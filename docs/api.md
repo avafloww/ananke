@@ -589,6 +589,12 @@ Get service detail
     stream: string
     timestamp_ms: number
   }[]
+  recent_restarts?: {
+    at_ms: number
+    detail: string
+    run_id?: number | null
+    trigger: string
+  }[]
   rolling_mean?: number | null
   rolling_samples: number
   run_id?: number | null

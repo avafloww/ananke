@@ -113,6 +113,37 @@ pub struct RequestMetric {
     pub status_code: i64,
 }
 
+/// One auto-restart watchdog firing, persisted so the history survives the
+/// live event stream. See migration `0006_service_restarts`.
+#[derive(Debug, Clone)]
+pub struct ServiceRestart {
+    pub restart_id: i64,
+    pub service_id: i64,
+    /// The run that was drained by the firing.
+    pub run_id: Option<i64>,
+    pub at_ms: i64,
+    /// Which watchdog fired (`"error_rate"`, `"ttft_stall"`,
+    /// `"generation_stall"`, `"spec_collapse"`, or `"periodic"`).
+    pub trigger: String,
+    /// Human-readable reason carried by the event.
+    pub detail: String,
+}
+
+impl ServiceRestart {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            restart_id: row.get(0)?,
+            service_id: row.get(1)?,
+            run_id: row.get(2)?,
+            at_ms: row.get(3)?,
+            trigger: row.get(4)?,
+            detail: row.get(5)?,
+        })
+    }
+
+    pub const COLUMNS: &'static str = "restart_id, service_id, run_id, at_ms, trigger_name, detail";
+}
+
 #[derive(Debug, Clone)]
 pub struct DeviceSample {
     pub sample_id: i64,

@@ -2668,6 +2668,13 @@ impl RunLoop {
                 detail = %detail,
                 "auto-restart flap cap reached; disabling instead of restarting"
             );
+            // The firing that trips the flap cap is the most important one to
+            // record — it is the one that takes the service down for good.
+            self.emit_auto_restarted(
+                trigger,
+                format!("{detail} (flap cap reached; service disabled)"),
+                run_id,
+            );
             self.drain_now_bounded(
                 child,
                 run_id,
@@ -2682,7 +2689,7 @@ impl RunLoop {
         }
         self.auto_restart_history.push(now);
         warn!(service = %self.init.identity.name, trigger, detail = %detail, "auto-restart: watchdog firing");
-        self.emit_auto_restarted(trigger, detail);
+        self.emit_auto_restarted(trigger, detail, run_id);
         self.drain_now_bounded(
             child,
             run_id,
@@ -2759,19 +2766,37 @@ impl RunLoop {
         detail: String,
     ) {
         info!(service = %self.init.identity.name, detail = %detail, "auto-restart: periodic timer firing");
-        self.emit_auto_restarted("periodic", detail);
+        self.emit_auto_restarted("periodic", detail, run_id);
         self.drain_now(child, run_id, drain::DrainReason::AutoRestart)
             .await;
         self.set_state(ServiceState::Idle);
     }
 
-    /// Publish an [`Event::AutoRestarted`] to the daemon event stream.
-    fn emit_auto_restarted(&self, trigger: &str, detail: String) {
+    /// Publish an [`Event::AutoRestarted`] to the daemon event stream and
+    /// persist it to `service_restarts` so the firing outlives the live
+    /// WebSocket (a watchdog restart with no browser attached used to leave
+    /// nothing behind but a daemon log line).
+    fn emit_auto_restarted(&self, trigger: &str, detail: String, run_id: i64) {
+        let at_ms = crate::tracking::now_unix_ms();
         self.deps.events.publish(Event::AutoRestarted {
             service: self.init.identity.name.clone(),
             trigger: trigger.to_string(),
+            detail: detail.clone(),
+            at_ms,
+        });
+        let db = self.deps.db.clone();
+        let row = crate::db::models::ServiceRestart {
+            restart_id: 0,
+            service_id: self.init.service_id,
+            run_id: Some(run_id),
+            at_ms,
+            trigger: trigger.to_string(),
             detail,
-            at_ms: crate::tracking::now_unix_ms(),
+        };
+        tokio::spawn(async move {
+            if let Err(e) = db.insert_service_restart(&row).await {
+                warn!(error = %e, "failed to persist auto-restart record");
+            }
         });
     }
 
@@ -2808,7 +2833,11 @@ impl RunLoop {
                         "periodic on-request restart: draining for incoming request"
                     );
                     self.deferred_ensure = Some((ack, source));
-                    self.emit_auto_restarted("periodic", "on-request interval elapsed".into());
+                    self.emit_auto_restarted(
+                        "periodic",
+                        "on-request interval elapsed".into(),
+                        run_id,
+                    );
                     self.drain_now(child, run_id, drain::DrainReason::AutoRestart)
                         .await;
                     self.set_state(ServiceState::Idle);

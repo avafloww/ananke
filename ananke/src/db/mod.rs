@@ -19,9 +19,15 @@ use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{
-    db::models::{DeviceSample, RequestMetric, RunningService, Service, ServiceLog},
+    db::models::{
+        DeviceSample, RequestMetric, RunningService, Service, ServiceLog, ServiceRestart,
+    },
     errors::ExpectedError,
 };
+
+/// Per-service cap on persisted auto-restart firings. Enforced at insert
+/// time by [`Database::insert_service_restart`].
+const SERVICE_RESTART_CAP: u32 = 50;
 
 /// Cloneable database handle. All queries go through the shared
 /// `Connection` behind a `parking_lot::Mutex`. Lock durations stay in
@@ -179,6 +185,63 @@ impl Database {
             },
         )
         .map_err(|e| self.db_err(e))
+    }
+
+    /// Persist one auto-restart watchdog firing and prune the per-service
+    /// history to the newest [`SERVICE_RESTART_CAP`] rows. The cap-at-insert
+    /// keeps the table bounded without a background sweeper; restarts are
+    /// rare enough (the flap cap disables a service after a handful) that
+    /// the extra DELETE per insert is negligible.
+    pub async fn insert_service_restart(&self, row: &ServiceRestart) -> Result<(), ExpectedError> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "INSERT INTO service_restarts
+                 (service_id, run_id, at_ms, trigger_name, detail)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                row.service_id,
+                row.run_id,
+                row.at_ms,
+                row.trigger,
+                row.detail,
+            ],
+        )
+        .map_err(|e| self.db_err(e))?;
+        conn.execute(
+            "DELETE FROM service_restarts
+             WHERE service_id = ?1
+               AND restart_id NOT IN (
+                   SELECT restart_id FROM service_restarts
+                   WHERE service_id = ?1
+                   ORDER BY restart_id DESC
+                   LIMIT ?2
+               )",
+            params![row.service_id, SERVICE_RESTART_CAP],
+        )
+        .map_err(|e| self.db_err(e))?;
+        Ok(())
+    }
+
+    /// The newest auto-restart firings for a service, most recent first.
+    pub async fn recent_service_restarts(
+        &self,
+        service_id: i64,
+        limit: u32,
+    ) -> Result<Vec<ServiceRestart>, ExpectedError> {
+        let conn = self.conn.lock();
+        let sql = format!(
+            "SELECT {} FROM service_restarts
+             WHERE service_id = ?1
+             ORDER BY restart_id DESC
+             LIMIT ?2",
+            ServiceRestart::COLUMNS
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| self.db_err(e))?;
+        let rows = stmt
+            .query_map(params![service_id, limit], ServiceRestart::from_row)
+            .map_err(|e| self.db_err(e))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| self.db_err(e))
     }
 
     /// All services without a `deleted_at`. Used by retention to iterate

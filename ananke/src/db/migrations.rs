@@ -54,6 +54,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "draft_tokens",
         sql: include_str!("migrations/0005_draft_tokens.sql"),
     },
+    Migration {
+        version: 6,
+        name: "service_restarts",
+        sql: include_str!("migrations/0006_service_restarts.sql"),
+    },
 ];
 
 /// SQL applied before the first migration ever runs. Creates the version

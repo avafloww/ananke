@@ -5,7 +5,7 @@ use ananke_api::{
     internal::log_line::LogLine,
     services::{
         command::{EnvVar, LaunchCommand, LaunchCommandResponse, LaunchCommandSource},
-        detail::{DevicePlacement, PlacementPreview, ServiceDetail},
+        detail::{DevicePlacement, PlacementPreview, RestartEvent, ServiceDetail},
         list::{ServiceSummary, ServicesResponse},
     },
     shared::errors::ApiError,
@@ -174,6 +174,26 @@ pub async fn service_detail(State(state): State<AppState>, Path(name): Path<Stri
         }
     };
 
+    let recent_restarts: Vec<RestartEvent> = {
+        let svc_id_opt = state.db.resolve_service_id(&name).await.ok().flatten();
+        match svc_id_opt {
+            Some(svc_id) => state
+                .db
+                .recent_service_restarts(svc_id, 10)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| RestartEvent {
+                    at_ms: r.at_ms,
+                    trigger: r.trigger,
+                    detail: r.detail,
+                    run_id: r.run_id,
+                })
+                .collect(),
+            None => Vec::new(),
+        }
+    };
+
     let rc = state.rolling.get(&svc_cfg.name);
     let observed_peak_bytes = state.observation.read_peak(&svc_cfg.name);
 
@@ -222,6 +242,7 @@ pub async fn service_detail(State(state): State<AppState>, Path(name): Path<Stri
         modality: svc_cfg.modality,
         ananke_metadata: svc_cfg.metadata.clone(),
         last_used_ms: state.activity.last_ms(&svc_cfg.name),
+        recent_restarts,
         runtime: runtime_info(svc_cfg),
         serving: serving_config(svc_cfg),
     };
