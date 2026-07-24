@@ -103,6 +103,13 @@ pub struct RequestMetric {
     pub prompt_ms: Option<i64>,
     /// Engine-reported decode time (`timings.predicted_ms`), llama.cpp only.
     pub predicted_ms: Option<i64>,
+    /// Engine-reported count of tokens proposed by the speculative draft
+    /// (`timings.draft_n`), llama.cpp with speculative decoding only.
+    pub draft_tokens: Option<i64>,
+    /// Engine-reported count of draft tokens the target model accepted
+    /// (`timings.draft_n_accepted`). Sustained zero across drafting requests
+    /// is the spec_collapse watchdog's trip condition.
+    pub draft_tokens_accepted: Option<i64>,
     pub status_code: i64,
 }
 

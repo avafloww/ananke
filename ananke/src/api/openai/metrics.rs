@@ -37,6 +37,13 @@ pub struct MetricsRecorder {
     prompt_ms: Option<i64>,
     /// Engine-reported decode time from the response `timings` object.
     predicted_ms: Option<i64>,
+    /// Engine-reported count of speculative draft tokens proposed
+    /// (`timings.draft_n`). Present only when the engine ran speculative
+    /// decoding for the request.
+    draft_tokens: Option<i64>,
+    /// Engine-reported count of draft tokens the target accepted
+    /// (`timings.draft_n_accepted`). The spec_collapse watchdog's signal.
+    draft_tokens_accepted: Option<i64>,
     /// For SSE parsing: accumulates a partial line that spans a chunk
     /// boundary. For non-streaming: accumulates the full body (capped).
     buf: String,
@@ -69,6 +76,8 @@ impl MetricsRecorder {
             prompt_eval_tokens: None,
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             buf: String::new(),
             buf_cap: 256 * 1024,
         }
@@ -159,6 +168,12 @@ impl MetricsRecorder {
         if let Some(n) = timings.get("prompt_n").and_then(|t| t.as_i64()) {
             self.prompt_eval_tokens = Some(n);
         }
+        if let Some(n) = timings.get("draft_n").and_then(|t| t.as_i64()) {
+            self.draft_tokens = Some(n);
+        }
+        if let Some(n) = timings.get("draft_n_accepted").and_then(|t| t.as_i64()) {
+            self.draft_tokens_accepted = Some(n);
+        }
     }
 
     /// Called when the response stream ends. Extracts any remaining
@@ -198,6 +213,8 @@ impl MetricsRecorder {
             ttft_ms,
             prompt_ms: rec.prompt_ms,
             predicted_ms: rec.predicted_ms,
+            draft_tokens: rec.draft_tokens,
+            draft_tokens_accepted: rec.draft_tokens_accepted,
             status_code: status_code as i64,
         };
 
@@ -429,6 +446,35 @@ mod tests {
         assert_eq!(rec.prompt_ms, Some(50));
         assert_eq!(rec.predicted_ms, Some(200));
         assert_eq!(rec.prompt_eval_tokens, Some(10));
+    }
+
+    /// Streaming: a `timings` object carrying speculative draft counts
+    /// (llama.cpp with `--spec-type`) populates the draft fields. The values
+    /// mirror a real collapsed response: 59 drafted, 0 accepted.
+    #[test]
+    fn streaming_extracts_draft_counts() {
+        let mut rec = make_recorder(true);
+        rec.ingest(&Bytes::from(
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":32},\
+             \"timings\":{\"prompt_ms\":135.5,\"predicted_ms\":873.5,\"prompt_n\":13,\
+             \"draft_n\":59,\"draft_n_accepted\":0}}\n\n",
+        ));
+        assert_eq!(rec.draft_tokens, Some(59));
+        assert_eq!(rec.draft_tokens_accepted, Some(0));
+    }
+
+    /// A `timings` object without draft counts (speculative decoding off)
+    /// leaves the draft fields null so the row never feeds the
+    /// spec_collapse watchdog.
+    #[test]
+    fn missing_draft_counts_leave_fields_null() {
+        let mut rec = make_recorder(true);
+        rec.ingest(&Bytes::from(
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1},\
+             \"timings\":{\"prompt_ms\":50.0,\"predicted_ms\":100.0,\"prompt_n\":1}}\n\n",
+        ));
+        assert_eq!(rec.draft_tokens, None);
+        assert_eq!(rec.draft_tokens_accepted, None);
     }
 
     /// A response without a `timings` object leaves the engine timing

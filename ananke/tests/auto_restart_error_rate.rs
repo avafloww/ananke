@@ -61,6 +61,8 @@ async fn inject_server_errors(
             ttft_ms: None,
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: status,
         })
         .await

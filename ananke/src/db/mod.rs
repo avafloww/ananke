@@ -414,8 +414,9 @@ impl Database {
             "INSERT INTO request_metrics
                  (service_id, run_id, timestamp_ms, endpoint, model,
                   prompt_tokens, completion_tokens, prompt_eval_tokens,
-                  duration_ms, ttft_ms, prompt_ms, predicted_ms, status_code)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                  duration_ms, ttft_ms, prompt_ms, predicted_ms,
+                  draft_tokens, draft_tokens_accepted, status_code)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 row.service_id,
                 row.run_id,
@@ -429,6 +430,8 @@ impl Database {
                 row.ttft_ms,
                 row.prompt_ms,
                 row.predicted_ms,
+                row.draft_tokens,
+                row.draft_tokens_accepted,
                 row.status_code,
             ],
         )
@@ -707,6 +710,8 @@ mod tests {
             ttft_ms: Some(200),
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: 200,
         })
         .await
@@ -725,6 +730,8 @@ mod tests {
             ttft_ms: None,
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: 500,
         })
         .await
@@ -766,6 +773,8 @@ mod tests {
                     ttft_ms: None,
                     prompt_ms: None,
                     predicted_ms: None,
+                    draft_tokens: None,
+                    draft_tokens_accepted: None,
                     status_code,
                 })
                 .await
@@ -819,6 +828,8 @@ mod tests {
             ttft_ms: None,
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: 200,
         };
 
@@ -902,6 +913,8 @@ mod tests {
             ttft_ms: None,
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: 200,
         };
 
@@ -949,6 +962,8 @@ mod tests {
             ttft_ms: None,
             prompt_ms: Some(200),
             predicted_ms: Some(500),
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: 200,
         })
         .await
@@ -999,6 +1014,8 @@ mod tests {
                 ttft_ms: None,
                 prompt_ms: None,
                 predicted_ms: None,
+                draft_tokens: None,
+                draft_tokens_accepted: None,
                 status_code: 200,
             })
             .await
@@ -1045,6 +1062,8 @@ mod tests {
             ttft_ms: None,
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: 200,
         })
         .await
@@ -1063,6 +1082,8 @@ mod tests {
             ttft_ms: None,
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: 200,
         })
         .await

@@ -49,6 +49,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "prompt_eval_tokens",
         sql: include_str!("migrations/0004_prompt_eval_tokens.sql"),
     },
+    Migration {
+        version: 5,
+        name: "draft_tokens",
+        sql: include_str!("migrations/0005_draft_tokens.sql"),
+    },
 ];
 
 /// SQL applied before the first migration ever runs. Creates the version
