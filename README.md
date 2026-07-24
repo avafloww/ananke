@@ -80,7 +80,7 @@ ananke is configured via TOML, which will be located in this order:
 4. `~/.config/ananke/config.toml`
 5. `/etc/ananke/config.toml`
 
-The full configuration guide - daemon settings, device and service configuration, placement, inheritance, and config hot-reload - lives in [docs/configuration.md](docs/configuration.md).
+The full configuration guide - daemon settings, device and service configuration, placement, inheritance, and config hot-reload - lives in [docs/configuration.md](docs/configuration.md). The self-healing watchdogs, and the incidents that motivated each of them, are described in [docs/auto-restart.md](docs/auto-restart.md).
 
 ## Interacting with ananke
 
