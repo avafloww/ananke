@@ -185,6 +185,21 @@ export function bucketFor(spanMs: number): string {
   return "2h";
 }
 
+// Millisecond widths of the bucket strings `bucketFor` produces, for
+// client-side binning of sparse event streams (e.g. restarts) to the
+// same grid the bucketed metrics use.
+const BUCKET_MS: Readonly<Record<string, number>> = {
+  "10s": 10_000,
+  "1m": 60_000,
+  "5m": 300_000,
+  "30m": 1_800_000,
+  "2h": 7_200_000,
+};
+
+export function bucketMsOf(bucket: string): number {
+  return BUCKET_MS[bucket] ?? 300_000;
+}
+
 // Resolve a TimeWindow into concrete metrics-query parameters. For
 // relative windows `now` is captured at call time — memoise on the
 // window object so the query key doesn't churn every render.

@@ -10,20 +10,26 @@ import {
   useServiceCommand,
   useLifecycle,
   useMetrics,
+  useRestarts,
 } from "../../api/hooks.ts";
 import type {
   DevicePlacement,
   EstimateSummary,
   IkParams,
   LaunchCommand,
+  RestartEvent,
   RuntimeInfo,
   ServingConfig,
   ModelInfo,
   PlacementPreview,
   ServiceDetail,
 } from "../../api/client.ts";
-import { aggregateBuckets } from "../../api/metrics-aggregate.ts";
 import {
+  aggregateBuckets,
+  toErrorsRestartsData,
+} from "../../api/metrics-aggregate.ts";
+import {
+  bucketMsOf,
   formatBytes,
   formatDuration,
   formatParameterCount,
@@ -210,12 +216,41 @@ export function ServiceDetailView() {
         {/* Per-service stats */}
         {d.modality !== "embedding" && <ServiceMetrics name={d.name} />}
 
+        {/* Auto-restart history */}
+        {(d.recent_restarts?.length ?? 0) > 0 && (
+          <Card header={t("serviceDetail.autoRestarts")}>
+            <RestartHistory restarts={d.recent_restarts ?? []} />
+          </Card>
+        )}
+
         {/* Logs */}
         <Card header={t("serviceDetail.logs")} bodyClassName="p-0">
           <LogsViewer name={d.name} />
         </Card>
       </div>
     </div>
+  );
+}
+
+function RestartHistory({ restarts }: { restarts: readonly RestartEvent[] }) {
+  return (
+    <ul className="flex flex-col gap-2 text-sm">
+      {restarts.map((r) => (
+        <li
+          key={`${r.at_ms}-${r.trigger}`}
+          className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3"
+        >
+          <span
+            className="shrink-0 text-tertiary tabular-nums"
+            title={formatTimestamp(r.at_ms)}
+          >
+            {relativeTime(r.at_ms)}
+          </span>
+          <Badge variant="warning">{r.trigger}</Badge>
+          <span className="text-primary">{r.detail}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -890,6 +925,14 @@ function ServiceMetrics({ name }: { name: string }) {
 
   const metrics = useMetrics({ service: name, since, until, bucket });
   const buckets = aggregateBuckets(metrics.data?.buckets ?? []);
+  const restarts = useRestarts(name, since, until ?? end);
+  const errorsRestartsData = toErrorsRestartsData(
+    buckets,
+    restarts.data ?? [],
+    since,
+    end,
+    bucketMsOf(bucket),
+  );
 
   const totalRequests = buckets.reduce((s, b) => s + b.requestCount, 0);
   const totalErrors = buckets.reduce((s, b) => s + b.errorCount, 0);
@@ -1018,61 +1061,82 @@ function ServiceMetrics({ name }: { name: string }) {
             ]}
           />
         </Card>
+        {/* The end-to-end effective line is always shown; the input/output
+            decode rates are overlaid on top of it when available. */}
+        <Card header={t("stats.tokensPerSecond")}>
+          <Chart
+            xMin={xMin}
+            xMax={xMax}
+            data={[
+              buckets.map((b) => b.ts),
+              ...(hasSplitTps
+                ? [
+                    buckets.map((b) =>
+                      b.inputTpsRequests > 0
+                        ? b.totalWeightedInputTps / b.inputTpsRequests
+                        : null,
+                    ),
+                    buckets.map((b) =>
+                      b.outputTpsRequests > 0
+                        ? b.totalWeightedOutputTps / b.outputTpsRequests
+                        : null,
+                    ),
+                  ]
+                : []),
+              buckets.map((b) =>
+                b.effectiveTpsRequests > 0
+                  ? b.totalWeightedEffectiveTps / b.effectiveTpsRequests
+                  : null,
+              ),
+            ]}
+            series={[
+              ...(hasSplitTps
+                ? [
+                    {
+                      label: t("stats.tpsIn"),
+                      stroke: CHART_PALETTE[0],
+                      fill: "rgba(139,124,248,0.08)",
+                      unit: "tok/s",
+                    },
+                    {
+                      label: t("stats.tpsOut"),
+                      stroke: CHART_PALETTE[1],
+                      fill: "rgba(69,201,138,0.08)",
+                      unit: "tok/s",
+                    },
+                  ]
+                : []),
+              {
+                label: t("stats.tpsEffective"),
+                stroke: CHART_PALETTE[2],
+                fill: "rgba(224,168,60,0.08)",
+                unit: "tok/s",
+              },
+            ]}
+          />
+        </Card>
+        {/* Errors and auto-restarts on one card: the error storm and the
+            watchdog firing it provokes belong on the same axis. */}
+        <Card header={t("stats.errorsRestarts")}>
+          <Chart
+            xMin={xMin}
+            xMax={xMax}
+            data={errorsRestartsData}
+            series={[
+              {
+                label: t("stats.errors"),
+                stroke: CHART_PALETTE[5],
+                fill: "rgba(239,90,90,0.08)",
+              },
+              {
+                label: t("stats.restarts"),
+                stroke: CHART_PALETTE[2],
+                fill: "rgba(224,168,60,0.08)",
+              },
+            ]}
+          />
+        </Card>
       </div>
-      {/* The end-to-end effective line is always shown; the input/output
-          decode rates are overlaid on top of it when available. */}
-      <Card header={t("stats.tokensPerSecond")}>
-        <Chart
-          xMin={xMin}
-          xMax={xMax}
-          data={[
-            buckets.map((b) => b.ts),
-            ...(hasSplitTps
-              ? [
-                  buckets.map((b) =>
-                    b.inputTpsRequests > 0
-                      ? b.totalWeightedInputTps / b.inputTpsRequests
-                      : null,
-                  ),
-                  buckets.map((b) =>
-                    b.outputTpsRequests > 0
-                      ? b.totalWeightedOutputTps / b.outputTpsRequests
-                      : null,
-                  ),
-                ]
-              : []),
-            buckets.map((b) =>
-              b.effectiveTpsRequests > 0
-                ? b.totalWeightedEffectiveTps / b.effectiveTpsRequests
-                : null,
-            ),
-          ]}
-          series={[
-            ...(hasSplitTps
-              ? [
-                  {
-                    label: t("stats.tpsIn"),
-                    stroke: CHART_PALETTE[0],
-                    fill: "rgba(139,124,248,0.08)",
-                    unit: "tok/s",
-                  },
-                  {
-                    label: t("stats.tpsOut"),
-                    stroke: CHART_PALETTE[1],
-                    fill: "rgba(69,201,138,0.08)",
-                    unit: "tok/s",
-                  },
-                ]
-              : []),
-            {
-              label: t("stats.tpsEffective"),
-              stroke: CHART_PALETTE[2],
-              fill: "rgba(224,168,60,0.08)",
-              unit: "tok/s",
-            },
-          ]}
-        />
-      </Card>
     </div>
   );
 }

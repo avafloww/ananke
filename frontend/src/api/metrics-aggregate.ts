@@ -1,7 +1,7 @@
 // Shared metric bucket aggregation. Used by both the stats view
 // (MetricsView) and the per-service metrics section (ServiceDetailView).
 
-import type { MetricBucketResponse } from "./client.ts";
+import type { MetricBucketResponse, ServiceRestartEntry } from "./client.ts";
 
 export type AggregatedBucket = {
   ts: number;
@@ -112,4 +112,42 @@ export function groupByService(
         b.buckets.reduce((s, x) => s + x.requestCount, 0) -
         a.buckets.reduce((s, x) => s + x.requestCount, 0),
     );
+}
+
+// One time grid for the errors-and-restarts card: epoch-aligned buckets
+// (matching the backend's `(timestamp_ms / bucket) * bucket` grid) with
+// error counts mapped from the aggregated metric buckets and restart
+// events binned onto the same grid. Both series are zero-filled across
+// the window so the lines sit on the axis between incidents.
+export function toErrorsRestartsData(
+  buckets: readonly AggregatedBucket[],
+  restarts: readonly ServiceRestartEntry[],
+  sinceMs: number,
+  endMs: number,
+  bucketWidthMs: number,
+): (number | null)[][] {
+  const firstBucketMs = Math.floor(sinceMs / bucketWidthMs) * bucketWidthMs;
+  const binCount = Math.max(
+    1,
+    Math.ceil((endMs - firstBucketMs) / bucketWidthMs),
+  );
+  const ts: number[] = [];
+  const errors: number[] = [];
+  const restartCounts: number[] = [];
+  for (let i = 0; i < binCount; i++) {
+    ts.push(Math.floor((firstBucketMs + i * bucketWidthMs) / 1000));
+    errors.push(0);
+    restartCounts.push(0);
+  }
+  const binOf = (ms: number) =>
+    Math.floor((ms - firstBucketMs) / bucketWidthMs);
+  for (const b of buckets) {
+    const i = binOf(b.ts * 1000);
+    if (i >= 0 && i < binCount) errors[i] = (errors[i] ?? 0) + b.errorCount;
+  }
+  for (const r of restarts) {
+    const i = binOf(r.at_ms);
+    if (i >= 0 && i < binCount) restartCounts[i] = (restartCounts[i] ?? 0) + 1;
+  }
+  return [ts, errors, restartCounts];
 }

@@ -18,6 +18,7 @@ import {
   type ConfigSaveResult,
   type DaemonInfoResponse,
   type DeviceSampleResponse,
+  type ServiceRestartEntry,
   type DisableResponse,
   type EnableResponse,
   type LaunchCommandResponse,
@@ -82,6 +83,21 @@ export function useMetrics(
       query.bucket,
     ],
     queryFn: () => api.getMetrics(query),
+    staleTime: METRICS_STALE_MS,
+    refetchInterval: METRICS_STALE_MS,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function useRestarts(
+  service?: string,
+  since?: number,
+  until?: number,
+): UseQueryResult<ServiceRestartEntry[], Error> {
+  return useQuery({
+    queryKey: ["restarts", service, since, until],
+    queryFn: () =>
+      api.getRestarts(service, since, until).then((r) => r.restarts),
     staleTime: METRICS_STALE_MS,
     refetchInterval: METRICS_STALE_MS,
     placeholderData: (prev) => prev,

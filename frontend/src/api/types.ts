@@ -143,6 +143,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/restarts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get auto-restart firings */
+    get: operations["get_restarts"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/services": {
     parameters: {
       query?: never;
@@ -1156,6 +1173,31 @@ export interface components {
       /** @description Whether the placement fits right now without eviction or reclaim. */
       verdict: components["schemas"]["FitVerdict"];
     };
+    /** @description One persisted auto-restart watchdog firing. */
+    RestartEvent: {
+      /**
+       * Format: int64
+       * @description Wall-clock timestamp of the firing (ms since epoch).
+       */
+      at_ms: number;
+      /** @description Human-readable reason (e.g. the observed error rate and window). */
+      detail: string;
+      /**
+       * Format: int64
+       * @description The run that was drained by the firing.
+       */
+      run_id?: number | null;
+      /**
+       * @description Which watchdog fired: `"error_rate"`, `"ttft_stall"`,
+       *     `"generation_stall"`, `"spec_collapse"`, or `"periodic"`.
+       */
+      trigger: string;
+    };
+    /** @description `GET /api/restarts` response body. */
+    RestartsResponse: {
+      /** @description Firings within the requested window, oldest first. */
+      restarts: components["schemas"]["ServiceRestartEntry"][];
+    };
     /**
      * @description Which llama-server implementation serves a llama-cpp service, plus
      *     the fork-specific configuration when it is not mainline.
@@ -1238,6 +1280,12 @@ export interface components {
       /** @description Most recent log lines for a frontend's first-paint context. */
       recent_logs: components["schemas"]["LogLine"][];
       /**
+       * @description Recent auto-restart watchdog firings, most recent first. Sourced
+       *     from the daemon's durable `service_restarts` store, so firings are
+       *     visible after the fact — not only to a live `/api/events` listener.
+       */
+      recent_restarts?: components["schemas"]["RestartEvent"][];
+      /**
        * Format: float
        * @description Rolling estimator correction factor.
        */
@@ -1258,6 +1306,32 @@ export interface components {
       state: string;
       /** @description Template name, e.g. `"llamacpp"` or `"command"`. */
       template: string;
+    };
+    /**
+     * @description One auto-restart watchdog firing, with the service it belongs to.
+     *     The service-detail endpoint serves the same records scoped to one
+     *     service; this shape adds the `service` label for cross-service views.
+     */
+    ServiceRestartEntry: {
+      /**
+       * Format: int64
+       * @description Wall-clock timestamp of the firing (ms since epoch).
+       */
+      at_ms: number;
+      /** @description Human-readable reason carried by the event. */
+      detail: string;
+      /**
+       * Format: int64
+       * @description The run that was drained by the firing.
+       */
+      run_id?: number | null;
+      /** @description Service name. */
+      service: string;
+      /**
+       * @description Which watchdog fired: `"error_rate"`, `"ttft_stall"`,
+       *     `"generation_stall"`, `"spec_collapse"`, or `"periodic"`.
+       */
+      trigger: string;
     };
     /** @description One entry in `GET /api/services`. */
     ServiceSummary: {
@@ -1781,6 +1855,32 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ApiError"];
+        };
+      };
+    };
+  };
+  get_restarts: {
+    parameters: {
+      query?: {
+        /** @description Filter to one service name */
+        service?: string;
+        /** @description Earliest at_ms, inclusive (default: 1h ago) */
+        since?: number;
+        /** @description Latest at_ms, inclusive (default: now) */
+        until?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["RestartsResponse"];
         };
       };
     };

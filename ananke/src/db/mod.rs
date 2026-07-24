@@ -282,6 +282,84 @@ impl Database {
         Ok(())
     }
 
+    /// Per-trigger counts of persisted auto-restart firings for a service,
+    /// for the Prometheus `ananke_auto_restarts_total` counter. Subject to
+    /// the per-service history cap, so counts plateau once a service has
+    /// accumulated [`SERVICE_RESTART_CAP`] rows — acceptable for a counter
+    /// whose signal is its rate of increase.
+    pub async fn count_service_restarts_by_trigger(
+        &self,
+        service_id: i64,
+    ) -> Result<Vec<(String, u64)>, ExpectedError> {
+        let conn = self.conn.lock();
+        let mut stmt = conn
+            .prepare(
+                "SELECT trigger_name, COUNT(*)
+                 FROM service_restarts
+                 WHERE service_id = ?1
+                 GROUP BY trigger_name",
+            )
+            .map_err(|e| self.db_err(e))?;
+        let rows = stmt
+            .query_map([service_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?.max(0) as u64,
+                ))
+            })
+            .map_err(|e| self.db_err(e))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| self.db_err(e))
+    }
+
+    /// Auto-restart firings within a time window across services, oldest
+    /// first, for the `/api/restarts` chart endpoint. `service_id` narrows
+    /// to one service. Returns `(service_name, firing)` pairs; firings of
+    /// tombstoned services are included as long as their rows survive the
+    /// per-service cap.
+    pub async fn query_service_restarts(
+        &self,
+        service_id: Option<i64>,
+        since_ms: i64,
+        until_ms: i64,
+    ) -> Result<Vec<(String, ServiceRestart)>, ExpectedError> {
+        let conn = self.conn.lock();
+        let sql = format!(
+            "SELECT s.name, {cols}
+             FROM service_restarts r
+             JOIN services s ON s.service_id = r.service_id
+             WHERE r.at_ms >= ?1 AND r.at_ms <= ?2
+               AND (?3 IS NULL OR r.service_id = ?3)
+             ORDER BY r.at_ms ASC",
+            cols = ServiceRestart::COLUMNS
+                .split(", ")
+                .map(|c| format!("r.{c}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|e| self.db_err(e))?;
+        let rows = stmt
+            .query_map(params![since_ms, until_ms, service_id], |row| {
+                let name: String = row.get(0)?;
+                // ServiceRestart::from_row reads columns 0.., but the name
+                // occupies column 0 here — shift by re-reading explicitly.
+                Ok((
+                    name,
+                    ServiceRestart {
+                        restart_id: row.get(1)?,
+                        service_id: row.get(2)?,
+                        run_id: row.get(3)?,
+                        at_ms: row.get(4)?,
+                        trigger: row.get(5)?,
+                        detail: row.get(6)?,
+                    },
+                ))
+            })
+            .map_err(|e| self.db_err(e))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| self.db_err(e))
+    }
+
     /// The newest auto-restart firings for a service, most recent first.
     pub async fn recent_service_restarts(
         &self,

@@ -2,7 +2,10 @@
 
 use ananke_api::{
     devices::samples::{DeviceSampleResponse, DeviceSamplesResponse},
-    metrics::get::{MetricBucketResponse, MetricsResponse},
+    metrics::{
+        get::{MetricBucketResponse, MetricsResponse},
+        restarts::{RestartsResponse, ServiceRestartEntry},
+    },
     shared::errors::ApiError,
 };
 use axum::{
@@ -95,6 +98,71 @@ pub async fn get_metrics(State(state): State<AppState>, Query(q): Query<MetricsQ
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RestartsQuery {
+    pub service: Option<String>,
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+}
+
+#[utoipa::path(
+    summary = "Get auto-restart firings",
+    get,
+    path = "/api/restarts",
+    params(
+        ("service" = Option<String>, Query, description = "Filter to one service name"),
+        ("since" = Option<i64>, Query, description = "Earliest at_ms, inclusive (default: 1h ago)"),
+        ("until" = Option<i64>, Query, description = "Latest at_ms, inclusive (default: now)"),
+    ),
+    responses((status = 200, body = RestartsResponse))
+)]
+pub async fn get_restarts(
+    State(state): State<AppState>,
+    Query(q): Query<RestartsQuery>,
+) -> Response {
+    let now = crate::tracking::now_unix_ms();
+    let until = q.until.unwrap_or(now);
+    let since = q.since.unwrap_or(now - 3_600_000);
+
+    let service_id = if let Some(name) = &q.service {
+        state.db.resolve_service_id(name).await.ok().flatten()
+    } else {
+        None
+    };
+    // An unknown service name matches nothing rather than everything.
+    if q.service.is_some() && service_id.is_none() {
+        let resp = RestartsResponse { restarts: vec![] };
+        return (StatusCode::OK, Json(resp)).into_response();
+    }
+
+    match state
+        .db
+        .query_service_restarts(service_id, since, until)
+        .await
+    {
+        Ok(rows) => {
+            let resp = RestartsResponse {
+                restarts: rows
+                    .into_iter()
+                    .map(|(service, r)| ServiceRestartEntry {
+                        service,
+                        at_ms: r.at_ms,
+                        trigger: r.trigger,
+                        detail: r.detail,
+                        run_id: r.run_id,
+                    })
+                    .collect(),
+            };
+            (StatusCode::OK, Json(resp)).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
 pub struct DeviceSamplesQuery {
     pub device: Option<String>,
     pub since: Option<i64>,
@@ -151,6 +219,7 @@ pub async fn get_device_samples(
 pub fn register(router: Router, state: AppState) -> Router {
     let mgmt: Router = Router::new()
         .route("/api/metrics", get(get_metrics))
+        .route("/api/restarts", get(get_restarts))
         .route("/api/devices/samples", get(get_device_samples))
         .with_state(state);
     router.merge(mgmt)

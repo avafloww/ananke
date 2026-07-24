@@ -12,7 +12,10 @@ use ananke_api::{
     events::Event,
     info::get::DaemonInfoResponse,
     internal::{fit_verdict::FitVerdict, log_line::LogLine},
-    metrics::get::{MetricBucketResponse, MetricsResponse},
+    metrics::{
+        get::{MetricBucketResponse, MetricsResponse},
+        restarts::{RestartsResponse, ServiceRestartEntry},
+    },
     oneshot::{
         create::{
             OneshotAllocation, OneshotDevices, OneshotHealth, OneshotRequest, OneshotResponse,
@@ -82,6 +85,7 @@ use crate::{
         mgmt_config::put_config,
         mgmt_config::post_validate,
         mgmt_metrics::get_metrics,
+        mgmt_metrics::get_restarts,
         mgmt_metrics::get_device_samples,
         oneshot_handlers::post_oneshot,
         oneshot_handlers::list_oneshots,
@@ -124,6 +128,8 @@ use crate::{
         ValidationError,
         MetricsResponse,
         MetricBucketResponse,
+        RestartsResponse,
+        ServiceRestartEntry,
         DeviceSamplesResponse,
         DeviceSampleResponse,
         DaemonInfoResponse,

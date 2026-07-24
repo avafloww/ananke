@@ -103,9 +103,29 @@ async fn collect_metrics(state: &AppState) -> Vec<MetricFamily> {
         "counter",
     );
     let mut tokens = MetricFamily::new("ananke_tokens_total", "Total tokens processed.", "counter");
+    let mut auto_restarts = MetricFamily::new(
+        "ananke_auto_restarts_total",
+        "Auto-restart watchdog firings, from the daemon's persisted history.",
+        "counter",
+    );
 
     for svc in &eff.services {
         let sid = state.db.resolve_service_id(&svc.name).await.ok().flatten();
+        if let Some(sid) = sid {
+            match state.db.count_service_restarts_by_trigger(sid).await {
+                Ok(counts) => {
+                    for (trigger, count) in counts {
+                        auto_restarts.sample(
+                            vec![("service", svc.name.to_string()), ("trigger", trigger)],
+                            count as f64,
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, service = %svc.name, "prometheus: restart count query failed");
+                }
+            }
+        }
         let (req_total, prompt_total, completion_total) = if let Some(sid) = sid {
             match state
                 .db
@@ -275,6 +295,7 @@ async fn collect_metrics(state: &AppState) -> Vec<MetricFamily> {
     vec![
         requests,
         tokens,
+        auto_restarts,
         inflight,
         mem_total,
         mem_free,
