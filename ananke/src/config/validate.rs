@@ -17,9 +17,11 @@ pub use ananke_config::docs::{
     DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS, DEFAULT_AUTO_RESTART_MAX_ERROR_RATE,
     DEFAULT_AUTO_RESTART_MAX_RESTARTS, DEFAULT_AUTO_RESTART_MIN_REQUESTS,
     DEFAULT_AUTO_RESTART_MIN_UPTIME_MS, DEFAULT_AUTO_RESTART_POLL_INTERVAL_MS,
-    DEFAULT_AUTO_RESTART_TTFT_STALL_MS, DEFAULT_AUTO_RESTART_WINDOW_MS, DEFAULT_DRAIN_TIMEOUT_MS,
-    DEFAULT_EXTENDED_STREAM_DRAIN_MS, DEFAULT_HEALTH_PROBE_INTERVAL_MS, DEFAULT_HEALTH_TIMEOUT_MS,
-    DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_MAX_REQUEST_DURATION_MS, DEFAULT_MIN_BORROWER_RUNTIME_MS,
+    DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_REQUESTS, DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS,
+    DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS, DEFAULT_AUTO_RESTART_TTFT_STALL_MS,
+    DEFAULT_AUTO_RESTART_WINDOW_MS, DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_EXTENDED_STREAM_DRAIN_MS,
+    DEFAULT_HEALTH_PROBE_INTERVAL_MS, DEFAULT_HEALTH_TIMEOUT_MS, DEFAULT_IDLE_TIMEOUT_MS,
+    DEFAULT_MAX_REQUEST_DURATION_MS, DEFAULT_MIN_BORROWER_RUNTIME_MS,
     DEFAULT_OPENAI_MAX_BODY_BYTES, DEFAULT_OPENAI_MAX_BODY_MB, DEFAULT_PRIVATE_PORT_END,
     DEFAULT_PRIVATE_PORT_START, DEFAULT_SERVICE_PRIORITY,
 };
@@ -31,7 +33,8 @@ use crate::{
     config::parse::{
         EstimationConfig, RawAutoRestart, RawCommandService, RawConfig, RawErrorRateSettings,
         RawExpertOffload, RawGenerationStallSettings, RawLlamaCppService, RawPeriodicSettings,
-        RawRuntime, RawService, RawTtftStallSettings, SamplingConfig, Toggle,
+        RawRuntime, RawService, RawSpecCollapseSettings, RawTtftStallSettings, SamplingConfig,
+        Toggle,
     },
     errors::ExpectedError,
 };
@@ -609,6 +612,11 @@ pub struct AutoRestartSettings {
     /// `None` by default on the `command` template, where ananke cannot
     /// inject `--metrics` into an argv it does not build.
     pub generation_stall: Option<GenerationStallTrigger>,
+    /// Speculative-decoding collapse watchdog, or `None` if disabled.
+    /// `Some` by default only for llama-cpp services with `spec_type` set;
+    /// no other service produces draft counts, and an explicit per-service
+    /// enable elsewhere is rejected at validation.
+    pub spec_collapse: Option<SpecCollapseTrigger>,
     /// Anti-flap cooldown: minimum uptime of a fresh run before another
     /// auto-restart may fire.
     pub min_uptime_ms: u64,
@@ -627,6 +635,7 @@ impl AutoRestartSettings {
             || self.periodic.is_some()
             || self.ttft_stall.is_some()
             || self.generation_stall.is_some()
+            || self.spec_collapse.is_some()
     }
 
     /// All triggers off, guardrails at their defaults. Used by test
@@ -638,6 +647,7 @@ impl AutoRestartSettings {
             periodic: None,
             ttft_stall: None,
             generation_stall: None,
+            spec_collapse: None,
             ..Self::default()
         }
     }
@@ -653,6 +663,7 @@ impl Default for AutoRestartSettings {
             periodic: None,
             ttft_stall: Some(TtftStallTrigger::default()),
             generation_stall: Some(GenerationStallTrigger::default()),
+            spec_collapse: Some(SpecCollapseTrigger::default()),
             min_uptime_ms: DEFAULT_AUTO_RESTART_MIN_UPTIME_MS,
             max_restarts: DEFAULT_AUTO_RESTART_MAX_RESTARTS,
             flap_window_ms: DEFAULT_AUTO_RESTART_FLAP_WINDOW_MS,
@@ -691,6 +702,28 @@ impl Default for GenerationStallTrigger {
         Self {
             timeout_ms: DEFAULT_AUTO_RESTART_GENERATION_STALL_MS,
             poll_interval_ms: DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS,
+        }
+    }
+}
+
+/// Resolved speculative-decoding collapse watchdog thresholds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpecCollapseTrigger {
+    /// Rolling window over which draft acceptance is measured.
+    pub window_ms: u64,
+    /// Minimum count of drafting requests in the window before an all-zero
+    /// acceptance is trusted.
+    pub min_requests: u32,
+    /// How often the watchdog queries the metrics store.
+    pub poll_interval_ms: u64,
+}
+
+impl Default for SpecCollapseTrigger {
+    fn default() -> Self {
+        Self {
+            window_ms: DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS,
+            min_requests: DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_REQUESTS,
+            poll_interval_ms: DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS,
         }
     }
 }
@@ -1339,6 +1372,10 @@ fn validate_service(
 
     // auto_restart resolves as a whole block: a service's own block replaces
     // `[defaults.auto_restart]` entirely rather than merging field-by-field.
+    let has_spec_type = match &template_config {
+        TemplateConfig::LlamaCpp(lc) => lc.spec_type.is_some(),
+        TemplateConfig::Command(_) => false,
+    };
     let auto_restart = validate_auto_restart(
         &name,
         common
@@ -1346,6 +1383,8 @@ fn validate_service(
             .as_ref()
             .or(daemon.defaults.auto_restart.as_ref()),
         template_config.template(),
+        has_spec_type,
+        common.auto_restart.is_some(),
     )?;
 
     Ok(ServiceConfig {
@@ -1420,10 +1459,19 @@ fn validate_tracking(
     Ok(TrackingSettings { cgroup_parent })
 }
 
+/// `has_spec_type` gates the spec-collapse watchdog: only a llama-cpp
+/// service with `spec_type` produces draft counts, so the trigger is
+/// meaningless anywhere else. `from_service_block` distinguishes the
+/// service's own `auto_restart` block from an inherited
+/// `[defaults.auto_restart]`: an explicit per-service enable on a service
+/// that can never honor it is a hard error, while a fleet-wide default
+/// silently resolves to disabled on the services it doesn't apply to.
 fn validate_auto_restart(
     name: &SmolStr,
     raw: Option<&RawAutoRestart>,
     template: Template,
+    has_spec_type: bool,
+    from_service_block: bool,
 ) -> Result<AutoRestartSettings, ExpectedError> {
     // The generation-stall watchdog defaults per template: on for llama-cpp
     // (where ananke builds the argv and can inject `--metrics`), off for
@@ -1432,9 +1480,14 @@ fn validate_auto_restart(
         Template::LlamaCpp => Some(GenerationStallTrigger::default()),
         Template::Command => None,
     };
+    // The spec_collapse watchdog defaults on only where it can actually
+    // observe anything: a llama-cpp service with `spec_type` set. Responses
+    // elsewhere carry no draft counts.
+    let default_spec_collapse = has_spec_type.then(SpecCollapseTrigger::default);
     let Some(raw) = raw else {
         return Ok(AutoRestartSettings {
             generation_stall: default_generation_stall,
+            spec_collapse: default_spec_collapse,
             ..AutoRestartSettings::default()
         });
     };
@@ -1478,6 +1531,27 @@ fn validate_auto_restart(
         Some(Toggle::Settings(s)) => Some(validate_generation_stall(name, s)?),
     };
 
+    // Spec-collapse watchdog: an explicit enable on a service without
+    // `spec_type` is rejected when it comes from the service's own block
+    // (it could never fire), and silently resolved to disabled when it
+    // comes from a fleet-wide default.
+    let spec_collapse = match &raw.spec_collapse {
+        None => default_spec_collapse,
+        Some(Toggle::Enabled(false)) => None,
+        Some(_) if !has_spec_type => {
+            if from_service_block {
+                return Err(fail(format!(
+                    "service {name}: auto_restart.spec_collapse requires spec_type to be set \
+                     (without speculative decoding, responses carry no draft counts and the \
+                     watchdog can never fire)"
+                )));
+            }
+            None
+        }
+        Some(Toggle::Enabled(true)) => Some(SpecCollapseTrigger::default()),
+        Some(Toggle::Settings(s)) => Some(validate_spec_collapse(name, s)?),
+    };
+
     let min_uptime_ms = raw
         .min_uptime
         .as_deref()
@@ -1499,9 +1573,57 @@ fn validate_auto_restart(
         periodic,
         ttft_stall,
         generation_stall,
+        spec_collapse,
         min_uptime_ms,
         max_restarts,
         flap_window_ms,
+    })
+}
+
+fn validate_spec_collapse(
+    name: &SmolStr,
+    s: &RawSpecCollapseSettings,
+) -> Result<SpecCollapseTrigger, ExpectedError> {
+    let d = SpecCollapseTrigger::default();
+    let field = |field: &str, x: &str| {
+        parse_duration_ms(x).map_err(|e| {
+            fail(format!(
+                "service {name} auto_restart.spec_collapse.{field}: {e}"
+            ))
+        })
+    };
+    let window_ms = s
+        .window
+        .as_deref()
+        .map(|x| field("window", x))
+        .transpose()?
+        .unwrap_or(d.window_ms);
+    let min_requests = s.min_requests.unwrap_or(d.min_requests);
+    let poll_interval_ms = s
+        .poll_interval
+        .as_deref()
+        .map(|x| field("poll_interval", x))
+        .transpose()?
+        .unwrap_or(d.poll_interval_ms);
+    if window_ms == 0 {
+        return Err(fail(format!(
+            "service {name}: auto_restart.spec_collapse.window must be greater than zero"
+        )));
+    }
+    if min_requests == 0 {
+        return Err(fail(format!(
+            "service {name}: auto_restart.spec_collapse.min_requests must be greater than zero"
+        )));
+    }
+    if poll_interval_ms == 0 {
+        return Err(fail(format!(
+            "service {name}: auto_restart.spec_collapse.poll_interval must be greater than zero"
+        )));
+    }
+    Ok(SpecCollapseTrigger {
+        window_ms,
+        min_requests,
+        poll_interval_ms,
     })
 }
 
@@ -2391,12 +2513,13 @@ devices.placement = "cpu-only"
     #[test]
     fn auto_restart_all_triggers_false_disables_policy() {
         let svc = svc_with_auto_restart(
-            "auto_restart = { error_rate = false, ttft_stall = false, generation_stall = false }",
+            "auto_restart = { error_rate = false, ttft_stall = false, generation_stall = false, spec_collapse = false }",
         )
         .unwrap();
         assert!(svc.auto_restart.error_rate.is_none());
         assert!(svc.auto_restart.ttft_stall.is_none());
         assert!(svc.auto_restart.generation_stall.is_none());
+        assert!(svc.auto_restart.spec_collapse.is_none());
         assert!(!svc.auto_restart.any_enabled());
     }
 
@@ -2501,6 +2624,84 @@ devices.placement = "cpu-only"
         );
         assert!(
             svc_with_auto_restart("auto_restart.generation_stall = { poll_interval = \"0s\" }")
+                .is_err()
+        );
+    }
+
+    /// Like `svc_with_auto_restart`, but the service configures speculative
+    /// decoding — the precondition for the spec-collapse watchdog.
+    fn spec_svc_with_auto_restart(block: &str) -> Result<ServiceConfig, ExpectedError> {
+        svc_with_auto_restart(&format!("spec_type = \"draft-mtp\"\n{block}"))
+    }
+
+    #[test]
+    fn auto_restart_spec_collapse_defaults_on_only_with_spec_type() {
+        let svc = spec_svc_with_auto_restart("").unwrap();
+        let sc = svc
+            .auto_restart
+            .spec_collapse
+            .as_ref()
+            .expect("spec collapse on by default when spec_type is set");
+        assert_eq!(sc.window_ms, DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS);
+        assert_eq!(
+            sc.min_requests,
+            DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_REQUESTS
+        );
+        assert_eq!(
+            sc.poll_interval_ms,
+            DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS
+        );
+
+        // Without spec_type, no responses carry draft counts, so the trigger
+        // defaults off — on llama-cpp and command services alike.
+        let svc = svc_with_auto_restart("").unwrap();
+        assert!(svc.auto_restart.spec_collapse.is_none());
+        let svc = command_svc_with_auto_restart("").unwrap();
+        assert!(svc.auto_restart.spec_collapse.is_none());
+    }
+
+    #[test]
+    fn auto_restart_spec_collapse_toggles_and_overrides() {
+        let svc = spec_svc_with_auto_restart("auto_restart = { spec_collapse = false }").unwrap();
+        assert!(svc.auto_restart.spec_collapse.is_none());
+        // The other default triggers stay on.
+        assert!(svc.auto_restart.error_rate.is_some());
+
+        let svc = spec_svc_with_auto_restart(
+            "auto_restart.spec_collapse = { window = \"5m\", min_requests = 25, poll_interval = \"10s\" }",
+        )
+        .unwrap();
+        let sc = svc.auto_restart.spec_collapse.as_ref().unwrap();
+        assert_eq!(sc.window_ms, 5 * 60 * 1000);
+        assert_eq!(sc.min_requests, 25);
+        assert_eq!(sc.poll_interval_ms, 10 * 1000);
+    }
+
+    #[test]
+    fn auto_restart_spec_collapse_explicit_enable_requires_spec_type() {
+        // An explicit per-service enable on a service that can never produce
+        // draft counts is a configuration error, not a silent no-op.
+        let err = svc_with_auto_restart("auto_restart = { spec_collapse = true }").unwrap_err();
+        assert!(
+            format!("{err}").contains("requires spec_type"),
+            "unexpected error: {err}"
+        );
+        assert!(command_svc_with_auto_restart("auto_restart = { spec_collapse = true }").is_err());
+        // An explicit disable is always fine.
+        assert!(svc_with_auto_restart("auto_restart = { spec_collapse = false }").is_ok());
+    }
+
+    #[test]
+    fn auto_restart_spec_collapse_rejects_zero_thresholds() {
+        assert!(
+            spec_svc_with_auto_restart("auto_restart.spec_collapse = { window = \"0s\" }").is_err()
+        );
+        assert!(
+            spec_svc_with_auto_restart("auto_restart.spec_collapse = { min_requests = 0 }")
+                .is_err()
+        );
+        assert!(
+            spec_svc_with_auto_restart("auto_restart.spec_collapse = { poll_interval = \"0s\" }")
                 .is_err()
         );
     }

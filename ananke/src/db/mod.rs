@@ -29,6 +29,18 @@ use crate::{
 /// time by [`Database::insert_service_restart`].
 const SERVICE_RESTART_CAP: u32 = 50;
 
+/// Result of [`Database::spec_acceptance_since`]: draft-acceptance figures
+/// for the recent window plus the run's lifetime accepted total.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpecAcceptance {
+    /// Drafting requests whose completion falls inside the window.
+    pub window_drafting: u64,
+    /// Draft tokens accepted across the window's drafting requests.
+    pub window_accepted: u64,
+    /// Draft tokens accepted across the whole run.
+    pub run_accepted: u64,
+}
+
 /// Cloneable database handle. All queries go through the shared
 /// `Connection` behind a `parking_lot::Mutex`. Lock durations stay in
 /// the microsecond range because SQLite on local disk is fast and
@@ -182,6 +194,54 @@ impl Database {
                 // SUM over zero rows is NULL, hence the Option.
                 let errors: i64 = row.get::<_, Option<i64>>(1)?.unwrap_or(0);
                 Ok((total.max(0) as u64, errors.max(0) as u64))
+            },
+        )
+        .map_err(|e| self.db_err(e))
+    }
+
+    /// Draft-acceptance figures for one run, for the spec_collapse
+    /// auto-restart watchdog. A request "drafts" when the engine reported a
+    /// positive `draft_tokens`; rows without draft columns (no speculative
+    /// decoding, non-llama engines, pre-migration rows) never count. Scoped
+    /// to `run_id` for the same reason as [`Self::error_rate_since`].
+    ///
+    /// The recency window is keyed on request *completion* time
+    /// (`timestamp_ms + duration_ms`) rather than the start-stamped
+    /// `timestamp_ms`: rows only appear at completion, and the failure this
+    /// watchdog detects produces long garbage generations, so a start-keyed
+    /// window would exclude exactly the requests that evidence the wedge.
+    ///
+    /// `run_accepted` sums acceptance over the whole run so the caller can
+    /// require a collapse (prior acceptance, then none) rather than firing
+    /// on a workload that never accepts.
+    pub async fn spec_acceptance_since(
+        &self,
+        service_id: i64,
+        run_id: i64,
+        since_ms: i64,
+    ) -> Result<SpecAcceptance, ExpectedError> {
+        let conn = self.conn.lock();
+        conn.query_row(
+            "SELECT SUM(CASE WHEN end_ms >= ?3 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN end_ms >= ?3 THEN accepted ELSE 0 END),
+                    SUM(accepted)
+             FROM (SELECT timestamp_ms + COALESCE(duration_ms, 0) AS end_ms,
+                          COALESCE(draft_tokens_accepted, 0) AS accepted
+                   FROM request_metrics
+                   WHERE service_id = ?1 AND run_id = ?2 AND draft_tokens > 0)",
+            params![service_id, run_id, since_ms],
+            |row| {
+                // SUM over zero rows is NULL, hence the Options.
+                let get = |i: usize| {
+                    Ok::<_, rusqlite::Error>(
+                        row.get::<_, Option<i64>>(i)?.unwrap_or(0).max(0) as u64
+                    )
+                };
+                Ok(SpecAcceptance {
+                    window_drafting: get(0)?,
+                    window_accepted: get(1)?,
+                    run_accepted: get(2)?,
+                })
             },
         )
         .map_err(|e| self.db_err(e))
@@ -868,6 +928,109 @@ mod tests {
         // No rows in window → zero total, zero errors (SUM over empty is NULL).
         let (total, errors) = db.error_rate_since(svc, 2, 200_000, 500).await.unwrap();
         assert_eq!((total, errors), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn spec_acceptance_since_scopes_and_counts_drafting_rows() {
+        let db = Database::open_in_memory().await.unwrap();
+        let svc = db.upsert_service("demo", 0).await.unwrap();
+        let insert = |run_id: i64, timestamp_ms: i64, draft: Option<i64>, accepted: Option<i64>| {
+            let db = &db;
+            async move {
+                db.insert_request_metric(&RequestMetric {
+                    metric_id: 0,
+                    prompt_eval_tokens: None,
+                    service_id: svc,
+                    run_id: Some(run_id),
+                    timestamp_ms,
+                    endpoint: "/v1/chat/completions".into(),
+                    model: "demo".into(),
+                    prompt_tokens: None,
+                    completion_tokens: None,
+                    duration_ms: None,
+                    ttft_ms: None,
+                    prompt_ms: None,
+                    predicted_ms: None,
+                    draft_tokens: draft,
+                    draft_tokens_accepted: accepted,
+                    status_code: 200,
+                })
+                .await
+                .unwrap();
+            }
+        };
+
+        // Current run 2, in-window: the incident shape — every drafting
+        // request rejected wholesale — plus a non-drafting row that must not
+        // count either way.
+        insert(2, 100_000, Some(59), Some(0)).await;
+        insert(2, 101_000, Some(11), Some(0)).await;
+        insert(2, 102_000, None, None).await;
+        // A previous run's healthy acceptance must not leak into run 2.
+        insert(1, 100_500, Some(100), Some(80)).await;
+        // A healthy row before the `since` cutoff: outside the window, but
+        // still counted in the run's lifetime acceptance.
+        insert(2, 50_000, Some(20), Some(18)).await;
+
+        let a = db.spec_acceptance_since(svc, 2, 90_000).await.unwrap();
+        assert_eq!(
+            (a.window_drafting, a.window_accepted, a.run_accepted),
+            (2, 0, 18)
+        );
+
+        // One accepted token inside the window shows up in both sums.
+        insert(2, 103_000, Some(14), Some(12)).await;
+        let a = db.spec_acceptance_since(svc, 2, 90_000).await.unwrap();
+        assert_eq!(
+            (a.window_drafting, a.window_accepted, a.run_accepted),
+            (3, 12, 30)
+        );
+
+        // Empty window → zeros (SUM over empty is NULL); the run total stays.
+        let a = db.spec_acceptance_since(svc, 2, 200_000).await.unwrap();
+        assert_eq!(
+            (a.window_drafting, a.window_accepted, a.run_accepted),
+            (0, 0, 30)
+        );
+    }
+
+    /// The window keys on completion time (`timestamp_ms + duration_ms`),
+    /// not the start-stamped `timestamp_ms`: a long generation that started
+    /// before the window but finished inside it must count.
+    #[tokio::test]
+    async fn spec_acceptance_windows_on_completion_time() {
+        let db = Database::open_in_memory().await.unwrap();
+        let svc = db.upsert_service("demo", 0).await.unwrap();
+        db.insert_request_metric(&RequestMetric {
+            metric_id: 0,
+            prompt_eval_tokens: None,
+            service_id: svc,
+            run_id: Some(1),
+            // Started at 50s, ran for 5 minutes: completion at 350s.
+            timestamp_ms: 50_000,
+            endpoint: "/v1/chat/completions".into(),
+            model: "demo".into(),
+            prompt_tokens: None,
+            completion_tokens: None,
+            duration_ms: Some(300_000),
+            ttft_ms: None,
+            prompt_ms: None,
+            predicted_ms: None,
+            draft_tokens: Some(59),
+            draft_tokens_accepted: Some(0),
+            status_code: 200,
+        })
+        .await
+        .unwrap();
+
+        // A start-keyed window from 300s would miss the row; the
+        // completion-keyed window counts it.
+        let a = db.spec_acceptance_since(svc, 1, 300_000).await.unwrap();
+        assert_eq!(a.window_drafting, 1);
+
+        // A window opening after the completion excludes it.
+        let a = db.spec_acceptance_since(svc, 1, 400_000).await.unwrap();
+        assert_eq!(a.window_drafting, 0);
     }
 
     /// The input/output split is sourced tier-by-tier: engine timings

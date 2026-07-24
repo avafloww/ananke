@@ -52,6 +52,7 @@ fn genstall_only(timeout_ms: u64, max_restarts: u32) -> AutoRestartSettings {
             timeout_ms,
             poll_interval_ms: 5_000,
         }),
+        spec_collapse: None,
         min_uptime_ms: 0,
         max_restarts,
         flap_window_ms: 1_800_000,

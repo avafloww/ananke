@@ -292,7 +292,7 @@ cgroup_parent = "/system.slice/ananke-comfyui.slice"
 
 ### Auto-restart
 
-Self-healing for a `Running` service that is alive but degraded — the process has not exited, so the crash-detection path never fires, yet every request is failing or the process has accumulated dirty internal state. Two independent triggers both feed the existing drain → respawn cycle.
+Self-healing for a `Running` service that is alive but degraded — the process has not exited, so the crash-detection path never fires, yet every request is failing, hanging, or returning garbage. Five independent triggers all feed the existing drain → respawn cycle. The error-rate, TTFT-stall, and periodic triggers observe HTTP traffic at the proxy and apply to any service; the generation-stall and spec-collapse triggers read llama.cpp-specific surfaces and are gated to services that provide them. [docs/auto-restart.md](auto-restart.md) explains the reasoning behind each trigger, the exact engine coverage, and the incidents that motivated them.
 
 ```toml
 [service.auto_restart]
@@ -300,7 +300,9 @@ Self-healing for a `Running` service that is alive but degraded — the process 
 error_rate = { window = "2m", max_error_rate = 0.5, min_requests = 20, poll_interval = "30s", error_statuses = "5xx" }
 # Periodic restart (off by default; a table with an interval enables it):
 periodic = { interval = "6h", mode = "on-request" }
-# Anti-flap guardrails, shared by both triggers:
+# Speculative-decoding collapse watchdog (on by default when spec_type is set):
+spec_collapse = { window = "2m", min_requests = 10, poll_interval = "30s" }
+# Anti-flap guardrails, shared by all triggers:
 min_uptime = "5m"
 max_restarts = 3
 flap_window = "30m"
@@ -314,8 +316,9 @@ The block is resolved as a **whole unit**: a service that sets any `auto_restart
 | `periodic` | table | `false` | off | Periodic restart. Absent or `false` disables it; a table (with an `interval`) enables it. |
 | `ttft_stall` | table | `false` | on, with the defaults below | Time-to-first-token stall watchdog. `false` disables it; a table enables it and overrides the timeout. Catches a wedged child that accepts a streaming request but never emits a frame — a failure the error-rate watchdog cannot see, because the request never completes. Restarts only when the whole service has gone silent, so it never fights healthy concurrent traffic. |
 | `generation_stall` | table | bool | on for `llama-cpp` services, off for `command` services | Generation-stall watchdog. Polls the child's `/metrics` progress counters and restarts when they stay flat while requests are in flight — the wedge `ttft_stall` cannot see, because non-streaming requests give the proxy nothing to watch. Needs the child's `--metrics` endpoint; see the generation-stall trigger section below. |
-| `min_uptime` | duration string | `5m` | Minimum uptime a fresh run must reach before an error-rate or generation-stall restart may fire — the anti-flap cooldown. |
-| `max_restarts` | u32 | `3` | Error-rate and stall restarts tolerated within `flap_window` before the service is disabled with reason `auto_restart_loop` instead of restarted again. Periodic restarts are intentional and do not count toward this cap. |
+| `spec_collapse` | table | bool | on for `llama-cpp` services, off for `command` services | Speculative-decoding collapse watchdog. Fires when a run that previously accepted draft tokens stops accepting any across a full window of drafting requests, which indicates corrupted inference state (e.g. all-NaN logits) that still returns HTTP 200 and is invisible to the other watchdogs. On by default only when `spec_type` is set; an explicit per-service enable without `spec_type` is rejected. See the spec-collapse trigger section below. |
+| `min_uptime` | duration string | `5m` | Minimum uptime a fresh run must reach before an error-rate, generation-stall, or spec-collapse restart may fire — the anti-flap cooldown. |
+| `max_restarts` | u32 | `3` | Watchdog restarts (error-rate, stall, generation-stall, and spec-collapse) tolerated within `flap_window` before the service is disabled with reason `auto_restart_loop` instead of restarted again. Periodic restarts are intentional and do not count toward this cap. |
 | `flap_window` | duration string | `30m` | Sliding window over which `max_restarts` is counted. |
 
 `[service.auto_restart.error_rate]` fields:
@@ -350,7 +353,19 @@ The generation-stall trigger reads llama.cpp's Prometheus `/metrics` progress co
 | `timeout` | duration string | `5m` | How long the child's `/metrics` progress counters may stay flat, with at least one request in flight, before the service is restarted. Healthy prefill and decode both advance the counters every batch, so the default is unambiguous under load. An idle service (nothing in flight) never trips it. |
 | `poll_interval` | duration string | `30s` | How often the child's `/metrics` endpoint is polled. |
 
-When a trigger fires, the service drains (SIGTERM with grace, then SIGKILL) and returns to `Idle`; the normal ensure path respawns it — on the next request for an on-demand service, or within a few seconds for a persistent one. An auto-restart emits an `auto_restarted` event on the daemon event stream (see [the API guide](api.md)). Oneshot services never auto-restart.
+The spec-collapse trigger reads the speculative-decoding fields llama.cpp reports in each response's `timings` object (`draft_n` proposed, `draft_n_accepted` accepted), which the per-service proxy records per request. A working target/draft pairing accepts a substantial fraction of drafted tokens on nearly every request. A target with corrupted inference state (degenerate or NaN logits) rejects every draft token while still returning HTTP 200 — a failure the error-rate and stall triggers cannot detect, since nothing errors and generation keeps progressing.
+
+The trip condition requires a collapse, not just absence: the run must have accepted draft tokens at some point, and the recent window must then hold at least `min_requests` drafting requests with zero accepted between them. Workloads whose acceptance is legitimately zero from the start of a run (grammar-constrained speculative decoding, for example) never satisfy the first half and never trip the trigger. The trigger is on by default only for services that configure `spec_type`; an explicit per-service enable without `spec_type` is rejected at validation, since such a service can never produce draft counts. See [docs/auto-restart.md](auto-restart.md) for the full reasoning.
+
+`[service.auto_restart.spec_collapse]` fields:
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `window` | duration string | `2m` | Rolling window over which draft acceptance is measured, keyed on request completion time and scoped to the current run. Only requests that actually drafted (`draft_n > 0` in the engine's `timings`) count; a single accepted draft token anywhere in the window vetoes the restart. |
+| `min_requests` | u32 | `10` | Minimum count of drafting requests in the window before an all-zero acceptance is trusted — one short unlucky generation can genuinely accept nothing; this many in a row cannot. |
+| `poll_interval` | duration string | `30s` | How often the watchdog queries the metrics store. |
+
+When a trigger fires, the service drains (SIGTERM with grace, then SIGKILL) and returns to `Idle`; the normal ensure path respawns it — on the next request for an on-demand service, or within a few seconds for a persistent one. An auto-restart emits an `auto_restarted` event on the daemon event stream (see [the API guide](api.md)) and is persisted to the daemon's store, so the recent history is visible after the fact in the service detail view (web UI and `anankectl show`) even when nothing was listening at firing time. Oneshot services never auto-restart.
 
 ## Templates
 ### llama-cpp

@@ -53,6 +53,7 @@ fn stall_only(timeout_ms: u64, max_restarts: u32) -> AutoRestartSettings {
         periodic: None,
         ttft_stall: Some(TtftStallTrigger { timeout_ms }),
         generation_stall: None,
+        spec_collapse: None,
         min_uptime_ms: 0,
         max_restarts,
         flap_window_ms: 1_800_000,

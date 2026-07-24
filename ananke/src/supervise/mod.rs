@@ -40,10 +40,10 @@ use crate::{
     allocator::placement::{PackError, Packed},
     config::validate::{
         AutoRestartSettings, DEFAULT_SERVICE_PRIORITY, ErrorRateTrigger, Lifecycle, PeriodicMode,
-        ServiceConfig,
+        ServiceConfig, SpecCollapseTrigger,
     },
     daemon::events::EventBus,
-    db::{Database, logs::BatcherHandle},
+    db::{Database, SpecAcceptance, logs::BatcherHandle},
     devices::Allocation,
     supervise::{
         drain::{DrainConfig, drain_pipeline, fast_kill},
@@ -2367,6 +2367,23 @@ impl RunLoop {
         // out so a fresh run isn't probed the instant it starts.
         let mut genstall = self.genstall_setup(&auto_restart);
 
+        // Spec-collapse watchdog poll: like the error-rate poll, but only for
+        // llama-cpp services that configure speculative decoding — without
+        // `spec_type` no request can ever carry engine draft counts, so the
+        // query would be a per-interval no-op forever.
+        let mut spec_poll = auto_restart
+            .spec_collapse
+            .as_ref()
+            .filter(|_| {
+                self.current_svc()
+                    .llama_cpp()
+                    .is_some_and(|lc| lc.spec_type.is_some())
+            })
+            .map(|sc| {
+                let period = Duration::from_millis(sc.poll_interval_ms);
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period)
+            });
+
         loop {
             tokio::select! {
                 exit = child.wait() => {
@@ -2406,6 +2423,25 @@ impl RunLoop {
                             self.evaluate_generation_stall(g, running_since).await
                         && matches!(
                             self.perform_auto_restart(child, run_id, "generation_stall", detail)
+                                .await,
+                            AutoRestartOutcome::Restarted | AutoRestartOutcome::Disabled,
+                        )
+                    {
+                        return StartingOutcome::Break;
+                    }
+                }
+                // Spec-collapse watchdog poll. Mirrors the error-rate branch:
+                // the future borrows only the local `spec_poll`; the decision
+                // + restart run in the handler.
+                _ = async {
+                    match spec_poll.as_mut() {
+                        Some(p) => { p.tick().await; }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    if let Some(detail) = self.evaluate_spec_collapse(run_id, running_since).await
+                        && matches!(
+                            self.perform_auto_restart(child, run_id, "spec_collapse", detail)
                                 .await,
                             AutoRestartOutcome::Restarted | AutoRestartOutcome::Disabled,
                         )
@@ -2622,6 +2658,57 @@ impl RunLoop {
             format!(
                 "/metrics progress counters flat for {}s with {inflight} request(s) in flight (upstream wedge)",
                 gs.timeout_ms / 1000,
+            )
+        })
+    }
+
+    /// Query the current run's draft acceptance and decide whether the
+    /// spec-collapse watchdog should fire. Returns a human-readable detail
+    /// string when it should, else `None`.
+    ///
+    /// The trip condition requires an actual collapse: the run must have
+    /// accepted draft tokens at some point, and the recent window must hold
+    /// at least `min_requests` drafting requests with zero accepted between
+    /// them. The prior-acceptance requirement keeps workloads that
+    /// legitimately never accept (e.g. grammar-constrained speculative
+    /// decoding, where drafts are rejected for violating the grammar) from
+    /// tripping the watchdog: for them, zero is the workload's baseline, not
+    /// a state change. It also bounds the blast radius of any residual false
+    /// positive to a single restart — a fresh run cannot re-fire until it
+    /// has demonstrated acceptance again, so a healthy-but-zero service
+    /// never reaches the flap cap through this trigger.
+    /// Gated on the same `min_uptime` cooldown as the error-rate watchdog.
+    async fn evaluate_spec_collapse(
+        &self,
+        run_id: i64,
+        running_since: tokio::time::Instant,
+    ) -> Option<String> {
+        let ar = self.current_svc().auto_restart;
+        let sc = ar.spec_collapse.as_ref()?;
+        if tokio::time::Instant::now().duration_since(running_since)
+            < Duration::from_millis(ar.min_uptime_ms)
+        {
+            return None;
+        }
+        let since_ms = crate::tracking::now_unix_ms() - sc.window_ms as i64;
+        let acceptance = match self
+            .deps
+            .db
+            .spec_acceptance_since(self.init.service_id, run_id, since_ms)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(service = %self.init.identity.name, error = %e, "auto-restart: spec-collapse query failed");
+                return None;
+            }
+        };
+        spec_collapse_trips(acceptance, sc).then(|| {
+            format!(
+                "speculative draft acceptance collapsed: 0 draft tokens accepted across {} drafting requests over {}s, after {} accepted earlier in the run",
+                acceptance.window_drafting,
+                sc.window_ms / 1000,
+                acceptance.run_accepted,
             )
         })
     }
@@ -3213,6 +3300,15 @@ fn error_rate_trips(total: u64, errors: u64, cfg: &ErrorRateTrigger) -> Option<f
     (rate >= cfg.max_error_rate).then_some(rate)
 }
 
+/// Pure verdict for the spec-collapse watchdog: `true` when the window holds
+/// enough drafting requests to trust, their accepted-token total is exactly
+/// zero, and the run accepted draft tokens before the window — i.e. the
+/// acceptance actually collapsed rather than never existing. Kept free of
+/// I/O so it can be unit-tested directly.
+fn spec_collapse_trips(a: SpecAcceptance, cfg: &SpecCollapseTrigger) -> bool {
+    a.window_drafting >= cfg.min_requests as u64 && a.window_accepted == 0 && a.run_accepted > 0
+}
+
 /// Convert a `DeviceSlot` to the canonical string key used in
 /// `AllocationChanged` reservations (`"cpu"` or `"gpu:N"`).
 pub(crate) fn slot_to_key(slot: &crate::config::DeviceSlot) -> String {
@@ -3303,6 +3399,57 @@ mod auto_restart_tests {
     fn trips_exactly_at_threshold() {
         // Boundary: exactly 50% counts as tripping (>=).
         assert!(error_rate_trips(20, 10, &cfg(0.5, 20)).is_some());
+    }
+
+    fn sc_cfg(min_requests: u32) -> SpecCollapseTrigger {
+        SpecCollapseTrigger {
+            window_ms: 120_000,
+            min_requests,
+            poll_interval_ms: 30_000,
+        }
+    }
+
+    fn acceptance(window_drafting: u64, window_accepted: u64, run_accepted: u64) -> SpecAcceptance {
+        SpecAcceptance {
+            window_drafting,
+            window_accepted,
+            run_accepted,
+        }
+    }
+
+    #[test]
+    fn spec_collapse_trips_on_collapse_after_healthy_acceptance() {
+        // The production wedge shape: healthy acceptance earlier in the run,
+        // then dozens of drafting requests with not one accepted token.
+        assert!(spec_collapse_trips(acceptance(48, 0, 5_000), &sc_cfg(10)));
+    }
+
+    #[test]
+    fn spec_collapse_needs_min_requests() {
+        // A couple of unlucky short generations must not restart the service.
+        assert!(!spec_collapse_trips(acceptance(9, 0, 5_000), &sc_cfg(10)));
+        assert!(spec_collapse_trips(acceptance(10, 0, 5_000), &sc_cfg(10)));
+    }
+
+    #[test]
+    fn spec_collapse_vetoed_by_any_window_acceptance() {
+        // One accepted draft token anywhere in the window proves the pairing
+        // still works — even 48 otherwise-empty requests must not trip it.
+        assert!(!spec_collapse_trips(acceptance(48, 1, 5_000), &sc_cfg(10)));
+    }
+
+    #[test]
+    fn spec_collapse_needs_prior_acceptance() {
+        // A run that has never accepted a draft token is a workload property
+        // (e.g. grammar-constrained speculative decoding), not a collapse.
+        assert!(!spec_collapse_trips(acceptance(48, 0, 0), &sc_cfg(10)));
+    }
+
+    #[test]
+    fn spec_collapse_ignores_empty_window() {
+        // No drafting traffic at all (idle, or a non-spec service).
+        assert!(!spec_collapse_trips(acceptance(0, 0, 0), &sc_cfg(10)));
+        assert!(!spec_collapse_trips(acceptance(0, 0, 5_000), &sc_cfg(10)));
     }
 
     #[test]
