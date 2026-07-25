@@ -14,12 +14,14 @@ use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
 
-use super::{
-    kv,
-    llama::{collect_non_layer, collect_per_layer},
-    types::{Estimate, EstimatorInputs},
+use crate::{
+    estimator::{
+        compute_buffer, kv,
+        llama::{collect_non_layer, collect_per_layer},
+        types::{Estimate, EstimatorInputs},
+    },
+    gguf::GgufSummary,
 };
-use crate::gguf::GgufSummary;
 
 /// Architectures that mix attention with recurrent SSM layers (no MoE).
 pub const HYBRID_FAMILY: &[&str] = &["jamba", "qwen35"];
@@ -97,9 +99,9 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     Estimate {
         weights_bytes,
         kv_per_token,
-        compute_buffer_mb: inputs.compute_buffer_mb.unwrap_or_else(|| {
-            super::compute_buffer::default_for(summary, inputs.context, inputs.ubatch)
-        }),
+        compute_buffer_mb: inputs
+            .compute_buffer_mb
+            .unwrap_or_else(|| compute_buffer::default_for(summary, inputs.context, inputs.ubatch)),
         mtp_bytes: 0,
         output_buffer_bytes: 0,
         per_layer_bytes: Some(per_layer),

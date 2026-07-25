@@ -15,8 +15,11 @@ use std::collections::BTreeMap;
 use regex::Regex;
 use tracing::warn;
 
-use super::{llama::layer_index, types::Estimate};
-use crate::{config::DeviceSlot, gguf::GgufSummary};
+use crate::{
+    config::DeviceSlot,
+    estimator::{llama::layer_index, moe::expert_kind, types::Estimate},
+    gguf::GgufSummary,
+};
 
 #[derive(Debug)]
 pub struct OverrideRule {
@@ -95,7 +98,7 @@ pub fn apply(estimate: &mut Estimate, summary: &GgufSummary, rules: &[OverrideRu
             // An operator rule that pins an expert tensor takes it out of the
             // packer's auto-offload pool: drop it from the itemised experts so
             // the packer doesn't double-place or re-offload it.
-            if let Some(kind) = super::moe::expert_kind(tensor.name.as_str())
+            if let Some(kind) = expert_kind(tensor.name.as_str())
                 && let Some(experts) = estimate.expert_tensors.as_mut()
             {
                 experts.retain(|e| !(e.layer == idx && e.kind == kind));

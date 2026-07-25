@@ -8,7 +8,7 @@ use nvml_wrapper::Nvml;
 use parking_lot::Mutex;
 use tracing::warn;
 
-use super::probe::{GpuInfo, GpuMemory, GpuProbe, GpuProcess};
+use crate::devices::probe::{GpuInfo, GpuMemory, GpuProbe, GpuProcess};
 
 pub struct NvmlProbe {
     nvml: Arc<Nvml>,

@@ -1,6 +1,6 @@
 //! Render `CUDA_VISIBLE_DEVICES` from an `Allocation`.
 
-use super::Allocation;
+use crate::devices::Allocation;
 
 /// Return the value to set for `CUDA_VISIBLE_DEVICES` given the service's
 /// allocation and policy.

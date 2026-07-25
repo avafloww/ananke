@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use super::probe::{GpuInfo, GpuMemory, GpuProbe, GpuProcess};
+use crate::devices::probe::{GpuInfo, GpuMemory, GpuProbe, GpuProcess};
 
 #[derive(Debug, Clone)]
 pub struct FakeGpu {

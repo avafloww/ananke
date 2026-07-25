@@ -2,11 +2,13 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{
-    reader::{ReadError, read_single},
-    types::GgufSummary,
+use crate::{
+    gguf::{
+        reader::{ReadError, read_single},
+        types::GgufSummary,
+    },
+    system::Fs,
 };
-use crate::system::Fs;
 
 /// Read a GGUF model. If the file is shard 0 of a multi-shard set
 /// (metadata has `split.count > 1`), walk all shards and return an

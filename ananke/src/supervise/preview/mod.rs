@@ -2,7 +2,7 @@
 //! spawning anything.
 //!
 //! This mirrors the placement decisions in
-//! [`super::RunLoop::compute_reservation_map_inner`] but as a pure function:
+//! [`crate::supervise::RunLoop::compute_reservation_map_inner`] but as a pure function:
 //! it runs the estimator and the *optimistic* packer (the pledge-book planner,
 //! so a service that is already running — whose own VRAM the nvml snapshot
 //! already reflects — still plans against the book rather than failing on its
@@ -100,7 +100,7 @@ fn plan(
 }
 
 /// Command-template placement, mirroring
-/// [`super::RunLoop::compute_command_reservation`] in optimistic mode: honour
+/// [`crate::supervise::RunLoop::compute_command_reservation`] in optimistic mode: honour
 /// an explicit `placement_override`, else pin `CpuOnly` services to the CPU,
 /// else pick the GPU with the most headroom. An empty map (no reservation)
 /// renders a deterministic empty `CUDA_VISIBLE_DEVICES`.

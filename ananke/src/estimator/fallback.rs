@@ -5,8 +5,13 @@ use std::collections::BTreeMap;
 use smol_str::SmolStr;
 use tracing::warn;
 
-use super::types::{Estimate, NonLayer};
-use crate::gguf::GgufSummary;
+use crate::{
+    estimator::{
+        compute_buffer,
+        types::{Estimate, NonLayer},
+    },
+    gguf::GgufSummary,
+};
 
 /// Multiplier applied to the GGUF's on-disk tensor bytes as a rough
 /// headroom factor for the unmodelled non-tensor overhead (KV, compute
@@ -32,7 +37,7 @@ pub fn estimate_fallback(summary: &GgufSummary, context: u32) -> Estimate {
         kv_per_token: 0,
         // Unknown archs never hit the ubatch-sensitive deepseek4 curve, so
         // the default ubatch is fine here.
-        compute_buffer_mb: super::compute_buffer::default_for(summary, context, None),
+        compute_buffer_mb: compute_buffer::default_for(summary, context, None),
         mtp_bytes: 0,
         output_buffer_bytes: 0,
         per_layer_bytes: None,

@@ -40,7 +40,7 @@ pub async fn run(
                     "model is required when a prompt is provided; either pass a model name or omit the prompt to pick interactively".into(),
                 ));
             }
-            match super::picker::pick_service(client).await? {
+            match crate::commands::picker::pick_service(client).await? {
                 Some(name) => name,
                 None => return Ok(()),
             }
@@ -56,7 +56,7 @@ pub async fn run(
 
     if prompt.is_empty() {
         // No prompt — enter interactive TUI mode.
-        super::tui::run(client, &resolved_model, system_prompt).await
+        crate::commands::tui::run(client, &resolved_model, system_prompt).await
     } else if json {
         run_non_streaming(openai_url, &resolved_model, prompt, system_prompt).await
     } else {

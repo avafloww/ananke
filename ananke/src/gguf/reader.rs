@@ -13,8 +13,10 @@ use std::{
 
 use smol_str::SmolStr;
 
-use super::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
-use crate::system::Fs;
+use crate::{
+    gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue},
+    system::Fs,
+};
 
 const MAGIC: &[u8; 4] = b"GGUF";
 

@@ -8,11 +8,14 @@ use std::collections::BTreeMap;
 
 use smol_str::SmolStr;
 
-use super::{
-    llama::collect_non_layer,
-    types::{Estimate, EstimatorInputs},
+use crate::{
+    estimator::{
+        compute_buffer,
+        llama::{collect_non_layer, collect_per_layer},
+        types::{Estimate, EstimatorInputs},
+    },
+    gguf::GgufSummary,
 };
-use crate::gguf::GgufSummary;
 
 /// Default mamba.ssm.state_size when the model metadata omits it. Matches the
 /// Mamba-1 reference implementation.
@@ -44,7 +47,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     };
     let n_layers = summary.block_count.unwrap_or(0);
 
-    let per_layer = super::llama::collect_per_layer(summary, n_layers);
+    let per_layer = collect_per_layer(summary, n_layers);
     let non_layer = collect_non_layer(summary);
 
     let weights_bytes = per_layer.iter().sum::<u64>()
@@ -77,7 +80,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         kv_per_token,
         compute_buffer_mb: inputs
             .compute_buffer_mb
-            .unwrap_or_else(|| super::compute_buffer::default_for(summary, context, inputs.ubatch)),
+            .unwrap_or_else(|| compute_buffer::default_for(summary, context, inputs.ubatch)),
         mtp_bytes: 0,
         output_buffer_bytes: 0,
         per_layer_bytes: Some(per_layer),

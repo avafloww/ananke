@@ -1,4 +1,4 @@
-//! Tests for [`super::render_llama_cpp_argv`] / [`super`]'s flag rendering,
+//! Tests for [`crate::supervise::spawn::llama_cpp::render_llama_cpp_argv`] / [`crate::supervise::spawn::llama_cpp`]'s flag rendering,
 //! exercised end-to-end through [`crate::supervise::spawn::render_argv`].
 
 use std::{collections::BTreeMap, path::PathBuf};

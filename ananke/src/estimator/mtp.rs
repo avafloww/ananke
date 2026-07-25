@@ -27,8 +27,7 @@
 //! 2×3090 run (peak 40858 MiB total) minus the target+mmproj estimate: the
 //! draft contributes ~400 MiB, of which ~108 MiB is weights.
 
-use super::types::EstimatorInputs;
-use crate::gguf::GgufSummary;
+use crate::{estimator::types::EstimatorInputs, gguf::GgufSummary};
 
 /// Per-MTP-context compute buffer, MiB, for the *embedded* head. Rounded up to
 /// stay above every observed datapoint (1553 MiB on 35B, 1609 MiB on 27B) with

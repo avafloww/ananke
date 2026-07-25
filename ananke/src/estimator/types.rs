@@ -127,14 +127,14 @@ pub struct Estimate {
     /// this term on the secondaries, so they fill with more expert weight
     /// instead of a phantom logits buffer. Deliberately a conservative
     /// under-estimate of the real logits allocation (see
-    /// [`super::compute_buffer::output_logits_bytes`]): subtracting less than
+    /// [`crate::estimator::compute_buffer::output_logits_bytes`]): subtracting less than
     /// the true value keeps the secondaries safe, subtracting more would
     /// under-reserve and OOM them.
     pub output_buffer_bytes: u64,
     /// Extra VRAM (bytes) for the MTP / NextN draft context when the
     /// service runs `--spec-type draft-mtp`. Zero when MTP is off or the
     /// model carries no MTP head. Reserved as a single lump on the
-    /// primary GPU by the packer. See [`super::mtp`].
+    /// primary GPU by the packer. See [`crate::estimator::mtp`].
     pub mtp_bytes: u64,
     /// Per-layer weight bytes for index-ordered packing. `None` for
     /// architectures where layer-aware placement isn't applicable

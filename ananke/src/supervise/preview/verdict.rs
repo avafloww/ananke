@@ -115,7 +115,7 @@ pub fn preview_override_placement(
 /// Placement for a command-template service that picks a GPU dynamically (no
 /// `placement_override`): it reserves `min_mb` on the GPU with the most
 /// headroom, or pins to the CPU for a cpu-only service. Mirrors
-/// [`super::RunLoop::compute_command_reservation`]. Returns `None` when the
+/// [`crate::supervise::RunLoop::compute_command_reservation`]. Returns `None` when the
 /// service reserves no VRAM (`AllocationMode::None`), so the caller renders no
 /// placement at all.
 pub fn preview_command_placement(

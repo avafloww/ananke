@@ -12,7 +12,7 @@ use std::{
 
 use serde_json::Value;
 
-use super::ts::{schema_ref_name, ts_type};
+use crate::gen_api_docs::ts::{schema_ref_name, ts_type};
 
 /// Render the full `docs/api.md` document from an OpenAPI spec.
 pub fn render_markdown(spec: &Value, prose: &ProseFragments) -> String {
