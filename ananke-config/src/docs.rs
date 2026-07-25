@@ -97,6 +97,24 @@ pub const DEFAULT_AUTO_RESTART_GENERATION_STALL_MS: u64 = 300_000;
 /// `/metrics` endpoint (30 s).
 pub const DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS: u64 = 30_000;
 
+/// Default rolling window for the auto-restart spec_collapse watchdog (2
+/// minutes). Calibrated against the 2026-07-24 all-NaN-logits incident:
+/// healthy speculative traffic held 60–100 % per-request acceptance, while
+/// the wedged run served exactly zero accepted draft tokens on every request
+/// for 45+ minutes.
+pub const DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS: u64 = 120_000;
+
+/// Default minimum count of drafted tokens in the window before an
+/// all-zero acceptance is trusted. Counted in tokens rather than requests:
+/// long generations arrive slowly but draft thousands of tokens each, and a
+/// healthy pairing accepting none of this many drafted tokens does not
+/// happen. One short unlucky generation stays under the floor.
+pub const DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_DRAFT_TOKENS: u64 = 200;
+
+/// Default cadence at which the spec_collapse watchdog polls the metrics
+/// store (30 s).
+pub const DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS: u64 = 30_000;
+
 /// Default concurrency cap on pending start requests waiting for the same
 /// supervisor to finish starting before they are rejected with `QueueFull`.
 pub const DEFAULT_START_QUEUE_DEPTH: usize = 10;
@@ -633,16 +651,22 @@ pub fn all_sections() -> Vec<SectionDoc> {
                     "Generation-stall watchdog. Polls the child's `/metrics` progress counters and restarts when they stay flat while requests are in flight — the wedge `ttft_stall` cannot see, because non-streaming requests give the proxy nothing to watch. Needs the child's `--metrics` endpoint; see the generation-stall trigger section below.",
                 ),
                 field(
+                    "spec_collapse",
+                    "table | bool",
+                    "on for `llama-cpp` services, off for `command` services",
+                    "Speculative-decoding collapse watchdog. Fires when a run that previously accepted draft tokens stops accepting any across a full window of drafting requests, which indicates corrupted inference state (e.g. all-NaN logits) that still returns HTTP 200 and is invisible to the other watchdogs. On by default only when `spec_type` is set; an explicit per-service enable without `spec_type` is rejected. See the spec-collapse trigger section below.",
+                ),
+                field(
                     "min_uptime",
                     "duration string",
                     bt_dur(DEFAULT_AUTO_RESTART_MIN_UPTIME_MS),
-                    "Minimum uptime a fresh run must reach before an error-rate or generation-stall restart may fire — the anti-flap cooldown.",
+                    "Minimum uptime a fresh run must reach before an error-rate, generation-stall, or spec-collapse restart may fire — the anti-flap cooldown.",
                 ),
                 field(
                     "max_restarts",
                     "u32",
                     bt(DEFAULT_AUTO_RESTART_MAX_RESTARTS),
-                    "Error-rate and stall restarts tolerated within `flap_window` before the service is disabled with reason `auto_restart_loop` instead of restarted again. Periodic restarts are intentional and do not count toward this cap.",
+                    "Watchdog restarts (error-rate, stall, generation-stall, and spec-collapse) tolerated within `flap_window` before the service is disabled with reason `auto_restart_loop` instead of restarted again. Periodic restarts are intentional and do not count toward this cap.",
                 ),
                 field(
                     "flap_window",
@@ -731,6 +755,30 @@ pub fn all_sections() -> Vec<SectionDoc> {
                     "duration string",
                     bt_dur(DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS),
                     "How often the child's `/metrics` endpoint is polled.",
+                ),
+            ],
+        },
+        SectionDoc {
+            id: "service_auto_restart_spec_collapse",
+            title: "Spec-collapse trigger",
+            fields: vec![
+                field(
+                    "window",
+                    "duration string",
+                    bt_dur(DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS),
+                    "Rolling window over which draft acceptance is measured, keyed on request completion time and scoped to the current run. Only requests that actually drafted (`draft_n > 0` in the engine's `timings`) count; a single accepted draft token anywhere in the window vetoes the restart.",
+                ),
+                field(
+                    "min_draft_tokens",
+                    "u64",
+                    bt(DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_DRAFT_TOKENS),
+                    "Minimum count of drafted tokens in the window before an all-zero acceptance is trusted. Counted in tokens rather than requests so that slow-arriving long generations — which draft thousands of tokens each — reach the floor on their own; one short unlucky generation stays under it.",
+                ),
+                field(
+                    "poll_interval",
+                    "duration string",
+                    bt_dur(DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS),
+                    "How often the watchdog queries the metrics store.",
                 ),
             ],
         },

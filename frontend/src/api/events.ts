@@ -126,6 +126,9 @@ export function useEventsConnection(): void {
                 queryKey: ["service-detail", event.service],
               });
             }
+            if (event.type === "auto_restarted") {
+              void qc.invalidateQueries({ queryKey: ["restarts"] });
+            }
             break;
         }
       },

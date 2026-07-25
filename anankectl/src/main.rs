@@ -167,11 +167,12 @@ enum Command {
         /// Filter to a specific run id.
         #[arg(long)]
         run: Option<i64>,
-        /// Minimum timestamp (ms since epoch).
-        #[arg(long)]
+        /// Minimum timestamp: ms since epoch, RFC 3339, a local datetime
+        /// (`2026-07-24 15:30`), a local date, or an age like `2h` / `30m`.
+        #[arg(long, value_parser = parse_time_arg)]
         since: Option<i64>,
-        /// Maximum timestamp (ms since epoch).
-        #[arg(long)]
+        /// Maximum timestamp; accepts the same forms as `--since`.
+        #[arg(long, value_parser = parse_time_arg)]
         until: Option<i64>,
         /// Cap on number of historical lines returned.
         #[arg(long, default_value_t = 200)]
@@ -312,5 +313,101 @@ async fn main() -> ExitCode {
             eprintln!("anankectl: {e}");
             e.exit_code()
         }
+    }
+}
+
+/// Parse a `--since`/`--until` value into ms since epoch. Accepts, in order:
+/// a raw integer (ms since epoch, the historical form), a relative age like
+/// `2h` or `30m` (meaning that long ago), an RFC 3339 timestamp, or a civil
+/// datetime / date interpreted in the system timezone.
+fn parse_time_arg(s: &str) -> Result<i64, String> {
+    let s = s.trim();
+    if let Ok(ms) = s.parse::<i64>() {
+        return Ok(ms);
+    }
+    if let Some(ms_ago) = parse_relative_age_ms(s) {
+        return Ok(jiff::Timestamp::now().as_millisecond() - ms_ago);
+    }
+    if let Ok(ts) = s.parse::<jiff::Timestamp>() {
+        return Ok(ts.as_millisecond());
+    }
+    let tz = jiff::tz::TimeZone::system();
+    if let Ok(dt) = s.parse::<jiff::civil::DateTime>()
+        && let Ok(zoned) = tz.to_zoned(dt)
+    {
+        return Ok(zoned.timestamp().as_millisecond());
+    }
+    if let Ok(date) = s.parse::<jiff::civil::Date>()
+        && let Ok(zoned) = tz.to_zoned(date.at(0, 0, 0, 0))
+    {
+        return Ok(zoned.timestamp().as_millisecond());
+    }
+    Err(format!(
+        "cannot parse `{s}` as a timestamp; use ms since epoch, RFC 3339, \
+         `YYYY-MM-DD[ HH:MM[:SS]]` (local time), or an age like `2h`"
+    ))
+}
+
+/// Parse `90s` / `15m` / `2h` / `1d` into a millisecond count. `None` when
+/// the string is not of that shape.
+fn parse_relative_age_ms(s: &str) -> Option<i64> {
+    let (num, unit) = s.split_at(s.len().checked_sub(1)?);
+    let per_unit: i64 = match unit {
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        _ => return None,
+    };
+    let n: i64 = num.parse().ok().filter(|n| *n >= 0)?;
+    n.checked_mul(per_unit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_ms_passes_through() {
+        assert_eq!(parse_time_arg("1784904497789"), Ok(1784904497789));
+        assert_eq!(parse_time_arg("0"), Ok(0));
+    }
+
+    #[test]
+    fn relative_ages_subtract_from_now() {
+        let now = jiff::Timestamp::now().as_millisecond();
+        let two_hours = parse_time_arg("2h").unwrap();
+        let delta = now - two_hours;
+        // Within a second of exactly two hours ago.
+        assert!((delta - 7_200_000).abs() < 1_000, "delta = {delta}");
+        assert!(parse_time_arg("30m").is_ok());
+        assert!(parse_time_arg("90s").is_ok());
+        assert!(parse_time_arg("1d").is_ok());
+    }
+
+    #[test]
+    fn rfc3339_parses() {
+        let ms = parse_time_arg("2026-07-24T15:38:47Z").unwrap();
+        // 2026-07-24T15:38:47Z as a fixed, timezone-independent instant.
+        assert_eq!(ms, 1784907527000);
+    }
+
+    #[test]
+    fn civil_datetime_uses_system_timezone() {
+        // The exact value depends on the host timezone; assert only that the
+        // forms parse and order sensibly.
+        let day = parse_time_arg("2026-07-24").unwrap();
+        let noon = parse_time_arg("2026-07-24 12:00").unwrap();
+        let noon_secs = parse_time_arg("2026-07-24 12:00:30").unwrap();
+        assert!(day < noon);
+        assert_eq!(noon_secs - noon, 30_000);
+    }
+
+    #[test]
+    fn garbage_is_rejected_with_guidance() {
+        let err = parse_time_arg("yesterday-ish").unwrap_err();
+        assert!(err.contains("cannot parse"), "{err}");
+        assert!(parse_time_arg("2x").is_err());
+        assert!(parse_time_arg("").is_err());
     }
 }

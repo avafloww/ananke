@@ -177,12 +177,32 @@ function medianGapThreshold(ts: number[]): number {
 // readable point density (~30-70 points) at any range, including the
 // 5m preset and arbitrary custom ranges. The backend accepts any
 // duration string here.
-export function bucketFor(spanMs: number): string {
+export function bucketFor(spanMs: number): BucketSize {
   if (spanMs <= 5 * 60_000) return "10s";
   if (spanMs <= 3_600_000) return "1m";
   if (spanMs <= 6 * 3_600_000) return "5m";
   if (spanMs <= 24 * 3_600_000) return "30m";
   return "2h";
+}
+
+// Millisecond widths of the bucket strings `bucketFor` produces, for
+// client-side binning of sparse event streams (e.g. restarts) to the
+// same grid the bucketed metrics use. Keyed by the literal union rather
+// than `string` so a bucket added to `bucketFor` without a width here is
+// a compile error — the alternative is a silent fallback that misaligns
+// the client-side bins against the backend's grid.
+const BUCKET_MS = {
+  "10s": 10_000,
+  "1m": 60_000,
+  "5m": 300_000,
+  "30m": 1_800_000,
+  "2h": 7_200_000,
+} as const satisfies Readonly<Record<string, number>>;
+
+export type BucketSize = keyof typeof BUCKET_MS;
+
+export function bucketMsOf(bucket: BucketSize): number {
+  return BUCKET_MS[bucket];
 }
 
 // Resolve a TimeWindow into concrete metrics-query parameters. For
@@ -192,7 +212,7 @@ export function metricsWindow(w: TimeWindow): {
   since: number;
   until: number | undefined;
   end: number;
-  bucket: string;
+  bucket: BucketSize;
 } {
   const now = Date.now();
   const since =

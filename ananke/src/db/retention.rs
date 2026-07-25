@@ -151,6 +151,8 @@ mod tests {
             ttft_ms: None,
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: 200,
         })
         .await
@@ -171,6 +173,8 @@ mod tests {
             ttft_ms: None,
             prompt_ms: None,
             predicted_ms: None,
+            draft_tokens: None,
+            draft_tokens_accepted: None,
             status_code: 200,
         })
         .await

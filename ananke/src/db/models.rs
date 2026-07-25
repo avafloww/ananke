@@ -103,7 +103,45 @@ pub struct RequestMetric {
     pub prompt_ms: Option<i64>,
     /// Engine-reported decode time (`timings.predicted_ms`), llama.cpp only.
     pub predicted_ms: Option<i64>,
+    /// Engine-reported count of tokens proposed by the speculative draft
+    /// (`timings.draft_n`), llama.cpp with speculative decoding only.
+    pub draft_tokens: Option<i64>,
+    /// Engine-reported count of draft tokens the target model accepted
+    /// (`timings.draft_n_accepted`). Sustained zero across drafting requests
+    /// is the spec_collapse watchdog's trip condition.
+    pub draft_tokens_accepted: Option<i64>,
     pub status_code: i64,
+}
+
+/// One auto-restart watchdog firing, persisted so the history survives the
+/// live event stream. See migration `0006_service_restarts`.
+#[derive(Debug, Clone)]
+pub struct ServiceRestart {
+    pub restart_id: i64,
+    pub service_id: i64,
+    /// The run that was drained by the firing.
+    pub run_id: Option<i64>,
+    pub at_ms: i64,
+    /// Which watchdog fired (`"error_rate"`, `"ttft_stall"`,
+    /// `"generation_stall"`, `"spec_collapse"`, or `"periodic"`).
+    pub trigger: String,
+    /// Human-readable reason carried by the event.
+    pub detail: String,
+}
+
+impl ServiceRestart {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            restart_id: row.get(0)?,
+            service_id: row.get(1)?,
+            run_id: row.get(2)?,
+            at_ms: row.get(3)?,
+            trigger: row.get(4)?,
+            detail: row.get(5)?,
+        })
+    }
+
+    pub const COLUMNS: &'static str = "restart_id, service_id, run_id, at_ms, trigger_name, detail";
 }
 
 #[derive(Debug, Clone)]

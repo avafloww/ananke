@@ -77,6 +77,11 @@ pub struct ServiceDetail {
     /// service has never been started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used_ms: Option<i64>,
+    /// Recent auto-restart watchdog firings, most recent first. Sourced
+    /// from the daemon's durable `service_restarts` store, so firings are
+    /// visible after the fact — not only to a live `/api/events` listener.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_restarts: Vec<RestartEvent>,
     /// Serving-runtime details for a llama-cpp service. `None` for
     /// command-template services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,6 +90,21 @@ pub struct ServiceDetail {
     /// command-template services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serving: Option<ServingConfig>,
+}
+
+/// One persisted auto-restart watchdog firing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct RestartEvent {
+    /// Wall-clock timestamp of the firing (ms since epoch).
+    pub at_ms: i64,
+    /// Which watchdog fired: `"error_rate"`, `"ttft_stall"`,
+    /// `"generation_stall"`, `"spec_collapse"`, or `"periodic"`.
+    pub trigger: String,
+    /// Human-readable reason (e.g. the observed error rate and window).
+    pub detail: String,
+    /// The run that was drained by the firing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<i64>,
 }
 
 /// Curated serving configuration for a llama-cpp service: the knobs an

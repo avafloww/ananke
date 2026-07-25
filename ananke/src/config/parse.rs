@@ -528,6 +528,14 @@ pub struct RawAutoRestart {
     /// `generation_stall = false` to opt out); disabled by default on the
     /// `command` template. A table tunes the timeout and poll interval.
     pub generation_stall: Option<Toggle<RawGenerationStallSettings>>,
+    /// Speculative-decoding collapse watchdog: restarts when a run that
+    /// previously accepted draft tokens stops accepting any (e.g. all-NaN
+    /// logits after state corruption — a failure that still returns HTTP
+    /// 200). Enabled by default on `llama-cpp` services that configure
+    /// speculative decoding (`spec_type`); an explicit per-service enable
+    /// without `spec_type` is a validation error. A table tunes the window
+    /// and thresholds.
+    pub spec_collapse: Option<Toggle<RawSpecCollapseSettings>>,
     /// Minimum uptime a fresh run must reach before another auto-restart
     /// may fire — the anti-flap cooldown.
     pub min_uptime: Option<String>,
@@ -621,6 +629,22 @@ pub struct RawGenerationStallSettings {
     /// one request in flight, before the service is restarted.
     pub timeout: Option<String>,
     /// How often the child's `/metrics` endpoint is polled.
+    pub poll_interval: Option<String>,
+}
+
+/// `[service.auto_restart.spec_collapse]` thresholds. Every field is
+/// optional and falls back to a built-in default during validation.
+#[derive(Debug, Default, Deserialize, Clone)]
+#[serde(deny_unknown_fields, default)]
+pub struct RawSpecCollapseSettings {
+    /// Rolling window over which draft acceptance is measured.
+    pub window: Option<String>,
+    /// Minimum count of drafted tokens in the window before an all-zero
+    /// acceptance is trusted — stops a couple of unlucky short generations
+    /// from restarting a healthy service. Tokens rather than requests: long
+    /// generations arrive slowly but draft thousands of tokens each.
+    pub min_draft_tokens: Option<u64>,
+    /// How often the watchdog queries the metrics store.
     pub poll_interval: Option<String>,
 }
 

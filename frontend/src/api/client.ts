@@ -9,6 +9,9 @@ type Schemas = components["schemas"];
 export type ServiceSummary = Schemas["ServiceSummary"];
 export type ServicesResponse = Schemas["ServicesResponse"];
 export type ServiceDetail = Schemas["ServiceDetail"];
+export type RestartEvent = Schemas["RestartEvent"];
+export type RestartsResponse = Schemas["RestartsResponse"];
+export type ServiceRestartEntry = Schemas["ServiceRestartEntry"];
 export type LaunchCommand = Schemas["LaunchCommand"];
 export type LaunchCommandResponse = Schemas["LaunchCommandResponse"];
 export type ModelInfo = Schemas["ModelInfo"];
@@ -166,6 +169,14 @@ export const api = {
     if (query.bucket !== undefined) params.set("bucket", query.bucket);
     const qs = params.toString();
     return getJson<MetricsResponse>(`/api/metrics${qs ? `?${qs}` : ""}`);
+  },
+  getRestarts: (service?: string, since?: number, until?: number) => {
+    const params = new URLSearchParams();
+    if (service !== undefined) params.set("service", service);
+    if (since !== undefined) params.set("since", String(since));
+    if (until !== undefined) params.set("until", String(until));
+    const qs = params.toString();
+    return getJson<RestartsResponse>(`/api/restarts${qs ? `?${qs}` : ""}`);
   },
   getDeviceSamples: (device?: string, since?: number, until?: number) => {
     const params = new URLSearchParams();

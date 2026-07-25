@@ -109,11 +109,49 @@ pub fn print_service_detail(detail: &ServiceDetail) {
             println!("    {k} = {v}");
         }
     }
+    if !detail.recent_restarts.is_empty() {
+        println!("  auto-restarts (most recent first):");
+        for r in &detail.recent_restarts {
+            println!(
+                "    {} [{}] {}",
+                format_restart_time(r.at_ms),
+                r.trigger,
+                r.detail
+            );
+        }
+    }
     if !detail.recent_logs.is_empty() {
         println!("  recent logs (last {}):", detail.recent_logs.len());
         for line in detail.recent_logs.iter().rev().take(10).rev() {
             println!("    [{}] {}", line.stream, line.line);
         }
+    }
+}
+
+/// Render a wall-clock timestamp (ms since epoch) as the local datetime plus
+/// a coarse relative age: `2026-07-24 15:41 (3h ago)`. The absolute time is
+/// what an operator correlates against other logs; the age is what they scan
+/// for at a glance.
+fn format_restart_time(at_ms: i64) -> String {
+    let age = {
+        let now_ms = jiff::Timestamp::now().as_millisecond();
+        let delta_s = (now_ms - at_ms).max(0) / 1000;
+        if delta_s < 60 {
+            format!("{delta_s}s ago")
+        } else if delta_s < 3600 {
+            format!("{}m ago", delta_s / 60)
+        } else if delta_s < 86_400 {
+            format!("{}h ago", delta_s / 3600)
+        } else {
+            format!("{}d ago", delta_s / 86_400)
+        }
+    };
+    match jiff::Timestamp::from_millisecond(at_ms) {
+        Ok(ts) => {
+            let local = ts.to_zoned(jiff::tz::TimeZone::system());
+            format!("{} ({age})", local.strftime("%Y-%m-%d %H:%M"))
+        }
+        Err(_) => age,
     }
 }
 

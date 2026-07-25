@@ -44,6 +44,7 @@ The daemon binds to loopback by default. Do **not** expose the management API or
 | `POST` | `/api/oneshot` | Create or list oneshot processes |
 | `GET` | `/api/oneshot/{id}` | Get or delete a oneshot process |
 | `DELETE` | `/api/oneshot/{id}` | Get or delete a oneshot process |
+| `GET` | `/api/restarts` | Get auto-restart firings |
 | `GET` | `/api/services` | List all services |
 | `GET` | `/api/services/{name}` | Get service detail |
 | `GET` | `/api/services/{name}/command` | Get launch command preview |
@@ -485,6 +486,36 @@ Get or delete a oneshot process
 | 204 |  | — |
 | 404 | service_not_found | `ApiError` |
 
+### Other
+
+#### GET /api/restarts
+
+Get auto-restart firings
+
+| Parameter | In | Required | Description |
+| --- | --- | --- | --- |
+| `service` | query | no | Filter to one service name |
+| `since` | query | no | Earliest at_ms, inclusive (default: 1h ago) |
+| `until` | query | no | Latest at_ms, inclusive (default: now) |
+
+| Status | Description | Body |
+| --- | --- | --- |
+| 200 |  | `RestartsResponse` |
+
+**Response (200)**:
+
+```typescript
+{
+  restarts: {
+    at_ms: number
+    detail: string
+    run_id?: number | null
+    service: string
+    trigger: string
+  }[]
+}
+```
+
 ### Services
 
 #### GET /api/services
@@ -588,6 +619,12 @@ Get service detail
     seq: number
     stream: string
     timestamp_ms: number
+  }[]
+  recent_restarts?: {
+    at_ms: number
+    detail: string
+    run_id?: number | null
+    trigger: string
   }[]
   rolling_mean?: number | null
   rolling_samples: number
@@ -970,7 +1007,7 @@ Emitted when the rolling estimator updates its correction factor for a service.
 
 #### `auto_restarted`
 
-Emitted when a `Running` service is drained and respawned by its auto-restart policy (see [auto-restart](configuration.md#auto-restart)). `trigger` is `"error_rate"`, `"periodic"`, `"ttft_stall"` (the service produced no response frame within the stall timeout while a request was in flight), or `"generation_stall"` (the child's `/metrics` progress counters stayed flat for the stall timeout while requests were in flight); `detail` is a human-readable reason such as the observed error rate and window.
+Emitted when a `Running` service is drained and respawned by its auto-restart policy (see [auto-restart](configuration.md#auto-restart)). `trigger` is `"error_rate"`, `"periodic"`, `"ttft_stall"` (the service produced no response frame within the stall timeout while a request was in flight), `"generation_stall"` (the child's `/metrics` progress counters stayed flat for the stall timeout while requests were in flight), or `"spec_collapse"` (a run that previously accepted speculative draft tokens stopped accepting any); `detail` is a human-readable reason such as the observed error rate and window.
 
 ```json
 {
@@ -1107,6 +1144,7 @@ The `/metrics` endpoint exposes Prometheus text-format metrics for external scra
 | --- | --- | --- |
 | `ananke_requests_total` | counter | Total number of requests proxied. |
 | `ananke_tokens_total` | counter | Total tokens processed (labelled by `type`: `prompt` or `completion`). |
+| `ananke_auto_restarts_total` | counter | Auto-restart watchdog firings from the daemon's persisted history (labelled by `service` and `trigger`). Aggregate globally with `sum(ananke_auto_restarts_total)`. The backing history is capped per service, so a long-accumulated count can plateau; the rate of increase is the signal. |
 | `ananke_inflight_requests` | gauge | Current number of in-flight requests. |
 | `ananke_memory_bytes` | gauge | Total memory capacity in bytes (labelled by `device`). |
 | `ananke_memory_free_bytes` | gauge | Free memory in bytes (labelled by `device`). |

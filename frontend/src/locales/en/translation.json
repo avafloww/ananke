@@ -120,7 +120,8 @@
     "allServices": "All services",
     "requestRate": "Request rate",
     "tokenThroughput": "Token throughput",
-    "errorRate": "Error rate",
+    "errorsRestarts": "Errors & auto-restarts",
+    "restarts": "Restarts",
     "avgLatency": "Avg latency",
     "tokensPerSecond": "Tokens per second",
     "memoryUtilisation": "Memory utilisation",
@@ -194,6 +195,7 @@
   },
   "serviceDetail": {
     "notFound": "service not found",
+    "autoRestarts": "Auto-restarts",
     "model": "Model",
     "configuration": "Configuration",
     "memoryEstimate": "Memory estimate",

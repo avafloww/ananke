@@ -1,19 +1,26 @@
 // Stats / observability view (`/stats`). Charts request rate, token
-// throughput, error rate, avg latency, and per-device memory utilisation
-// from the daemon's `/api/metrics` and `/api/devices/samples` endpoints.
+// throughput, error rate, auto-restarts, avg latency, and per-device
+// memory utilisation from the daemon's `/api/metrics`, `/api/restarts`,
+// and `/api/devices/samples` endpoints.
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { useMetrics, useDeviceSamples, useServices } from "../../api/hooks.ts";
+import {
+  useMetrics,
+  useDeviceSamples,
+  useRestarts,
+  useServices,
+} from "../../api/hooks.ts";
 import type { DeviceSampleResponse } from "../../api/client.ts";
 import {
   aggregateBuckets,
   groupByService,
+  toErrorsRestartsData,
   type AggregatedBucket,
   type PerServiceSeries,
 } from "../../api/metrics-aggregate.ts";
-import { metricsWindow } from "../../util.ts";
+import { bucketMsOf, metricsWindow } from "../../util.ts";
 import { Card } from "../ui/Card.tsx";
 import { ViewHeader } from "../ui/ViewHeader.tsx";
 import { Chart } from "../ui/Chart.tsx";
@@ -149,6 +156,7 @@ export function MetricsView() {
     bucket,
   });
   const deviceSamples = useDeviceSamples(undefined, since);
+  const restarts = useRestarts(serviceFilter || undefined, since, until ?? end);
 
   const loading = metrics.isPending;
 
@@ -165,6 +173,18 @@ export function MetricsView() {
   const memorySeries = useMemo(
     () => groupDeviceSamples(deviceSamples.data ?? []),
     [deviceSamples.data],
+  );
+
+  const errorsRestartsData = useMemo(
+    () =>
+      toErrorsRestartsData(
+        aggregated,
+        restarts.data ?? [],
+        since,
+        end,
+        bucketMsOf(bucket),
+      ),
+    [aggregated, restarts.data, since, end, bucket],
   );
 
   return (
@@ -238,17 +258,23 @@ export function MetricsView() {
               />
             </Card>
 
-            {/* Error rate */}
-            <Card header={t("stats.errorRate")}>
+            {/* Errors and auto-restarts on one card: the error storm and
+                the watchdog firing it provokes belong on the same axis. */}
+            <Card header={t("stats.errorsRestarts")}>
               <Chart
                 xMin={xMin}
                 xMax={xMax}
-                data={toLineData(aggregated, "errorCount")}
+                data={errorsRestartsData}
                 series={[
                   {
                     label: t("stats.errors"),
                     stroke: CHART_PALETTE[5],
                     fill: "rgba(239,90,90,0.08)",
+                  },
+                  {
+                    label: t("stats.restarts"),
+                    stroke: CHART_PALETTE[2],
+                    fill: "rgba(224,168,60,0.08)",
                   },
                 ]}
               />

@@ -38,6 +38,7 @@ utoipa-axum = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 smol_str = { version = "0.3", features = ["serde"] }
+jiff = "0.2"
 parking_lot = "0.12"
 arc-swap = "1"
 sha2 = "0.10"
