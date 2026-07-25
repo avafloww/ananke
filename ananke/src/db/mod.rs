@@ -260,6 +260,11 @@ impl Database {
     /// keeps the table bounded without a background sweeper; restarts are
     /// rare enough (the flap cap disables a service after a handful) that
     /// the extra DELETE per insert is negligible.
+    ///
+    /// The monotonic `service_restart_counts` tally is bumped in the same
+    /// breath, because the capped history cannot serve a counter: eviction
+    /// is shared across triggers, so a per-trigger count read off it can
+    /// fall. See migration `0007_service_restart_counts`.
     pub async fn insert_service_restart(&self, row: &ServiceRestart) -> Result<(), ExpectedError> {
         let conn = self.conn.lock();
         conn.execute(
@@ -276,12 +281,20 @@ impl Database {
         )
         .map_err(|e| self.db_err(e))?;
         conn.execute(
+            "INSERT INTO service_restart_counts (service_id, trigger_name, count)
+             VALUES (?1, ?2, 1)
+             ON CONFLICT(service_id, trigger_name)
+             DO UPDATE SET count = count + 1",
+            params![row.service_id, row.trigger],
+        )
+        .map_err(|e| self.db_err(e))?;
+        conn.execute(
             "DELETE FROM service_restarts
              WHERE service_id = ?1
                AND restart_id NOT IN (
                    SELECT restart_id FROM service_restarts
                    WHERE service_id = ?1
-                   ORDER BY restart_id DESC
+                   ORDER BY at_ms DESC, restart_id DESC
                    LIMIT ?2
                )",
             params![row.service_id, SERVICE_RESTART_CAP],
@@ -290,11 +303,12 @@ impl Database {
         Ok(())
     }
 
-    /// Per-trigger counts of persisted auto-restart firings for a service,
-    /// for the Prometheus `ananke_auto_restarts_total` counter. Subject to
-    /// the per-service history cap, so counts plateau once a service has
-    /// accumulated [`SERVICE_RESTART_CAP`] rows — acceptable for a counter
-    /// whose signal is its rate of increase.
+    /// Per-trigger counts of auto-restart firings for a service, for the
+    /// Prometheus `ananke_auto_restarts_total` counter. Read from the
+    /// monotonic `service_restart_counts` tally rather than the capped
+    /// `service_restarts` history, so the value never decreases — a falling
+    /// counter reads as a reset to Prometheus and would fabricate a restart
+    /// spike out of a history eviction.
     pub async fn count_service_restarts_by_trigger(
         &self,
         service_id: i64,
@@ -302,10 +316,9 @@ impl Database {
         let conn = self.conn.lock();
         let mut stmt = conn
             .prepare(
-                "SELECT trigger_name, COUNT(*)
-                 FROM service_restarts
-                 WHERE service_id = ?1
-                 GROUP BY trigger_name",
+                "SELECT trigger_name, count
+                 FROM service_restart_counts
+                 WHERE service_id = ?1",
             )
             .map_err(|e| self.db_err(e))?;
         let rows = stmt
@@ -1014,6 +1027,56 @@ mod tests {
         // No rows in window → zero total, zero errors (SUM over empty is NULL).
         let (total, errors) = db.error_rate_since(svc, 2, 200_000, 500).await.unwrap();
         assert_eq!((total, errors), (0, 0));
+    }
+
+    /// The Prometheus counter must never fall. The stored history is capped
+    /// per service across all triggers, so a service that restarts
+    /// periodically evicts its watchdog rows; the tally the counter reads
+    /// has to survive that, or a dashboard shows a phantom restart spike
+    /// where an eviction happened.
+    #[tokio::test]
+    async fn restart_counts_are_monotonic_across_history_eviction() {
+        let db = Database::open_in_memory().await.unwrap();
+        let svc = db.upsert_service("demo", 0).await.unwrap();
+        let insert = |trigger: &'static str, at_ms: i64| {
+            let db = &db;
+            async move {
+                db.insert_service_restart(&ServiceRestart {
+                    restart_id: 0,
+                    service_id: svc,
+                    run_id: Some(1),
+                    at_ms,
+                    trigger: trigger.to_string(),
+                    detail: "d".into(),
+                })
+                .await
+                .unwrap();
+            }
+        };
+
+        insert("spec_collapse", 1_000).await;
+        // Enough periodic firings to evict every row of the older trigger.
+        for i in 0..SERVICE_RESTART_CAP as i64 {
+            insert("periodic", 2_000 + i).await;
+        }
+
+        // The history has forgotten the spec_collapse firing entirely...
+        let recent = db
+            .recent_service_restarts(svc, SERVICE_RESTART_CAP)
+            .await
+            .unwrap();
+        assert_eq!(recent.len(), SERVICE_RESTART_CAP as usize);
+        assert!(recent.iter().all(|r| r.trigger == "periodic"));
+
+        // ...but the counter still reports it, and does not go backwards.
+        let counts: std::collections::HashMap<String, u64> = db
+            .count_service_restarts_by_trigger(svc)
+            .await
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(counts.get("spec_collapse"), Some(&1));
+        assert_eq!(counts.get("periodic"), Some(&(SERVICE_RESTART_CAP as u64)));
     }
 
     #[tokio::test]

@@ -104,6 +104,8 @@ Each firing is:
 
 Persistence exists because the WebSocket only reaches clients connected at the time of the firing. The stored history is served in the service detail response (`GET /api/services/{name}`, field `recent_restarts`) and shown on the web UI's service page and in `anankectl show <service>`.
 
+The Prometheus counter `ananke_auto_restarts_total{service,trigger}` is kept in a separate monotonic tally rather than counted from the stored history, which is capped per service. Counting evictable rows would let a per-trigger count fall, and a falling counter reads to Prometheus as a process restart — turning an eviction into a phantom restart spike on the dashboard.
+
 ## Design constraints
 
 Two requirements apply to any new trigger:
