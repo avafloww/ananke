@@ -389,5 +389,24 @@ async fn repeated_collapses_trip_flap_cap_and_disable() {
         sup.peek_state()
     );
 
+    // Both firings are persisted, including the one that tripped the cap —
+    // it is the one that took the service down, so it is the one an operator
+    // goes looking for. It is recorded but not broadcast as `auto_restarted`,
+    // since nothing was restarted; the `Disabled` state change carries that.
+    let restarts = h
+        .state
+        .db
+        .recent_service_restarts(service_id, 10)
+        .await
+        .unwrap();
+    assert_eq!(restarts.len(), 2, "expected both firings persisted");
+    assert!(
+        restarts[0].detail.contains("flap cap reached"),
+        "newest firing should record the disable; got {:?}",
+        restarts[0].detail
+    );
+    assert_eq!(restarts[0].run_id, Some(run_b));
+    assert_eq!(restarts[1].run_id, Some(run_a));
+
     h.cleanup().await;
 }

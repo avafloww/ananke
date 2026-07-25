@@ -2383,6 +2383,13 @@ impl RunLoop {
                 let period = Duration::from_millis(sc.poll_interval_ms);
                 tokio::time::interval_at(tokio::time::Instant::now() + period, period)
             });
+        // Latches once this run has been observed accepting draft tokens.
+        // The SQL `run_accepted` term is the primary source, but it reads
+        // `request_metrics`, which retention prunes at seven days — a run
+        // older than that would lose its arming evidence and silently stop
+        // being watched. The latch is per-run local state, so it resets on
+        // every respawn exactly like the run-scoped query does.
+        let mut spec_ever_accepted = false;
 
         loop {
             tokio::select! {
@@ -2439,7 +2446,9 @@ impl RunLoop {
                         None => std::future::pending::<()>().await,
                     }
                 } => {
-                    if let Some(detail) = self.evaluate_spec_collapse(run_id, running_since).await
+                    if let Some(detail) = self
+                        .evaluate_spec_collapse(run_id, running_since, &mut spec_ever_accepted)
+                        .await
                         && matches!(
                             self.perform_auto_restart(child, run_id, "spec_collapse", detail)
                                 .await,
@@ -2678,10 +2687,15 @@ impl RunLoop {
     /// has demonstrated acceptance again, so a healthy-but-zero service
     /// never reaches the flap cap through this trigger.
     /// Gated on the same `min_uptime` cooldown as the error-rate watchdog.
+    ///
+    /// `ever_accepted` latches the prior-acceptance requirement across polls
+    /// so it survives metrics retention pruning the run's early rows; see
+    /// where it is declared in [`Self::run_running_loop`].
     async fn evaluate_spec_collapse(
         &self,
         run_id: i64,
         running_since: tokio::time::Instant,
+        ever_accepted: &mut bool,
     ) -> Option<String> {
         let ar = self.current_svc().auto_restart;
         let sc = ar.spec_collapse.as_ref()?;
@@ -2703,13 +2717,21 @@ impl RunLoop {
                 return None;
             }
         };
-        spec_collapse_trips(acceptance, sc).then(|| {
+        *ever_accepted |= acceptance.run_accepted > 0;
+        spec_collapse_trips(acceptance, sc, *ever_accepted).then(|| {
+            // `run_accepted` can read zero even though the run demonstrably
+            // accepted earlier, if retention pruned those rows — the latch
+            // remembers what the query no longer can.
+            let earlier = if acceptance.run_accepted > 0 {
+                format!("{} accepted earlier in the run", acceptance.run_accepted)
+            } else {
+                "acceptance observed earlier in the run".to_string()
+            };
             format!(
-                "speculative draft acceptance collapsed: 0 of {} drafted tokens accepted across {} requests over {}s, after {} accepted earlier in the run",
+                "speculative draft acceptance collapsed: 0 of {} drafted tokens accepted across {} requests over {}s, after {earlier}",
                 acceptance.window_drafted,
                 acceptance.window_drafting,
                 sc.window_ms / 1000,
-                acceptance.run_accepted,
             )
         })
     }
@@ -2758,11 +2780,16 @@ impl RunLoop {
             );
             // The firing that trips the flap cap is the most important one to
             // record — it is the one that takes the service down for good.
-            self.emit_auto_restarted(
+            // Recorded but not published as `AutoRestarted`: nothing is
+            // restarted here, and the `set_state` below already broadcasts
+            // the transition to `Disabled`.
+            self.record_auto_restart(
                 trigger,
                 format!("{detail} (flap cap reached; service disabled)"),
                 run_id,
-            );
+                crate::tracking::now_unix_ms(),
+            )
+            .await;
             self.drain_now_bounded(
                 child,
                 run_id,
@@ -2777,7 +2804,7 @@ impl RunLoop {
         }
         self.auto_restart_history.push(now);
         warn!(service = %self.init.identity.name, trigger, detail = %detail, "auto-restart: watchdog firing");
-        self.emit_auto_restarted(trigger, detail, run_id);
+        self.emit_auto_restarted(trigger, detail, run_id).await;
         self.drain_now_bounded(
             child,
             run_id,
@@ -2854,17 +2881,17 @@ impl RunLoop {
         detail: String,
     ) {
         info!(service = %self.init.identity.name, detail = %detail, "auto-restart: periodic timer firing");
-        self.emit_auto_restarted("periodic", detail, run_id);
+        self.emit_auto_restarted("periodic", detail, run_id).await;
         self.drain_now(child, run_id, drain::DrainReason::AutoRestart)
             .await;
         self.set_state(ServiceState::Idle);
     }
 
     /// Publish an [`Event::AutoRestarted`] to the daemon event stream and
-    /// persist it to `service_restarts` so the firing outlives the live
-    /// WebSocket (a watchdog restart with no browser attached used to leave
-    /// nothing behind but a daemon log line).
-    fn emit_auto_restarted(&self, trigger: &str, detail: String, run_id: i64) {
+    /// persist the firing. Only for firings that actually respawn the
+    /// service — the flap-cap path calls [`Self::record_auto_restart`]
+    /// directly, since it disables rather than restarts.
+    async fn emit_auto_restarted(&self, trigger: &str, detail: String, run_id: i64) {
         let at_ms = crate::tracking::now_unix_ms();
         self.deps.events.publish(Event::AutoRestarted {
             service: self.init.identity.name.clone(),
@@ -2872,7 +2899,20 @@ impl RunLoop {
             detail: detail.clone(),
             at_ms,
         });
-        let db = self.deps.db.clone();
+        self.record_auto_restart(trigger, detail, run_id, at_ms)
+            .await;
+    }
+
+    /// Persist one watchdog firing to `service_restarts` so it outlives the
+    /// live WebSocket (a watchdog restart with no browser attached used to
+    /// leave nothing behind but a daemon log line).
+    ///
+    /// Awaited rather than detached: the flap-cap path records the firing
+    /// that takes a service down for good and then immediately drains and
+    /// disables, so a spawned task racing daemon shutdown could lose exactly
+    /// the record the operator most needs. The write is a couple of
+    /// statements against local SQLite.
+    async fn record_auto_restart(&self, trigger: &str, detail: String, run_id: i64, at_ms: i64) {
         let row = crate::db::models::ServiceRestart {
             restart_id: 0,
             service_id: self.init.service_id,
@@ -2881,11 +2921,9 @@ impl RunLoop {
             trigger: trigger.to_string(),
             detail,
         };
-        tokio::spawn(async move {
-            if let Err(e) = db.insert_service_restart(&row).await {
-                warn!(error = %e, "failed to persist auto-restart record");
-            }
-        });
+        if let Err(e) = self.deps.db.insert_service_restart(&row).await {
+            warn!(service = %self.init.identity.name, error = %e, "failed to persist auto-restart record");
+        }
     }
 
     /// Dispatch a command received while the service is Running.
@@ -2925,7 +2963,8 @@ impl RunLoop {
                         "periodic",
                         "on-request interval elapsed".into(),
                         run_id,
-                    );
+                    )
+                    .await;
                     self.drain_now(child, run_id, drain::DrainReason::AutoRestart)
                         .await;
                     self.set_state(ServiceState::Idle);
@@ -3309,8 +3348,13 @@ fn error_rate_trips(total: u64, errors: u64, cfg: &ErrorRateTrigger) -> Option<f
 /// draft thousands of tokens each, so a request floor starves on exactly
 /// the traffic a garbage wedge produces. Kept free of I/O so it can be
 /// unit-tested directly.
-fn spec_collapse_trips(a: SpecAcceptance, cfg: &SpecCollapseTrigger) -> bool {
-    a.window_drafted >= cfg.min_draft_tokens && a.window_accepted == 0 && a.run_accepted > 0
+///
+/// `ever_accepted` carries the caller's latched view of prior acceptance,
+/// which outlives retention pruning `a.run_accepted` back to zero.
+fn spec_collapse_trips(a: SpecAcceptance, cfg: &SpecCollapseTrigger, ever_accepted: bool) -> bool {
+    a.window_drafted >= cfg.min_draft_tokens
+        && a.window_accepted == 0
+        && (ever_accepted || a.run_accepted > 0)
 }
 
 /// Convert a `DeviceSlot` to the canonical string key used in
@@ -3434,7 +3478,8 @@ mod auto_restart_tests {
         // with not one accepted.
         assert!(spec_collapse_trips(
             acceptance(1, 5_000, 0, 5_000),
-            &sc_cfg(200)
+            &sc_cfg(200),
+            false,
         ));
     }
 
@@ -3443,11 +3488,13 @@ mod auto_restart_tests {
         // A couple of unlucky short generations must not restart the service.
         assert!(!spec_collapse_trips(
             acceptance(9, 199, 0, 5_000),
-            &sc_cfg(200)
+            &sc_cfg(200),
+            false,
         ));
         assert!(spec_collapse_trips(
             acceptance(9, 200, 0, 5_000),
-            &sc_cfg(200)
+            &sc_cfg(200),
+            false,
         ));
     }
 
@@ -3458,7 +3505,8 @@ mod auto_restart_tests {
         // trip it.
         assert!(!spec_collapse_trips(
             acceptance(48, 5_000, 1, 5_000),
-            &sc_cfg(200)
+            &sc_cfg(200),
+            true,
         ));
     }
 
@@ -3468,17 +3516,41 @@ mod auto_restart_tests {
         // (e.g. grammar-constrained speculative decoding), not a collapse.
         assert!(!spec_collapse_trips(
             acceptance(48, 5_000, 0, 0),
-            &sc_cfg(200)
+            &sc_cfg(200),
+            false,
+        ));
+    }
+
+    #[test]
+    fn spec_collapse_latch_survives_pruned_run_history() {
+        // Retention can prune the early rows that proved this run once
+        // accepted, zeroing the SQL term. The caller's latch keeps the
+        // trigger armed; without it, a run older than the metrics retention
+        // window would silently stop being watched.
+        assert!(!spec_collapse_trips(
+            acceptance(48, 5_000, 0, 0),
+            &sc_cfg(200),
+            false,
+        ));
+        assert!(spec_collapse_trips(
+            acceptance(48, 5_000, 0, 0),
+            &sc_cfg(200),
+            true,
         ));
     }
 
     #[test]
     fn spec_collapse_ignores_empty_window() {
         // No drafting traffic at all (idle, or a non-spec service).
-        assert!(!spec_collapse_trips(acceptance(0, 0, 0, 0), &sc_cfg(200)));
+        assert!(!spec_collapse_trips(
+            acceptance(0, 0, 0, 0),
+            &sc_cfg(200),
+            false,
+        ));
         assert!(!spec_collapse_trips(
             acceptance(0, 0, 0, 5_000),
-            &sc_cfg(200)
+            &sc_cfg(200),
+            true,
         ));
     }
 

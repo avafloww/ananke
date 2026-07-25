@@ -351,7 +351,7 @@ impl Database {
              JOIN services s ON s.service_id = r.service_id
              WHERE r.at_ms >= ?1 AND r.at_ms <= ?2
                AND (?3 IS NULL OR r.service_id = ?3)
-             ORDER BY r.at_ms ASC",
+             ORDER BY r.at_ms ASC, r.restart_id ASC",
             cols = ServiceRestart::COLUMNS
                 .split(", ")
                 .map(|c| format!("r.{c}"))
@@ -382,6 +382,9 @@ impl Database {
     }
 
     /// The newest auto-restart firings for a service, most recent first.
+    /// Ordered by wall-clock time rather than insertion order, so the
+    /// history reads chronologically even if two inserts ever land out of
+    /// order; `restart_id` only breaks ties within a millisecond.
     pub async fn recent_service_restarts(
         &self,
         service_id: i64,
@@ -391,7 +394,7 @@ impl Database {
         let sql = format!(
             "SELECT {} FROM service_restarts
              WHERE service_id = ?1
-             ORDER BY restart_id DESC
+             ORDER BY at_ms DESC, restart_id DESC
              LIMIT ?2",
             ServiceRestart::COLUMNS
         );
