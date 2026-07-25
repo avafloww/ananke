@@ -56,6 +56,8 @@ The window is keyed on request completion time (`timestamp_ms + duration_ms`), n
 
 Aborted requests need one more provision. llama.cpp normally attaches `timings` only to the final chunk of a stream, and a client that gives up on a garbage generation never receives that chunk — so the daemon injects `timings_per_token` into streamed requests to spec-decoding services, making every chunk carry the cumulative draft counts. The proxy records the last values seen when the stream ends, normally or not. Without this, the exact traffic a wedge produces — long generations cut off by client timeouts — would leave no evidence for the trigger to read.
 
+This injection is visible to clients: every chunk of such a stream carries a `timings` object rather than only the last one, which adds a few hundred bytes per token to the response. A request that sets `timings_per_token` itself keeps its own value, so a client that wants the smaller frames can opt out per request — at the cost of that request being invisible to the trigger if it is aborted. Services without `spec_type`, and non-streaming requests, are untouched.
+
 The trigger is passive: it reads metrics from real traffic and sends no probe requests. A synthetic probe (checking a response for degenerate logprobs) would extend coverage to non-speculative services, but would also reset the idle timeout and consume GPU time. Since this failure class only causes damage while traffic is flowing, and the passive signal is present whenever traffic flows, no probe is implemented.
 
 ### periodic
@@ -90,7 +92,7 @@ Three limits apply to the watchdog triggers:
 
 - **min_uptime** (default 5 minutes). A fresh run must reach this age before the error-rate, generation-stall, or spec-collapse watchdogs may fire. In addition, every watchdog query is scoped to the current run's `run_id`, so a respawned process starts with empty metrics.
 - **max_restarts within flap_window** (default 3 within 30 minutes). Repeated watchdog restarts indicate a fault that restarting does not fix. At the cap, the service is disabled with reason `auto_restart_loop` instead of restarted, and stays disabled until an operator re-enables it. Re-enabling resets the restart budget.
-- **min_requests** on the statistical triggers (error-rate, spec-collapse). Prevents a small number of requests from being read as a trend.
+- **A volume floor on the statistical triggers.** Error-rate has `min_requests`; spec-collapse has `min_draft_tokens`, for the reason given above. Either way, a small amount of traffic is not read as a trend.
 
 The stall triggers use a shortened drain wait. Their premise is that in-flight requests will never complete, so waiting the full `max_request_duration` before SIGTERM would only delay the respawn.
 
