@@ -6,20 +6,12 @@
 // state) lives in the module-level chatStore so it survives navigation
 // away and back within the same tab session.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeHighlight from "rehype-highlight";
-import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
 
 import { useServices, useInfo } from "../../api/hooks.ts";
-import { type ServiceSummary } from "../../api/client.ts";
 import { openaiBaseUrlFromListen } from "../../util.ts";
-import { formatTokenRate } from "../../util.ts";
 import {
   addAttachment,
   cancel as cancelSend,
@@ -30,71 +22,17 @@ import {
   send,
   setInput,
   useChat,
-  type Message,
-  type StreamStats,
 } from "../../api/chatStore.ts";
 import { Spinner } from "../ui/Spinner.tsx";
 import { Button } from "../ui/Button.tsx";
 import { ButtonLink } from "../ui/ButtonLink.tsx";
-import { Badge } from "../ui/Badge.tsx";
 import { EmptyState } from "../ui/EmptyState.tsx";
-import { StatusDot } from "../ui/StatusDot.tsx";
 import { CopyButton } from "../ui/CopyButton.tsx";
 import { ViewHeader } from "../ui/ViewHeader.tsx";
 import { ExternalLinkIcon, TrashIcon } from "../ui/icons.tsx";
 import { useStickToBottom } from "../../hooks/useStickToBottom.ts";
-
-// Renders assistant markdown (both the answer and the reasoning trace)
-// through one pipeline. react-markdown escapes raw HTML by default, so no
-// pre-sanitization is needed or wanted (see #24).
-function MarkdownContent({ children }: { children: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeHighlight, rehypeKatex]}
-      components={{
-        // Fenced blocks arrive wrapped in a <pre> from react-markdown; this
-        // styles that box. Inline code is a bare <code> (no <pre>), so it must
-        // not be promoted to a block.
-        pre: ({ children }) => (
-          <pre className="my-2 overflow-x-auto bg-base p-2 font-mono text-xs">
-            {children}
-          </pre>
-        ),
-        code: ({ children, className }) => {
-          // rehype-highlight tags fenced blocks with a language/hljs class;
-          // fall back to a newline check for language-less fences. Inline code
-          // gets a subtle chip; block code is left to the <pre> above.
-          const isBlock =
-            !!className ||
-            (typeof children === "string" && children.includes("\n"));
-          if (isBlock) {
-            const lang = className?.replace("language-", "");
-            return (
-              <code data-lang={lang} className={className}>
-                {children}
-              </code>
-            );
-          }
-          return (
-            <code className="rounded bg-base px-1 py-0.5 font-mono text-[0.9em]">
-              {children}
-            </code>
-          );
-        },
-        table: ({ children }) => (
-          <div className="my-2 overflow-x-auto">
-            <table className="min-w-full border-collapse text-xs">
-              {children}
-            </table>
-          </div>
-        ),
-      }}
-    >
-      {children}
-    </ReactMarkdown>
-  );
-}
+import { ModelDropdown } from "./ChatModelDropdown.tsx";
+import { MessageBubble } from "./ChatMessageBubble.tsx";
 
 export function ChatView() {
   const { t } = useTranslation();
@@ -391,250 +329,6 @@ export function ChatView() {
             )}
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function ModelDropdown({
-  models,
-  selected,
-  onSelect,
-  className = "",
-}: {
-  models: ServiceSummary[];
-  selected: string | null;
-  onSelect: (name: string) => void;
-  className?: string;
-}) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const [filter, setFilter] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent | TouchEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        close();
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  useEffect(() => {
-    if (open) {
-      inputRef.current?.focus();
-    }
-  }, [open]);
-
-  function close() {
-    setOpen(false);
-    setFilter("");
-  }
-
-  const selectedSvc = models.find((s) => s.name === selected);
-  const filtered = filter
-    ? models.filter((s) => s.name.toLowerCase().includes(filter.toLowerCase()))
-    : models;
-
-  return (
-    <div ref={ref} className={`relative ${className}`}>
-      {open ? (
-        <input
-          ref={inputRef}
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              close();
-            } else if (e.key === "Enter" && filtered.length > 0) {
-              onSelect(filtered[0].name);
-              close();
-            }
-          }}
-          placeholder={t("chat.filterModels")}
-          className="h-7 w-full rounded-sm border border-border-default bg-surface px-2 text-sm text-primary placeholder:text-tertiary focus:border-accent focus:outline-none"
-        />
-      ) : (
-        <button
-          onClick={() => setOpen(true)}
-          className="flex h-7 w-full min-w-0 items-center gap-2 rounded-sm border border-border-default bg-surface px-2 text-sm text-primary hover:bg-elevated"
-        >
-          {selectedSvc ? (
-            <>
-              <StatusDot state={selectedSvc.state} />
-              <span className="min-w-0 truncate font-mono">
-                {selectedSvc.name}
-              </span>
-              {selectedSvc.has_mmproj && (
-                <Badge variant="vision" className="shrink-0">
-                  vision
-                </Badge>
-              )}
-            </>
-          ) : (
-            <span className="text-tertiary">
-              {t("chat.selectModelPlaceholder")}
-            </span>
-          )}
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="ml-auto shrink-0 text-tertiary"
-          >
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </button>
-      )}
-      {open && (
-        <div className="absolute bottom-full left-0 z-20 mb-1 max-h-72 w-full overflow-auto rounded-md border border-border-default bg-surface shadow-lg">
-          {filtered.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-tertiary">
-              {t("chat.noMatchingModels")}
-            </div>
-          ) : (
-            filtered.map((s) => (
-              <button
-                key={s.name}
-                onClick={() => {
-                  onSelect(s.name);
-                  close();
-                }}
-                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-elevated ${
-                  s.name === selected ? "bg-elevated" : ""
-                }`}
-              >
-                <StatusDot state={s.state} />
-                <span className="font-mono text-sm text-primary">{s.name}</span>
-                {s.has_mmproj && <Badge variant="vision">vision</Badge>}
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MessageBubble({
-  message,
-  modelName,
-  liveStats,
-}: {
-  message: Message;
-  modelName: string | null;
-  liveStats: StreamStats | null;
-}) {
-  const { t } = useTranslation();
-  const isUser = message.role === "user";
-  const isSystem = message.role === "system";
-  const isAssistant = message.role === "assistant";
-
-  const label = isAssistant ? (modelName ?? t("chat.assistant")) : message.role;
-  const displayStats = liveStats ?? message.stats ?? null;
-
-  return (
-    <div className={`mb-4 ${isSystem ? "opacity-60" : ""}`}>
-      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-0">
-        <span className="eyebrow min-w-0 shrink truncate">{label}</span>
-        <span className="shrink-0 font-mono text-xs text-tertiary">
-          {message.timestamp}
-        </span>
-        {/* Forces the stats onto their own row on mobile, where the
-            label/timestamp/stats combination is too wide to fit on
-            one line; hidden on larger screens so it never forces a
-            break there. */}
-        <span className="basis-full sm:hidden" />
-        {isAssistant && displayStats && displayStats.promptTokens !== null && (
-          <span className="flex items-center gap-3 text-xs text-tertiary">
-            <span>
-              {t("chat.promptTokens", { value: displayStats.promptTokens })}
-            </span>
-            {displayStats.completionTokens !== null && (
-              <span>
-                {t("chat.outputTokens", {
-                  value: displayStats.completionTokens,
-                })}
-              </span>
-            )}
-            {displayStats.inputTokPerSec !== null &&
-            displayStats.outputTokPerSec !== null ? (
-              <>
-                <span>
-                  {t("chat.inputTokensPerSecond", {
-                    value: formatTokenRate(displayStats.inputTokPerSec),
-                  })}
-                </span>
-                <span>
-                  {t("chat.outputTokensPerSecond", {
-                    value: formatTokenRate(displayStats.outputTokPerSec),
-                  })}
-                </span>
-              </>
-            ) : (
-              displayStats.predictedPerSecond !== null && (
-                <span>
-                  {t("chat.tokensPerSecond", {
-                    value: displayStats.predictedPerSecond.toFixed(1),
-                  })}
-                </span>
-              )
-            )}
-          </span>
-        )}
-      </div>
-      <div
-        className={`rounded-md px-4 py-3 text-sm ring-1 ring-inset ${
-          isUser
-            ? "bg-accent/10 ring-accent/20"
-            : "bg-elevated ring-border-default/60"
-        } ${isSystem ? "text-secondary" : "text-primary"}`}
-      >
-        {isAssistant && message.reasoning && (
-          <details
-            open
-            className="open:mb-2 open:border-b open:border-border-default open:pb-2 [&_summary]:list-none"
-          >
-            <summary className="cursor-pointer select-none text-xs text-secondary hover:text-primary">
-              {t("chat.reasoning")}
-            </summary>
-            <div className="mt-1 max-h-40 overflow-y-auto break-words text-xs text-secondary">
-              <MarkdownContent>{message.reasoning}</MarkdownContent>
-            </div>
-          </details>
-        )}
-        {isAssistant ? (
-          message.content ? (
-            <div className="flex flex-col gap-3 overflow-hidden break-words">
-              <MarkdownContent>{message.content}</MarkdownContent>
-            </div>
-          ) : null
-        ) : (
-          <div className="whitespace-pre-wrap break-words">
-            {message.content}
-          </div>
-        )}
-        {message.images && message.images.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {message.images.map((src, i) => (
-              <img
-                key={i}
-                src={src}
-                alt={`attachment ${i + 1}`}
-                className="max-h-40 object-cover"
-              />
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );

@@ -1,0 +1,404 @@
+//! KV cache sizing for llama-family models, including the SWA and shared-KV
+//! variants (Gemma 2/3/4, LFM2).
+
+use crate::{
+    estimator::{kv, types::EstimatorInputs},
+    gguf::GgufSummary,
+};
+
+/// Hardcoded sliding-window group length for architectures where llama.cpp
+/// knows the pattern but the GGUF doesn't expose it. Gemma 2 / Gemma 3 use
+/// 1 global-attention layer per every 6 layers (5 SWA + 1 global); the HF
+/// config isn't round-tripped, so this constant mirrors the value baked
+/// into llama.cpp's `LLM_ARCH_GEMMA*` handling.
+///
+/// Architectures that ship the pattern as a per-layer bool mask (e.g.
+/// `gemma4.attention.sliding_window_pattern`) do *not* go through this
+/// function — they use the mask directly.
+pub fn hardcoded_swa_group_size(arch: &str) -> Option<u32> {
+    match arch {
+        "gemma2" | "gemma3" => Some(6),
+        _ => None,
+    }
+}
+
+/// Compute the `kv_per_token` term for a llama-family model, handling
+/// three independent knobs that can all appear together:
+///
+/// - **Scalar vs per-layer `head_count_kv`.** Nvidia's `deci` and Gemma 4
+///   both store `attention.head_count_kv` as a length-`n_layer` array;
+///   every other family we've seen stores a scalar.
+/// - **Sliding-window attention.** Gemma 2 / Gemma 3 use a hardcoded 1:5
+///   global:SWA pattern (see `hardcoded_swa_group_size`); Gemma 4 stores
+///   a per-layer bool mask in `attention.sliding_window_pattern` plus
+///   separate K/V head dims for its SWA layers. On SWA layers the KV
+///   cost caps at `min(context, sliding_window)` tokens.
+/// - **Shared-KV layers.** Gemma 4 exposes `attention.shared_kv_layers`
+///   N: the last N layers reuse the preceding layers' KV and therefore
+///   don't contribute additional cache bytes.
+///
+/// The result is folded back into `kv_per_token × context = total KV
+/// bytes` so the packer's downstream math stays identical.
+pub(crate) fn compute_kv_per_token(
+    summary: &GgufSummary,
+    arch: &str,
+    n_layers: u32,
+    inputs: &EstimatorInputs<'_>,
+) -> u64 {
+    let cache_k = inputs.cache_type_k.unwrap_or("f16");
+    let cache_v = inputs.cache_type_v.unwrap_or("f16");
+    let bytes_k = kv::kv_bytes_per_element(cache_k);
+    let bytes_v = kv::kv_bytes_per_element(cache_v);
+
+    // Head-count-KV can be a scalar (broadcast across all layers) or a
+    // per-layer array. Materialise a vector of length `n_layers` so the
+    // loop below treats both uniformly. When `head_count_kv` is absent the
+    // model has no GQA, so llama.cpp defaults `n_head_kv` to `n_head`; we
+    // mirror that by falling back to `attention.head_count` (e.g. talkie,
+    // which omits the KV key entirely).
+    let kv_heads_raw: Vec<u32> = summary
+        .metadata
+        .get(&*format!("{arch}.attention.head_count_kv"))
+        .or_else(|| {
+            summary
+                .metadata
+                .get(&*format!("{arch}.attention.head_count"))
+        })
+        .and_then(|v| v.as_u32_array())
+        .unwrap_or_default();
+    let kv_heads_per_layer: Vec<u32> = if kv_heads_raw.len() == 1 {
+        vec![kv_heads_raw[0]; n_layers as usize]
+    } else {
+        kv_heads_raw
+    };
+    if kv_heads_per_layer.is_empty() || kv_heads_per_layer.len() != n_layers as usize {
+        return 0;
+    }
+
+    // Per-head byte widths. Gemma 4 uses different head dims for SWA
+    // layers (`key_length_swa` / `value_length_swa`); everyone else
+    // reuses the same pair for both. When the keys are absent llama.cpp
+    // derives `n_embd_head = n_embd / n_head`, so mirror that before
+    // falling back to the classic 128 (which is only correct for models
+    // whose ratio happens to be 128 — e.g. lfm2's is 64).
+    let derived_head_dim = summary
+        .metadata
+        .get(&*format!("{arch}.embedding_length"))
+        .and_then(|v| v.as_u32())
+        .zip(
+            summary
+                .metadata
+                .get(&*format!("{arch}.attention.head_count"))
+                .and_then(|v| v.as_u32())
+                .filter(|&h| h > 0),
+        )
+        .map(|(embd, heads)| (embd / heads) as u64)
+        .unwrap_or(128);
+    let key_length = summary
+        .metadata
+        .get(&*format!("{arch}.attention.key_length"))
+        .and_then(|v| v.as_u32())
+        .map(|v| v as u64)
+        .unwrap_or(derived_head_dim);
+    let value_length = summary
+        .metadata
+        .get(&*format!("{arch}.attention.value_length"))
+        .and_then(|v| v.as_u32())
+        .map(|v| v as u64)
+        .unwrap_or(derived_head_dim);
+    let key_length_swa = summary
+        .metadata
+        .get(&*format!("{arch}.attention.key_length_swa"))
+        .and_then(|v| v.as_u32())
+        .map(|v| v as u64)
+        .unwrap_or(key_length);
+    let value_length_swa = summary
+        .metadata
+        .get(&*format!("{arch}.attention.value_length_swa"))
+        .and_then(|v| v.as_u32())
+        .map(|v| v as u64)
+        .unwrap_or(value_length);
+    let per_head_full = ((key_length as f64 * bytes_k) + (value_length as f64 * bytes_v)) as u64;
+    let per_head_swa =
+        ((key_length_swa as f64 * bytes_k) + (value_length_swa as f64 * bytes_v)) as u64;
+
+    // Build the per-layer SWA mask. Three sources, tried in order:
+    //   1. An explicit per-layer bool array (gemma4).
+    //   2. A hardcoded group size for architectures where llama.cpp
+    //      bakes the pattern in (gemma2 / gemma3).
+    //   3. No SWA — every layer is full attention.
+    let sliding_window = summary
+        .metadata
+        .get(&*format!("{arch}.attention.sliding_window"))
+        .and_then(|v| v.as_u32())
+        .map(|v| v as u64);
+    let pattern_mask: Option<Vec<bool>> = summary
+        .metadata
+        .get(&*format!("{arch}.attention.sliding_window_pattern"))
+        .and_then(|v| v.as_bool_array())
+        .filter(|m| m.len() == n_layers as usize);
+    let is_swa_layer: Vec<bool> = match (&pattern_mask, hardcoded_swa_group_size(arch)) {
+        (Some(mask), _) => mask.clone(),
+        (None, Some(group)) if group > 0 => (0..n_layers)
+            // Pattern `g` means every `g`-th layer (1-indexed) is global
+            // — matches both llama.cpp's gemma3 handling and the "1
+            // global per 6" HF config.
+            .map(|i| (i + 1) % group != 0)
+            .collect(),
+        _ => vec![false; n_layers as usize],
+    };
+
+    // `shared_kv_layers = N` means the last N layers reuse earlier
+    // layers' KV and contribute no additional cache bytes. Absent key =
+    // 0 shared = every layer unique.
+    let shared_kv_layers = summary
+        .metadata
+        .get(&*format!("{arch}.attention.shared_kv_layers"))
+        .and_then(|v| v.as_u32())
+        .unwrap_or(0);
+    let unique_kv_count = (n_layers as u64).saturating_sub(shared_kv_layers as u64);
+
+    // Walk the first `unique_kv_count` layers, summing the per-layer
+    // cache bytes. SWA layers cap at the window size; full-attention
+    // layers scale with the full context. We return `kv_per_token` so
+    // the packer can multiply by context and recover the total.
+    let context = inputs.context as u64;
+    if context == 0 {
+        return 0;
+    }
+    let mut total_kv_bytes = 0u64;
+    for i in 0..unique_kv_count as usize {
+        let kv_heads = kv_heads_per_layer[i] as u64;
+        let (per_head, tokens) = if is_swa_layer[i] {
+            let window = sliding_window.unwrap_or(context);
+            (per_head_swa, context.min(window))
+        } else {
+            (per_head_full, context)
+        };
+        total_kv_bytes += kv_heads * per_head * tokens;
+    }
+    total_kv_bytes / context
+}
+
+#[cfg(test)]
+mod tests {
+    use smol_str::SmolStr;
+
+    use crate::{
+        estimator::llama::{
+            estimate::estimate,
+            test_support::{fake_summary, inputs, tensor},
+        },
+        gguf::types::{GgufSummary, GgufValue},
+    };
+
+    #[test]
+    fn kv_uses_arch_metadata() {
+        let s = fake_summary();
+        let empty: Vec<String> = Vec::new();
+        let e = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        // n_layers=2, n_kv=4, k=v=128, 2 bytes/element (f16).
+        // per_layer_kv = 4 × (128*2 + 128*2) = 4 × 512 = 2048 bytes.
+        // kv_per_token = 2 × 2048 = 4096 bytes.
+        assert_eq!(e.kv_per_token, 4096);
+    }
+
+    #[test]
+    fn lfm2_hybrid_kv_prices_only_attention_layers() {
+        // LFM2.5-Embedding-350M shape: 16 blocks, head_count 16 (scalar),
+        // head_count_kv a per-layer array with zeros on shortconv layers,
+        // no key/value_length keys → head dim derives 1024 / 16 = 64.
+        let mut tensors = std::collections::BTreeMap::new();
+        for layer in 0..16u32 {
+            let kind = if layer % 3 == 2 {
+                "attn_q"
+            } else {
+                "shortconv.in_proj"
+            };
+            let name = format!("blk.{layer}.{kind}.weight");
+            tensors.insert(SmolStr::new(&name), tensor(&name, 1024 * 1024));
+        }
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert(
+            SmolStr::new("general.architecture"),
+            GgufValue::String("lfm2".into()),
+        );
+        metadata.insert(SmolStr::new("lfm2.block_count"), GgufValue::U32(16));
+        metadata.insert(SmolStr::new("lfm2.embedding_length"), GgufValue::U32(1024));
+        metadata.insert(
+            SmolStr::new("lfm2.attention.head_count"),
+            GgufValue::U32(16),
+        );
+        let kv_array: Vec<GgufValue> = (0..16)
+            .map(|i| GgufValue::U32(if i % 3 == 2 { 8 } else { 0 }))
+            .collect();
+        metadata.insert(
+            SmolStr::new("lfm2.attention.head_count_kv"),
+            GgufValue::Array(kv_array),
+        );
+        let s = GgufSummary {
+            path: "/fake".into(),
+            total_tensor_bytes: 16 * 1024 * 1024,
+            tensors,
+            metadata,
+            block_count: Some(16),
+            architecture: SmolStr::new("lfm2"),
+            shards: vec!["/fake".into()],
+        };
+
+        assert!(crate::estimator::llama::is_llama_family("lfm2"));
+        let empty: Vec<String> = Vec::new();
+        let e = estimate(&s, &inputs("f16", "f16", 16384, &empty));
+        // 5 attention layers (indices 2,5,8,11,14) × 8 kv-heads ×
+        // (64 + 64) head dims × 2 bytes (f16) = 5 × 2048 = 10240 B/token.
+        // Shortconv layers contribute exactly zero.
+        assert_eq!(e.kv_per_token, 10240);
+        // All 16 layers still carry weights for the layer split.
+        assert_eq!(e.per_layer_bytes.as_ref().unwrap().len(), 16);
+    }
+
+    #[test]
+    fn kv_quantised_shrinks() {
+        let s = fake_summary();
+        let empty: Vec<String> = Vec::new();
+        let e_q8 = estimate(&s, &inputs("q8_0", "q8_0", 4096, &empty));
+        let e_f16 = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        assert!(e_q8.kv_per_token < e_f16.kv_per_token);
+    }
+
+    #[test]
+    fn missing_head_count_kv_falls_back_to_head_count() {
+        // Talkie omits `attention.head_count_kv` (full MHA, no GQA). The KV
+        // computation must fall back to `attention.head_count` rather than
+        // returning zero, which would silently under-reserve the cache.
+        let mut tensors = std::collections::BTreeMap::new();
+        for layer in 0..2u32 {
+            for kind in ["attn_q", "attn_k", "attn_v", "ffn_down"] {
+                let name = format!("blk.{layer}.{kind}.weight");
+                tensors.insert(SmolStr::new(&name), tensor(&name, 1024 * 1024));
+            }
+        }
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert(
+            SmolStr::new("general.architecture"),
+            GgufValue::String("talkie".into()),
+        );
+        metadata.insert(SmolStr::new("talkie.block_count"), GgufValue::U32(2));
+        metadata.insert(
+            SmolStr::new("talkie.attention.head_count"),
+            GgufValue::U32(8),
+        );
+        metadata.insert(
+            SmolStr::new("talkie.attention.key_length"),
+            GgufValue::U32(128),
+        );
+        metadata.insert(
+            SmolStr::new("talkie.attention.value_length"),
+            GgufValue::U32(128),
+        );
+        let s = GgufSummary {
+            path: "/fake".into(),
+            total_tensor_bytes: 0,
+            tensors,
+            metadata,
+            block_count: Some(2),
+            architecture: SmolStr::new("talkie"),
+            shards: vec!["/fake".into()],
+        };
+        let empty: Vec<String> = Vec::new();
+        let e = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        // n_layers=2, n_kv=head_count=8, k=v=128, 2 bytes/element (f16).
+        // per_layer_kv = 8 × (128*2 + 128*2) = 8 × 512 = 4096 bytes.
+        // kv_per_token = 2 × 4096 = 8192 bytes.
+        assert_eq!(e.kv_per_token, 8192);
+    }
+
+    /// Build a gemma4-shaped summary with a given per-layer SWA mask and
+    /// head-count-KV array so the KV computation can be exercised end-to-end.
+    fn gemma4_summary(is_swa: &[bool], kv_heads: &[u32], sliding_window: u32) -> GgufSummary {
+        assert_eq!(is_swa.len(), kv_heads.len());
+        let n_layers = is_swa.len() as u32;
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert(
+            SmolStr::new("general.architecture"),
+            GgufValue::String("gemma4".into()),
+        );
+        metadata.insert(SmolStr::new("gemma4.block_count"), GgufValue::U32(n_layers));
+        metadata.insert(
+            SmolStr::new("gemma4.attention.head_count_kv"),
+            GgufValue::Array(kv_heads.iter().map(|h| GgufValue::U32(*h)).collect()),
+        );
+        metadata.insert(
+            SmolStr::new("gemma4.attention.key_length"),
+            GgufValue::U32(512),
+        );
+        metadata.insert(
+            SmolStr::new("gemma4.attention.value_length"),
+            GgufValue::U32(512),
+        );
+        metadata.insert(
+            SmolStr::new("gemma4.attention.key_length_swa"),
+            GgufValue::U32(256),
+        );
+        metadata.insert(
+            SmolStr::new("gemma4.attention.value_length_swa"),
+            GgufValue::U32(256),
+        );
+        metadata.insert(
+            SmolStr::new("gemma4.attention.sliding_window"),
+            GgufValue::U32(sliding_window),
+        );
+        metadata.insert(
+            SmolStr::new("gemma4.attention.sliding_window_pattern"),
+            GgufValue::Array(is_swa.iter().map(|b| GgufValue::Bool(*b)).collect()),
+        );
+        GgufSummary {
+            path: "/fake".into(),
+            total_tensor_bytes: 0,
+            tensors: std::collections::BTreeMap::new(),
+            metadata,
+            block_count: Some(n_layers),
+            architecture: SmolStr::new("gemma4"),
+            shards: vec!["/fake".into()],
+        }
+    }
+
+    #[test]
+    fn gemma4_swa_uses_per_layer_mask_and_swa_head_dims() {
+        // 4 layers: layer 2 is full-attention, the rest are SWA. Each layer
+        // has 8 KV heads. Context = 4096, window = 1024 — SWA layers cap
+        // their cache at the window; full layer uses the entire context.
+        let mask = [true, true, false, true];
+        let heads = [8u32, 8, 8, 8];
+        let s = gemma4_summary(&mask, &heads, 1024);
+        let empty: Vec<String> = Vec::new();
+        let e = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+
+        // Per-head bytes: f16 (2 b) × (512+512) = 2048 for full, × (256+256) = 1024 for SWA.
+        // Layer cost (K+V bytes per layer at this context):
+        //   SWA layer: 8 × 1024 × 1024 = 8_388_608 bytes
+        //   Full layer: 8 × 2048 × 4096 = 67_108_864 bytes
+        // Total: 3 × 8_388_608 + 1 × 67_108_864 = 92_274_688 bytes
+        // kv_per_token × context = total bytes, so kv_per_token = 22_528.
+        let total_kv = e.kv_per_token * e.context as u64;
+        assert_eq!(total_kv, 92_274_688);
+    }
+
+    #[test]
+    fn gemma4_shared_kv_layers_skip_cache() {
+        // Same 4-layer model as above, but the last layer is marked as a
+        // shared-KV slot — it must contribute zero KV bytes.
+        let mask = [true, true, false, true];
+        let heads = [8u32, 8, 8, 8];
+        let mut s = gemma4_summary(&mask, &heads, 1024);
+        s.metadata.insert(
+            SmolStr::new("gemma4.attention.shared_kv_layers"),
+            GgufValue::U32(1),
+        );
+        let empty: Vec<String> = Vec::new();
+        let e = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        // Total must drop by one SWA layer's worth (8_388_608 bytes).
+        let total_kv = e.kv_per_token * e.context as u64;
+        assert_eq!(total_kv, 92_274_688 - 8_388_608);
+    }
+}
