@@ -17,11 +17,11 @@ pub use ananke_config::docs::{
     DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS, DEFAULT_AUTO_RESTART_MAX_ERROR_RATE,
     DEFAULT_AUTO_RESTART_MAX_RESTARTS, DEFAULT_AUTO_RESTART_MIN_REQUESTS,
     DEFAULT_AUTO_RESTART_MIN_UPTIME_MS, DEFAULT_AUTO_RESTART_POLL_INTERVAL_MS,
-    DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_REQUESTS, DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS,
-    DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS, DEFAULT_AUTO_RESTART_TTFT_STALL_MS,
-    DEFAULT_AUTO_RESTART_WINDOW_MS, DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_EXTENDED_STREAM_DRAIN_MS,
-    DEFAULT_HEALTH_PROBE_INTERVAL_MS, DEFAULT_HEALTH_TIMEOUT_MS, DEFAULT_IDLE_TIMEOUT_MS,
-    DEFAULT_MAX_REQUEST_DURATION_MS, DEFAULT_MIN_BORROWER_RUNTIME_MS,
+    DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_DRAFT_TOKENS,
+    DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS, DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS,
+    DEFAULT_AUTO_RESTART_TTFT_STALL_MS, DEFAULT_AUTO_RESTART_WINDOW_MS, DEFAULT_DRAIN_TIMEOUT_MS,
+    DEFAULT_EXTENDED_STREAM_DRAIN_MS, DEFAULT_HEALTH_PROBE_INTERVAL_MS, DEFAULT_HEALTH_TIMEOUT_MS,
+    DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_MAX_REQUEST_DURATION_MS, DEFAULT_MIN_BORROWER_RUNTIME_MS,
     DEFAULT_OPENAI_MAX_BODY_BYTES, DEFAULT_OPENAI_MAX_BODY_MB, DEFAULT_PRIVATE_PORT_END,
     DEFAULT_PRIVATE_PORT_START, DEFAULT_SERVICE_PRIORITY,
 };
@@ -711,9 +711,11 @@ impl Default for GenerationStallTrigger {
 pub struct SpecCollapseTrigger {
     /// Rolling window over which draft acceptance is measured.
     pub window_ms: u64,
-    /// Minimum count of drafting requests in the window before an all-zero
-    /// acceptance is trusted.
-    pub min_requests: u32,
+    /// Minimum count of drafted tokens in the window before an all-zero
+    /// acceptance is trusted. Tokens rather than requests: long generations
+    /// arrive slowly but draft thousands of tokens each, so a request floor
+    /// would starve on exactly the traffic a garbage wedge produces.
+    pub min_draft_tokens: u64,
     /// How often the watchdog queries the metrics store.
     pub poll_interval_ms: u64,
 }
@@ -722,7 +724,7 @@ impl Default for SpecCollapseTrigger {
     fn default() -> Self {
         Self {
             window_ms: DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS,
-            min_requests: DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_REQUESTS,
+            min_draft_tokens: DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_DRAFT_TOKENS,
             poll_interval_ms: DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS,
         }
     }
@@ -1598,7 +1600,7 @@ fn validate_spec_collapse(
         .map(|x| field("window", x))
         .transpose()?
         .unwrap_or(d.window_ms);
-    let min_requests = s.min_requests.unwrap_or(d.min_requests);
+    let min_draft_tokens = s.min_draft_tokens.unwrap_or(d.min_draft_tokens);
     let poll_interval_ms = s
         .poll_interval
         .as_deref()
@@ -1610,9 +1612,9 @@ fn validate_spec_collapse(
             "service {name}: auto_restart.spec_collapse.window must be greater than zero"
         )));
     }
-    if min_requests == 0 {
+    if min_draft_tokens == 0 {
         return Err(fail(format!(
-            "service {name}: auto_restart.spec_collapse.min_requests must be greater than zero"
+            "service {name}: auto_restart.spec_collapse.min_draft_tokens must be greater than zero"
         )));
     }
     if poll_interval_ms == 0 {
@@ -1622,7 +1624,7 @@ fn validate_spec_collapse(
     }
     Ok(SpecCollapseTrigger {
         window_ms,
-        min_requests,
+        min_draft_tokens,
         poll_interval_ms,
     })
 }
@@ -2644,8 +2646,8 @@ devices.placement = "cpu-only"
             .expect("spec collapse on by default when spec_type is set");
         assert_eq!(sc.window_ms, DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS);
         assert_eq!(
-            sc.min_requests,
-            DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_REQUESTS
+            sc.min_draft_tokens,
+            DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_DRAFT_TOKENS
         );
         assert_eq!(
             sc.poll_interval_ms,
@@ -2668,12 +2670,12 @@ devices.placement = "cpu-only"
         assert!(svc.auto_restart.error_rate.is_some());
 
         let svc = spec_svc_with_auto_restart(
-            "auto_restart.spec_collapse = { window = \"5m\", min_requests = 25, poll_interval = \"10s\" }",
+            "auto_restart.spec_collapse = { window = \"5m\", min_draft_tokens = 400, poll_interval = \"10s\" }",
         )
         .unwrap();
         let sc = svc.auto_restart.spec_collapse.as_ref().unwrap();
         assert_eq!(sc.window_ms, 5 * 60 * 1000);
-        assert_eq!(sc.min_requests, 25);
+        assert_eq!(sc.min_draft_tokens, 400);
         assert_eq!(sc.poll_interval_ms, 10 * 1000);
     }
 
@@ -2697,7 +2699,7 @@ devices.placement = "cpu-only"
             spec_svc_with_auto_restart("auto_restart.spec_collapse = { window = \"0s\" }").is_err()
         );
         assert!(
-            spec_svc_with_auto_restart("auto_restart.spec_collapse = { min_requests = 0 }")
+            spec_svc_with_auto_restart("auto_restart.spec_collapse = { min_draft_tokens = 0 }")
                 .is_err()
         );
         assert!(

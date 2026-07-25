@@ -277,6 +277,22 @@ async fn forward_json_post(
     {
         parsed["model"] = Value::String(proxy.upstream_model.to_string());
     }
+    // For spec-decoding llama-cpp services, ask llama.cpp to attach its
+    // cumulative `timings` (including the draft counts) to every streamed
+    // chunk instead of only the final one. An aborted stream never receives
+    // the final chunk, and a garbage-generation wedge produces exactly that
+    // traffic — long generations cut off by client timeouts — so without
+    // per-chunk timings the spec-collapse watchdog gets no evidence from
+    // the requests that matter most. An explicit client value wins.
+    if parsed
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        && svc.llama_cpp().is_some_and(|lc| lc.spec_type.is_some())
+        && let Some(obj) = parsed.as_object_mut()
+    {
+        obj.entry("timings_per_token").or_insert(Value::Bool(true));
+    }
     let new_body = match serde_json::to_vec(&parsed) {
         Ok(b) => b,
         Err(e) => return errors::bad_request(format!("re-serialise failed: {e}")),

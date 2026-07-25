@@ -35,6 +35,11 @@ const SERVICE_RESTART_CAP: u32 = 50;
 pub struct SpecAcceptance {
     /// Drafting requests whose completion falls inside the window.
     pub window_drafting: u64,
+    /// Draft tokens proposed across the window's drafting requests. The
+    /// spec-collapse floor counts tokens rather than requests: long
+    /// generations arrive slowly but draft thousands of tokens each, so a
+    /// request floor would starve on exactly the traffic a wedge produces.
+    pub window_drafted: u64,
     /// Draft tokens accepted across the window's drafting requests.
     pub window_accepted: u64,
     /// Draft tokens accepted across the whole run.
@@ -223,9 +228,11 @@ impl Database {
         let conn = self.conn.lock();
         conn.query_row(
             "SELECT SUM(CASE WHEN end_ms >= ?3 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN end_ms >= ?3 THEN drafted ELSE 0 END),
                     SUM(CASE WHEN end_ms >= ?3 THEN accepted ELSE 0 END),
                     SUM(accepted)
              FROM (SELECT timestamp_ms + COALESCE(duration_ms, 0) AS end_ms,
+                          draft_tokens AS drafted,
                           COALESCE(draft_tokens_accepted, 0) AS accepted
                    FROM request_metrics
                    WHERE service_id = ?1 AND run_id = ?2 AND draft_tokens > 0)",
@@ -239,8 +246,9 @@ impl Database {
                 };
                 Ok(SpecAcceptance {
                     window_drafting: get(0)?,
-                    window_accepted: get(1)?,
-                    run_accepted: get(2)?,
+                    window_drafted: get(1)?,
+                    window_accepted: get(2)?,
+                    run_accepted: get(3)?,
                 })
             },
         )
@@ -1052,23 +1060,38 @@ mod tests {
 
         let a = db.spec_acceptance_since(svc, 2, 90_000).await.unwrap();
         assert_eq!(
-            (a.window_drafting, a.window_accepted, a.run_accepted),
-            (2, 0, 18)
+            (
+                a.window_drafting,
+                a.window_drafted,
+                a.window_accepted,
+                a.run_accepted
+            ),
+            (2, 70, 0, 18)
         );
 
         // One accepted token inside the window shows up in both sums.
         insert(2, 103_000, Some(14), Some(12)).await;
         let a = db.spec_acceptance_since(svc, 2, 90_000).await.unwrap();
         assert_eq!(
-            (a.window_drafting, a.window_accepted, a.run_accepted),
-            (3, 12, 30)
+            (
+                a.window_drafting,
+                a.window_drafted,
+                a.window_accepted,
+                a.run_accepted
+            ),
+            (3, 84, 12, 30)
         );
 
         // Empty window → zeros (SUM over empty is NULL); the run total stays.
         let a = db.spec_acceptance_since(svc, 2, 200_000).await.unwrap();
         assert_eq!(
-            (a.window_drafting, a.window_accepted, a.run_accepted),
-            (0, 0, 30)
+            (
+                a.window_drafting,
+                a.window_drafted,
+                a.window_accepted,
+                a.run_accepted
+            ),
+            (0, 0, 0, 30)
         );
     }
 

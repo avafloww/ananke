@@ -639,10 +639,11 @@ pub struct RawGenerationStallSettings {
 pub struct RawSpecCollapseSettings {
     /// Rolling window over which draft acceptance is measured.
     pub window: Option<String>,
-    /// Minimum count of drafting requests in the window before an all-zero
+    /// Minimum count of drafted tokens in the window before an all-zero
     /// acceptance is trusted — stops a couple of unlucky short generations
-    /// from restarting a healthy service.
-    pub min_requests: Option<u32>,
+    /// from restarting a healthy service. Tokens rather than requests: long
+    /// generations arrive slowly but draft thousands of tokens each.
+    pub min_draft_tokens: Option<u64>,
     /// How often the watchdog queries the metrics store.
     pub poll_interval: Option<String>,
 }

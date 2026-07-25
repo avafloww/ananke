@@ -43,7 +43,7 @@ fn chat_request() -> Request<Body> {
 /// A llama-cpp service with speculative decoding configured and only the
 /// spec-collapse watchdog enabled, with short spans so the virtual clock
 /// reaches them quickly.
-fn spec_service(min_requests: u32) -> ServiceConfig {
+fn spec_service(min_draft_tokens: u64) -> ServiceConfig {
     let mut svc = minimal_llama_service("alpha", 0);
     // Keep the idle timeout well out of the way so only the watchdog can drain.
     svc.idle_timeout_ms = 600_000;
@@ -54,7 +54,7 @@ fn spec_service(min_requests: u32) -> ServiceConfig {
     svc.auto_restart = AutoRestartSettings {
         spec_collapse: Some(SpecCollapseTrigger {
             window_ms: 120_000,
-            min_requests,
+            min_draft_tokens,
             poll_interval_ms: 500,
         }),
         min_uptime_ms: 1_000,
@@ -135,7 +135,7 @@ async fn cold_start(h: &common::TestHarness, app: &axum::Router) -> (i64, i64) {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn spec_collapse_watchdog_restarts_wedged_service() {
-    let h = build_harness(vec![spec_service(10)]).await;
+    let h = build_harness(vec![spec_service(200)]).await;
     let app = openai::router(h.state.clone());
     let (service_id, run_id) = cold_start(&h, &app).await;
     let sup = &h.supervisors[0];
@@ -194,7 +194,7 @@ async fn spec_collapse_watchdog_restarts_wedged_service() {
     assert_eq!(restarts[0].trigger, "spec_collapse");
     assert_eq!(restarts[0].run_id, Some(run_id));
     assert!(
-        restarts[0].detail.contains("0 draft tokens accepted"),
+        restarts[0].detail.contains("drafted tokens accepted"),
         "detail should carry the reason; got {:?}",
         restarts[0].detail
     );
@@ -212,7 +212,7 @@ async fn spec_collapse_watchdog_restarts_wedged_service() {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn healthy_acceptance_never_triggers() {
-    let h = build_harness(vec![spec_service(10)]).await;
+    let h = build_harness(vec![spec_service(200)]).await;
     let app = openai::router(h.state.clone());
     let (service_id, run_id) = cold_start(&h, &app).await;
     let sup = &h.supervisors[0];
@@ -235,16 +235,16 @@ async fn healthy_acceptance_never_triggers() {
 }
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn all_zero_below_min_requests_never_triggers() {
-    let h = build_harness(vec![spec_service(10)]).await;
+async fn all_zero_below_min_draft_tokens_never_triggers() {
+    let h = build_harness(vec![spec_service(200)]).await;
     let app = openai::router(h.state.clone());
     let (service_id, run_id) = cold_start(&h, &app).await;
     let sup = &h.supervisors[0];
 
     // The run has accepted before (so the collapse precondition holds), but
-    // the all-zero window holds only a handful of wholly-rejected requests —
-    // plausible for a few unlucky short generations, and below the floor
-    // that makes all-zero trustworthy.
+    // the all-zero window sums to 99 drafted tokens — plausible for a few
+    // unlucky short generations, and below the 200-token floor that makes
+    // all-zero trustworthy.
     inject_drafting_requests_at(&h.state.db, service_id, run_id, 5, 59, 45, 200_000).await;
     inject_drafting_requests(&h.state.db, service_id, run_id, 9, 11, 0).await;
     for _ in 0..10 {
@@ -266,7 +266,7 @@ async fn run_that_never_accepted_never_triggers() {
     // of the run — e.g. grammar-constrained speculative decoding, where the
     // draft's proposals are rejected for violating the grammar — must not
     // trip the watchdog: zero is its baseline, not a collapse.
-    let h = build_harness(vec![spec_service(10)]).await;
+    let h = build_harness(vec![spec_service(200)]).await;
     let app = openai::router(h.state.clone());
     let (service_id, run_id) = cold_start(&h, &app).await;
     let sup = &h.supervisors[0];
@@ -296,7 +296,7 @@ async fn non_spec_service_never_polls_even_with_trigger_configured() {
     svc.auto_restart = AutoRestartSettings {
         spec_collapse: Some(SpecCollapseTrigger {
             window_ms: 120_000,
-            min_requests: 10,
+            min_draft_tokens: 200,
             poll_interval_ms: 500,
         }),
         min_uptime_ms: 1_000,
@@ -326,7 +326,7 @@ async fn non_spec_service_never_polls_even_with_trigger_configured() {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn repeated_collapses_trip_flap_cap_and_disable() {
-    let mut svc = spec_service(10);
+    let mut svc = spec_service(200);
     // One restart tolerated; the second collapse disables instead.
     svc.auto_restart.max_restarts = 1;
 

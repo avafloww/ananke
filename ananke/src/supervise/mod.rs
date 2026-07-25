@@ -2705,7 +2705,8 @@ impl RunLoop {
         };
         spec_collapse_trips(acceptance, sc).then(|| {
             format!(
-                "speculative draft acceptance collapsed: 0 draft tokens accepted across {} drafting requests over {}s, after {} accepted earlier in the run",
+                "speculative draft acceptance collapsed: 0 of {} drafted tokens accepted across {} requests over {}s, after {} accepted earlier in the run",
+                acceptance.window_drafted,
                 acceptance.window_drafting,
                 sc.window_ms / 1000,
                 acceptance.run_accepted,
@@ -3301,12 +3302,15 @@ fn error_rate_trips(total: u64, errors: u64, cfg: &ErrorRateTrigger) -> Option<f
 }
 
 /// Pure verdict for the spec-collapse watchdog: `true` when the window holds
-/// enough drafting requests to trust, their accepted-token total is exactly
-/// zero, and the run accepted draft tokens before the window — i.e. the
-/// acceptance actually collapsed rather than never existing. Kept free of
-/// I/O so it can be unit-tested directly.
+/// enough drafted tokens to trust, their accepted total is exactly zero,
+/// and the run accepted draft tokens before the window — i.e. the
+/// acceptance actually collapsed rather than never existing. The floor
+/// counts drafted tokens, not requests: long generations arrive slowly but
+/// draft thousands of tokens each, so a request floor starves on exactly
+/// the traffic a garbage wedge produces. Kept free of I/O so it can be
+/// unit-tested directly.
 fn spec_collapse_trips(a: SpecAcceptance, cfg: &SpecCollapseTrigger) -> bool {
-    a.window_drafting >= cfg.min_requests as u64 && a.window_accepted == 0 && a.run_accepted > 0
+    a.window_drafted >= cfg.min_draft_tokens && a.window_accepted == 0 && a.run_accepted > 0
 }
 
 /// Convert a `DeviceSlot` to the canonical string key used in
@@ -3401,17 +3405,23 @@ mod auto_restart_tests {
         assert!(error_rate_trips(20, 10, &cfg(0.5, 20)).is_some());
     }
 
-    fn sc_cfg(min_requests: u32) -> SpecCollapseTrigger {
+    fn sc_cfg(min_draft_tokens: u64) -> SpecCollapseTrigger {
         SpecCollapseTrigger {
             window_ms: 120_000,
-            min_requests,
+            min_draft_tokens,
             poll_interval_ms: 30_000,
         }
     }
 
-    fn acceptance(window_drafting: u64, window_accepted: u64, run_accepted: u64) -> SpecAcceptance {
+    fn acceptance(
+        window_drafting: u64,
+        window_drafted: u64,
+        window_accepted: u64,
+        run_accepted: u64,
+    ) -> SpecAcceptance {
         SpecAcceptance {
             window_drafting,
+            window_drafted,
             window_accepted,
             run_accepted,
         }
@@ -3420,36 +3430,56 @@ mod auto_restart_tests {
     #[test]
     fn spec_collapse_trips_on_collapse_after_healthy_acceptance() {
         // The production wedge shape: healthy acceptance earlier in the run,
-        // then dozens of drafting requests with not one accepted token.
-        assert!(spec_collapse_trips(acceptance(48, 0, 5_000), &sc_cfg(10)));
+        // then a single long aborted generation drafting thousands of tokens
+        // with not one accepted.
+        assert!(spec_collapse_trips(
+            acceptance(1, 5_000, 0, 5_000),
+            &sc_cfg(200)
+        ));
     }
 
     #[test]
-    fn spec_collapse_needs_min_requests() {
+    fn spec_collapse_needs_min_draft_tokens() {
         // A couple of unlucky short generations must not restart the service.
-        assert!(!spec_collapse_trips(acceptance(9, 0, 5_000), &sc_cfg(10)));
-        assert!(spec_collapse_trips(acceptance(10, 0, 5_000), &sc_cfg(10)));
+        assert!(!spec_collapse_trips(
+            acceptance(9, 199, 0, 5_000),
+            &sc_cfg(200)
+        ));
+        assert!(spec_collapse_trips(
+            acceptance(9, 200, 0, 5_000),
+            &sc_cfg(200)
+        ));
     }
 
     #[test]
     fn spec_collapse_vetoed_by_any_window_acceptance() {
         // One accepted draft token anywhere in the window proves the pairing
-        // still works — even 48 otherwise-empty requests must not trip it.
-        assert!(!spec_collapse_trips(acceptance(48, 1, 5_000), &sc_cfg(10)));
+        // still works — even thousands of otherwise-rejected tokens must not
+        // trip it.
+        assert!(!spec_collapse_trips(
+            acceptance(48, 5_000, 1, 5_000),
+            &sc_cfg(200)
+        ));
     }
 
     #[test]
     fn spec_collapse_needs_prior_acceptance() {
         // A run that has never accepted a draft token is a workload property
         // (e.g. grammar-constrained speculative decoding), not a collapse.
-        assert!(!spec_collapse_trips(acceptance(48, 0, 0), &sc_cfg(10)));
+        assert!(!spec_collapse_trips(
+            acceptance(48, 5_000, 0, 0),
+            &sc_cfg(200)
+        ));
     }
 
     #[test]
     fn spec_collapse_ignores_empty_window() {
         // No drafting traffic at all (idle, or a non-spec service).
-        assert!(!spec_collapse_trips(acceptance(0, 0, 0), &sc_cfg(10)));
-        assert!(!spec_collapse_trips(acceptance(0, 0, 5_000), &sc_cfg(10)));
+        assert!(!spec_collapse_trips(acceptance(0, 0, 0, 0), &sc_cfg(200)));
+        assert!(!spec_collapse_trips(
+            acceptance(0, 0, 0, 5_000),
+            &sc_cfg(200)
+        ));
     }
 
     #[test]

@@ -104,11 +104,12 @@ pub const DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS: u64 = 30_000;
 /// for 45+ minutes.
 pub const DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS: u64 = 120_000;
 
-/// Default minimum count of drafting requests in the window before an
-/// all-zero acceptance is trusted. One short unlucky generation can
-/// genuinely accept nothing; ten in a row with not a single accepted token
-/// across them is unambiguous.
-pub const DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_REQUESTS: u32 = 10;
+/// Default minimum count of drafted tokens in the window before an
+/// all-zero acceptance is trusted. Counted in tokens rather than requests:
+/// long generations arrive slowly but draft thousands of tokens each, and a
+/// healthy pairing accepting none of this many drafted tokens does not
+/// happen. One short unlucky generation stays under the floor.
+pub const DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_DRAFT_TOKENS: u64 = 200;
 
 /// Default cadence at which the spec_collapse watchdog polls the metrics
 /// store (30 s).
@@ -768,10 +769,10 @@ pub fn all_sections() -> Vec<SectionDoc> {
                     "Rolling window over which draft acceptance is measured, keyed on request completion time and scoped to the current run. Only requests that actually drafted (`draft_n > 0` in the engine's `timings`) count; a single accepted draft token anywhere in the window vetoes the restart.",
                 ),
                 field(
-                    "min_requests",
-                    "u32",
-                    bt(DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_REQUESTS),
-                    "Minimum count of drafting requests in the window before an all-zero acceptance is trusted — one short unlucky generation can genuinely accept nothing; this many in a row cannot.",
+                    "min_draft_tokens",
+                    "u64",
+                    bt(DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_DRAFT_TOKENS),
+                    "Minimum count of drafted tokens in the window before an all-zero acceptance is trusted. Counted in tokens rather than requests so that slow-arriving long generations — which draft thousands of tokens each — reach the floor on their own; one short unlucky generation stays under it.",
                 ),
                 field(
                     "poll_interval",
