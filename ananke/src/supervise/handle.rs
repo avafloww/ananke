@@ -189,6 +189,25 @@ impl SupervisorHandle {
         }
     }
 
+    /// Like [`Self::stub_for_test`], but hands back the mailbox receiver so a
+    /// test can assert on the commands the handle was sent. Use this when the
+    /// behaviour under test *is* the command dispatch (e.g. "does the balloon
+    /// watchdog actually fast-kill?"); `stub_for_test`'s closed mailbox
+    /// silently swallows commands and would make such a test vacuous.
+    #[cfg(any(test, feature = "test-fakes"))]
+    pub fn stub_with_mailbox() -> (Self, mpsc::Receiver<SupervisorCommand>) {
+        let (tx, rx) = mpsc::channel(8);
+        (
+            Self {
+                name: smol_str::SmolStr::new(""),
+                tx,
+                join: tokio::sync::Mutex::new(None),
+                mirror: Arc::new(SyncMutex::new(MirroredState::default())),
+            },
+            rx,
+        )
+    }
+
     pub async fn shutdown(&self) {
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
         let _ = self

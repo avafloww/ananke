@@ -5,8 +5,8 @@
 //! management API). Readers never block the sampler; the sampler replaces
 //! the whole snapshot atomically.
 //!
-//! Also samples per-service observed memory peaks: for each running service,
-//! sums NVML VRAM + /proc/<pid>/status VmRSS and calls `observation.update_peak`.
+//! Also samples per-service observed memory: for each running service, sums
+//! NVML VRAM + /proc/<pid>/status VmRSS and calls `observation.record_sample`.
 
 use std::{sync::Arc, time::Duration};
 
@@ -57,7 +57,7 @@ pub fn spawn(
     })
 }
 
-/// Sample per-service observed memory peaks.
+/// Sample per-service observed memory.
 ///
 /// For each service with a known root PID, builds the full attribution
 /// pid set from three sources and sums NVML VRAM + `/proc/<pid>/status`
@@ -110,8 +110,14 @@ fn sample_observation(
             rss_mb = rss / (1024 * 1024),
             "observation attribution sample"
         );
+        // A tick that attributes nothing at all is a gap in the signal, not
+        // an observation of zero: the pid set can go momentarily unreadable
+        // (pid exiting between the `/proc` walk and the status read). Skip it
+        // so the retained current reading stays the last thing we actually
+        // saw, rather than dropping to zero and telling the balloon resolver
+        // the service released everything.
         if vram + rss > 0 {
-            observation.update_peak(&name, vram, rss);
+            observation.record_sample(&name, vram, rss);
         }
     }
 }

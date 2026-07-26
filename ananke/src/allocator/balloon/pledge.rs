@@ -1,8 +1,13 @@
-//! Pledge-book reconciliation: turning a recent VRAM observation window
+//! Pledge-book reconciliation: turning a recent memory-observation window
 //! into the pledge a dynamic service should hold, and deciding when that
-//! change is worth publishing.
+//! change is worth publishing. The window samples GPU VRAM or host RSS
+//! depending on which device the service's reservation actually sits on —
+//! see [`pledged_slot`].
 
-use std::{collections::VecDeque, time::Duration};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    time::Duration,
+};
 
 use parking_lot::Mutex;
 use smol_str::SmolStr;
@@ -28,6 +33,23 @@ pub struct BalloonConfig {
     pub min_borrower_runtime: Duration,
     /// Extra headroom added to the `min_mb` floor for growth detection.
     pub margin_bytes: u64,
+}
+
+/// The slot a dynamic service's reservation currently occupies: the first GPU
+/// entry in its pledge row, else the only entry (legitimately `Cpu` for a
+/// cpu-pinned service). `None` when the service holds no row — idle, draining,
+/// or never started.
+///
+/// This is read from the live row rather than derived from `placement_policy`
+/// because the policy is not the deciding input: `compute_command_reservation`
+/// honours a `placement_override` first, and falls back to the CPU when the
+/// snapshot has no GPUs at all. A `hybrid` service pinned to the CPU by an
+/// override would look GPU-bound to the policy and CPU-bound in reality.
+pub(crate) fn pledged_slot(row: &BTreeMap<DeviceSlot, u64>) -> Option<DeviceSlot> {
+    row.keys()
+        .find(|s| matches!(s, DeviceSlot::Gpu(_)))
+        .or_else(|| row.keys().next())
+        .cloned()
 }
 
 /// Compute the pledge a dynamic service should hold given a recent
@@ -93,15 +115,7 @@ pub(crate) fn reconcile_pledge(
     let Some(row) = guard.get_mut(service_name) else {
         return;
     };
-    // Pick the GPU slot the service is pinned to. Falls back to the only
-    // entry (which may legitimately be Cpu in test setups) so a CPU-spilled
-    // dynamic service still sees its pledge tracked.
-    let target_slot = row
-        .keys()
-        .find(|s| matches!(s, DeviceSlot::Gpu(_)))
-        .or_else(|| row.keys().next())
-        .cloned();
-    let Some(slot) = target_slot else {
+    let Some(slot) = pledged_slot(row) else {
         return;
     };
     let current_mb = row.get(&slot).copied();

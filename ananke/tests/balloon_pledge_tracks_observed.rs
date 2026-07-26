@@ -1,8 +1,13 @@
-//! Scenario: a dynamic-allocation service's pledge in `AllocationTable`
-//! must track its observed VRAM peak, not stay frozen at `min_mb`. Other
+//! Scenario: a dynamic-allocation service's pledge in `AllocationTable` must
+//! track its recent observed usage, not stay frozen at `min_mb`. Other
 //! services' fit decisions depend on this — pre-fix a peer could see a 2 GB
 //! pledge while ComfyUI was actually using 10 GB, book the apparent
 //! headroom, then OOM at runtime.
+//!
+//! "Recent" is the resolver's rolling window over *current* readings, so the
+//! pledge rises with a spike and falls again once it rolls out. The
+//! over-ceiling watchdog that reads the same samples lives in
+//! `balloon_ceiling_watchdog.rs`.
 //!
 //! Drives the resolver under tokio's paused clock so the
 //! `SAMPLE_INTERVAL`-driven loop can be advanced deterministically.
@@ -18,7 +23,7 @@ use ananke::{
     config::{DaemonSettings, DeviceSlot, EffectiveConfig, Lifecycle, manager::ConfigManager},
     daemon::events::EventBus,
     devices::snapshotter,
-    supervise::registry::ServiceRegistry,
+    supervise::{SupervisorCommand, SupervisorHandle, registry::ServiceRegistry},
     tracking::observation::ObservationTable,
 };
 use ananke_api::events::Event;
@@ -45,15 +50,31 @@ struct Harness {
 }
 
 fn build_harness(service: &str, min_mb: u64, max_mb: u64) -> Harness {
+    build_harness_on(service, min_mb, max_mb, DeviceSlot::Gpu(0)).0
+}
+
+/// Build a resolver harness whose service holds `slot` in the pledge book.
+/// The slot decides which reading the resolver samples, so a CPU-pinned
+/// service must be built with [`DeviceSlot::Cpu`] to exercise the RSS path.
+/// Also returns the mailbox of the registered handle so a test can assert on
+/// the commands the resolver sends.
+fn build_harness_on(
+    service: &str,
+    min_mb: u64,
+    max_mb: u64,
+    slot: DeviceSlot,
+) -> (Harness, tokio::sync::mpsc::Receiver<SupervisorCommand>) {
     let svc = SmolStr::new(service);
     let mut row = BTreeMap::new();
-    row.insert(DeviceSlot::Gpu(0), min_mb); // MB
+    row.insert(slot, min_mb); // MB
     let mut table = AllocationTable::new();
     table.insert(svc.clone(), row);
     let allocations = Arc::new(Mutex::new(table));
 
     let observation = ObservationTable::new();
     let registry = ServiceRegistry::new();
+    let (handle, mailbox) = SupervisorHandle::stub_with_mailbox();
+    registry.insert(svc.clone(), Arc::new(handle));
     let events = EventBus::new();
     let events_rx = events.subscribe();
     let (shutdown, shutdown_rx) = watch::channel(false);
@@ -90,22 +111,30 @@ fn build_harness(service: &str, min_mb: u64, max_mb: u64) -> Harness {
             shutdown: shutdown_rx,
         },
     );
-    Harness {
-        svc,
-        allocations,
-        observation,
-        events_rx,
-        shutdown,
-        _join: join,
-    }
+    (
+        Harness {
+            svc,
+            allocations,
+            observation,
+            events_rx,
+            shutdown,
+            _join: join,
+        },
+        mailbox,
+    )
 }
 
 /// Read this service's pledge for `Gpu(0)` from the allocation table.
 fn pledge_mb(table: &Mutex<AllocationTable>, service: &SmolStr) -> u64 {
+    pledge_mb_on(table, service, &DeviceSlot::Gpu(0))
+}
+
+/// Read this service's pledge for an arbitrary slot.
+fn pledge_mb_on(table: &Mutex<AllocationTable>, service: &SmolStr, slot: &DeviceSlot) -> u64 {
     table
         .lock()
         .get(service)
-        .and_then(|row| row.get(&DeviceSlot::Gpu(0)).copied())
+        .and_then(|row| row.get(slot).copied())
         .unwrap_or(0)
 }
 
@@ -145,7 +174,7 @@ async fn pledge_grows_to_observed_peak() {
 
     // Service grows to 10 GB observed peak. Advance the clock past one
     // sample interval so the resolver picks up the new value.
-    h.observation.update_peak(&h.svc, mb(10 * 1024), 0);
+    h.observation.record_sample(&h.svc, mb(10 * 1024), 0);
     step().await;
 
     let p = pledge_mb(&h.allocations, &h.svc);
@@ -170,7 +199,7 @@ async fn pledge_clamps_to_max_on_overshoot() {
     // Observed peak above max_mb. The ceiling watchdog handles persistent
     // overshoots; the pledge book just clamps to max so peers see the
     // declared upper bound, not a runaway value.
-    h.observation.update_peak(&h.svc, mb(28 * 1024), 0);
+    h.observation.record_sample(&h.svc, mb(28 * 1024), 0);
     step().await;
 
     assert_eq!(pledge_mb(&h.allocations, &h.svc), 20 * 1024);
@@ -183,16 +212,15 @@ async fn pledge_decays_as_spike_rolls_out_of_window() {
     let h = build_harness("comfy", 2 * 1024, 20 * 1024);
 
     // Tick 1: 12 GB spike. Pledge lifts.
-    h.observation.update_peak(&h.svc, mb(12 * 1024), 0);
+    h.observation.record_sample(&h.svc, mb(12 * 1024), 0);
     step().await;
     assert_eq!(pledge_mb(&h.allocations, &h.svc), 12 * 1024);
 
-    // ObservationTable's read_peak is a high-water mark, so we can't
-    // directly drive it down. Clear and reset to the new low-water value to
-    // simulate the service settling. Then run several ticks (≥ WINDOW_SIZE)
-    // so the 12 GB spike rolls out of the window entirely.
-    h.observation.clear(&h.svc);
-    h.observation.update_peak(&h.svc, mb(4 * 1024), 0);
+    // The service settles back to 4 GB. The resolver samples the *current*
+    // reading, so simply reporting the lower number is enough — no clearing
+    // the observation table to work around a latched high-water mark. Run
+    // several ticks (≥ WINDOW_SIZE) so the 12 GB spike rolls out entirely.
+    h.observation.record_sample(&h.svc, mb(4 * 1024), 0);
     for _ in 0..7 {
         step().await;
     }
@@ -214,14 +242,15 @@ async fn pledge_does_not_emit_for_sub_threshold_drift() {
     // Lift to 12 GB, then drift by 50 MB — well below the 5 % / 256 MB
     // rate-limit floor. We expect exactly one AllocationChanged event for
     // the initial 12 GB lift, none for the drift.
-    h.observation.update_peak(&h.svc, mb(12 * 1024), 0);
+    h.observation.record_sample(&h.svc, mb(12 * 1024), 0);
     step().await;
 
     let first = latest_event_pledge_mb(&mut h.events_rx, &h.svc);
     assert_eq!(first, Some(12 * 1024));
     assert_eq!(pledge_mb(&h.allocations, &h.svc), 12 * 1024);
 
-    h.observation.update_peak(&h.svc, mb(12 * 1024) + mb(50), 0);
+    h.observation
+        .record_sample(&h.svc, mb(12 * 1024) + mb(50), 0);
     step().await;
 
     // No new event (rate-limited) and the pledge is unchanged.
@@ -231,6 +260,48 @@ async fn pledge_does_not_emit_for_sub_threshold_drift() {
         "sub-threshold drift must not emit a new AllocationChanged"
     );
     assert_eq!(pledge_mb(&h.allocations, &h.svc), 12 * 1024);
+
+    let _ = h.shutdown.send(true);
+}
+
+/// A CPU-pinned dynamic service reports no VRAM at all, so its pledge has to
+/// come from RSS. Sampling the VRAM peak read zero forever, which left the
+/// pledge frozen at `min_mb` however much host RAM the service actually took —
+/// and the packer books hybrid MoE expert spill against exactly that row.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn cpu_pinned_service_pledges_from_rss() {
+    let (h, _mailbox) = build_harness_on("cpu-svc", 2 * 1024, 20 * 1024, DeviceSlot::Cpu);
+
+    // Zero VRAM, 10 GB RSS — the shape of any cpu-only workload.
+    h.observation.record_sample(&h.svc, 0, mb(10 * 1024));
+    step().await;
+
+    assert_eq!(
+        pledge_mb_on(&h.allocations, &h.svc, &DeviceSlot::Cpu),
+        10 * 1024,
+        "a CPU-pinned service's pledge must track its RSS peak, not stay at min_mb"
+    );
+
+    let _ = h.shutdown.send(true);
+}
+
+/// The mirror image, and the regression guard for the original reason the
+/// resolver sampled VRAM alone: a GPU service's pledge must not absorb the
+/// python interpreter's RSS. An SDXL run at 6 GB VRAM + 30 GB RSS used to
+/// pledge as 36 GB and trigger an unjustified self-eviction.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn gpu_service_pledges_from_vram_and_ignores_rss() {
+    let (h, _mailbox) = build_harness_on("gpu-svc", 2 * 1024, 20 * 1024, DeviceSlot::Gpu(0));
+
+    h.observation
+        .record_sample(&h.svc, mb(6 * 1024), mb(30 * 1024));
+    step().await;
+
+    assert_eq!(
+        pledge_mb(&h.allocations, &h.svc),
+        6 * 1024,
+        "a GPU service pledges its VRAM peak; RSS must not inflate it"
+    );
 
     let _ = h.shutdown.send(true);
 }

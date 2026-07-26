@@ -194,7 +194,7 @@ async fn growth_without_overcommit_does_not_evict() {
     // Drive observed VRAM up to 10 GB across enough samples to convince
     // detect_growth (positive slope across the window).
     for gb in [3u64, 4, 5, 6, 7, 8, 9, 10] {
-        h.observation.update_peak(&h.svc, mb(gb * 1024), 0);
+        h.observation.record_sample(&h.svc, mb(gb * 1024), 0);
         step().await;
     }
 
@@ -237,7 +237,7 @@ async fn overcommit_triggers_yield_at_tied_priority_with_persistent_peer() {
     // keeps the AllocationTable's over-commit signature intact through
     // the contention check.
     for gb in [9u64, 10, 11, 12, 13, 14, 14, 14] {
-        h.observation.update_peak(&h.svc, mb(gb * 1024), 0);
+        h.observation.record_sample(&h.svc, mb(gb * 1024), 0);
         step().await;
     }
 
@@ -257,7 +257,7 @@ async fn overcommit_triggers_yield_at_tied_priority_with_persistent_peer() {
 /// pledge-overcommit fix, the resolver waited for NVML's `free_bytes`
 /// to drop below 512 MiB before firing; a peer that had merely
 /// pledged-but-not-yet-allocated would silently constrain the balloon's
-/// growth ceiling far below its declared `max_vram_gb`. Now the
+/// growth ceiling far below its declared `max_reserve_gb`. Now the
 /// pledge book is the signal: once `balloon_pledge + peer_pledges +
 /// growth_margin > total`, the resolver picks a peer to evict.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
@@ -338,7 +338,7 @@ async fn growing_balloon_evicts_lower_priority_peer_before_physical_oom() {
     // 22 GiB → 24 GiB and crosses the 23.5 GiB overcommit threshold
     // partway through.
     for gb in [3u64, 3, 4, 4, 4, 4] {
-        observation.update_peak(&svc, mb(gb * 1024), 0);
+        observation.record_sample(&svc, mb(gb * 1024), 0);
         tokio::time::advance(SAMPLE_INTERVAL + Duration::from_millis(50)).await;
         tokio::task::yield_now().await;
     }
