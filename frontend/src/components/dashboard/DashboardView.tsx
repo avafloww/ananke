@@ -102,8 +102,8 @@ export function DashboardView() {
               return a.name.localeCompare(b.name);
             }
             if (sortOrder === "size") {
-              const aSize = a.vram_bytes ?? 0;
-              const bSize = b.vram_bytes ?? 0;
+              const aSize = a.footprint_bytes ?? 0;
+              const bSize = b.footprint_bytes ?? 0;
               if (aSize !== bSize) return bSize - aSize;
               return a.name.localeCompare(b.name);
             }

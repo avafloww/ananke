@@ -10,8 +10,8 @@ lifecycle = "on_demand"
 
 [service.allocation]
 mode = "dynamic"
-min_vram_gb = 2.0
-max_vram_gb = 12.0
+min_reserve_gb = 2.0
+max_reserve_gb = 12.0
 
 [service.health]
 http = "/system_stats"
@@ -26,7 +26,7 @@ The following placeholders are substituted in `command` and `shutdown_command` a
 
 - `{port}` - the private loopback port assigned by ananke.
 - `{gpu_ids}` - comma-separated NVML index list ananke picked for this service.
-- `{vram_mb}` - reserved VRAM in MiB.
+- `{reserve_mb}` - the reservation in MiB, on whichever device the service was placed. Still accepted under its former name `{vram_mb}`.
 - `{model}` - model path (llama-cpp only; empty for command services).
 - `{name}` - service name.
 
@@ -49,7 +49,7 @@ idle_timeout = "10m"
 
 [service.allocation]
 mode = "static"
-vram_gb = 44
+reserve_gb = 44
 
 [service.devices]
 placement = "gpu-only"
@@ -93,7 +93,7 @@ idle_timeout = "30m"
 
 [service.allocation]
 mode = "static"
-vram_gb = 7
+reserve_gb = 7
 
 [service.devices]
 placement = "gpu-only"

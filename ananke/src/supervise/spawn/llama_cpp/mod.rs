@@ -42,7 +42,7 @@ pub(super) fn render_llama_cpp_argv(
             port: svc.private_port,
             model: Some(&model_str),
             allocation: alloc,
-            static_vram_mb: None,
+            static_reserve_mb: None,
         };
         let argv = substitute_launcher_argv(launcher, &standard_args, &ctx)?;
         // `launcher` is non-empty (the validator rejects an empty

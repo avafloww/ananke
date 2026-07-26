@@ -267,7 +267,7 @@ template = "command"
 command = ["/bin/true"]
 port = 11500
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 "#,
         );
         let validated = validate(&cfg).unwrap();
@@ -285,7 +285,7 @@ template = "command"
 command = ["/bin/true"]
 port = 11500
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 env_inherit = false
 "#,
         );

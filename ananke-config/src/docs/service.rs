@@ -79,7 +79,7 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "env",
                     "map string → string",
                     "none",
-                    "Environment variables set on the spawned process. Accepts `{port}`, `{gpu_ids}`, `{vram_mb}`, `{model}`, `{name}` placeholders.",
+                    "Environment variables set on the spawned process. Accepts `{port}`, `{gpu_ids}`, `{reserve_mb}`, `{model}`, `{name}` placeholders.",
                 ),
                 field(
                     "env_inherit",
@@ -205,22 +205,22 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "`\"static\"` or `\"dynamic\"`. Rejected for llama-cpp services. Applies to `command` services only.",
                 ),
                 field(
-                    "vram_gb",
+                    "reserve_gb",
                     "f32",
                     "none",
-                    "`static` only. VRAM to reserve, in GiB. Required for `static`.",
+                    "`static` only. Memory to reserve, in GiB — host RAM for a cpu-only service, VRAM otherwise. Required for `static`. Accepted as `vram_gb` for pre-rename configs.",
                 ),
                 field(
-                    "min_vram_gb",
+                    "min_reserve_gb",
                     "f32",
                     "none",
-                    "`dynamic` only. Minimum VRAM in GiB. Required for `dynamic`.",
+                    "`dynamic` only. Minimum reservation in GiB. Required for `dynamic`. Accepted as `min_vram_gb` for pre-rename configs.",
                 ),
                 field(
-                    "max_vram_gb",
+                    "max_reserve_gb",
                     "f32",
                     "none",
-                    "`dynamic` only. Maximum VRAM in GiB. Required for `dynamic`; must be > `min_vram_gb`.",
+                    "`dynamic` only. Maximum reservation in GiB. Required for `dynamic`; must be > `min_reserve_gb`. Accepted as `max_vram_gb` for pre-rename configs.",
                 ),
                 field(
                     "min_borrower_runtime",

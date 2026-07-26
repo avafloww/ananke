@@ -25,7 +25,7 @@ Flow:
   3. Chat → victim again. Symmetric: `displacer` now gets displaced.
 
 Each of the three chat calls is retried with short backoff if ananke
-returns 503 (start_queue_full / insufficient_vram) — the transitions
+returns 503 (start_queue_full / insufficient_capacity) — the transitions
 we care about happen inside ananke's scheduler and are racy against
 the inbound request, so the client-side retry is part of exercising
 the path, not a bug-hiding shim.

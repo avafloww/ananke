@@ -40,30 +40,34 @@ pub async fn run(
     ttl: Option<String>,
     workdir: Option<std::path::PathBuf>,
     placement: String,
-    vram_gb: Option<f32>,
-    min_vram_gb: Option<f32>,
-    max_vram_gb: Option<f32>,
+    reserve_gb: Option<f32>,
+    min_reserve_gb: Option<f32>,
+    max_reserve_gb: Option<f32>,
     command: Vec<String>,
 ) -> Result<(), ApiClientError> {
-    let allocation = match (vram_gb, min_vram_gb, max_vram_gb) {
+    let allocation = match (reserve_gb, min_reserve_gb, max_reserve_gb) {
         (Some(g), None, None) => OneshotAllocation {
             mode: Some("static".into()),
-            vram_gb: Some(g),
-            min_vram_gb: None,
-            max_vram_gb: None,
+            reserve_gb: Some(g),
+            min_reserve_gb: None,
+            max_reserve_gb: None,
         },
         (None, Some(lo), Some(hi)) => OneshotAllocation {
             mode: Some("dynamic".into()),
-            vram_gb: None,
-            min_vram_gb: Some(lo),
-            max_vram_gb: Some(hi),
+            reserve_gb: None,
+            min_reserve_gb: Some(lo),
+            max_reserve_gb: Some(hi),
         },
         (None, None, None) => {
             return Err(ApiClientError::Usage(
-                "must specify --vram-gb or --min-vram-gb + --max-vram-gb".into(),
+                "must specify --reserve-gb or --min-reserve-gb + --max-reserve-gb".into(),
             ));
         }
-        _ => return Err(ApiClientError::Usage("conflicting --vram flags".into())),
+        _ => {
+            return Err(ApiClientError::Usage(
+                "conflicting reservation flags".into(),
+            ));
+        }
     };
 
     let req = OneshotRequest {

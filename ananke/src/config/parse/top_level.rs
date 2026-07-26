@@ -12,12 +12,18 @@ use crate::config::parse::{RawAutoRestart, RawService};
 #[serde(deny_unknown_fields, default)]
 pub struct RawAllocation {
     pub mode: Option<SmolStr>,
-    /// Static allocation only: VRAM in GiB.
-    pub vram_gb: Option<f32>,
-    /// Dynamic allocation only: minimum VRAM in GiB.
-    pub min_vram_gb: Option<f32>,
-    /// Dynamic allocation only: maximum VRAM in GiB.
-    pub max_vram_gb: Option<f32>,
+    /// Static allocation only: the reservation in GiB. Lands on whichever
+    /// device the service is placed on — host RAM for a cpu-only command
+    /// service, VRAM otherwise — hence the device-neutral name. The `vram_gb`
+    /// alias keeps pre-rename configs parsing.
+    #[serde(alias = "vram_gb")]
+    pub reserve_gb: Option<f32>,
+    /// Dynamic allocation only: the minimum reservation in GiB.
+    #[serde(alias = "min_vram_gb")]
+    pub min_reserve_gb: Option<f32>,
+    /// Dynamic allocation only: the maximum reservation in GiB.
+    #[serde(alias = "max_vram_gb")]
+    pub max_reserve_gb: Option<f32>,
     /// Balloon resolver grace period (default 60s); dynamic only.
     pub min_borrower_runtime: Option<String>,
 }

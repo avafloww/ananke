@@ -4,7 +4,7 @@
 //! Regression target: before the idle-eviction rule change, two services
 //! at default priority (50) could deadlock the allocator — neither
 //! could displace the other even while idle, so the second request
-//! always got `insufficient_vram`. The allocator's eligibility rule is
+//! always got `insufficient_capacity`. The allocator's eligibility rule is
 //! now "idle is always evictable regardless of priority", and every
 //! call site funnels through `EvictionCandidate::is_evictable_by` so
 //! the two spots where the predicate lived can't drift again.
@@ -73,7 +73,7 @@ async fn second_request_displaces_idle_peer_at_equal_priority() {
     assert_eq!(st, StatusCode::OK, "alpha first request failed: {body}");
 
     // Beta arrives. Before the rule change this 503'd with
-    // insufficient_vram because alpha was `Running` (not `Idle`) at the
+    // insufficient_capacity because alpha was `Running` (not `Idle`) at the
     // same priority, and the allocator refused to displace it. Now,
     // alpha has no in-flight requests; it counts as idle; beta evicts.
     let (st, body) = chat(openai::router(h.state.clone()), "beta").await;

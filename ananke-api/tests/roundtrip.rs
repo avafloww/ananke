@@ -39,7 +39,7 @@ fn service_summary_roundtrips() {
         modality: ananke_api::shared::modality::Modality::Chat,
         ananke_metadata,
         fit_verdict: None,
-        vram_bytes: None,
+        footprint_bytes: None,
         last_used_ms: None,
     };
     assert_eq!(v.clone(), roundtrip(v));
@@ -49,7 +49,7 @@ fn service_summary_roundtrips() {
 fn start_response_tagged_union() {
     let v = StartResponse::Unavailable {
         error: ApiErrorBody {
-            code: ApiErrorCodeSlug::InsufficientVram,
+            code: ApiErrorCodeSlug::InsufficientCapacity,
             message: "no fit".into(),
             kind: ApiErrorKind::ServerError,
         },
@@ -60,7 +60,7 @@ fn start_response_tagged_union() {
         serde_json::json!({
             "status": "unavailable",
             "error": {
-                "code": "insufficient_vram",
+                "code": "insufficient_capacity",
                 "message": "no fit",
                 "type": "server_error",
             }
@@ -90,9 +90,9 @@ fn oneshot_request_optional_fields_omitted() {
         workdir: None,
         allocation: OneshotAllocation {
             mode: Some("static".into()),
-            vram_gb: Some(16.0),
-            min_vram_gb: None,
-            max_vram_gb: None,
+            reserve_gb: Some(16.0),
+            min_reserve_gb: None,
+            max_reserve_gb: None,
         },
         devices: Some(OneshotDevices {
             placement: Some("gpu-only".into()),
@@ -322,7 +322,10 @@ fn error_slug_serde_roundtrips() {
         (ApiErrorCodeSlug::ServiceDisabled, "service_disabled"),
         (ApiErrorCodeSlug::StartQueueFull, "start_queue_full"),
         (ApiErrorCodeSlug::StartFailed, "start_failed"),
-        (ApiErrorCodeSlug::InsufficientVram, "insufficient_vram"),
+        (
+            ApiErrorCodeSlug::InsufficientCapacity,
+            "insufficient_capacity",
+        ),
         (ApiErrorCodeSlug::ServiceBlocked, "service_blocked"),
         (
             ApiErrorCodeSlug::UpstreamUnavailable,
@@ -386,8 +389,8 @@ fn error_slug_display_matches_serialisation() {
     // Display must yield the bare slug string (no quotes) so
     // anankectl's `println!("{}", error.code)` keeps working.
     assert_eq!(
-        ApiErrorCodeSlug::InsufficientVram.to_string(),
-        "insufficient_vram"
+        ApiErrorCodeSlug::InsufficientCapacity.to_string(),
+        "insufficient_capacity"
     );
     assert_eq!(
         ApiErrorCodeSlug::InvalidRequest.to_string(),

@@ -274,7 +274,7 @@ fn render_endpoint_detail(
         let mut visited = BTreeSet::new();
         let ts = ts_type(schema, spec, &mut visited, 0);
         writeln!(out, "```typescript").unwrap();
-        write!(out, "{}", ts.trim_end()).unwrap();
+        write!(out, "{}", ts.trim_start_matches('\n').trim_end()).unwrap();
         writeln!(out, "\n```\n").unwrap();
     }
 
@@ -322,7 +322,7 @@ fn render_endpoint_detail(
             let ts = ts_type(schema, spec, &mut visited, 0);
             if ts.contains('\n') || ts.contains(' ') || ts.contains('{') {
                 writeln!(out, "```typescript").unwrap();
-                write!(out, "{}", ts.trim_end()).unwrap();
+                write!(out, "{}", ts.trim_start_matches('\n').trim_end()).unwrap();
                 writeln!(out, "\n```\n").unwrap();
             }
         }
@@ -352,7 +352,7 @@ fn render_error_code_table(out: &mut String, spec: &Value) {
             "service_disabled" => "Service is administratively disabled.",
             "start_queue_full" => "Supervisor's start queue saturated.",
             "start_failed" => "Spawn or health-probe failure during ensure.",
-            "insufficient_vram" => "Packer couldn't lay out the model on available devices.",
+            "insufficient_capacity" => "Packer couldn't lay out the model on available devices.",
             "service_blocked" => "Queued behind a busy non-elastic peer.",
             "upstream_unavailable" => "Upstream child rejected the wire or never replied.",
             "proxy_internal" => "Bug inside the proxy itself (URI parse, header build, etc.).",

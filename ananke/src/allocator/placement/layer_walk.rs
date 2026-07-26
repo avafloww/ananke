@@ -56,6 +56,7 @@ impl<'a> Packer<'a> {
                     return Err(PackError::LayerDoesNotFit {
                         layer_index: idx as u32,
                         bytes,
+                        shortfalls: self.gpu_shortfalls(layer_cost),
                     });
                 }
             }
@@ -84,7 +85,9 @@ impl<'a> Packer<'a> {
             *self.per_device.entry(DeviceSlot::Cpu).or_default() += bytes;
             Ok(())
         } else {
-            Err(PackError::WeightsDoNotFit)
+            Err(PackError::WeightsDoNotFit {
+                shortfalls: self.gpu_shortfalls(bytes),
+            })
         }
     }
 

@@ -3,7 +3,7 @@
 //! The error type itself lives one level up at [`crate::api::errors::
 //! ApiErrorCode`] — that's the single source of truth for slug, status,
 //! kind, and message. The thin wrappers here exist so the OpenAI
-//! handlers stay readable (`return errors::insufficient_vram(&model,
+//! handlers stay readable (`return errors::insufficient_capacity(&model,
 //! &msg)`) without callers having to spell out the enum variant
 //! inline. New error classes should be added by extending
 //! `ApiErrorCode`, not by adding free functions here.
@@ -43,8 +43,8 @@ pub fn start_failed(name: &str, reason: &str) -> Response {
     .into_response()
 }
 
-pub fn insufficient_vram(name: &str, reason: &str) -> Response {
-    ApiErrorCode::InsufficientVram {
+pub fn insufficient_capacity(name: &str, reason: &str) -> Response {
+    ApiErrorCode::InsufficientCapacity {
         name: SmolStr::new(name),
         reason: reason.to_string(),
     }

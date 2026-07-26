@@ -1,10 +1,10 @@
 //! Service list, detail, and launch-command-preview handlers.
 
 use ananke_api::{
-    internal::log_line::LogLine,
+    internal::{fit_verdict::FitVerdict, log_line::LogLine},
     services::{
         command::{EnvVar, LaunchCommand, LaunchCommandResponse, LaunchCommandSource},
-        detail::{RestartEvent, ServiceDetail},
+        detail::{PlacementPreview, RestartEvent, ServiceDetail},
         list::{ServiceSummary, ServicesResponse},
     },
     shared::errors::ApiError,
@@ -17,9 +17,11 @@ use axum::{
 };
 
 use crate::{
+    allocator::placement,
     api::management::handlers::{model_estimate_entry, placement_preview, read_current_allocation},
     config::ServiceConfig,
-    daemon::app_state::AppState,
+    daemon::{app_state::AppState, estimate_cache::CacheEntry},
+    estimator::Estimate,
 };
 
 #[utoipa::path(
@@ -52,10 +54,8 @@ pub async fn list_services(State(state): State<AppState>) -> Response {
             entry.as_ref().map(|e| &e.estimate_full),
             running,
         );
-        let fit_verdict = placement.as_ref().map(|p| p.verdict);
-        let vram_bytes = placement
-            .as_ref()
-            .map(|p| p.devices.iter().map(|d| d.bytes).sum());
+        let fit_verdict = placement.as_ref().map(|p| p.verdict.clone());
+        let footprint_bytes = summary_footprint_bytes(&state, svc_cfg, placement.as_ref(), &entry);
         let last_used_ms = state.activity.last_ms(&svc_cfg.name);
 
         services.push(ServiceSummary {
@@ -75,7 +75,7 @@ pub async fn list_services(State(state): State<AppState>) -> Response {
             modality: svc_cfg.modality,
             ananke_metadata: svc_cfg.metadata.clone(),
             fit_verdict,
-            vram_bytes,
+            footprint_bytes,
             last_used_ms,
         });
     }
@@ -241,7 +241,7 @@ pub async fn service_detail(State(state): State<AppState>, Path(name): Path<Stri
     responses(
         (status = 200, body = LaunchCommandResponse),
         (status = 404, body = ApiError, description = "service_not_found"),
-        (status = 422, body = ApiError, description = "insufficient_vram")
+        (status = 422, body = ApiError, description = "insufficient_capacity")
     )
 )]
 pub async fn service_command(State(state): State<AppState>, Path(name): Path<String>) -> Response {
@@ -390,4 +390,46 @@ fn serving_config(svc_cfg: &ServiceConfig) -> Option<ananke_api::services::detai
         mmap: lc.mmap.unwrap_or(true),
         mlock: lc.mlock.unwrap_or(false),
     })
+}
+
+/// The list view's footprint figure for one service.
+///
+/// A successful placement is summed per device — that is what the service
+/// would actually reserve. A failed one has no devices to sum, and reporting
+/// the empty sum as `0` conflated three unrelated situations: a legitimately
+/// CPU-only service, one that hasn't been estimated yet, and a real model that
+/// simply couldn't be placed. Fall back to the estimator's aggregate demand so
+/// the row still conveys the model's scale; `fit_verdict` tells the reader it
+/// is a requirement rather than a reservation.
+fn summary_footprint_bytes(
+    state: &AppState,
+    svc_cfg: &ServiceConfig,
+    placement: Option<&PlacementPreview>,
+    entry: &Option<CacheEntry>,
+) -> Option<u64> {
+    let placement = placement?;
+    if !placement.devices.is_empty() {
+        return Some(placement.devices.iter().map(|d| d.bytes).sum());
+    }
+    // Only a `does_not_fit` verdict gets the demand fallback. The frontend
+    // keys its "needed" qualifier on that verdict, so reporting a requirement
+    // under any other one renders it as memory the service is holding.
+    if !matches!(placement.verdict, FitVerdict::DoesNotFit { .. }) {
+        return None;
+    }
+    let est = &entry.as_ref()?.estimate_full;
+    let snapshot = state.snapshot.read();
+    // Apply the same rolling drift correction `placement_preview` applies
+    // before packing, so both figures describe the same model.
+    let mean = state.rolling.get(&svc_cfg.name).effective_mean();
+    let corrected = Estimate {
+        weights_bytes: (est.weights_bytes as f64 * mean) as u64,
+        ..est.clone()
+    };
+    // Run the packer itself rather than re-deriving its arithmetic. Every term
+    // — the head-vs-secondary logits trim, the CPU-side compute buffer, the
+    // one-layer fudge, MTP, expert offload — falls out of the same code that
+    // computes a real placement, so the two cannot disagree.
+    let packed = placement::pack_demand(&corrected, svc_cfg, &snapshot).ok()?;
+    Some(packed.allocation.bytes.values().sum())
 }

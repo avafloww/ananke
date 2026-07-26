@@ -11,9 +11,9 @@ export type OneshotFormState = {
   command: string;
   workdir: string;
   allocationMode: "static" | "dynamic";
-  vramGb: string;
-  minVramGb: string;
-  maxVramGb: string;
+  reserveGb: string;
+  minReserveGb: string;
+  maxReserveGb: string;
   placement: "gpu-only" | "cpu-only" | "hybrid";
   priority: number;
   ttl: string;
@@ -27,9 +27,9 @@ const EMPTY_FORM: OneshotFormState = {
   command: "",
   workdir: "",
   allocationMode: "static",
-  vramGb: "4",
-  minVramGb: "2",
-  maxVramGb: "8",
+  reserveGb: "4",
+  minReserveGb: "2",
+  maxReserveGb: "8",
   placement: "gpu-only",
   priority: 50,
   ttl: "1h",
@@ -141,8 +141,8 @@ export function OneshotForm({
               <input
                 type="number"
                 step="0.5"
-                value={form.vramGb}
-                onChange={(e) => update("vramGb", e.target.value)}
+                value={form.reserveGb}
+                onChange={(e) => update("reserveGb", e.target.value)}
                 className="w-full rounded-sm border border-border-default bg-base px-2 py-1 text-xs text-primary focus:border-accent focus:outline-none"
               />
             ) : (
@@ -150,8 +150,8 @@ export function OneshotForm({
                 <input
                   type="number"
                   step="0.5"
-                  value={form.minVramGb}
-                  onChange={(e) => update("minVramGb", e.target.value)}
+                  value={form.minReserveGb}
+                  onChange={(e) => update("minReserveGb", e.target.value)}
                   className="w-full rounded-sm border border-border-default bg-base px-2 py-1 text-xs text-primary focus:border-accent focus:outline-none"
                 />
                 <span className="text-xs text-tertiary">
@@ -160,8 +160,8 @@ export function OneshotForm({
                 <input
                   type="number"
                   step="0.5"
-                  value={form.maxVramGb}
-                  onChange={(e) => update("maxVramGb", e.target.value)}
+                  value={form.maxReserveGb}
+                  onChange={(e) => update("maxReserveGb", e.target.value)}
                   className="w-full rounded-sm border border-border-default bg-base px-2 py-1 text-xs text-primary focus:border-accent focus:outline-none"
                 />
               </div>

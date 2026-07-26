@@ -64,12 +64,21 @@ pub struct ServiceSummary {
     /// Running services are always `Fits`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fit_verdict: Option<FitVerdict>,
-    /// Total VRAM bytes the service would reserve across all devices
-    /// under current conditions (from the placement preview). Includes
-    /// weights, KV cache, and compute buffer. `None` when the placement
-    /// can't be computed (e.g. a command service that reserves no VRAM).
+    /// Total bytes the service would occupy across all devices — GPU VRAM and
+    /// host RAM alike — under current conditions. Includes weights, KV cache,
+    /// and compute buffer.
+    ///
+    /// Normally this is the placement preview's per-device sum: what the
+    /// service would actually reserve. When `fit_verdict` is `does_not_fit`
+    /// there is no placement to sum, so this falls back to the estimator's
+    /// aggregate demand — how much the model *would need*. Read the two fields
+    /// together; a `does_not_fit` verdict means this figure is a requirement,
+    /// not a reservation.
+    ///
+    /// `None` when neither can be computed (e.g. a command service that
+    /// reserves nothing, or a llama-cpp service whose GGUF hasn't been read).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vram_bytes: Option<u64>,
+    pub footprint_bytes: Option<u64>,
     /// Wall-clock timestamp (ms since epoch) of the last time the
     /// service was provisioned or received a request. `None` if the
     /// service has never been started.

@@ -51,7 +51,7 @@ fn command_argv_substitutes_port() {
         max_request_duration_ms: 60_000,
         auto_restart: AutoRestartSettings::disabled(),
         filters: Filters::default(),
-        allocation_mode: AllocationMode::Static { vram_mb: 6144 },
+        allocation_mode: AllocationMode::Static { reserve_mb: 6144 },
         openai_compat: false,
         description: None,
         modality: ananke_api::shared::Modality::Chat,

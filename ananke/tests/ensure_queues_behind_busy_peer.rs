@@ -4,7 +4,7 @@
 //!
 //! Regression target: before the queue-on-busy-peer fix, any new request
 //! that arrived while a same-priority peer had an in-flight generation
-//! returned `503 insufficient_vram` even though the request would have fit
+//! returned `503 insufficient_capacity` even though the request would have fit
 //! cleanly once the peer finished. That surfaced as "I asked for 35B while
 //! 31B was still writing its response and got a 503".
 #![cfg(feature = "test-fakes")]

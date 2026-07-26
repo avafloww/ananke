@@ -39,7 +39,7 @@ async def body(matrix: Matrix, api: Api, rec: Recorder) -> None:
         "name": f"stress-oneshot-{int(time.time())}",
         "template": "command",
         "command": ["/bin/sh", "-c", f"sleep {ttl_s + 30}"],
-        "allocation": {"mode": "static", "vram_gb": 0.1},
+        "allocation": {"mode": "static", "reserve_gb": 0.1},
         "devices": {"placement": "cpu-only"},
         "priority": 40,
         "ttl": f"{ttl_s}s",

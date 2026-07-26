@@ -233,7 +233,7 @@ pub struct ModelInfo {
 }
 
 /// Estimator output projected to the wire. Carries the components a
-/// reader needs to answer "how much VRAM will this service take?"
+/// reader needs to answer "how much memory will this service take?"
 /// without having to re-derive any of them client-side.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 pub struct EstimateSummary {

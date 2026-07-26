@@ -109,7 +109,7 @@ Chat completion (OpenAI-compatible proxy)
 | 400 | invalid_request_error | `ApiError` |
 | 404 | model_not_found | `ApiError` |
 | 502 | upstream_unavailable | `ApiError` |
-| 503 | service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked | `ApiError` |
+| 503 | service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked | `ApiError` |
 
 ### POST /v1/completions
 
@@ -130,7 +130,7 @@ Text completion (OpenAI-compatible proxy)
 | 400 | invalid_request_error | `ApiError` |
 | 404 | model_not_found | `ApiError` |
 | 502 | upstream_unavailable | `ApiError` |
-| 503 | service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked | `ApiError` |
+| 503 | service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked | `ApiError` |
 
 ### POST /v1/embeddings
 
@@ -151,7 +151,7 @@ Embeddings (OpenAI-compatible proxy)
 | 400 | invalid_request_error | `ApiError` |
 | 404 | model_not_found | `ApiError` |
 | 502 | upstream_unavailable | `ApiError` |
-| 503 | service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked | `ApiError` |
+| 503 | service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked | `ApiError` |
 
 ### GET /v1/models
 
@@ -403,10 +403,10 @@ Create or list oneshot processes
 ```typescript
 {
   allocation: {
-    max_vram_gb?: number | null
-    min_vram_gb?: number | null
+    max_reserve_gb?: number | null
+    min_reserve_gb?: number | null
     mode?: string | null
-    vram_gb?: number | null
+    reserve_gb?: number | null
   }
   command?: string[] | null
   devices?: {
@@ -534,7 +534,25 @@ List all services
   services: {
     ananke_metadata?: Record<string, any>
     elastic_borrower?: string | null
-    fit_verdict?: "fits" | "needs_eviction" | "does_not_fit" | null
+    fit_verdict?:
+      // fits
+      | {
+        kind: "fits"
+      }
+      // needs_eviction
+      | {
+        kind: "needs_eviction"
+      }
+      // does_not_fit
+      | {
+        kind: "does_not_fit"
+        shortfalls: {
+          available_bytes: number
+          device: string
+          requested_bytes: number
+        }[]
+      } | null
+    footprint_bytes?: number | null
     has_mmproj?: boolean | null
     inflight_count?: number
     last_used_ms?: number | null
@@ -546,7 +564,6 @@ List all services
     priority: number
     run_id?: number | null
     state: string
-    vram_bytes?: number | null
   }[]
 }
 ```
@@ -608,7 +625,24 @@ Get service detail
     }[]
     expert_offload_bytes: number
     expert_offload_layers: number
-    verdict: "fits" | "needs_eviction" | "does_not_fit"
+    verdict:
+      // fits
+      | {
+        kind: "fits"
+      }
+      // needs_eviction
+      | {
+        kind: "needs_eviction"
+      }
+      // does_not_fit
+      | {
+        kind: "does_not_fit"
+        shortfalls: {
+          available_bytes: number
+          device: string
+          requested_bytes: number
+        }[]
+      }
   } | null
   port: number
   priority: number
@@ -674,7 +708,7 @@ Get launch command preview
 | --- | --- | --- |
 | 200 |  | `LaunchCommandResponse` |
 | 404 | service_not_found | `ApiError` |
-| 422 | insufficient_vram | `ApiError` |
+| 422 | insufficient_capacity | `ApiError` |
 
 **Response (200)**:
 
@@ -717,10 +751,14 @@ Disable a service
 **Response (200)**:
 
 ```typescript
-// disabled
-{ status: "disabled" }
-// already_disabled
-{ status: "already_disabled" }
+  // disabled
+  | {
+    status: "disabled"
+  }
+  // already_disabled
+  | {
+    status: "already_disabled"
+  }
 ```
 
 #### POST /api/services/{name}/enable
@@ -739,12 +777,18 @@ Enable a disabled service
 **Response (200)**:
 
 ```typescript
-// enabled
-{ status: "enabled" }
-// not_disabled
-{ status: "not_disabled" }
-// already_enabled
-{ status: "already_enabled" }
+  // enabled
+  | {
+    status: "enabled"
+  }
+  // not_disabled
+  | {
+    status: "not_disabled"
+  }
+  // already_enabled
+  | {
+    status: "already_enabled"
+  }
 ```
 
 #### GET /api/services/{name}/logs
@@ -794,19 +838,33 @@ Restart a service
 | --- | --- | --- |
 | 202 |  | `StartResponse` |
 | 404 | service_not_found | `ApiError` |
-| 503 | service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked | `ApiError` |
+| 503 | service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked | `ApiError` |
 
 **Response (202)**:
 
 ```typescript
-// already_running
-{ status: "already_running" }
-// started
-{ run_id: number, status: "started" }
-// queue_full
-{ status: "queue_full" }
-// unavailable
-{ error: ApiErrorBody, status: "unavailable" }
+  // already_running
+  | {
+    status: "already_running"
+  }
+  // started
+  | {
+    run_id: number
+    status: "started"
+  }
+  // queue_full
+  | {
+    status: "queue_full"
+  }
+  // unavailable
+  | {
+    error: {
+      code: "model_not_found" | "service_not_found" | "service_disabled" | "start_queue_full" | "start_failed" | "insufficient_capacity" | "service_blocked" | "upstream_unavailable" | "proxy_internal" | "not_implemented" | "invalid_request_error" | "invalid_cursor" | "if_match_required" | "hash_mismatch" | "persist_failed" | "other"
+      message: string
+      type: "invalid_request_error" | "server_error" | "other"
+    }
+    status: "unavailable"
+  }
 ```
 
 #### POST /api/services/{name}/start
@@ -821,19 +879,33 @@ Start a service
 | --- | --- | --- |
 | 202 |  | `StartResponse` |
 | 404 | service_not_found | `ApiError` |
-| 503 | service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked | `ApiError` |
+| 503 | service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked | `ApiError` |
 
 **Response (202)**:
 
 ```typescript
-// already_running
-{ status: "already_running" }
-// started
-{ run_id: number, status: "started" }
-// queue_full
-{ status: "queue_full" }
-// unavailable
-{ error: ApiErrorBody, status: "unavailable" }
+  // already_running
+  | {
+    status: "already_running"
+  }
+  // started
+  | {
+    run_id: number
+    status: "started"
+  }
+  // queue_full
+  | {
+    status: "queue_full"
+  }
+  // unavailable
+  | {
+    error: {
+      code: "model_not_found" | "service_not_found" | "service_disabled" | "start_queue_full" | "start_failed" | "insufficient_capacity" | "service_blocked" | "upstream_unavailable" | "proxy_internal" | "not_implemented" | "invalid_request_error" | "invalid_cursor" | "if_match_required" | "hash_mismatch" | "persist_failed" | "other"
+      message: string
+      type: "invalid_request_error" | "server_error" | "other"
+    }
+    status: "unavailable"
+  }
 ```
 
 #### POST /api/services/{name}/stop
@@ -852,10 +924,14 @@ Stop a service
 **Response (202)**:
 
 ```typescript
-// not_running
-{ status: "not_running" }
-// drained
-{ status: "drained" }
+  // not_running
+  | {
+    status: "not_running"
+  }
+  // drained
+  | {
+    status: "drained"
+  }
 ```
 
 ## Per-service reverse proxy
@@ -877,7 +953,7 @@ Each service exposes a per-service reverse proxy on its configured `port`. This 
   which would cause the browser to close the connection prematurely).
 - **On-demand start**: the proxy triggers a service ensure (start) before
   forwarding the first request. If the supervisor cannot start the service
-  (VRAM shortfall, disabled, etc.), a `503` error is returned with the
+  (insufficient capacity, disabled, etc.), a `503` error is returned with the
   standard error envelope.
 - **In-flight tracking**: each request increments a per-service counter
   that pins the service open against drain. The counter stays elevated
@@ -1092,7 +1168,7 @@ All error responses — across both the OpenAI-compatible API and the management
 ```json
 {
   "error": {
-    "code": "insufficient_vram",
+    "code": "insufficient_capacity",
     "message": "service `demo` cannot fit: ...",
     "type": "server_error"
   }
@@ -1113,7 +1189,7 @@ Both `code` and `type` use an `Other` fallback for deserialization. If the daemo
 
 ### `StartResponse::Unavailable`
 
-The `POST /api/services/{name}/start` endpoint returns `202 Accepted` even when the supervisor declines to start the service (VRAM shortfall, disabled, etc.). The body is `{"status": "unavailable", "error": {...}}` with the same `ApiErrorBody` shape a `503` error would carry. This is a "controlled outcome" of the start request, not a server-side fault.
+The `POST /api/services/{name}/start` endpoint returns `202 Accepted` even when the supervisor declines to start the service (insufficient capacity, disabled, etc.). The body is `{"status": "unavailable", "error": {...}}` with the same `ApiErrorBody` shape a `503` error would carry. This is a "controlled outcome" of the start request, not a server-side fault.
 
 | Slug | Description |
 | --- | --- |
@@ -1122,7 +1198,7 @@ The `POST /api/services/{name}/start` endpoint returns `202 Accepted` even when 
 | `service_disabled` | Service is administratively disabled. |
 | `start_queue_full` | Supervisor's start queue saturated. |
 | `start_failed` | Spawn or health-probe failure during ensure. |
-| `insufficient_vram` | Packer couldn't lay out the model on available devices. |
+| `insufficient_capacity` | Packer couldn't lay out the model on available devices. |
 | `service_blocked` | Queued behind a busy non-elastic peer. |
 | `upstream_unavailable` | Upstream child rejected the wire or never replied. |
 | `proxy_internal` | Bug inside the proxy itself (URI parse, header build, etc.). |

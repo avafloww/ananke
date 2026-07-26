@@ -1,4 +1,4 @@
-//! Substitute `{port}`, `{gpu_ids}`, `{vram_mb}`, `{model}`, `{name}`
+//! Substitute `{port}`, `{gpu_ids}`, `{reserve_mb}`, `{model}`, `{name}`
 //! in command-template argv and env values.
 
 use std::collections::BTreeMap;
@@ -11,15 +11,15 @@ pub struct PlaceholderContext<'a> {
     pub port: u16,
     pub model: Option<&'a str>,
     pub allocation: &'a Allocation,
-    /// Only populated for single-GPU static allocations; `None` on
-    /// dynamic or multi-device, where `{vram_mb}` is a config error.
-    pub static_vram_mb: Option<u64>,
+    /// Only populated for single-device static allocations; `None` on
+    /// dynamic or multi-device, where `{reserve_mb}` is a config error.
+    pub static_reserve_mb: Option<u64>,
 }
 
 #[derive(Debug)]
 pub enum SubstituteError {
-    VramMbOnDynamic,
-    VramMbMultiDevice,
+    ReserveMbOnDynamic,
+    ReserveMbMultiDevice,
     UnknownPlaceholder(String),
     /// The launcher splat `{args}` must occupy a launcher entry on its
     /// own; it cannot be embedded inside a larger argv string because
@@ -30,13 +30,13 @@ pub enum SubstituteError {
 impl std::fmt::Display for SubstituteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SubstituteError::VramMbOnDynamic => {
-                write!(f, "{{vram_mb}} is invalid with a dynamic allocation")
+            SubstituteError::ReserveMbOnDynamic => {
+                write!(f, "{{reserve_mb}} is invalid with a dynamic allocation")
             }
-            SubstituteError::VramMbMultiDevice => {
+            SubstituteError::ReserveMbMultiDevice => {
                 write!(
                     f,
-                    "{{vram_mb}} is valid only with a single-GPU static allocation"
+                    "{{reserve_mb}} is valid only with a single-device static allocation"
                 )
             }
             SubstituteError::UnknownPlaceholder(s) => {
@@ -118,10 +118,14 @@ pub fn resolve(key: &str, ctx: &PlaceholderContext<'_>) -> Result<String, Substi
             ids.sort_unstable();
             Ok(ids.iter().map(u32::to_string).collect::<Vec<_>>().join(","))
         }
-        "vram_mb" => ctx
-            .static_vram_mb
+        // `vram_mb` is the pre-rename spelling. It is still accepted so
+        // existing command templates keep launching; `reserve_mb` is the name
+        // to write, since the reservation lands on the CPU device just as
+        // readily as on a GPU.
+        "reserve_mb" | "vram_mb" => ctx
+            .static_reserve_mb
             .map(|mb| mb.to_string())
-            .ok_or(SubstituteError::VramMbOnDynamic),
+            .ok_or(SubstituteError::ReserveMbOnDynamic),
         other => Err(SubstituteError::UnknownPlaceholder(other.to_string())),
     }
 }
@@ -197,10 +201,10 @@ mod tests {
             port: 8188,
             model: Some("/m/x.gguf"),
             allocation: &alloc,
-            static_vram_mb: Some(6000),
+            static_reserve_mb: Some(6000),
         };
         let out = substitute(
-            "python main.py --port {port} --model {model} --gpu {gpu_ids} --vram {vram_mb}",
+            "python main.py --port {port} --model {model} --gpu {gpu_ids} --vram {reserve_mb}",
             &ctx,
         )
         .unwrap();
@@ -210,18 +214,35 @@ mod tests {
         );
     }
 
+    /// `{vram_mb}` was the name before the reservation was recognised as
+    /// device-neutral. Command templates in the wild still use it, so it has
+    /// to keep resolving identically to `{reserve_mb}`.
     #[test]
-    fn vram_mb_on_dynamic_fails() {
+    fn legacy_vram_mb_placeholder_still_resolves() {
         let alloc = alloc_gpu0_only();
         let ctx = PlaceholderContext {
             name: "demo",
             port: 8188,
             model: None,
             allocation: &alloc,
-            static_vram_mb: None,
+            static_reserve_mb: Some(6000),
         };
-        let err = substitute("--vram {vram_mb}", &ctx).unwrap_err();
-        assert!(matches!(err, SubstituteError::VramMbOnDynamic));
+        assert_eq!(substitute("{vram_mb}", &ctx).unwrap(), "6000");
+        assert_eq!(substitute("{reserve_mb}", &ctx).unwrap(), "6000");
+    }
+
+    #[test]
+    fn reserve_mb_on_dynamic_fails() {
+        let alloc = alloc_gpu0_only();
+        let ctx = PlaceholderContext {
+            name: "demo",
+            port: 8188,
+            model: None,
+            allocation: &alloc,
+            static_reserve_mb: None,
+        };
+        let err = substitute("--vram {reserve_mb}", &ctx).unwrap_err();
+        assert!(matches!(err, SubstituteError::ReserveMbOnDynamic));
     }
 
     #[test]
@@ -232,7 +253,7 @@ mod tests {
             port: 8188,
             model: None,
             allocation: &alloc,
-            static_vram_mb: None,
+            static_reserve_mb: None,
         };
         let out = substitute("{gpu_ids}", &ctx).unwrap();
         assert_eq!(out, "");
@@ -246,7 +267,7 @@ mod tests {
             port: 8188,
             model: None,
             allocation: &alloc,
-            static_vram_mb: None,
+            static_reserve_mb: None,
         };
         let err = substitute("{bogus}", &ctx).unwrap_err();
         assert!(matches!(err, SubstituteError::UnknownPlaceholder(_)));
@@ -260,7 +281,7 @@ mod tests {
             port: 8188,
             model: None,
             allocation: &alloc,
-            static_vram_mb: None,
+            static_reserve_mb: None,
         };
         // No close brace → literal.
         let out = substitute("prefix {not closed", &ctx).unwrap();
@@ -275,7 +296,7 @@ mod tests {
             port: 8188,
             model: None,
             allocation: &alloc,
-            static_vram_mb: None,
+            static_reserve_mb: None,
         };
         // `{{` / `}}` are escapes; the embedded script keeps its braces.
         let out = substitute("print(d[{{'k': 1}}]) on {port}", &ctx).unwrap();

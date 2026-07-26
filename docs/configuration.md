@@ -119,7 +119,7 @@ These fields appear at the top level of every `[[service]]` block, regardless of
 | `modality` | string | `"chat"` | `"chat"` or `"embedding"` (see [Embedding Services](#embedding-services)). On `llama-cpp` services, `"embedding"` also passes `--embeddings` to llama-server. Any other string is a hard config error. |
 | `extra_args` | array of string | none | Extra argv appended to the service's launch command. |
 | `extra_args_append` | array of string | none | Extra argv appended to the inherited list (use with `extends`; concatenated with parent's list). |
-| `env` | map string → string | none | Environment variables set on the spawned process. Accepts `{port}`, `{gpu_ids}`, `{vram_mb}`, `{model}`, `{name}` placeholders. |
+| `env` | map string → string | none | Environment variables set on the spawned process. Accepts `{port}`, `{gpu_ids}`, `{reserve_mb}`, `{model}`, `{name}` placeholders. |
 | `env_inherit` | bool | `true` | Whether the child process inherits the daemon's environment (`$PATH`, `$HOME`, locale, …). Per-service `env` entries override individual inherited keys. Set `false` to start with a clean environment containing only the variables in `env` plus `CUDA_VISIBLE_DEVICES`. |
 | `drain_timeout` | duration string | `30s` | Drain timeout before the supervisor escalates to SIGKILL. |
 | `extended_stream_drain` | duration string | `30s` | Extra grace granted to in-flight streaming requests during drain. |
@@ -226,17 +226,17 @@ ananke oversubscribes GPU memory by dynamically managing which models are active
 
 - **llama.cpp Services**: VRAM usage is determined by the model size and `n_gpu_layers`. ananke uses an internal GGUF-aware estimator to track usage. No allocation mode is needed.
 - **Command Services**: Support two allocation modes via `[service.allocation]`:
-  - `static`: Reserves a fixed amount of VRAM (`vram_gb`).
-  - `dynamic`: Operates within a range (`min_vram_gb` to `max_vram_gb`).
+  - `static`: Reserves a fixed amount of memory (`reserve_gb`) — host RAM for a cpu-only service, VRAM otherwise. The pre-rename `vram_gb` spelling is still accepted.
+  - `dynamic`: Operates within a range (`min_reserve_gb` to `max_reserve_gb`).
 
-In both modes the daemon picks the GPU with the most available headroom (subject to `gpu_allow`), preferring one whose free capacity satisfies the upper bound (`vram_gb` for `static`, `max_vram_gb` for `dynamic`) so dynamic services have room to grow. The picked GPU id is exported to the spawned child as `CUDA_VISIBLE_DEVICES`, and is also available as the `{gpu_ids}` placeholder in `command` argv. Wrappers that launch containers should forward this env (e.g. `docker run --device "nvidia.com/gpu=$CUDA_VISIBLE_DEVICES"`) so the picked GPU is the only one the container sees.
+For a GPU-placed service the daemon picks, in both modes, the GPU with the most available headroom (subject to `gpu_allow`), preferring one whose free capacity satisfies the upper bound (`reserve_gb` for `static`, `max_reserve_gb` for `dynamic`) so dynamic services have room to grow. The picked GPU id is exported to the spawned child as `CUDA_VISIBLE_DEVICES`, and is also available as the `{gpu_ids}` placeholder in `command` argv. Wrappers that launch containers should forward this env (e.g. `docker run --device "nvidia.com/gpu=$CUDA_VISIBLE_DEVICES"`) so the picked GPU is the only one the container sees. A `placement = "cpu-only"` service skips the pick entirely — its reservation is host RAM, and `{gpu_ids}` substitutes to the empty string.
 
 ```toml
 [service.allocation]
 mode = "dynamic"         # "static" or "dynamic" (command services only)
-vram_gb = 44             # static: fixed VRAM in GiB
-min_vram_gb = 2.0        # dynamic: minimum VRAM in GiB
-max_vram_gb = 12.0       # dynamic: maximum VRAM in GiB
+reserve_gb = 44              # static: fixed reservation in GiB
+min_reserve_gb = 2.0         # dynamic: minimum reservation in GiB
+max_reserve_gb = 12.0        # dynamic: maximum reservation in GiB
 min_borrower_runtime = "60s" # dynamic: balloon resolver grace period
 ```
 
@@ -245,9 +245,9 @@ min_borrower_runtime = "60s" # dynamic: balloon resolver grace period
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `mode` | string | *required* (command only) | `"static"` or `"dynamic"`. Rejected for llama-cpp services. Applies to `command` services only. |
-| `vram_gb` | f32 | none | `static` only. VRAM to reserve, in GiB. Required for `static`. |
-| `min_vram_gb` | f32 | none | `dynamic` only. Minimum VRAM in GiB. Required for `dynamic`. |
-| `max_vram_gb` | f32 | none | `dynamic` only. Maximum VRAM in GiB. Required for `dynamic`; must be > `min_vram_gb`. |
+| `reserve_gb` | f32 | none | `static` only. Memory to reserve, in GiB — host RAM for a cpu-only service, VRAM otherwise. Required for `static`. Accepted as `vram_gb` for pre-rename configs. |
+| `min_reserve_gb` | f32 | none | `dynamic` only. Minimum reservation in GiB. Required for `dynamic`. Accepted as `min_vram_gb` for pre-rename configs. |
+| `max_reserve_gb` | f32 | none | `dynamic` only. Maximum reservation in GiB. Required for `dynamic`; must be > `min_reserve_gb`. Accepted as `max_vram_gb` for pre-rename configs. |
 | `min_borrower_runtime` | duration string | `1m` | `dynamic` only. Balloon resolver grace period: minimum runtime a borrower must accumulate before it may be fast-killed. |
 
 ### Request Filters
@@ -561,8 +561,8 @@ lifecycle = "on_demand"
 
 [service.allocation]
 mode = "dynamic"
-min_vram_gb = 2.0
-max_vram_gb = 12.0
+min_reserve_gb = 2.0
+max_reserve_gb = 12.0
 
 [service.health]
 http = "/system_stats"
@@ -577,7 +577,7 @@ The following placeholders are substituted in `command` and `shutdown_command` a
 
 - `{port}` - the private loopback port assigned by ananke.
 - `{gpu_ids}` - comma-separated NVML index list ananke picked for this service.
-- `{vram_mb}` - reserved VRAM in MiB.
+- `{reserve_mb}` - the reservation in MiB, on whichever device the service was placed. Still accepted under its former name `{vram_mb}`.
 - `{model}` - model path (llama-cpp only; empty for command services).
 - `{name}` - service name.
 
@@ -600,7 +600,7 @@ idle_timeout = "10m"
 
 [service.allocation]
 mode = "static"
-vram_gb = 44
+reserve_gb = 44
 
 [service.devices]
 placement = "gpu-only"
@@ -644,7 +644,7 @@ idle_timeout = "30m"
 
 [service.allocation]
 mode = "static"
-vram_gb = 7
+reserve_gb = 7
 
 [service.devices]
 placement = "gpu-only"
@@ -676,7 +676,7 @@ ananke ensures the upstream container is started (cold-starting it on first requ
 | --- | --- | --- | --- |
 | `command` | array of string | *required* | argv to execute. Accepts placeholders (see below). |
 | `workdir` | path | none | Working directory for the spawned process. |
-| `allocation` | table | none | VRAM allocation (see [Resource Allocation](#resource-allocation)). Required for command services. |
+| `allocation` | table | none | Memory reservation (see [Resource Allocation](#resource-allocation)). Required for command services. |
 | `private_port` | u16 | auto-assigned | Upstream port ananke's reverse proxy should forward to. When absent, ananke picks one from the daemon's private-port pool and substitutes it into `command`/`env` via the `{port}` placeholder. Set explicitly when the external service binds a fixed port (e.g. a docker container exposing 18188 on the host). |
 | `shutdown_command` | array of string | none | Optional argv run at drain time after SIGTERM-then-SIGKILL completes. Useful for external services that don't stop via signal - e.g. a docker-run wrapper where SIGTERM reaches the host shell but the container needs an explicit `docker stop`. Accepts the same placeholder substitutions as `command`. |
 | `openai_proxy` | table | none | Opt the service into the OpenAI-compatible multiplexer (see [OpenAI Proxy](#openai-proxy)). |

@@ -10,7 +10,9 @@ use crate::{
     devices::DeviceSnapshot,
 };
 
-pub(crate) fn allowed_gpu_list(svc: &ServiceConfig, snapshot: &DeviceSnapshot) -> Vec<u32> {
+/// The GPUs this service may be placed on: every GPU in the snapshot, narrowed
+/// by `gpu_allow` when set, and empty for a `CpuOnly` service.
+pub(super) fn allowed_gpu_list(svc: &ServiceConfig, snapshot: &DeviceSnapshot) -> Vec<u32> {
     if svc.placement_policy == PlacementPolicy::CpuOnly {
         return Vec::new();
     }

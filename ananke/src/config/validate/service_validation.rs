@@ -84,9 +84,9 @@ pub(crate) fn validate_service(
             let alloc = AllocationMode::from_parts(
                 Template::Command,
                 raw_alloc.mode.as_deref(),
-                raw_alloc.vram_gb,
-                raw_alloc.min_vram_gb,
-                raw_alloc.max_vram_gb,
+                raw_alloc.reserve_gb,
+                raw_alloc.min_reserve_gb,
+                raw_alloc.max_reserve_gb,
                 runtime_ms,
             )
             .map_err(|e| fail(format!("service {name}: {e}")))?;

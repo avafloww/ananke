@@ -48,7 +48,7 @@ pub(crate) fn model_estimate_entry(
 /// command-template service picks a GPU dynamically, and the rest run the
 /// estimator-path packer against the live snapshot and pledge book. Returns
 /// `None` when there is nothing to show — a llama-cpp service whose GGUF
-/// couldn't be read, or a command service that reserves no VRAM.
+/// couldn't be read, or a command service that reserves nothing.
 pub(crate) fn placement_preview(
     state: &AppState,
     svc_cfg: &ServiceConfig,
@@ -86,7 +86,7 @@ pub(crate) fn placement_preview(
         crate::supervise::preview_override_placement(svc_cfg, &snapshot, &table, running)
     } else if matches!(svc_cfg.template(), crate::config::Template::Command) {
         // Command-template service picking a GPU dynamically (e.g. ComfyUI):
-        // `None` means it reserves no VRAM, so there is nothing to show.
+        // `None` means it reserves nothing, so there is nothing to show.
         crate::supervise::preview_command_placement(svc_cfg, &snapshot, &table, running)?
     } else {
         let mut est = estimate?.clone();

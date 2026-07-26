@@ -231,7 +231,7 @@ template = "command"
 command = ["/bin/true"]
 port = 11435
 allocation.mode = "static"
-allocation.vram_gb = 4
+allocation.reserve_gb = 4
 devices.placement = "cpu-only"
 {block}
 "#

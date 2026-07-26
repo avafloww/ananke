@@ -15,7 +15,7 @@ pub enum StartResponse {
         run_id: i64,
     },
     QueueFull,
-    /// The supervisor declined to start: VRAM didn't fit, the service
+    /// The supervisor declined to start: it didn't fit, the service
     /// is disabled, etc. The embedded [`ApiErrorBody`] carries the
     /// same typed slug, message, and kind that a 503 `ApiError`
     /// response would (so clients can switch on `error.code` instead

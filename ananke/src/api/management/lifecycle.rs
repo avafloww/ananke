@@ -34,7 +34,7 @@ use crate::{
     responses(
         (status = 202, body = StartResponse),
         (status = 404, body = ApiError, description = "service_not_found"),
-        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked")
+        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked")
     )
 )]
 pub async fn post_start(State(state): State<AppState>, Path(name): Path<String>) -> Response {
@@ -89,7 +89,7 @@ pub async fn post_stop(State(state): State<AppState>, Path(name): Path<String>) 
     responses(
         (status = 202, body = StartResponse),
         (status = 404, body = ApiError, description = "service_not_found"),
-        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked")
+        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked")
     )
 )]
 pub async fn post_restart(State(state): State<AppState>, Path(name): Path<String>) -> Response {
@@ -190,8 +190,8 @@ fn not_found(name: &str) -> Response {
 
 /// Single place that turns an `EnsureFailure` from the supervisor into
 /// the management API's response. Variants the management surface
-/// elects to surface as "controlled outcome" 202s (queue full, vram
-/// shortfall, disabled) project to the typed `StartResponse`; the
+/// elects to surface as "controlled outcome" 202s (queue full, insufficient
+/// capacity, disabled) project to the typed `StartResponse`; the
 /// hard-error variants (start failed, blocked) go through
 /// `ApiErrorCode`'s standard 503 projection. Shared between
 /// `post_start` and `post_restart` so the two handlers can't drift.
@@ -199,7 +199,7 @@ fn not_found(name: &str) -> Response {
 /// `Unavailable` carries the same `ApiErrorBody` shape a 503 error
 /// would (slug + message + kind), built through the same
 /// `ApiErrorCode` pipeline — so a client switching on `error.code`
-/// sees `insufficient_vram` / `service_disabled` here and at the 503
+/// sees `insufficient_capacity` / `service_disabled` here and at the 503
 /// surfaces, without having to special-case 202-with-Unavailable.
 fn management_failure_response(
     name: &str,
@@ -212,7 +212,7 @@ fn management_failure_response(
             warn!(service = name, operation = op, "rejected: start_queue_full");
             (StatusCode::ACCEPTED, Json(StartResponse::QueueFull)).into_response()
         }
-        EnsureFailure::InsufficientVram(_) | EnsureFailure::ServiceDisabled(_) => {
+        EnsureFailure::InsufficientCapacity(_) | EnsureFailure::ServiceDisabled(_) => {
             let code = ensure_failure_to_api_code(&SmolStr::new(name), failure);
             warn!(service = name, operation = op, slug = %code.slug(), message = %code.message(), "rejected (controlled)");
             let body: ApiError = code.into();

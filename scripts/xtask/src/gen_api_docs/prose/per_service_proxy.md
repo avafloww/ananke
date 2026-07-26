@@ -15,7 +15,7 @@ Each service exposes a per-service reverse proxy on its configured `port`. This 
   which would cause the browser to close the connection prematurely).
 - **On-demand start**: the proxy triggers a service ensure (start) before
   forwarding the first request. If the supervisor cannot start the service
-  (VRAM shortfall, disabled, etc.), a `503` error is returned with the
+  (insufficient capacity, disabled, etc.), a `503` error is returned with the
   standard error envelope.
 - **In-flight tracking**: each request increments a per-service counter
   that pins the service open against drain. The counter stays elevated

@@ -45,7 +45,7 @@ mod tests {
         estimator::{Estimate, NonLayer},
     };
 
-    /// Regression for the live "insufficient_vram on gpu:0" failure: the MTP
+    /// Regression for the live "insufficient_capacity on gpu:0" failure: the MTP
     /// draft-context lump must ride the *last* GPU (the spill target the
     /// trailing MTP head lands on), not pile onto the most-free GPU the
     /// first-fit walker is already filling to the brim. A model that spans

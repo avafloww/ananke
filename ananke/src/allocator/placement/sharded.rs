@@ -97,10 +97,12 @@ impl<'a> Packer<'a> {
             if gpu == main {
                 bytes += main_only + remainder;
             }
-            if bytes > self.gpu_available(gpu) {
+            let available = self.gpu_available(gpu);
+            if bytes > available {
                 return Err(PackError::ShardDoesNotFit {
                     gpu_index: gpu,
                     bytes,
+                    available,
                 });
             }
             *self.per_device.entry(DeviceSlot::Gpu(gpu)).or_default() += bytes;

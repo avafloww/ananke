@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 
 import type {
   DevicePlacement,
+  DeviceShortfall,
   PlacementPreview,
   ServiceDetail,
 } from "../../api/client.ts";
@@ -49,9 +50,14 @@ export function PlacementSection({
               ))}
             </div>
           ) : (
-            <span className="text-xs text-tertiary">
-              {t("serviceDetail.noPlacementFits")}
-            </span>
+            <div className="space-y-1">
+              <span className="text-xs text-tertiary">
+                {t("serviceDetail.noPlacementFits")}
+              </span>
+              {placement.verdict.kind === "does_not_fit" && (
+                <ShortfallList shortfalls={placement.verdict.shortfalls} />
+              )}
+            </div>
           )}
           {placement.expert_offload_bytes > 0 && (
             <div className="mt-1.5 text-xs text-tertiary">
@@ -106,6 +112,40 @@ export function PlacementSection({
   );
 }
 
+// Per-device breakdown of why a placement failed. Naming the device matters:
+// the binding constraint is frequently host RAM rather than the GPUs, and the
+// ids match `GET /api/devices` so they can be cross-referenced.
+function ShortfallList({
+  shortfalls,
+}: {
+  readonly shortfalls: readonly DeviceShortfall[];
+}) {
+  const { t } = useTranslation();
+  // An empty list means the failure had no device to point at — a config
+  // error, or no eligible device at all. Say so rather than rendering a bare
+  // "no placement is possible" with nothing under it.
+  if (shortfalls.length === 0) {
+    return (
+      <p className="text-xs text-tertiary">
+        {t("serviceDetail.noEligibleDevices")}
+      </p>
+    );
+  }
+  return (
+    <ul className="font-mono text-xs text-tertiary">
+      {shortfalls.map((s) => (
+        <li key={s.device}>
+          {t("serviceDetail.shortfall", {
+            device: s.device,
+            requested: formatBytes(s.requested_bytes),
+            available: formatBytes(s.available_bytes),
+          })}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function PlacementBar({
   device,
   verdict,
@@ -125,7 +165,7 @@ function PlacementBar({
   const canGrow = max_bytes > bytes;
 
   const thisVariant: BarSegment["variant"] =
-    verdict === "needs_eviction" ? "growth" : "used";
+    verdict.kind === "needs_eviction" ? "growth" : "used";
 
   const segments: BarSegment[] = [
     {
@@ -176,7 +216,7 @@ function PlacementBar({
 function FitBadge({ verdict }: { verdict: PlacementPreview["verdict"] }) {
   const { t } = useTranslation();
   const map: Record<
-    PlacementPreview["verdict"],
+    PlacementPreview["verdict"]["kind"],
     { variant: "success" | "warning" | "danger"; label: string }
   > = {
     fits: { variant: "success", label: t("serviceDetail.fitsNow") },
@@ -186,6 +226,6 @@ function FitBadge({ verdict }: { verdict: PlacementPreview["verdict"] }) {
     },
     does_not_fit: { variant: "danger", label: t("serviceDetail.doesNotFit") },
   };
-  const { variant, label } = map[verdict];
+  const { variant, label } = map[verdict.kind];
   return <Badge variant={variant}>{label}</Badge>;
 }

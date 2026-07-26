@@ -54,7 +54,8 @@
       "evicted": "evicted",
       "failed": "failed",
       "disabled": "disabled"
-    }
+    },
+    "footprintNeeded": "needed"
   },
   "devices": {
     "title": "Devices",
@@ -254,7 +255,8 @@
     "total": "Total",
     "peak": "(peak {{bytes}})",
     "preview": "Preview",
-    "noPlacementFits": "No placement fits the allowed GPUs.",
+    "noPlacementFits": "No placement is possible under current conditions.",
+    "shortfall": "{{device}}: needs {{requested}}, has {{available}}",
     "expertOffload": "Expert offload: {{layers}} layer · {{bytes}} to CPU",
     "expertOffload_other": "Expert offload: {{layers}} layers · {{bytes}} to CPU",
     "currentPledge": "Current pledge",
@@ -270,7 +272,7 @@
     "cannotCompute": "Cannot compute: {{error}}",
     "standalone": "Standalone",
     "currentConditions": "Current conditions",
-    "doesNotFitCurrent": "Does not fit under current conditions",
+    "doesNotFitCurrent": "Does not fit under current conditions.",
     "envInheritOn": "env: inherited",
     "envInheritOff": "env: isolated",
     "envInheritOnHint": "Child inherits the daemon's full environment ($PATH, $HOME, …) with per-service env overrides on top",
@@ -282,7 +284,8 @@
     "avgLatency": "Avg latency",
     "avgTpsIn": "Avg TPS (in)",
     "avgTpsOut": "Avg TPS (out)",
-    "avgTpsEffective": "Avg TPS (effective)"
+    "avgTpsEffective": "Avg TPS (effective)",
+    "noEligibleDevices": "No eligible device, or a configuration error prevents placement."
   },
   "logs": {
     "search": "search…",

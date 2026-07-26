@@ -3,7 +3,7 @@ All error responses — across both the OpenAI-compatible API and the management
 ```json
 {
   "error": {
-    "code": "insufficient_vram",
+    "code": "insufficient_capacity",
     "message": "service `demo` cannot fit: ...",
     "type": "server_error"
   }
@@ -24,4 +24,4 @@ Both `code` and `type` use an `Other` fallback for deserialization. If the daemo
 
 ### `StartResponse::Unavailable`
 
-The `POST /api/services/{name}/start` endpoint returns `202 Accepted` even when the supervisor declines to start the service (VRAM shortfall, disabled, etc.). The body is `{"status": "unavailable", "error": {...}}` with the same `ApiErrorBody` shape a `503` error would carry. This is a "controlled outcome" of the start request, not a server-side fault.
+The `POST /api/services/{name}/start` endpoint returns `202 Accepted` even when the supervisor declines to start the service (insufficient capacity, disabled, etc.). The body is `{"status": "unavailable", "error": {...}}` with the same `ApiErrorBody` shape a `503` error would carry. This is a "controlled outcome" of the start request, not a server-side fault.

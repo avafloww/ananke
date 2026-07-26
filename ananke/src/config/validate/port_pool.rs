@@ -202,7 +202,7 @@ command = ["/bin/true"]
 port = 8500
 private_port = 18188
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 "#,
         );
         assert!(validate(&cfg).is_ok());

@@ -50,7 +50,7 @@ pub enum ApiErrorCode {
     /// Spawn / health-probe / queue-bus failure during ensure.
     StartFailed { name: SmolStr, reason: String },
     /// Packer couldn't lay out the model.
-    InsufficientVram { name: SmolStr, reason: String },
+    InsufficientCapacity { name: SmolStr, reason: String },
     /// Queued behind a busy non-elastic peer beyond `QUEUE_BLOCKED_GRACE`.
     ServiceBlocked {
         name: SmolStr,
@@ -88,7 +88,7 @@ impl ApiErrorCode {
             Self::ServiceDisabled { .. } => ApiErrorCodeSlug::ServiceDisabled,
             Self::StartQueueFull { .. } => ApiErrorCodeSlug::StartQueueFull,
             Self::StartFailed { .. } => ApiErrorCodeSlug::StartFailed,
-            Self::InsufficientVram { .. } => ApiErrorCodeSlug::InsufficientVram,
+            Self::InsufficientCapacity { .. } => ApiErrorCodeSlug::InsufficientCapacity,
             Self::ServiceBlocked { .. } => ApiErrorCodeSlug::ServiceBlocked,
             Self::UpstreamUnavailable { .. } => ApiErrorCodeSlug::UpstreamUnavailable,
             Self::ProxyInternal { .. } => ApiErrorCodeSlug::ProxyInternal,
@@ -108,7 +108,7 @@ impl ApiErrorCode {
             Self::ServiceDisabled { .. }
             | Self::StartQueueFull { .. }
             | Self::StartFailed { .. }
-            | Self::InsufficientVram { .. }
+            | Self::InsufficientCapacity { .. }
             | Self::ServiceBlocked { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::UpstreamUnavailable { .. } => StatusCode::BAD_GATEWAY,
             Self::ProxyInternal { .. } | Self::PersistFailed { .. } => {
@@ -138,7 +138,7 @@ impl ApiErrorCode {
             Self::ServiceDisabled { .. }
             | Self::StartQueueFull { .. }
             | Self::StartFailed { .. }
-            | Self::InsufficientVram { .. }
+            | Self::InsufficientCapacity { .. }
             | Self::ServiceBlocked { .. }
             | Self::UpstreamUnavailable { .. }
             | Self::ProxyInternal { .. }
@@ -160,7 +160,7 @@ impl ApiErrorCode {
             Self::StartFailed { name, reason } => {
                 format!("service `{name}` failed to start: {reason}")
             }
-            Self::InsufficientVram { name, reason } => {
+            Self::InsufficientCapacity { name, reason } => {
                 format!("service `{name}` cannot fit: {reason}")
             }
             Self::ServiceBlocked { name, busy_peers } => {

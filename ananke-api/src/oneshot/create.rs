@@ -62,15 +62,25 @@ pub struct OneshotAllocation {
     /// `"static"` or `"dynamic"`; `None` for llama-cpp template.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
-    /// Static allocation amount.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vram_gb: Option<f32>,
-    /// Dynamic min.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_vram_gb: Option<f32>,
-    /// Dynamic max.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_vram_gb: Option<f32>,
+    /// Static reservation in GiB. Lands on whichever device the service is
+    /// placed on — host RAM for a cpu-only command service, VRAM otherwise.
+    /// The `vram_gb` alias keeps pre-rename clients working.
+    #[serde(default, alias = "vram_gb", skip_serializing_if = "Option::is_none")]
+    pub reserve_gb: Option<f32>,
+    /// Dynamic minimum reservation in GiB.
+    #[serde(
+        default,
+        alias = "min_vram_gb",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub min_reserve_gb: Option<f32>,
+    /// Dynamic maximum reservation in GiB.
+    #[serde(
+        default,
+        alias = "max_vram_gb",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max_reserve_gb: Option<f32>,
 }
 
 /// Device-placement hints for [`OneshotRequest`].

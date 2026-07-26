@@ -1,6 +1,6 @@
 //! Render argv for `Command`-template services: the main `command` and its
 //! optional `shutdown_command` sibling, both substituted through the same
-//! `{port}` / `{gpu_ids}` / `{vram_mb}` / `{model}` / `{name}` placeholder
+//! `{port}` / `{gpu_ids}` / `{reserve_mb}` / `{model}` / `{name}` placeholder
 //! rules.
 
 use std::collections::BTreeMap;
@@ -13,14 +13,14 @@ use crate::{
 
 /// Assemble the [`PlaceholderContext`] a command-template argv renders
 /// against. Shared by spawn-time and shutdown-time so both paths resolve
-/// `{port}` / `{gpu_ids}` / `{vram_mb}` / `{name}` identically.
+/// `{port}` / `{gpu_ids}` / `{reserve_mb}` / `{name}` identically.
 fn placeholder_context<'a>(
     svc: &'a ServiceConfig,
     alloc: &'a Allocation,
 ) -> crate::templates::PlaceholderContext<'a> {
     use crate::config::AllocationMode;
-    let static_vram_mb = match svc.allocation_mode {
-        AllocationMode::Static { vram_mb } => Some(vram_mb),
+    let static_reserve_mb = match svc.allocation_mode {
+        AllocationMode::Static { reserve_mb } => Some(reserve_mb),
         _ => None,
     };
     crate::templates::PlaceholderContext {
@@ -29,7 +29,7 @@ fn placeholder_context<'a>(
         // Command template has no model path; {model} resolves to empty.
         model: None,
         allocation: alloc,
-        static_vram_mb,
+        static_reserve_mb,
     }
 }
 
@@ -84,7 +84,7 @@ pub fn render_shutdown_argv(
 }
 
 /// Render argv for a `Command`-template service. Substitutes `{port}`,
-/// `{gpu_ids}`, `{vram_mb}`, `{model}`, `{name}`.
+/// `{gpu_ids}`, `{reserve_mb}`, `{model}`, `{name}`.
 pub(super) fn render_command_argv(
     svc: &ServiceConfig,
     alloc: &Allocation,
@@ -122,7 +122,7 @@ mod tests {
         svc.private_port = 48188;
         svc.placement_override = placement.clone();
         svc.placement_policy = PlacementPolicy::GpuOnly;
-        svc.allocation_mode = AllocationMode::Static { vram_mb: 6144 };
+        svc.allocation_mode = AllocationMode::Static { reserve_mb: 6144 };
         let alloc = Allocation::from_override(&placement);
         let cfg = render_argv(&svc, &alloc, None).unwrap();
         assert_eq!(cfg.binary, "python");

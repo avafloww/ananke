@@ -60,7 +60,7 @@ pub enum ApiErrorCodeSlug {
     /// Spawn / health-probe / queue-bus failure during ensure.
     StartFailed,
     /// Packer couldn't lay out the model.
-    InsufficientVram,
+    InsufficientCapacity,
     /// Queued behind a busy non-elastic peer.
     ServiceBlocked,
     /// Upstream child rejected the wire or never replied.

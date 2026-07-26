@@ -19,6 +19,6 @@ mod types;
 #[cfg(test)]
 mod test_support;
 
-pub use command_gpu::{check_command_placement_override, pick_command_gpu};
-pub use entry::{pack, pack_optimistic};
-pub use types::{CommandArgs, PackError, Packed};
+pub use command_gpu::{check_command_placement_override, command_gpu_shortfalls, pick_command_gpu};
+pub use entry::{PackMode, pack, pack_demand, pack_optimistic};
+pub use types::{CommandArgs, DeviceShortfall, PackError, Packed};

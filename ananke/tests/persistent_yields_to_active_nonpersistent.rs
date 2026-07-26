@@ -111,14 +111,14 @@ async fn persistent_yields_when_nonpersistent_peer_is_running() {
         .expect("ensure command delivered");
 
     match resp {
-        EnsureResponse::Unavailable(EnsureFailure::InsufficientVram(msg)) => {
+        EnsureResponse::Unavailable(EnsureFailure::InsufficientCapacity(msg)) => {
             assert!(
                 msg.contains("yielding") || msg.contains("yield"),
                 "yield message expected, got: {msg}"
             );
         }
         other => panic!(
-            "expected Unavailable(InsufficientVram) from yielded persistent ensure, got {other:?}"
+            "expected Unavailable(InsufficientCapacity) from yielded persistent ensure, got {other:?}"
         ),
     }
 

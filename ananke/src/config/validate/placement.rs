@@ -24,9 +24,9 @@ impl Template {
 pub enum AllocationMode {
     /// Llama-cpp services: placement decided by estimator/override; mode absent.
     None,
-    Static {
-        vram_mb: u64,
-    },
+    /// A fixed reservation. Named device-neutrally because it lands on the
+    /// CPU device for a cpu-only command service just as readily as on a GPU.
+    Static { reserve_mb: u64 },
     Dynamic {
         min_mb: u64,
         max_mb: u64,
@@ -36,18 +36,18 @@ pub enum AllocationMode {
 
 impl AllocationMode {
     /// Resolve an allocation mode from a `(template, mode)` pair plus the
-    /// associated VRAM knobs. Shared by the TOML validator and the oneshot
-    /// API so both paths agree on the semantics of `"static"`, `"dynamic"`,
-    /// and the llama-cpp exclusions.
+    /// associated reservation knobs. Shared by the TOML validator and the
+    /// oneshot API so both paths agree on the semantics of `"static"`,
+    /// `"dynamic"`, and the llama-cpp exclusions.
     ///
     /// The returned error is a bare sentence fragment; the caller is
     /// expected to prepend context (e.g. `service {name}: `).
     pub fn from_parts(
         template: Template,
         mode: Option<&str>,
-        vram_gb: Option<f32>,
-        min_vram_gb: Option<f32>,
-        max_vram_gb: Option<f32>,
+        reserve_gb: Option<f32>,
+        min_reserve_gb: Option<f32>,
+        max_reserve_gb: Option<f32>,
         min_borrower_runtime_ms: u64,
     ) -> Result<AllocationMode, String> {
         match (template, mode) {
@@ -56,19 +56,19 @@ impl AllocationMode {
             )),
             (Template::LlamaCpp, None) => Ok(AllocationMode::None),
             (Template::Command, Some("static")) => {
-                let gb =
-                    vram_gb.ok_or_else(|| "allocation.mode=static requires vram_gb".to_string())?;
+                let gb = reserve_gb
+                    .ok_or_else(|| "allocation.mode=static requires reserve_gb".to_string())?;
                 Ok(AllocationMode::Static {
-                    vram_mb: gib_to_mib(gb),
+                    reserve_mb: gib_to_mib(gb),
                 })
             }
             (Template::Command, Some("dynamic")) => {
-                let min = min_vram_gb
-                    .ok_or_else(|| "allocation.mode=dynamic requires min_vram_gb".to_string())?;
-                let max = max_vram_gb
-                    .ok_or_else(|| "allocation.mode=dynamic requires max_vram_gb".to_string())?;
+                let min = min_reserve_gb
+                    .ok_or_else(|| "allocation.mode=dynamic requires min_reserve_gb".to_string())?;
+                let max = max_reserve_gb
+                    .ok_or_else(|| "allocation.mode=dynamic requires max_reserve_gb".to_string())?;
                 if max <= min {
-                    return Err("max_vram_gb must be > min_vram_gb".to_string());
+                    return Err("max_reserve_gb must be > min_reserve_gb".to_string());
                 }
                 Ok(AllocationMode::Dynamic {
                     min_mb: gib_to_mib(min),
@@ -250,7 +250,7 @@ command = ["python", "main.py"]
 port = 8188
 lifecycle = "on_demand"
 allocation.mode = "static"
-allocation.vram_gb = 6
+allocation.reserve_gb = 6
 "#,
         );
         let ec = validate(&cfg).unwrap();
@@ -258,7 +258,56 @@ allocation.vram_gb = 6
         assert_eq!(svc.template(), Template::Command);
         assert!(matches!(
             svc.allocation_mode,
-            AllocationMode::Static { vram_mb: 6144 }
+            AllocationMode::Static { reserve_mb: 6144 }
+        ));
+    }
+
+    /// `vram_gb` / `min_vram_gb` / `max_vram_gb` were the names before the
+    /// reservation was recognised as device-neutral. Configs on disk still use
+    /// them, so they have to keep parsing to the same allocation.
+    #[test]
+    fn legacy_vram_gb_keys_still_parse() {
+        let cfg = parse_and_merge(
+            r#"
+[[service]]
+name = "static-legacy"
+template = "command"
+command = ["python", "main.py"]
+port = 8188
+lifecycle = "on_demand"
+allocation.mode = "static"
+allocation.vram_gb = 6
+
+[[service]]
+name = "dynamic-legacy"
+template = "command"
+command = ["python", "main.py"]
+port = 8189
+lifecycle = "on_demand"
+allocation.mode = "dynamic"
+allocation.min_vram_gb = 4
+allocation.max_vram_gb = 20
+"#,
+        );
+        let ec = validate(&cfg).unwrap();
+        let mode = |name: &str| {
+            ec.services
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("service {name} must be present"))
+                .allocation_mode
+        };
+        assert!(matches!(
+            mode("static-legacy"),
+            AllocationMode::Static { reserve_mb: 6144 }
+        ));
+        assert!(matches!(
+            mode("dynamic-legacy"),
+            AllocationMode::Dynamic {
+                min_mb: 4096,
+                max_mb: 20480,
+                ..
+            }
         ));
     }
 
@@ -273,8 +322,8 @@ command = ["python", "main.py"]
 port = 8188
 lifecycle = "on_demand"
 allocation.mode = "dynamic"
-allocation.min_vram_gb = 4
-allocation.max_vram_gb = 20
+allocation.min_reserve_gb = 4
+allocation.max_reserve_gb = 20
 "#,
         );
         let ec = validate(&cfg).unwrap();
@@ -300,7 +349,7 @@ template = "llama-cpp"
 model = "/m/x.gguf"
 port = 11000
 allocation.mode = "static"
-allocation.vram_gb = 4
+allocation.reserve_gb = 4
 "#,
             Path::new("/t"),
         );
@@ -320,11 +369,11 @@ template = "command"
 command = ["python"]
 port = 8188
 allocation.mode = "dynamic"
-allocation.min_vram_gb = 10
-allocation.max_vram_gb = 5
+allocation.min_reserve_gb = 10
+allocation.max_reserve_gb = 5
 "#,
         );
         let err = validate(&cfg).unwrap_err();
-        assert!(format!("{err}").contains("max_vram_gb"));
+        assert!(format!("{err}").contains("max_reserve_gb"));
     }
 }

@@ -96,7 +96,7 @@ async fn busy_dynamic_peer_is_evicted_by_tied_priority_request() {
     // Step 3: qwen fires while comfy is "busy". The OpenAI handler's
     // `await_ensure` is bounded by the service's `max_request_duration_ms`
     // (5 s in `minimal_llama_service`); without the fix this would either
-    // 503 immediately with `insufficient_vram` or hang the full 5 s and
+    // 503 immediately with `insufficient_capacity` or hang the full 5 s and
     // 503 with "start timed out". With the fix, comfy is treated as
     // logically idle, the planner picks it as the eviction victim, and
     // qwen proceeds.

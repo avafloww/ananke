@@ -1,9 +1,10 @@
 // Service list row (status, sparkline, lifecycle actions) for DashboardView.
 
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-import type { ServiceSummary } from "../../api/client.ts";
+import type { FitVerdict, ServiceSummary } from "../../api/client.ts";
 import { formatBytes, serviceProxyUrl } from "../../util.ts";
 import { StatusDot } from "../ui/StatusDot.tsx";
 import { Sparkline } from "../ui/Sparkline.tsx";
@@ -68,13 +69,18 @@ export function ServiceRow({
         <StatusDot state={svc.state} />
         <span
           className={`min-w-0 truncate font-mono text-sm ${fitVerdictColor(svc.fit_verdict)}`}
-          title={fitVerdictTitle(svc.fit_verdict)}
+          title={fitVerdictTitle(svc.fit_verdict, t)}
         >
           {svc.name}
         </span>
-        {svc.vram_bytes != null && (
+        {svc.footprint_bytes != null && (
           <span className="hidden shrink-0 font-mono text-xs text-tertiary sm:inline">
-            {formatBytes(svc.vram_bytes)}
+            {formatBytes(svc.footprint_bytes)}
+            {/* An unplaceable service has no reservation to report, so the
+                figure is the model's demand — say so rather than letting it
+                read as memory the service is holding. */}
+            {svc.fit_verdict?.kind === "does_not_fit" &&
+              ` ${t("services.footprintNeeded")}`}
           </span>
         )}
         {svc.has_mmproj && (
@@ -207,8 +213,8 @@ function IconButton({
   );
 }
 
-function fitVerdictColor(verdict: string | null | undefined): string {
-  switch (verdict) {
+function fitVerdictColor(verdict: FitVerdict | null | undefined): string {
+  switch (verdict?.kind) {
     case "does_not_fit":
       return "text-danger";
     case "needs_eviction":
@@ -219,13 +225,27 @@ function fitVerdictColor(verdict: string | null | undefined): string {
 }
 
 function fitVerdictTitle(
-  verdict: string | null | undefined,
+  verdict: FitVerdict | null | undefined,
+  t: TFunction,
 ): string | undefined {
-  switch (verdict) {
-    case "does_not_fit":
-      return "does not fit under current conditions";
+  switch (verdict?.kind) {
+    case "does_not_fit": {
+      // Reuse the same i18n strings the detail view renders, rather than a
+      // third English spelling of a sentence that already exists twice.
+      const detail = verdict.shortfalls
+        .map((s) =>
+          t("serviceDetail.shortfall", {
+            device: s.device,
+            requested: formatBytes(s.requested_bytes),
+            available: formatBytes(s.available_bytes),
+          }),
+        )
+        .join("; ");
+      const headline = t("serviceDetail.noPlacementFits");
+      return detail ? `${headline.replace(/\.$/, "")} — ${detail}` : headline;
+    }
     case "needs_eviction":
-      return "needs eviction to start";
+      return t("serviceDetail.needsEviction");
     default:
       return undefined;
   }

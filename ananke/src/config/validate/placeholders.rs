@@ -27,11 +27,11 @@ pub(crate) fn check_placeholders(
         port: 0,
         model: Some("/m/x.gguf"),
         allocation: &alloc,
-        // `None` so a `{vram_mb}` placeholder on a dynamic allocation
-        // trips the `VramMbOnDynamic` branch at config time, not
+        // `None` so a `{reserve_mb}` placeholder on a dynamic allocation
+        // trips the `ReserveMbOnDynamic` branch at config time, not
         // later. Static allocations re-validate at spawn time against
-        // the real static_vram_mb.
-        static_vram_mb: None,
+        // the real static_reserve_mb.
+        static_reserve_mb: None,
     };
     for (i, arg) in argv.iter().enumerate() {
         substitute(arg, &ctx)
@@ -61,7 +61,7 @@ pub(crate) fn check_launcher_placeholders(
         port: 0,
         model: Some("/m/x.gguf"),
         allocation: &alloc,
-        static_vram_mb: None,
+        static_reserve_mb: None,
     };
     substitute_launcher_argv(argv, &[], &ctx)
         .map_err(|e| fail(format!("service {name}: launcher: {e}")))?;

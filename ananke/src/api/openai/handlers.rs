@@ -144,7 +144,7 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
         (status = 200, description = "Proxied from upstream"),
         (status = 400, body = ApiError, description = "invalid_request_error"),
         (status = 404, body = ApiError, description = "model_not_found"),
-        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked"),
+        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked"),
         (status = 502, body = ApiError, description = "upstream_unavailable")
     )
 )]
@@ -165,7 +165,7 @@ pub async fn chat_completions(
         (status = 200, description = "Proxied from upstream"),
         (status = 400, body = ApiError, description = "invalid_request_error"),
         (status = 404, body = ApiError, description = "model_not_found"),
-        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked"),
+        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked"),
         (status = 502, body = ApiError, description = "upstream_unavailable")
     )
 )]
@@ -186,7 +186,7 @@ pub async fn completions(
         (status = 200, description = "Proxied from upstream"),
         (status = 400, body = ApiError, description = "invalid_request_error"),
         (status = 404, body = ApiError, description = "model_not_found"),
-        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked"),
+        (status = 503, body = ApiError, description = "service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked"),
         (status = 502, body = ApiError, description = "upstream_unavailable")
     )
 )]
@@ -241,9 +241,9 @@ async fn forward_json_post(
     let max_request_duration = Duration::from_millis(svc.max_request_duration_ms);
     match await_ensure(&handle, max_request_duration).await {
         EnsureOutcome::Ready { .. } => {}
-        EnsureOutcome::Failed(EnsureFailure::InsufficientVram(msg)) => {
-            warn!(model = %model, endpoint = path, reason = %msg, "request rejected: insufficient_vram");
-            return errors::insufficient_vram(&model, &msg);
+        EnsureOutcome::Failed(EnsureFailure::InsufficientCapacity(msg)) => {
+            warn!(model = %model, endpoint = path, reason = %msg, "request rejected: insufficient_capacity");
+            return errors::insufficient_capacity(&model, &msg);
         }
         EnsureOutcome::Failed(EnsureFailure::ServiceDisabled(msg)) => {
             warn!(model = %model, endpoint = path, reason = %msg, "request rejected: service_disabled");

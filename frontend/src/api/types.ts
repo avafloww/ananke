@@ -431,7 +431,7 @@ export interface components {
       | "service_disabled"
       | "start_queue_full"
       | "start_failed"
-      | "insufficient_vram"
+      | "insufficient_capacity"
       | "service_blocked"
       | "upstream_unavailable"
       | "proxy_internal"
@@ -580,6 +580,31 @@ export interface components {
     DeviceSamplesResponse: {
       /** @description Samples ordered by timestamp ascending. */
       samples: components["schemas"]["DeviceSampleResponse"][];
+    };
+    /**
+     * @description One device's contribution to a placement failure.
+     *
+     *     The binding constraint is often host RAM rather than GPU VRAM — a MoE with
+     *     expert offload routinely spills the bulk of its weights to the CPU — so the
+     *     device is named rather than the failure being sorted into a category.
+     */
+    DeviceShortfall: {
+      /**
+       * Format: int64
+       * @description Bytes the device could offer.
+       */
+      available_bytes: number;
+      /**
+       * @description Device id string, e.g. `"gpu:0"` or `"cpu"`. Matches `DeviceSummary::id`
+       *     from `GET /api/devices`, so a shortfall can be cross-referenced against
+       *     the live device view.
+       */
+      device: string;
+      /**
+       * Format: int64
+       * @description Bytes the placement needed on this device.
+       */
+      requested_bytes: number;
     };
     /** @description One entry in `GET /api/devices`. */
     DeviceSummary: {
@@ -734,9 +759,25 @@ export interface components {
         };
     /**
      * @description Whether a service's estimated placement fits under current conditions.
-     * @enum {string}
+     *
+     *     Serialised as a `kind`-tagged union so a failing verdict can carry the
+     *     per-device numbers that explain it.
      */
-    FitVerdict: "fits" | "needs_eviction" | "does_not_fit";
+    FitVerdict:
+      | {
+          /** @enum {string} */
+          kind: "fits";
+        }
+      | {
+          /** @enum {string} */
+          kind: "needs_eviction";
+        }
+      | {
+          /** @enum {string} */
+          kind: "does_not_fit";
+          /** @description The devices that came up short, and by how much. */
+          shortfalls: components["schemas"]["DeviceShortfall"][];
+        };
     /**
      * @description The ik_llama.cpp knobs of a `runtime = { kind = "ik-llama", ... }`
      *     service, mirrored from the validated config.
@@ -1033,21 +1074,23 @@ export interface components {
     OneshotAllocation: {
       /**
        * Format: float
-       * @description Dynamic max.
+       * @description Dynamic maximum reservation in GiB.
        */
-      max_vram_gb?: number | null;
+      max_reserve_gb?: number | null;
       /**
        * Format: float
-       * @description Dynamic min.
+       * @description Dynamic minimum reservation in GiB.
        */
-      min_vram_gb?: number | null;
+      min_reserve_gb?: number | null;
       /** @description `"static"` or `"dynamic"`; `None` for llama-cpp template. */
       mode?: string | null;
       /**
        * Format: float
-       * @description Static allocation amount.
+       * @description Static reservation in GiB. Lands on whichever device the service is
+       *     placed on — host RAM for a cpu-only command service, VRAM otherwise.
+       *     The `vram_gb` alias keeps pre-rename clients working.
        */
-      vram_gb?: number | null;
+      reserve_gb?: number | null;
     };
     /** @description Device-placement hints for [`OneshotRequest`]. */
     OneshotDevices: {
@@ -1346,6 +1389,23 @@ export interface components {
       elastic_borrower?: string | null;
       fit_verdict?: null | components["schemas"]["FitVerdict"];
       /**
+       * Format: int64
+       * @description Total bytes the service would occupy across all devices — GPU VRAM and
+       *     host RAM alike — under current conditions. Includes weights, KV cache,
+       *     and compute buffer.
+       *
+       *     Normally this is the placement preview's per-device sum: what the
+       *     service would actually reserve. When `fit_verdict` is `does_not_fit`
+       *     there is no placement to sum, so this falls back to the estimator's
+       *     aggregate demand — how much the model *would need*. Read the two fields
+       *     together; a `does_not_fit` verdict means this figure is a requirement,
+       *     not a reservation.
+       *
+       *     `None` when neither can be computed (e.g. a command service that
+       *     reserves nothing, or a llama-cpp service whose GGUF hasn't been read).
+       */
+      footprint_bytes?: number | null;
+      /**
        * @description `true` when the service's `[[service.llama_cpp]]` config has a
        *     `mmproj` entry — the standard signal that it supports vision /
        *     multimodal input. `None` for non-llama-cpp services. Cheap
@@ -1398,14 +1458,6 @@ export interface components {
       run_id?: number | null;
       /** @description State like `"idle"`, `"running"`, `"disabled_user_disabled"`. */
       state: string;
-      /**
-       * Format: int64
-       * @description Total VRAM bytes the service would reserve across all devices
-       *     under current conditions (from the placement preview). Includes
-       *     weights, KV cache, and compute buffer. `None` when the placement
-       *     can't be computed (e.g. a command service that reserves no VRAM).
-       */
-      vram_bytes?: number | null;
     };
     /** @description Response from `GET /api/services`. */
     ServicesResponse: {
@@ -1963,7 +2015,7 @@ export interface operations {
           "application/json": components["schemas"]["ApiError"];
         };
       };
-      /** @description insufficient_vram */
+      /** @description insufficient_capacity */
       422: {
         headers: {
           [name: string]: unknown;
@@ -2118,7 +2170,7 @@ export interface operations {
           "application/json": components["schemas"]["ApiError"];
         };
       };
-      /** @description service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked */
+      /** @description service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked */
       503: {
         headers: {
           [name: string]: unknown;
@@ -2158,7 +2210,7 @@ export interface operations {
           "application/json": components["schemas"]["ApiError"];
         };
       };
-      /** @description service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked */
+      /** @description service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked */
       503: {
         headers: {
           [name: string]: unknown;
@@ -2247,7 +2299,7 @@ export interface operations {
           "application/json": components["schemas"]["ApiError"];
         };
       };
-      /** @description service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked */
+      /** @description service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked */
       503: {
         headers: {
           [name: string]: unknown;
@@ -2305,7 +2357,7 @@ export interface operations {
           "application/json": components["schemas"]["ApiError"];
         };
       };
-      /** @description service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked */
+      /** @description service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked */
       503: {
         headers: {
           [name: string]: unknown;
@@ -2363,7 +2415,7 @@ export interface operations {
           "application/json": components["schemas"]["ApiError"];
         };
       };
-      /** @description service_disabled, start_queue_full, start_failed, insufficient_vram, service_blocked */
+      /** @description service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked */
       503: {
         headers: {
           [name: string]: unknown;

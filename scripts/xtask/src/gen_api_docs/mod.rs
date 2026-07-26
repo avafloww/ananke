@@ -286,7 +286,7 @@ mod tests {
                     },
                     "ApiErrorCodeSlug": {
                         "type": "string",
-                        "enum": ["model_not_found", "insufficient_vram", "other"]
+                        "enum": ["model_not_found", "insufficient_capacity", "other"]
                     }
                 }
             }
@@ -333,6 +333,6 @@ mod tests {
         assert!(!md.contains("**Response (200)** (`"));
         // Error code table.
         assert!(md.contains("`model_not_found`"));
-        assert!(md.contains("`insufficient_vram`"));
+        assert!(md.contains("`insufficient_capacity`"));
     }
 }

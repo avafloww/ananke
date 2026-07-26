@@ -136,7 +136,7 @@ impl RunLoop {
     {
         self.packed_for_spawn = None;
         let (min_mb, prefer_mb) = match svc.allocation_mode {
-            crate::config::AllocationMode::Static { vram_mb } => (vram_mb, Some(vram_mb)),
+            crate::config::AllocationMode::Static { reserve_mb } => (reserve_mb, Some(reserve_mb)),
             crate::config::AllocationMode::Dynamic { min_mb, max_mb, .. } => (min_mb, Some(max_mb)),
             crate::config::AllocationMode::None => (0, None),
         };
@@ -190,7 +190,11 @@ impl RunLoop {
                 }
                 None => {
                     return Err(ReservationFailure::PackFailed(
-                        crate::allocator::placement::PackError::WeightsDoNotFit,
+                        crate::allocator::placement::PackError::WeightsDoNotFit {
+                            shortfalls: crate::allocator::placement::command_gpu_shortfalls(
+                                svc, snap, table, min_mb, optimistic,
+                            ),
+                        },
                     ));
                 }
             }

@@ -110,7 +110,7 @@ fn plan_command_map(
     table: &AllocationTable,
 ) -> Result<BTreeMap<DeviceSlot, u64>, PreviewError> {
     let (min_mb, prefer_mb) = match svc.allocation_mode {
-        AllocationMode::Static { vram_mb } => (vram_mb, Some(vram_mb)),
+        AllocationMode::Static { reserve_mb } => (reserve_mb, Some(reserve_mb)),
         AllocationMode::Dynamic { min_mb, max_mb, .. } => (min_mb, Some(max_mb)),
         AllocationMode::None => (0, None),
     };
@@ -129,7 +129,13 @@ fn plan_command_map(
         match placement::pick_command_gpu(svc, snapshot, table, min_mb, prefer_mb, true) {
             Some(id) => DeviceSlot::Gpu(id),
             None if snapshot.gpus.is_empty() => DeviceSlot::Cpu,
-            None => return Err(PreviewError::Pack(PackError::WeightsDoNotFit)),
+            None => {
+                return Err(PreviewError::Pack(PackError::WeightsDoNotFit {
+                    shortfalls: placement::command_gpu_shortfalls(
+                        svc, snapshot, table, min_mb, true,
+                    ),
+                }));
+            }
         }
     };
     map.insert(slot, min_mb);

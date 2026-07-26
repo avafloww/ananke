@@ -3,7 +3,7 @@
 //! expert-offload decision in [`crate::allocator::placement::experts_ncmoe`].
 
 use crate::{
-    allocator::placement::{packer::Packer, types::PackError},
+    allocator::placement::{entry::PackMode, packer::Packer, types::PackError},
     config::DeviceSlot,
 };
 
@@ -60,7 +60,15 @@ impl<'a> Packer<'a> {
                 // CPU-spill the `-ngl 999` child ignores and then OOMs on
                 // (a live "child exited during starting" when loading laguna
                 // on top of a resident gemma).
-                None if self.allow_cpu && !self.expert_aware => {
+                // `Demand` is exempt from the expert-aware restriction: it
+                // spawns nothing, so there is no `-ngl 999` child to OOM.
+                // Without the exemption a MoE whose non-expert weight alone
+                // overflows the bare cards yields no figure at all — the same
+                // "no number for an unplaceable model" hole this reporting
+                // work exists to close, just `null` instead of `0 B`.
+                None if self.allow_cpu
+                    && (!self.expert_aware || matches!(self.mode, PackMode::Demand)) =>
+                {
                     *self.per_device.entry(DeviceSlot::Cpu).or_default() += full_bytes;
                     self.layers_on_cpu += 1;
                     self.spilled_layers.insert(idx);
@@ -69,6 +77,7 @@ impl<'a> Packer<'a> {
                     return Err(PackError::LayerDoesNotFit {
                         layer_index: idx,
                         bytes: nonexp,
+                        shortfalls: self.gpu_shortfalls(layer_cost),
                     });
                 }
             }

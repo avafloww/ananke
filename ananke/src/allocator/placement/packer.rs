@@ -12,13 +12,13 @@ use crate::{
     allocator::{
         AllocationTable,
         placement::{
-            entry::ONE_LAYER_FUDGE_MULTIPLIER,
+            entry::{ONE_LAYER_FUDGE_MULTIPLIER, PackMode},
             reserve::{allowed_gpu_list, gpu_reserve_bytes, sum_reserved},
-            types::ShardedPlan,
+            types::{DeviceShortfall, ShardedPlan},
         },
     },
     config::{DeviceSlot, OffloadMode, PlacementPolicy, ServiceConfig},
-    devices::DeviceSnapshot,
+    devices::{DeviceId, DeviceSnapshot},
     estimator::Estimate,
 };
 
@@ -50,6 +50,9 @@ pub(crate) struct Packer<'a> {
     /// See `pack_optimistic` — controls whether we clamp per-GPU remaining
     /// against nvml-reported free bytes or trust the pledge book only.
     pub(crate) optimistic_remaining: bool,
+    /// What this pack is for. Read by the steps that must not constrain a
+    /// [`PackMode::Demand`] run the way they constrain a real placement.
+    pub(crate) mode: PackMode,
 
     /// Set by [`Self::distribute_sharded`] for tensor/row split; drives the
     /// `--split-mode`/`--main-gpu`/equal `--tensor-split` emission in
@@ -88,8 +91,12 @@ impl<'a> Packer<'a> {
         svc: &'a ServiceConfig,
         snapshot: &'a DeviceSnapshot,
         reserved: &'a AllocationTable,
-        optimistic_remaining: bool,
+        mode: PackMode,
     ) -> Self {
+        // Demand shares Optimistic's capacity view: it asks what the model
+        // needs, which is a property of the model and the hardware, not of who
+        // currently holds a pledge.
+        let optimistic_remaining = matches!(mode, PackMode::Optimistic | PackMode::Demand);
         let mut allowed_gpus = allowed_gpu_list(svc, snapshot);
         // Sort by descending pledge-book headroom (total - already committed)
         // so the GPU with the fewest active reservations is tried first. Using
@@ -102,10 +109,15 @@ impl<'a> Packer<'a> {
             let pledged = sum_reserved(reserved, &slot, &svc.name);
             Reverse(total.saturating_sub(pledged))
         });
-        let allow_cpu = matches!(
-            svc.placement_policy,
-            PlacementPolicy::CpuOnly | PlacementPolicy::Hybrid
-        );
+        // Demand forces CPU spill on regardless of policy: the surplus of a
+        // model too large for the GPUs has to land *somewhere* for the total to
+        // be countable, and an unbounded host is the premise of the question.
+        // A `GpuOnly` service would otherwise fail the walk and yield no figure.
+        let allow_cpu = matches!(mode, PackMode::Demand)
+            || matches!(
+                svc.placement_policy,
+                PlacementPolicy::CpuOnly | PlacementPolicy::Hybrid
+            );
         let per_layer = estimate.per_layer_bytes.clone().unwrap_or_default();
 
         let offload_mode = svc
@@ -133,6 +145,7 @@ impl<'a> Packer<'a> {
             layers_on_cpu: 0,
             fallback_on_gpu: false,
             optimistic_remaining,
+            mode,
             sharded: None,
             offload_mode,
             expert_aware,
@@ -207,7 +220,7 @@ impl<'a> Packer<'a> {
     /// `per_layer_avg + per_layer_kv`, so both terms have to be reserved
     /// here. Reserving only the weight term let a GPU that the walker fills
     /// to the brim overshoot its capacity by one layer's KV (≈ the live
-    /// qwen3.6-27b "insufficient_vram on gpu:0" by ~one `per_layer_kv`);
+    /// qwen3.6-27b "insufficient_capacity on gpu:0" by ~one `per_layer_kv`);
     /// including `per_layer_kv` makes the post-walk total land at or below
     /// `available`.
     pub(crate) fn initialise_gpu_remaining(&mut self) {
@@ -267,6 +280,38 @@ impl<'a> Packer<'a> {
         // Keep the configured headroom (global `[devices]` reserve + this
         // service's `gpu_headroom_mb`) free on the card.
         avail.saturating_sub(gpu_reserve_bytes(self.svc, gpu))
+    }
+
+    /// Per-allowed-GPU breakdown of a failed placement of `requested` bytes,
+    /// in ascending GPU-id order (`allowed_gpus` is sorted by headroom, which
+    /// would otherwise make the reported order depend on live device state).
+    /// `available` is the walker's *remaining* capacity, not the card's raw
+    /// free bytes, so it reflects what was actually left when the fit failed.
+    ///
+    /// Only cards that genuinely came up short are reported. Every entry in a
+    /// placement-failure list should be a reason the placement failed; a card
+    /// listed as needing 1.5 GiB while holding 1.9 GiB reads as a
+    /// contradiction. This matters for the pooled expert-offload failure,
+    /// where `requested` is each card's even share of an aggregate ask and the
+    /// cards' remaining capacity can be lopsided enough that some satisfy it.
+    ///
+    /// Empty when the service has no eligible GPU at all — a GPU-less host
+    /// (NVML unavailable), or a `gpu_allow` that names no present card. There
+    /// is genuinely no device to point at in that case. Whenever at least one
+    /// card is allowed the result is non-empty, since every call site has
+    /// already established that the cards cannot collectively hold
+    /// `n × requested`, so at least one must hold less than `requested`.
+    pub(crate) fn gpu_shortfalls(&self, requested: u64) -> Vec<DeviceShortfall> {
+        let mut gpus = self.allowed_gpus.clone();
+        gpus.sort_unstable();
+        gpus.into_iter()
+            .map(|gpu| DeviceShortfall {
+                device: DeviceId::Gpu(gpu),
+                requested_bytes: requested,
+                available_bytes: self.gpu_remaining.get(&gpu).copied().unwrap_or(0),
+            })
+            .filter(|s| s.available_bytes < s.requested_bytes)
+            .collect()
     }
 
     /// The per-layer weight average used for headroom/fudge reservations. For

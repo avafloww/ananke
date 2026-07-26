@@ -96,9 +96,9 @@ pub(crate) fn merge_command(
             (x, None) => x,
             (Some(p), Some(c)) => Some(crate::config::parse::RawAllocation {
                 mode: c.mode.or(p.mode),
-                vram_gb: c.vram_gb.or(p.vram_gb),
-                min_vram_gb: c.min_vram_gb.or(p.min_vram_gb),
-                max_vram_gb: c.max_vram_gb.or(p.max_vram_gb),
+                reserve_gb: c.reserve_gb.or(p.reserve_gb),
+                min_reserve_gb: c.min_reserve_gb.or(p.min_reserve_gb),
+                max_reserve_gb: c.max_reserve_gb.or(p.max_reserve_gb),
                 min_borrower_runtime: c.min_borrower_runtime.or(p.min_borrower_runtime),
             }),
         },

@@ -2,16 +2,13 @@
 //!
 //! All `$ref`s are expanded inline. A `visited` set prevents infinite
 //! recursion on circular `$ref` chains. This module holds the multi-line
-//! expansion (`ts_type`) and its shared helpers; [`inline`] holds the
-//! compact single-line variant used inside `oneOf` unions, and [`names`]
-//! holds the never-expanding type-name extraction used in tables.
+//! expansion (`ts_type`) and its shared helpers; [`names`] holds the
+//! never-expanding type-name extraction used in tables.
 
-mod inline;
 mod names;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-pub use inline::ts_inline;
 pub use names::schema_ref_name;
 use serde_json::Value;
 
@@ -143,18 +140,32 @@ pub fn ts_type(
                 return format!("{} | null", inner);
             }
 
-            // Tagged union: show each variant with a comment label.
-            let mut parts: Vec<String> = Vec::new();
-            for (i, variant) in non_null.iter().enumerate() {
-                let label = oneof_variant_label(variant, i);
-                let ts = ts_inline(variant, spec, visited);
-                if parts.is_empty() {
-                    parts.push(format!("// {}\n{}", label, ts));
-                } else {
-                    parts.push(format!("\n// {}\n{}", label, ts));
-                }
-            }
-            return parts.join("");
+            // Tagged union: one labelled variant per line, `|`-separated.
+            //
+            // The separators and the indent both matter. This branch is
+            // reached for a union nested as an object *property* (e.g.
+            // `ServiceSummary.fit_verdict`), not just for a whole response
+            // body, and without them the emitted block is unparseable
+            // TypeScript: the variants run together, and a `| null` appended
+            // by the nullable-wrapper case above binds to the last variant
+            // instead of the union. Keeping the union flat (rather than
+            // parenthesising) is what makes that trailing ` | null` correct.
+            //
+            // Variants render through `ts_type`, not `ts_inline`: the latter
+            // renders a `$ref` as a bare type name, which for a union that is
+            // the only place a schema appears leaves the reader with a name
+            // the document never defines.
+            let pad = "  ".repeat(indent + 1);
+            let parts: Vec<String> = non_null
+                .iter()
+                .enumerate()
+                .map(|(i, variant)| {
+                    let label = oneof_variant_label(variant, i);
+                    let ts = ts_type(variant, spec, visited, indent + 1);
+                    format!("{pad}// {label}\n{pad}| {ts}")
+                })
+                .collect();
+            return format!("\n{}", parts.join("\n"));
         }
     }
 
@@ -263,7 +274,14 @@ fn format_ts_object(
         if field_type.contains('\n') {
             let mut type_lines = field_type.lines();
             let first = type_lines.next().unwrap_or("");
-            lines.push(format!("{}{}: {}", inner_pad, field_name, first));
+            // A multi-line type that leads with its own newline (a tagged
+            // union) contributes an empty first line, so trim rather than
+            // emitting `field?: ` with a trailing space.
+            lines.push(
+                format!("{}{}: {}", inner_pad, field_name, first)
+                    .trim_end()
+                    .to_string(),
+            );
             for line in type_lines {
                 lines.push(line.to_string());
             }

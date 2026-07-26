@@ -26,7 +26,7 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "allocation",
                     "table",
                     "none",
-                    "VRAM allocation (see [Resource Allocation](#resource-allocation)). Required for command services.",
+                    "Memory reservation (see [Resource Allocation](#resource-allocation)). Required for command services.",
                 ),
                 field(
                     "private_port",

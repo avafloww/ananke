@@ -41,9 +41,9 @@ pub async fn spawn_oneshot(
     let allocation_mode = AllocationMode::from_parts(
         template,
         req.allocation.mode.as_deref(),
-        req.allocation.vram_gb,
-        req.allocation.min_vram_gb,
-        req.allocation.max_vram_gb,
+        req.allocation.reserve_gb,
+        req.allocation.min_reserve_gb,
+        req.allocation.max_reserve_gb,
         DEFAULT_MIN_BORROWER_RUNTIME_MS,
     )?;
 

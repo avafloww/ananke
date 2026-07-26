@@ -170,7 +170,7 @@ impl RunLoop {
                         "persistent ensure yielding to active non-persistent peer"
                     );
                     let _ = ack.send(EnsureResponse::Unavailable(
-                        EnsureFailure::InsufficientVram(
+                        EnsureFailure::InsufficientCapacity(
                             "persistent service yielding to active non-persistent peer".into(),
                         ),
                     ));
@@ -189,7 +189,7 @@ impl RunLoop {
                         // candidates"), so no second log here — the consuming
                         // handler emits the client-facing line.
                         let _ = ack.send(EnsureResponse::Unavailable(
-                            EnsureFailure::InsufficientVram(retry_reason),
+                            EnsureFailure::InsufficientCapacity(retry_reason),
                         ));
                         return false;
                     }
@@ -247,7 +247,7 @@ impl RunLoop {
                 Ok(()) => {}
                 Err(RetryPackFailure::NotPossible(reason)) => {
                     let _ = ack.send(EnsureResponse::Unavailable(
-                        EnsureFailure::InsufficientVram(reason),
+                        EnsureFailure::InsufficientCapacity(reason),
                     ));
                     return false;
                 }

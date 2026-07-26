@@ -92,7 +92,7 @@ name = "comfy"
 template = "command"
 port = 8188
 allocation.mode = "static"
-allocation.vram_gb = 6
+allocation.reserve_gb = 6
 "#,
         );
         let err = validate(&cfg).unwrap_err();
@@ -149,7 +149,7 @@ command = ["/bin/true"]
 port = 8500
 private_port = 18188
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 "#,
         );
         let eff = validate(&cfg).expect("validate");
@@ -168,7 +168,7 @@ command = ["/bin/true"]
 port = 8500
 shutdown_command = []
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 "#,
         );
         let err = validate(&cfg).expect_err("empty shutdown_command is rejected");
@@ -187,7 +187,7 @@ template = "command"
 command = ["/run/vllm.sh", "{port}"]
 port = 8500
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 [service.openai_proxy]
 upstream_model = "qwen3.6-27b-autoround"
 "#,
@@ -210,7 +210,7 @@ template = "command"
 command = ["/bin/true"]
 port = 8500
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 [service.openai_proxy]
 upstream_model = ""
 "#,
@@ -232,7 +232,7 @@ template = "command"
 command = ["/bin/true"]
 port = 8500
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 [service.openai_proxy]
 "#,
         );
@@ -253,8 +253,8 @@ template = "command"
 command = ["/bin/comfyui"]
 port = 8188
 allocation.mode = "dynamic"
-allocation.min_vram_gb = 2
-allocation.max_vram_gb = 8
+allocation.min_reserve_gb = 2
+allocation.max_reserve_gb = 8
 "#,
         );
         let eff = validate(&cfg).expect("validate");
@@ -281,7 +281,7 @@ template = "command"
 command = ["run", "--port={prot}"]
 port = 8500
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 "#,
         );
         let err = validate(&cfg).expect_err("typoed placeholder is rejected");
@@ -303,7 +303,7 @@ command = ["run", "--port={port}"]
 shutdown_command = ["stop", "{bogus}"]
 port = 8500
 allocation.mode = "static"
-allocation.vram_gb = 1
+allocation.reserve_gb = 1
 "#,
         );
         let err = validate(&cfg).expect_err("typoed shutdown placeholder is rejected");

@@ -125,7 +125,7 @@ pub(crate) enum RetryPackFailure {
 #[derive(Debug, Clone)]
 pub enum EnsureFailure {
     /// The start fit-check rejected or the child got OOM-killed.
-    InsufficientVram(String),
+    InsufficientCapacity(String),
     /// The service is Disabled (config or health) or otherwise unavailable.
     ServiceDisabled(String),
     /// The supervisor's start queue is saturated.
@@ -137,7 +137,7 @@ pub enum EnsureFailure {
     /// without a single watched peer idling. Carries the structured
     /// list of blocking peer names — wire-layer renderers turn this
     /// into a 503 + `service_blocked` body that names each blocker.
-    /// Distinct from `InsufficientVram` because the *fit* is fine — the
+    /// Distinct from `InsufficientCapacity` because the *fit* is fine — the
     /// planner just can't displace the current occupant on its own.
     Blocked { busy_peers: Vec<smol_str::SmolStr> },
 }
@@ -181,7 +181,7 @@ async fn await_start_bus(
         },
         Ok(Ok(StartOutcome::Err(f))) => EnsureOutcome::Failed(match f.kind {
             StartFailureKind::NoFit | StartFailureKind::Oom => {
-                EnsureFailure::InsufficientVram(f.message)
+                EnsureFailure::InsufficientCapacity(f.message)
             }
             StartFailureKind::Disabled => EnsureFailure::ServiceDisabled(f.message),
             StartFailureKind::HealthTimeout => {
@@ -221,10 +221,12 @@ mod pack_err_tests {
 
     #[test]
     fn pack_err_routes_capacity_errors_to_pack_failed() {
-        let e = PackError::WeightsDoNotFit;
+        let e = PackError::WeightsDoNotFit {
+            shortfalls: Vec::new(),
+        };
         assert!(matches!(
             pack_err_to_reservation_failure(e),
-            ReservationFailure::PackFailed(PackError::WeightsDoNotFit)
+            ReservationFailure::PackFailed(PackError::WeightsDoNotFit { .. })
         ));
     }
 }

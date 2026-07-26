@@ -251,7 +251,7 @@ pub(crate) fn ensure_failure_to_api_code(
 ) -> ApiErrorCode {
     use crate::supervise::EnsureFailure;
     match f {
-        EnsureFailure::InsufficientVram(reason) => ApiErrorCode::InsufficientVram {
+        EnsureFailure::InsufficientCapacity(reason) => ApiErrorCode::InsufficientCapacity {
             name: service_name.clone(),
             reason,
         },

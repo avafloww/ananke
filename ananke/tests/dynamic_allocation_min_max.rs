@@ -11,8 +11,8 @@ template = "command"
 command = ["python"]
 port = 8188
 allocation.mode = "dynamic"
-allocation.min_vram_gb = 4
-allocation.max_vram_gb = 20
+allocation.min_reserve_gb = 4
+allocation.max_reserve_gb = 20
 allocation.min_borrower_runtime = "90s"
 "#,
         std::path::Path::new("/t"),

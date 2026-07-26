@@ -7,11 +7,11 @@ use crate::{
         AllocationTable,
         placement::{
             reserve::{allowed_gpu_list, gpu_reserve_bytes, sum_reserved},
-            types::PackError,
+            types::{DeviceShortfall, PackError},
         },
     },
     config::{DeviceSlot, ServiceConfig},
-    devices::DeviceSnapshot,
+    devices::{DeviceId, DeviceSnapshot},
 };
 
 /// VRAM-aware GPU pick for a command-template service.
@@ -50,18 +50,10 @@ pub fn pick_command_gpu(
     let mut candidates: Vec<(u32, u64)> = allowed
         .into_iter()
         .map(|gpu| {
-            let slot = DeviceSlot::Gpu(gpu);
-            let free = snapshot.free_bytes(&slot).unwrap_or(0);
-            let total = snapshot.total_bytes(&slot).unwrap_or(free);
-            let pledged = sum_reserved(reserved, &slot, &svc.name);
-            let via_pledge = total.saturating_sub(pledged);
-            let available = if optimistic_remaining {
-                via_pledge
-            } else {
-                free.min(via_pledge)
-            };
-            let available = available.saturating_sub(gpu_reserve_bytes(svc, gpu));
-            (gpu, available)
+            (
+                gpu,
+                command_gpu_available(svc, snapshot, reserved, gpu, optimistic_remaining),
+            )
         })
         .filter(|(_, available)| *available >= need_min_bytes)
         .collect();
@@ -78,6 +70,36 @@ pub fn pick_command_gpu(
     // Sort: most-available first, ties broken by ascending GPU id for determinism.
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     Some(candidates[0].0)
+}
+
+/// Per-allowed-GPU breakdown of why [`pick_command_gpu`] found no home for
+/// `min_mb`, in ascending GPU-id order. Callers pair this with
+/// [`PackError::WeightsDoNotFit`] so the failure names the cards it was
+/// measured against rather than reporting a bare "does not fit".
+pub fn command_gpu_shortfalls(
+    svc: &ServiceConfig,
+    snapshot: &DeviceSnapshot,
+    reserved: &AllocationTable,
+    min_mb: u64,
+    optimistic_remaining: bool,
+) -> Vec<DeviceShortfall> {
+    let requested_bytes = min_mb.saturating_mul(1024 * 1024);
+    let mut allowed = allowed_gpu_list(svc, snapshot);
+    allowed.sort_unstable();
+    allowed
+        .into_iter()
+        .map(|gpu| DeviceShortfall {
+            device: DeviceId::Gpu(gpu),
+            requested_bytes,
+            available_bytes: command_gpu_available(
+                svc,
+                snapshot,
+                reserved,
+                gpu,
+                optimistic_remaining,
+            ),
+        })
+        .collect()
 }
 
 /// Capacity check for a command-template service that pinned the
@@ -110,10 +132,41 @@ pub fn check_command_placement_override(
         };
         let available = available.saturating_sub(gpu_reserve_bytes(svc, *gid));
         if available < need_bytes {
-            return Err(PackError::WeightsDoNotFit);
+            return Err(PackError::WeightsDoNotFit {
+                shortfalls: vec![DeviceShortfall {
+                    device: DeviceId::Gpu(*gid),
+                    requested_bytes: need_bytes,
+                    available_bytes: available,
+                }],
+            });
         }
     }
     Ok(())
+}
+
+/// Bytes `gpu` can offer this service: `min(nvml_free, total - pledged)`
+/// normally, or `total - pledged` when `optimistic_remaining` trusts the
+/// pledge book alone, less the configured per-GPU reserve. Mirrors
+/// [`crate::allocator::placement::packer::Packer::gpu_available`] for the
+/// command-template path, which never builds a `Packer`.
+fn command_gpu_available(
+    svc: &ServiceConfig,
+    snapshot: &DeviceSnapshot,
+    reserved: &AllocationTable,
+    gpu: u32,
+    optimistic_remaining: bool,
+) -> u64 {
+    let slot = DeviceSlot::Gpu(gpu);
+    let free = snapshot.free_bytes(&slot).unwrap_or(0);
+    let total = snapshot.total_bytes(&slot).unwrap_or(free);
+    let pledged = sum_reserved(reserved, &slot, &svc.name);
+    let via_pledge = total.saturating_sub(pledged);
+    let available = if optimistic_remaining {
+        via_pledge
+    } else {
+        free.min(via_pledge)
+    };
+    available.saturating_sub(gpu_reserve_bytes(svc, gpu))
 }
 
 #[cfg(test)]
@@ -124,9 +177,31 @@ mod tests {
 
     use super::*;
     use crate::{
-        allocator::placement::test_support::{snapshot, svc},
+        allocator::placement::test_support::{MIB, snapshot, svc},
         config::{PlacementPolicy, validate::test_fixtures::minimal_service},
     };
+
+    /// The override check must fail with a shortfall naming the GPU that
+    /// overflowed, the bytes asked of it, and what it could actually offer —
+    /// the operator's cross-reference into `GET /api/devices`.
+    fn assert_shortfall_on(result: &Result<(), PackError>, gpu: u32, requested: u64) {
+        let Err(err) = result else {
+            panic!("expected a placement failure, got {result:?}");
+        };
+        let shortfalls = err.shortfalls();
+        assert_eq!(
+            shortfalls.len(),
+            1,
+            "the first overflowing slot is reported, got {shortfalls:?}"
+        );
+        let s = shortfalls[0];
+        assert_eq!(s.device, DeviceId::Gpu(gpu));
+        assert_eq!(s.requested_bytes, requested);
+        assert!(
+            s.available_bytes < requested,
+            "a shortfall must report less available than requested, got {s:?}"
+        );
+    }
 
     /// `pick_command_gpu` should return the GPU with the most available
     /// capacity when several satisfy `min_mb`. Ties broken by ascending id.
@@ -279,7 +354,7 @@ mod tests {
         let snap = snapshot(&[24, 16]);
         let table = AllocationTable::new();
         let r = check_command_placement_override(&s, &snap, &table, false);
-        assert_eq!(r, Err(PackError::WeightsDoNotFit));
+        assert_shortfall_on(&r, 1, 22 * 1024 * MIB);
     }
 
     /// Existing peer reservations on a slot have to be subtracted from
@@ -294,7 +369,7 @@ mod tests {
         peer.insert(DeviceSlot::Gpu(0), 10 * 1024);
         table.insert(SmolStr::new("peer"), peer);
         let r = check_command_placement_override(&s, &snap, &table, false);
-        assert_eq!(r, Err(PackError::WeightsDoNotFit));
+        assert_shortfall_on(&r, 0, 22 * 1024 * MIB);
     }
 
     /// Optimistic mode (eviction retry) ignores nvml-free and trusts the
@@ -308,7 +383,7 @@ mod tests {
         let snap = snapshot(&[2, 24]);
         let table = AllocationTable::new();
         let conservative = check_command_placement_override(&s, &snap, &table, false);
-        assert_eq!(conservative, Err(PackError::WeightsDoNotFit));
+        assert_shortfall_on(&conservative, 0, 22 * 1024 * MIB);
         let optimistic = check_command_placement_override(&s, &snap, &table, true);
         assert_eq!(optimistic, Ok(()));
     }

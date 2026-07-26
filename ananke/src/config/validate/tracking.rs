@@ -70,8 +70,8 @@ command = ["python"]
 port = 8188
 lifecycle = "on_demand"
 allocation.mode = "dynamic"
-allocation.min_vram_gb = 2
-allocation.max_vram_gb = 20
+allocation.min_reserve_gb = 2
+allocation.max_reserve_gb = 20
 tracking.cgroup_parent = "/system.slice/ananke-comfyui.slice"
 "#,
         );
@@ -93,7 +93,7 @@ command = ["python"]
 port = 8188
 lifecycle = "on_demand"
 allocation.mode = "static"
-allocation.vram_gb = 4
+allocation.reserve_gb = 4
 tracking.cgroup_parent = "ananke-comfyui.slice"
 "#,
         );
@@ -115,7 +115,7 @@ command = ["python"]
 port = 8188
 lifecycle = "on_demand"
 allocation.mode = "static"
-allocation.vram_gb = 4
+allocation.reserve_gb = 4
 tracking.cgroup_parent = "/system.slice/ananke-comfyui.slice/"
 "#,
         );

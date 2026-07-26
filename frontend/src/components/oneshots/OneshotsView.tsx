@@ -50,11 +50,11 @@ export function OneshotsView() {
       ttl: form.ttl.trim() || null,
       allocation:
         form.allocationMode === "static"
-          ? { mode: "static", vram_gb: Number(form.vramGb) }
+          ? { mode: "static", reserve_gb: Number(form.reserveGb) }
           : {
               mode: "dynamic",
-              min_vram_gb: Number(form.minVramGb),
-              max_vram_gb: Number(form.maxVramGb),
+              min_reserve_gb: Number(form.minReserveGb),
+              max_reserve_gb: Number(form.maxReserveGb),
             },
       devices: { placement: form.placement },
       health: form.healthPath.trim()

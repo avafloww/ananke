@@ -88,15 +88,17 @@ enum OneshotCommand {
         /// Device-placement mode.
         #[arg(long, default_value = "gpu-only")]
         placement: String,
-        /// Static VRAM allocation in GiB; conflicts with --min-vram-gb/--max-vram-gb.
-        #[arg(long, conflicts_with_all = ["min_vram_gb", "max_vram_gb"])]
-        vram_gb: Option<f32>,
-        /// Dynamic lower bound for VRAM in GiB; requires --max-vram-gb.
-        #[arg(long, requires = "max_vram_gb")]
-        min_vram_gb: Option<f32>,
-        /// Dynamic upper bound for VRAM in GiB.
-        #[arg(long)]
-        max_vram_gb: Option<f32>,
+        /// Static reservation in GiB; conflicts with --min-reserve-gb/--max-reserve-gb.
+        /// The reservation lands on host RAM for a cpu-only service and on VRAM
+        /// otherwise; `--vram-gb` remains accepted as the pre-rename spelling.
+        #[arg(long, alias = "vram-gb", conflicts_with_all = ["min_reserve_gb", "max_reserve_gb"])]
+        reserve_gb: Option<f32>,
+        /// Dynamic lower bound for the reservation in GiB; requires --max-reserve-gb.
+        #[arg(long, alias = "min-vram-gb", requires = "max_reserve_gb")]
+        min_reserve_gb: Option<f32>,
+        /// Dynamic upper bound for the reservation in GiB.
+        #[arg(long, alias = "max-vram-gb")]
+        max_reserve_gb: Option<f32>,
         /// Command and arguments to run.
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
@@ -257,9 +259,9 @@ async fn main() -> ExitCode {
                 ttl,
                 workdir,
                 placement,
-                vram_gb,
-                min_vram_gb,
-                max_vram_gb,
+                reserve_gb,
+                min_reserve_gb,
+                max_reserve_gb,
                 command,
             } => {
                 commands::oneshot::run(
@@ -270,9 +272,9 @@ async fn main() -> ExitCode {
                     ttl,
                     workdir,
                     placement,
-                    vram_gb,
-                    min_vram_gb,
-                    max_vram_gb,
+                    reserve_gb,
+                    min_reserve_gb,
+                    max_reserve_gb,
                     command,
                 )
                 .await
