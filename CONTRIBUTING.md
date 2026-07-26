@@ -123,10 +123,11 @@ This applies to both trees; the Rust- and TypeScript-specific sections below bui
 - Format with **nightly rustfmt**: run `cargo +nightly fmt --all` before committing. The `rustfmt.toml` opts into `imports_granularity = "Crate"` and `group_imports = "StdExternalCrate"`, which are nightly-only features — stable rustfmt prints a warning about each and then silently skips them, so a stable-formatted file is *not* equivalent to a nightly-formatted one. See the Imports section below for details.
 - Ensure the following checks pass at the end of each complete task (you do not need to do this for intermediate steps):
   - `cargo +nightly fmt --all -- --check`
-  - `cargo clippy --all-targets --all-features -- -D warnings`
-  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  - `cargo clippy --workspace --all-targets --no-default-features -- -D warnings`
   - `cargo test --workspace --all-features`
   - `cargo test --workspace --no-default-features --lib`
+- Pass `--workspace` to every check. `default-members` deliberately excludes `xtask` so a bare `cargo build` doesn't build it, but that also drops it from any check that omits the flag — which is how it accumulated eight unlinted warnings before CI was widened.
 - Integration tests live under `ananke/tests/` and depend on the `test-fakes` feature (for `FakeSpawner` etc.). They run under `--all-features`. The no-default-features pass is scoped to `--lib` to verify the non-feature build still compiles; integration-test failures under no-default-features are expected.
 
 ### Build profile
