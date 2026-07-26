@@ -131,6 +131,21 @@ export function ConfigGrid({ detail }: { detail: ServiceDetail }) {
           </dd>
         </>
       )}
+      {detail.rolling_mean_host != null && (
+        <>
+          <dt className="text-tertiary">
+            {t("serviceDetail.estimatorDriftHost")}
+          </dt>
+          <dd className="font-mono text-primary">
+            {detail.rolling_mean_host.toFixed(3)}×{" "}
+            <span className="text-tertiary">
+              {t("serviceDetail.samples", {
+                value: detail.rolling_samples_host,
+              })}
+            </span>
+          </dd>
+        </>
+      )}
     </dl>
   );
 }

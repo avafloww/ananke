@@ -3,6 +3,7 @@
 //! Produces an `Allocation` (per-device byte reservation) and
 //! `CommandArgs` (llama.cpp CLI flags derived from the packing).
 
+mod charge;
 mod command_gpu;
 mod cpu_capacity;
 mod entry;
@@ -20,5 +21,5 @@ mod types;
 mod test_support;
 
 pub use command_gpu::{check_command_placement_override, command_gpu_shortfalls, pick_command_gpu};
-pub use entry::{PackMode, pack, pack_demand, pack_optimistic};
-pub use types::{CommandArgs, DeviceShortfall, PackError, Packed};
+pub use entry::{PackMode, pack, pack_corrected, pack_demand, pack_optimistic};
+pub use types::{CommandArgs, DeviceShortfall, PackError, Packed, RollingInputs};

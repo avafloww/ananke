@@ -34,9 +34,13 @@ pub enum Event {
         #[schema(value_type = Vec<String>)]
         changed_services: Vec<SmolStr>,
     },
+    /// One of a service's rolling estimator corrections moved by more than 5%.
+    /// `class` is the memory pool it belongs to — `"vram"` or `"host"` — since
+    /// the two are learned independently from separate observations.
     EstimatorDrift {
         #[schema(value_type = String)]
         service: SmolStr,
+        class: String,
         rolling_mean: f32,
         at_ms: i64,
     },

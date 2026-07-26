@@ -136,6 +136,10 @@ pub struct Estimate {
     /// model carries no MTP head. Reserved as a single lump on the
     /// primary GPU by the packer. See [`crate::estimator::mtp`].
     pub mtp_bytes: u64,
+    /// The share of [`Self::mtp_bytes`] that is model tensors read from a GGUF
+    /// — non-zero only for a separate draft model. See
+    /// [`crate::estimator::mtp::mtp_weight_bytes`].
+    pub mtp_weight_bytes: u64,
     /// Per-layer weight bytes for index-ordered packing. `None` for
     /// architectures where layer-aware placement isn't applicable
     /// (currently SSM/Mamba; in that case `placement` uses single-device

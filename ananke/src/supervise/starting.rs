@@ -277,6 +277,14 @@ impl RunLoop {
             Ok(HealthOutcome::Healthy) => {
                 let next = transition(&self.read_state(), StateEvent::HealthPassed);
                 self.set_state(next);
+                // The child answered, so its weights are resident and any
+                // memory peak sampled from here on is a peak of the whole
+                // model rather than of a partial load. This holds because
+                // llama.cpp flips `is_ready` only after `load_model` returns
+                // and 503s every endpoint until then; an older build that
+                // whitelisted `/v1/models` during loading would quietly turn
+                // this into "the HTTP server bound".
+                self.rolling_base.run_became_ready();
 
                 // Reset the idle window at the moment the service becomes
                 // ready. Without this, a stale `last_activity` (left over

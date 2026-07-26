@@ -70,6 +70,26 @@ fn separate_draft_overhead_bytes(draft: &GgufSummary) -> u64 {
     draft_model_gpu_weight_bytes(draft) + DRAFT_MODEL_COMPUTE_MIB * 1024 * 1024
 }
 
+/// The share of [`mtp_overhead_bytes`] that is model tensors read from a GGUF
+/// rather than memory the runtime allocates.
+///
+/// Non-zero only for a separate draft model (`-md`), whose weights are read
+/// through its own mmap and therefore land in the process's file RSS the same
+/// way the target model's do. An embedded MTP head allocates a KV cache and a
+/// compute buffer and reads no additional tensors — its layers are resident as
+/// part of the target model regardless.
+///
+/// The packer charges this part as [`crate::allocator::placement::Charge`]'s
+/// weights so it reaches `gpu_weight_bytes`, which the host-pool observation
+/// subtracts from a measured RSS peak. Left as runtime, the draft's weights
+/// would inflate every host sample of an MTP service.
+pub fn mtp_weight_bytes(draft: Option<&GgufSummary>, inputs: &EstimatorInputs<'_>) -> u64 {
+    if !inputs.mtp {
+        return 0;
+    }
+    draft.map(draft_model_gpu_weight_bytes).unwrap_or(0)
+}
+
 /// Extra VRAM (bytes) the MTP draft context adds, or 0 when MTP is off or the
 /// model carries no MTP head (`{arch}.nextn_predict_layers` absent or zero and
 /// no separate draft model).

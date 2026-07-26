@@ -1,6 +1,9 @@
 //! Reserving the MTP / NextN draft-context overhead ahead of the layer walk.
 
-use crate::{allocator::placement::packer::Packer, config::DeviceSlot};
+use crate::{
+    allocator::placement::packer::{Charge, Packer},
+    config::DeviceSlot,
+};
 
 impl<'a> Packer<'a> {
     /// Reserve the MTP / NextN draft-context overhead (its KV cache plus
@@ -22,7 +25,16 @@ impl<'a> Packer<'a> {
             Some(last_gpu) => DeviceSlot::Gpu(*last_gpu),
             None => DeviceSlot::Cpu,
         };
-        *self.per_device.entry(target).or_default() += self.estimate.mtp_bytes;
+        // A separate draft model's weights are read through its own mmap, so
+        // they belong in the weight tally the host observation subtracts; an
+        // embedded head's overhead is all runtime allocation.
+        let weights = self.estimate.mtp_weight_bytes.min(self.estimate.mtp_bytes);
+        self.charge(target.clone(), weights, Charge::Weights);
+        self.charge(
+            target,
+            self.estimate.mtp_bytes.saturating_sub(weights),
+            Charge::Runtime,
+        );
     }
 }
 
@@ -64,6 +76,7 @@ mod tests {
             compute_buffer_mb: 1000,
             output_buffer_bytes: 0,
             mtp_bytes,
+            mtp_weight_bytes: 0,
             per_layer_bytes: Some(per_layer_bytes),
             attention_layers: None,
             non_layer: NonLayer::default(),
@@ -98,5 +111,50 @@ mod tests {
             gpu1 >= mtp_bytes,
             "the MTP lump must ride the last GPU (gpu1={gpu1}, mtp={mtp_bytes})"
         );
+    }
+
+    /// A separate draft model (`-md`) contributes real GGUF tensors, read
+    /// through its own mmap and therefore resident in the process's file RSS.
+    /// They have to land in `gpu_weight_bytes`, which the host-pool
+    /// observation subtracts from a measured RSS peak — left as runtime, every
+    /// host sample of an MTP service is inflated by the draft's weights.
+    #[test]
+    fn a_separate_draft_models_weights_are_tallied_as_weights() {
+        let per_layer_bytes: Vec<u64> = (0..10).map(|_| 200 * 1024 * 1024).collect();
+        let weights_bytes: u64 = per_layer_bytes.iter().sum();
+        let draft_weights = 108 * 1024 * 1024;
+        let compute = 300 * 1024 * 1024;
+        let e = Estimate {
+            weights_bytes,
+            kv_per_token: 0,
+            compute_buffer_mb: 400,
+            output_buffer_bytes: 0,
+            mtp_bytes: draft_weights + compute,
+            mtp_weight_bytes: draft_weights,
+            per_layer_bytes: Some(per_layer_bytes),
+            attention_layers: None,
+            non_layer: NonLayer::default(),
+            override_tensor_bytes: BTreeMap::new(),
+            expert_layers: Vec::new(),
+            expert_tensors: None,
+            context: 4096,
+            architecture: SmolStr::new("gemma4"),
+        };
+        let packed = pack(
+            &e,
+            &svc(PlacementPolicy::GpuOnly, Some(vec![0])),
+            &snapshot(&[24]),
+            &AllocationTable::new(),
+        )
+        .expect("draft-MTP model must pack");
+
+        assert_eq!(
+            packed.rolling.gpu_weight_bytes,
+            weights_bytes + draft_weights,
+            "the draft's weights belong in the weight tally"
+        );
+        // The compute half stays out of it, but both halves are still reserved.
+        let reserved: u64 = packed.allocation.bytes.values().copied().sum::<u64>();
+        assert!(reserved >= weights_bytes + draft_weights + compute);
     }
 }

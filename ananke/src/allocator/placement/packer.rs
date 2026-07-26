@@ -8,6 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+pub(crate) use crate::allocator::placement::charge::Charge;
 use crate::{
     allocator::{
         AllocationTable,
@@ -20,6 +21,7 @@ use crate::{
     config::{DeviceSlot, OffloadMode, PlacementPolicy, ServiceConfig},
     devices::{DeviceId, DeviceSnapshot},
     estimator::Estimate,
+    tracking::rolling::Corrections,
 };
 
 /// Mutable bag threaded through the pack steps. Each method mutates the
@@ -35,8 +37,25 @@ pub(crate) struct Packer<'a> {
     pub(crate) allow_cpu: bool,
     pub(crate) per_layer: Vec<u64>,
 
-    /// Final per-device reservation totals. Steps 1-5 accumulate into this.
+    /// The rolling correction factors this pack runs with, one per memory
+    /// pool. Every byte charged to a device is scaled by its pool's factor —
+    /// see [`Self::charge`].
+    pub(crate) corrections: Corrections,
+
+    /// Final per-device reservation totals, corrected. Steps 1-5 accumulate
+    /// into this.
     pub(crate) per_device: BTreeMap<DeviceSlot, u64>,
+    /// Per-device totals as the estimator predicted them, before the rolling
+    /// correction. Accumulated alongside `per_device` so the next rolling
+    /// update can divide an observation by what was *predicted* rather than by
+    /// a base the last correction already moved — otherwise the mean
+    /// integrates against its own output and decays back toward 1.0.
+    pub(crate) raw_per_device: BTreeMap<DeviceSlot, u64>,
+    /// The [`Charge::Weights`] subset of `raw_per_device`: model tensor bytes
+    /// read from the GGUF, excluding KV, compute buffers, and slop. The
+    /// host-pool observation needs the GPU-resident share of this to subtract
+    /// the mmap'd file pages that llama.cpp reads through on its way to VRAM.
+    pub(crate) raw_weight_per_device: BTreeMap<DeviceSlot, u64>,
     /// Remaining capacity per GPU as the walker consumes it.
     pub(crate) gpu_remaining: BTreeMap<u32, u64>,
     /// Number of layers the walker placed on each GPU.
@@ -92,6 +111,7 @@ impl<'a> Packer<'a> {
         snapshot: &'a DeviceSnapshot,
         reserved: &'a AllocationTable,
         mode: PackMode,
+        corrections: Corrections,
     ) -> Self {
         // Demand shares Optimistic's capacity view: it asks what the model
         // needs, which is a property of the model and the hardware, not of who
@@ -139,7 +159,10 @@ impl<'a> Packer<'a> {
             allowed_gpus,
             allow_cpu,
             per_layer,
+            corrections,
             per_device: BTreeMap::new(),
+            raw_per_device: BTreeMap::new(),
+            raw_weight_per_device: BTreeMap::new(),
             gpu_remaining: BTreeMap::new(),
             layers_per_gpu: BTreeMap::new(),
             layers_on_cpu: 0,
@@ -164,10 +187,10 @@ impl<'a> Packer<'a> {
     /// "other" tensors ride with the first allowed GPU (or CPU if there is no
     /// GPU). override_tensor has its own pre-computed map from the estimator.
     pub(crate) fn seed_non_layer(&mut self) {
-        let non_layer = &self.estimate.non_layer;
+        let non_layer = self.estimate.non_layer.clone();
 
         if non_layer.token_embd_bytes > 0 {
-            *self.per_device.entry(DeviceSlot::Cpu).or_default() += non_layer.token_embd_bytes;
+            self.charge(DeviceSlot::Cpu, non_layer.token_embd_bytes, Charge::Weights);
         }
 
         let head_target = match self.head_gpu() {
@@ -175,14 +198,18 @@ impl<'a> Packer<'a> {
             None => DeviceSlot::Cpu,
         };
         if non_layer.output_head_bytes > 0 {
-            *self.per_device.entry(head_target.clone()).or_default() += non_layer.output_head_bytes;
+            self.charge(
+                head_target.clone(),
+                non_layer.output_head_bytes,
+                Charge::Weights,
+            );
         }
         if non_layer.other_bytes > 0 {
-            *self.per_device.entry(head_target).or_default() += non_layer.other_bytes;
+            self.charge(head_target, non_layer.other_bytes, Charge::Weights);
         }
 
-        for (slot, bytes) in &self.estimate.override_tensor_bytes {
-            *self.per_device.entry(slot.clone()).or_default() += *bytes;
+        for (slot, bytes) in self.estimate.override_tensor_bytes.clone() {
+            self.charge(slot, bytes, Charge::Weights);
         }
     }
 
@@ -250,8 +277,14 @@ impl<'a> Packer<'a> {
             };
             let available = self.gpu_available(*gpu);
             let raw = available.saturating_sub(*self.per_device.get(&slot).unwrap_or(&0));
+            // Pre-reserve the corrected headroom, since `add_compute_buffer`
+            // and `add_one_layer_fudge` will charge the corrected amount. A raw
+            // pre-reservation here against a corrected charge there lets a card
+            // the walker fills to the brim overshoot by the correction's share
+            // of the compute buffer.
+            let headroom = self.vram_cost(device_compute + fudge);
             self.gpu_remaining
-                .insert(*gpu, raw.saturating_sub(device_compute + fudge));
+                .insert(*gpu, raw.saturating_sub(headroom));
         }
     }
 

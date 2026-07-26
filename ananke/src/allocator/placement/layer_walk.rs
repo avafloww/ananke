@@ -3,7 +3,10 @@
 //! reserves KV, the compute buffer, and the one-layer fudge on top.
 
 use crate::{
-    allocator::placement::{packer::Packer, types::PackError},
+    allocator::placement::{
+        packer::{Charge, Packer},
+        types::PackError,
+    },
     config::DeviceSlot,
 };
 
@@ -28,11 +31,15 @@ impl<'a> Packer<'a> {
             .saturating_mul(self.estimate.context as u64);
         let kv_per_layer = kv_total.checked_div(n_layers).unwrap_or(0);
 
-        for (idx, bytes) in self.per_layer.iter().copied().enumerate() {
+        for (idx, bytes) in self.per_layer.clone().into_iter().enumerate() {
             if bytes == 0 {
                 continue;
             }
-            let layer_cost = bytes.saturating_add(kv_per_layer);
+            // Corrected, since `gpu_remaining` is a corrected budget: the
+            // headroom pre-reservation and every other charge are scaled, so a
+            // raw layer cost would fit more layers than the reservation can pay
+            // for.
+            let layer_cost = self.vram_cost(bytes.saturating_add(kv_per_layer));
             // First-fit on the sorted (most-free-first) GPU list: fills the
             // least-busy GPU before spilling to the next. Small models stay on
             // one GPU; models that genuinely span multiple GPUs still pack
@@ -45,11 +52,11 @@ impl<'a> Packer<'a> {
             match placed {
                 Some(gpu) => {
                     *self.gpu_remaining.entry(gpu).or_default() -= layer_cost;
-                    *self.per_device.entry(DeviceSlot::Gpu(gpu)).or_default() += bytes;
+                    self.charge(DeviceSlot::Gpu(gpu), bytes, Charge::Weights);
                     *self.layers_per_gpu.entry(gpu).or_default() += 1;
                 }
                 None if self.allow_cpu => {
-                    *self.per_device.entry(DeviceSlot::Cpu).or_default() += bytes;
+                    self.charge(DeviceSlot::Cpu, bytes, Charge::Weights);
                     self.layers_on_cpu += 1;
                 }
                 None => {
@@ -72,21 +79,22 @@ impl<'a> Packer<'a> {
             return Ok(());
         }
         let bytes = self.estimate.weights_bytes;
+        let cost = self.vram_cost(bytes);
         for gpu in self.allowed_gpus.clone() {
             let rem = self.gpu_remaining.entry(gpu).or_default();
-            if *rem >= bytes {
-                *rem -= bytes;
-                *self.per_device.entry(DeviceSlot::Gpu(gpu)).or_default() += bytes;
+            if *rem >= cost {
+                *rem -= cost;
+                self.charge(DeviceSlot::Gpu(gpu), bytes, Charge::Weights);
                 self.fallback_on_gpu = true;
                 return Ok(());
             }
         }
         if self.allow_cpu {
-            *self.per_device.entry(DeviceSlot::Cpu).or_default() += bytes;
+            self.charge(DeviceSlot::Cpu, bytes, Charge::Weights);
             Ok(())
         } else {
             Err(PackError::WeightsDoNotFit {
-                shortfalls: self.gpu_shortfalls(bytes),
+                shortfalls: self.gpu_shortfalls(cost),
             })
         }
     }
@@ -102,16 +110,16 @@ impl<'a> Packer<'a> {
         if n_layers == 0 || kv_total == 0 {
             return;
         }
-        for gpu in &self.allowed_gpus {
-            let share = self.layers_per_gpu.get(gpu).copied().unwrap_or(0);
+        for gpu in self.allowed_gpus.clone() {
+            let share = self.layers_per_gpu.get(&gpu).copied().unwrap_or(0);
             if share > 0 {
                 let bytes = kv_total * share as u64 / n_layers as u64;
-                *self.per_device.entry(DeviceSlot::Gpu(*gpu)).or_default() += bytes;
+                self.charge(DeviceSlot::Gpu(gpu), bytes, Charge::Runtime);
             }
         }
         if self.layers_on_cpu > 0 {
             let bytes = kv_total * self.layers_on_cpu as u64 / n_layers as u64;
-            *self.per_device.entry(DeviceSlot::Cpu).or_default() += bytes;
+            self.charge(DeviceSlot::Cpu, bytes, Charge::Runtime);
         }
     }
 
@@ -136,7 +144,7 @@ impl<'a> Packer<'a> {
             {
                 add = add.saturating_sub(logits);
             }
-            *self.per_device.entry(slot).or_default() += add;
+            self.charge(slot, add, Charge::Runtime);
         }
     }
 
@@ -157,9 +165,11 @@ impl<'a> Packer<'a> {
         let slots: Vec<DeviceSlot> = self.per_device.keys().cloned().collect();
         for slot in slots {
             match slot {
-                DeviceSlot::Gpu(_) => *self.per_device.entry(slot).or_default() += fudge_each,
+                DeviceSlot::Gpu(_) => {
+                    self.charge(slot, fudge_each, Charge::Slop);
+                }
                 DeviceSlot::Cpu if self.layers_on_cpu > 0 => {
-                    *self.per_device.entry(slot).or_default() += fudge_each
+                    self.charge(slot, fudge_each, Charge::Slop);
                 }
                 _ => {}
             }
@@ -321,6 +331,7 @@ mod tests {
             compute_buffer_mb: 3792,
             output_buffer_bytes: 0,
             mtp_bytes: 0,
+            mtp_weight_bytes: 0,
             per_layer_bytes: Some(per_layer_bytes),
             attention_layers: None,
             non_layer: NonLayer::default(),
@@ -364,6 +375,7 @@ mod tests {
             compute_buffer_mb: 2048,
             output_buffer_bytes: 0,
             mtp_bytes: 0,
+            mtp_weight_bytes: 0,
             per_layer_bytes: Some(per_layer_bytes),
             attention_layers: None,
             non_layer: NonLayer::default(),

@@ -9,6 +9,7 @@ use crate::{
     config::ServiceConfig,
     devices::DeviceSnapshot,
     estimator::Estimate,
+    tracking::rolling::Corrections,
 };
 
 /// Number of per-layer-equivalents added to every active backend as slop
@@ -64,13 +65,49 @@ pub enum PackMode {
 /// Pack `estimate` onto allowed devices, respecting `policy`,
 /// `override_tensor`, and live device capacity (`snapshot` minus any
 /// already-reserved bytes from `reserved`).
+///
+/// Runs uncorrected. The daemon's spawn path uses [`pack_corrected`] instead,
+/// so a service's learned per-pool corrections reach the placement; callers
+/// that describe the model rather than a specific service's history (previews
+/// of bare hardware, tests) want this one.
 pub fn pack(
     estimate: &Estimate,
     svc: &ServiceConfig,
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
 ) -> Result<Packed, PackError> {
-    pack_inner(estimate, svc, snapshot, reserved, PackMode::Strict)
+    pack_inner(
+        estimate,
+        svc,
+        snapshot,
+        reserved,
+        PackMode::Strict,
+        Corrections::NEUTRAL,
+    )
+}
+
+/// [`pack`] / [`pack_optimistic`] with the service's learned rolling
+/// corrections applied to every byte charged to a device.
+///
+/// `optimistic` selects the capacity view exactly as the two neutral entry
+/// points do. The returned [`Packed::rolling`] carries the uncorrected bases
+/// this pack was built from, which the supervisor captures so the next
+/// observation can be divided by what was predicted rather than by a base the
+/// correction already moved.
+pub fn pack_corrected(
+    estimate: &Estimate,
+    svc: &ServiceConfig,
+    snapshot: &DeviceSnapshot,
+    reserved: &AllocationTable,
+    corrections: Corrections,
+    optimistic: bool,
+) -> Result<Packed, PackError> {
+    let mode = if optimistic {
+        PackMode::Optimistic
+    } else {
+        PackMode::Strict
+    };
+    pack_inner(estimate, svc, snapshot, reserved, mode, corrections)
 }
 
 /// See [`PackMode::Optimistic`].
@@ -80,7 +117,14 @@ pub fn pack_optimistic(
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
 ) -> Result<Packed, PackError> {
-    pack_inner(estimate, svc, snapshot, reserved, PackMode::Optimistic)
+    pack_inner(
+        estimate,
+        svc,
+        snapshot,
+        reserved,
+        PackMode::Optimistic,
+        Corrections::NEUTRAL,
+    )
 }
 
 /// Total bytes the model would occupy across every device, ignoring whether
@@ -95,6 +139,7 @@ pub fn pack_demand(
     estimate: &Estimate,
     svc: &ServiceConfig,
     snapshot: &DeviceSnapshot,
+    corrections: Corrections,
 ) -> Result<Packed, PackError> {
     pack_inner(
         estimate,
@@ -102,6 +147,7 @@ pub fn pack_demand(
         snapshot,
         &AllocationTable::new(),
         PackMode::Demand,
+        corrections,
     )
 }
 
@@ -111,8 +157,9 @@ fn pack_inner(
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
     mode: PackMode,
+    corrections: Corrections,
 ) -> Result<Packed, PackError> {
-    let mut packer = Packer::new(estimate, svc, snapshot, reserved, mode);
+    let mut packer = Packer::new(estimate, svc, snapshot, reserved, mode, corrections);
     // Sharded (tensor/row) split distributes every layer across all spanned
     // GPUs in parallel — a fundamentally different shape from the first-fit
     // layer walk. Taken only when the service opts in, at least two GPUs are
@@ -198,7 +245,8 @@ mod tests {
         snap.gpus[0].free_bytes = 21 * GIB;
 
         let bare = pack_optimistic(&e, &svc, &snap, &AllocationTable::new()).expect("fits");
-        let demand = pack_demand(&e, &svc, &snap).expect("demand always resolves when it fits");
+        let demand = pack_demand(&e, &svc, &snap, Corrections::NEUTRAL)
+            .expect("demand always resolves when it fits");
         assert_eq!(
             total(&demand),
             total(&bare),
@@ -216,7 +264,7 @@ mod tests {
         let snap = snapshot(&[24]);
 
         let bare = pack_optimistic(&e, &svc, &snap, &AllocationTable::new()).expect("fits");
-        let demand = pack_demand(&e, &svc, &snap).expect("demand resolves");
+        let demand = pack_demand(&e, &svc, &snap, Corrections::NEUTRAL).expect("demand resolves");
         assert_eq!(total(&demand), total(&bare));
     }
 
@@ -239,7 +287,8 @@ mod tests {
             pack(&e, &svc, &snap, &AllocationTable::new()).is_err(),
             "the premise: this model cannot be placed on this host"
         );
-        let demand = pack_demand(&e, &svc, &snap).expect("demand ignores the host-RAM gate");
+        let demand = pack_demand(&e, &svc, &snap, Corrections::NEUTRAL)
+            .expect("demand ignores the host-RAM gate");
         assert!(
             total(&demand) >= 60 * GIB,
             "demand reports the whole model, got {}",
@@ -266,7 +315,8 @@ mod tests {
             pack(&e, &svc, &snap, &AllocationTable::new()).is_err(),
             "the premise: GpuOnly cannot spill, so this cannot be placed"
         );
-        let demand = pack_demand(&e, &svc, &snap).expect("demand spills to a notional host");
+        let demand = pack_demand(&e, &svc, &snap, Corrections::NEUTRAL)
+            .expect("demand spills to a notional host");
         assert!(total(&demand) >= 60 * GIB, "got {}", total(&demand));
     }
 
@@ -284,7 +334,7 @@ mod tests {
         snap.gpus[0].free_bytes = 12 * GIB;
 
         let placed = pack(&e, &svc, &snap, &AllocationTable::new()).expect("fits on the cards");
-        let demand = pack_demand(&e, &svc, &snap).expect("demand resolves");
+        let demand = pack_demand(&e, &svc, &snap, Corrections::NEUTRAL).expect("demand resolves");
         assert_eq!(total(&demand), total(&placed));
         assert_eq!(
             cpu_bytes(&demand),
@@ -314,7 +364,8 @@ mod tests {
             pack(&e, &svc, &snap, &AllocationTable::new()).is_err(),
             "the premise: non-expert weight is GPU-only and exceeds both cards"
         );
-        let demand = pack_demand(&e, &svc, &snap).expect("demand still yields a figure for a MoE");
+        let demand = pack_demand(&e, &svc, &snap, Corrections::NEUTRAL)
+            .expect("demand still yields a figure for a MoE");
         assert!(
             cpu_bytes(&demand) > 0,
             "the attention that cannot fit is charged to the notional host"

@@ -188,6 +188,37 @@ pub struct Packed {
     /// Number of distinct layers with at least one expert tensor offloaded to
     /// the CPU.
     pub expert_offload_layers: u32,
+    /// What the next rolling-correction update needs from this placement.
+    pub rolling: RollingInputs,
+}
+
+/// The uncorrected per-pool bases a placement was built from, plus the
+/// GPU-resident weight total, captured so the rolling correction can compare
+/// like with like when the service later drains.
+///
+/// Every field is *raw* — as the estimator predicted it, before the
+/// corrections this pack applied. A ratio taken against a corrected base would
+/// measure the correction rather than the estimator.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RollingInputs {
+    /// Sum of the `Gpu(_)` slots, uncorrected. Denominator for the VRAM pool.
+    pub uncorrected_vram_bytes: u64,
+    /// The `Cpu` slot, uncorrected. Denominator for the host pool.
+    pub uncorrected_host_bytes: u64,
+    /// Model tensor bytes placed on GPUs, uncorrected and excluding KV,
+    /// compute buffers, and slop.
+    ///
+    /// llama.cpp reads these through the GGUF's mmap, so they count against
+    /// the process's file RSS even though they live in VRAM at runtime.
+    /// Subtracting them from an observed RSS peak is what makes that peak
+    /// comparable to [`Self::uncorrected_host_bytes`] — but only when the
+    /// mapping exists; a service running `--no-mmap` stages GPU tensors
+    /// through a buffer it frees, so nothing needs subtracting there.
+    pub gpu_weight_bytes: u64,
+    /// Model tensor bytes placed on the host, uncorrected. Gates host-pool
+    /// learning: see
+    /// [`crate::supervise::rolling::RollingBase::host_peak`].
+    pub cpu_weight_bytes: u64,
 }
 
 /// A tensor/row-split distribution decided by

@@ -3,7 +3,11 @@
 //! expert-offload decision in [`crate::allocator::placement::experts_ncmoe`].
 
 use crate::{
-    allocator::placement::{entry::PackMode, packer::Packer, types::PackError},
+    allocator::placement::{
+        entry::PackMode,
+        packer::{Charge, Packer},
+        types::PackError,
+    },
     config::DeviceSlot,
 };
 
@@ -23,14 +27,16 @@ impl<'a> Packer<'a> {
             .saturating_mul(self.estimate.context as u64);
         let kv_per_layer = kv_total.checked_div(n_layers).unwrap_or(0);
 
-        for (idx, full_bytes) in self.per_layer.iter().copied().enumerate() {
+        for (idx, full_bytes) in self.per_layer.clone().into_iter().enumerate() {
             if full_bytes == 0 {
                 continue;
             }
             let idx = idx as u32;
             let exp_bytes = self.expert_bytes_by_layer.get(&idx).copied().unwrap_or(0);
             let nonexp = full_bytes.saturating_sub(exp_bytes);
-            let layer_cost = nonexp.saturating_add(kv_per_layer);
+            // Corrected: `gpu_remaining` is a corrected budget (see
+            // `Packer::charge`), so the fit check has to be too.
+            let layer_cost = self.vram_cost(nonexp.saturating_add(kv_per_layer));
             // Place on the GPU with the most remaining capacity, not the first
             // that fits. For a MoE whose non-expert weight is tiny (deepseek4's
             // is ~a few hundred MiB/layer), first-fit would pile every layer —
@@ -47,7 +53,7 @@ impl<'a> Packer<'a> {
             match placed {
                 Some(gpu) => {
                     *self.gpu_remaining.entry(gpu).or_default() -= layer_cost;
-                    *self.per_device.entry(DeviceSlot::Gpu(gpu)).or_default() += nonexp;
+                    self.charge(DeviceSlot::Gpu(gpu), nonexp, Charge::Weights);
                     *self.layers_per_gpu.entry(gpu).or_default() += 1;
                     self.layer_home.insert(idx, gpu);
                 }
@@ -69,7 +75,7 @@ impl<'a> Packer<'a> {
                 None if self.allow_cpu
                     && (!self.expert_aware || matches!(self.mode, PackMode::Demand)) =>
                 {
-                    *self.per_device.entry(DeviceSlot::Cpu).or_default() += full_bytes;
+                    self.charge(DeviceSlot::Cpu, full_bytes, Charge::Weights);
                     self.layers_on_cpu += 1;
                     self.spilled_layers.insert(idx);
                 }

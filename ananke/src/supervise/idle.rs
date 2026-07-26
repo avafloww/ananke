@@ -257,10 +257,9 @@ impl RunLoop {
             }
         }
 
-        // Reserve in the allocation table before spawning. Capture the total
-        // reserved bytes (MB → bytes) for the rolling update that fires when
-        // the service later drains back to Idle.
-        self.base_total_bytes_for_rolling = want.values().sum::<u64>() * 1024 * 1024;
+        // Reserve in the allocation table before spawning, capturing what the
+        // rolling update will need when the service later drains back to Idle.
+        self.capture_rolling_base();
         self.deps
             .allocations
             .lock()
@@ -440,7 +439,7 @@ impl RunLoop {
         // Commit the reservation + promote the queued bus to the start
         // carry, then transition to Starting. `handle_active_lifecycle`
         // will pick it up from here.
-        self.base_total_bytes_for_rolling = want.values().sum::<u64>() * 1024 * 1024;
+        self.capture_rolling_base();
         self.deps
             .allocations
             .lock()

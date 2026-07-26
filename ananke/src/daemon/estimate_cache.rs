@@ -222,6 +222,7 @@ mod tests {
                 compute_buffer_mb: 0,
                 output_buffer_bytes: 0,
                 mtp_bytes: 0,
+                mtp_weight_bytes: 0,
                 per_layer_bytes: None,
                 attention_layers: None,
                 non_layer: crate::estimator::NonLayer::default(),

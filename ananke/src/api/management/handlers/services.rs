@@ -21,7 +21,6 @@ use crate::{
     api::management::handlers::{model_estimate_entry, placement_preview, read_current_allocation},
     config::ServiceConfig,
     daemon::{app_state::AppState, estimate_cache::CacheEntry},
-    estimator::Estimate,
 };
 
 #[utoipa::path(
@@ -210,12 +209,18 @@ pub async fn service_detail(State(state): State<AppState>, Path(name): Path<Stri
         pid: snap.as_ref().and_then(|s| s.pid),
         recent_logs,
         // Cast from the internal f64/u32 representation to the shared DTO's f32/u64.
-        rolling_mean: if rc.sample_count == 0 {
+        rolling_mean: if rc.vram.samples == 0 {
             None
         } else {
-            Some(rc.rolling_mean as f32)
+            Some(rc.vram.mean as f32)
         },
-        rolling_samples: rc.sample_count.into(),
+        rolling_samples: rc.vram.samples.into(),
+        rolling_mean_host: if rc.host.samples == 0 {
+            None
+        } else {
+            Some(rc.host.mean as f32)
+        },
+        rolling_samples_host: rc.host.samples.into(),
         observed_peak_bytes,
         // Placeholder: elastic borrower tracking is deferred to a later phase.
         elastic_borrower: None,
@@ -268,7 +273,7 @@ pub async fn service_command(State(state): State<AppState>, Path(name): Path<Str
 
     let snapshot = state.snapshot.read().clone();
     let table = state.allocations.lock().clone();
-    let rolling_mean = state.rolling.get(&svc_cfg.name).effective_mean();
+    let corrections = state.rolling.get(&svc_cfg.name).corrections();
     let fs = state.system.fs.as_ref();
 
     // On-empty: what the command would be if no other services held
@@ -279,7 +284,7 @@ pub async fn service_command(State(state): State<AppState>, Path(name): Path<Str
         &snapshot,
         &crate::allocator::AllocationTable::new(),
         fs,
-        rolling_mean,
+        corrections,
     ) {
         Ok(cfg) => render_launch_command(cfg, source),
         Err(e) => {
@@ -294,7 +299,7 @@ pub async fn service_command(State(state): State<AppState>, Path(name): Path<Str
     // Active: what the command would be under the current device state
     // and pledge book. Gracefully `None` when the service can't fit
     // alongside currently running services.
-    let active = crate::supervise::preview_command(svc_cfg, &snapshot, &table, fs, rolling_mean)
+    let active = crate::supervise::preview_command(svc_cfg, &snapshot, &table, fs, corrections)
         .ok()
         .map(|cfg| render_launch_command(cfg, source));
 
@@ -419,17 +424,13 @@ fn summary_footprint_bytes(
     }
     let est = &entry.as_ref()?.estimate_full;
     let snapshot = state.snapshot.read();
-    // Apply the same rolling drift correction `placement_preview` applies
-    // before packing, so both figures describe the same model.
-    let mean = state.rolling.get(&svc_cfg.name).effective_mean();
-    let corrected = Estimate {
-        weights_bytes: (est.weights_bytes as f64 * mean) as u64,
-        ..est.clone()
-    };
+    // Apply the same rolling corrections `placement_preview` applies, so both
+    // figures describe the same model.
+    let corrections = state.rolling.get(&svc_cfg.name).corrections();
     // Run the packer itself rather than re-deriving its arithmetic. Every term
     // — the head-vs-secondary logits trim, the CPU-side compute buffer, the
     // one-layer fudge, MTP, expert offload — falls out of the same code that
     // computes a real placement, so the two cannot disagree.
-    let packed = placement::pack_demand(&corrected, svc_cfg, &snapshot).ok()?;
+    let packed = placement::pack_demand(est, svc_cfg, &snapshot, corrections).ok()?;
     Some(packed.allocation.bytes.values().sum())
 }

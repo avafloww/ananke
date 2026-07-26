@@ -38,6 +38,10 @@ struct ObservedState {
     /// inference's 8 GB VRAM + 12 GB RSS used to pledge as 20 GB on the
     /// GPU and trigger a self-eviction that wasn't justified).
     peak_vram_bytes: u64,
+    /// High-water mark of host RSS alone, the mirror of `peak_vram_bytes`.
+    /// The rolling correction's host-pool numerator derives from this; see
+    /// [`ObservationTable::read_peak_rss`] for why it can't be used raw.
+    peak_rss_bytes: u64,
     /// Latest GPU VRAM sample. Retained alongside the peak because the
     /// balloon resolver has to be able to watch usage come *down*.
     current_vram_bytes: u64,
@@ -92,6 +96,9 @@ impl ObservationTable {
         if vram_bytes > entry.peak_vram_bytes {
             entry.peak_vram_bytes = vram_bytes;
         }
+        if rss_bytes > entry.peak_rss_bytes {
+            entry.peak_rss_bytes = rss_bytes;
+        }
         entry.current_vram_bytes = vram_bytes;
         entry.current_rss_bytes = rss_bytes;
     }
@@ -107,13 +114,32 @@ impl ObservationTable {
     }
 
     /// VRAM-only peak. The rolling estimator correction folds this in at
-    /// drain time, and it is deliberately VRAM-only rather than the combined
-    /// `read_peak` — see the comment on `ObservedState::peak_vram_bytes`.
+    /// drain time against a GPU-slots-only reservation base, and it is
+    /// deliberately VRAM-only rather than the combined `read_peak` — see the
+    /// comment on `ObservedState::peak_vram_bytes`.
     pub fn read_peak_vram(&self, service: &SmolStr) -> u64 {
         self.inner
             .read()
             .get(service)
             .map(|s| s.peak_vram_bytes)
+            .unwrap_or(0)
+    }
+
+    /// Host-RSS-only peak, as `VmRSS` summed over the service's pid set.
+    ///
+    /// **Not comparable to the `Cpu` slot of a reservation on its own.**
+    /// llama.cpp mmaps the GGUF by default and reads GPU-destined tensors
+    /// through that mapping, so those pages count against this process's file
+    /// RSS even though they live in VRAM at runtime. The rolling correction
+    /// subtracts the packer's GPU-resident weight bytes before using this as a
+    /// host-pool numerator; the daemon's `RollingBase::host_peak` does that
+    /// before dividing, and only for a service holding enough host-resident
+    /// weight for the ratio to mean anything.
+    pub fn read_peak_rss(&self, service: &SmolStr) -> u64 {
+        self.inner
+            .read()
+            .get(service)
+            .map(|s| s.peak_rss_bytes)
             .unwrap_or(0)
     }
 

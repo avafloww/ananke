@@ -51,12 +51,13 @@ Emitted when the daemon's config file is reloaded. `changed_services` lists serv
 
 #### `estimator_drift`
 
-Emitted when the rolling estimator updates its correction factor for a service.
+Emitted when one of a service's rolling estimator corrections moves by more than 5%. Each service carries one correction per memory pool, learned independently from that pool's own observation, and `class` says which this event is about: `"vram"` (the observed NVML peak over the reservation's GPU slots) or `"host"` (the observed RSS peak, less the GPU-resident share of the model mapping, over the reservation's CPU slot).
 
 ```json
 {
   "type": "estimator_drift",
   "service": "demo",
+  "class": "vram",
   "rolling_mean": 1.05,
   "at_ms": 1700000000000
 }

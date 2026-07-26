@@ -11,11 +11,12 @@ use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
 use crate::{
-    config::validate::ServiceConfig,
+    config::{DeviceSlot, validate::ServiceConfig},
     db::Database,
     supervise::{
         RunLoop,
         handle::{EnsureSource, MirroredState, SupervisorCommand, SupervisorDeps, SupervisorInit},
+        rolling::RollingBase,
         state::ServiceState,
     },
 };
@@ -52,7 +53,7 @@ impl RunLoop {
             queued_since: None,
             packed_for_spawn: None,
             oom_attempts: 0,
-            base_total_bytes_for_rolling: 0,
+            rolling_base: RollingBase::default(),
             boot_svc,
             auto_restart_history: Vec::new(),
             restart_pending: false,
@@ -217,18 +218,7 @@ impl RunLoop {
     /// Idle. Logs nothing itself; callers emit the tracing event that fits
     /// their context.
     pub(crate) fn record_drain_complete(&mut self) {
-        self.deps.rolling.update(
-            &self.init.identity.name,
-            // The rolling base is a VRAM-only pledge, so the observed peak must
-            // be VRAM-only too. Using the combined VRAM+RSS peak here inflates
-            // the ratio by the process's host-memory footprint and over-pledges
-            // VRAM on the next placement — which has pushed a shard past a GPU's
-            // capacity and blocked re-placement.
-            self.deps
-                .observation
-                .read_peak_vram(&self.init.identity.name),
-            self.base_total_bytes_for_rolling,
-        );
+        self.record_rolling_observation();
         self.deps.observation.clear(&self.init.identity.name);
         self.deps
             .allocations
@@ -240,10 +230,10 @@ impl RunLoop {
 
 /// Convert a `DeviceSlot` to the canonical string key used in
 /// `AllocationChanged` reservations (`"cpu"` or `"gpu:N"`).
-pub fn slot_to_key(slot: &crate::config::DeviceSlot) -> String {
+pub fn slot_to_key(slot: &DeviceSlot) -> String {
     match slot {
-        crate::config::DeviceSlot::Cpu => "cpu".to_string(),
-        crate::config::DeviceSlot::Gpu(n) => format!("gpu:{n}"),
+        DeviceSlot::Cpu => "cpu".to_string(),
+        DeviceSlot::Gpu(n) => format!("gpu:{n}"),
     }
 }
 

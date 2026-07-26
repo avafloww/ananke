@@ -64,6 +64,7 @@ fn estimate_gib(n_layers: u32, per_gib: u64) -> Estimate {
         compute_buffer_mb: 0,
         output_buffer_bytes: 0,
         mtp_bytes: 0,
+        mtp_weight_bytes: 0,
         per_layer_bytes: Some(vec![per; n_layers as usize]),
         attention_layers: None,
         non_layer: NonLayer::default(),
@@ -98,7 +99,7 @@ fn command_preview_picks_free_gpu_and_renders_env() {
 
     let snap = two_gpu_snapshot();
     let (deps, _fakes) = SystemDeps::fake();
-    let cfg = preview_command(&svc, &snap, &table, deps.fs.as_ref(), 1.0)
+    let cfg = preview_command(&svc, &snap, &table, deps.fs.as_ref(), Corrections::NEUTRAL)
         .expect("command preview must succeed");
 
     assert_eq!(cfg.binary, "comfyui-start");
@@ -124,6 +125,7 @@ fn placement_fits_in_free_vram() {
         &gpus_with_free(24),
         &AllocationTable::new(),
         false,
+        Corrections::NEUTRAL,
     );
     assert_eq!(out.verdict, FitVerdict::Fits);
     assert!(!out.devices.is_empty(), "a fitting placement names devices");
@@ -140,6 +142,7 @@ fn placement_needs_eviction_when_free_is_low() {
         &gpus_with_free(1),
         &AllocationTable::new(),
         false,
+        Corrections::NEUTRAL,
     );
     assert_eq!(out.verdict, FitVerdict::NeedsEviction);
     assert!(
@@ -157,6 +160,7 @@ fn placement_does_not_fit_when_too_large() {
         &gpus_with_free(24),
         &AllocationTable::new(),
         false,
+        Corrections::NEUTRAL,
     );
     let FitVerdict::DoesNotFit { shortfalls } = &out.verdict else {
         panic!("expected DoesNotFit, got {:?}", out.verdict);
@@ -204,6 +208,7 @@ fn placement_that_overruns_host_ram_names_the_cpu() {
         &snap,
         &AllocationTable::new(),
         false,
+        Corrections::NEUTRAL,
     );
     let FitVerdict::DoesNotFit { shortfalls } = &out.verdict else {
         panic!("expected DoesNotFit, got {:?}", out.verdict);
@@ -232,6 +237,7 @@ fn running_service_always_fits() {
         &gpus_with_free(1),
         &AllocationTable::new(),
         true,
+        Corrections::NEUTRAL,
     );
     assert_eq!(out.verdict, FitVerdict::Fits);
 }

@@ -34,6 +34,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
             crate::estimator::compute_buffer::default_for(summary, inputs.context, inputs.ubatch)
         }),
         mtp_bytes: 0,
+        mtp_weight_bytes: 0,
         output_buffer_bytes: 0,
         per_layer_bytes: Some(per_layer_bytes),
         attention_layers: None,

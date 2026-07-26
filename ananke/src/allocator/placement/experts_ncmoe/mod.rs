@@ -7,7 +7,11 @@
 mod tests;
 
 use crate::{
-    allocator::placement::{entry::PackMode, packer::Packer, types::PackError},
+    allocator::placement::{
+        entry::PackMode,
+        packer::{Charge, Packer},
+        types::PackError,
+    },
     config::{DeviceSlot, OffloadMode},
 };
 
@@ -42,6 +46,8 @@ impl<'a> Packer<'a> {
 
         // Combined GPU budget for experts across all allowed cards; the runtime
         // balances the layer split, so account against the pool, not per-card.
+        // This is a *corrected* budget (see `Packer::charge`), so every expert
+        // byte weighed against it below is corrected too.
         let pool: u64 = self
             .allowed_gpus
             .iter()
@@ -54,9 +60,9 @@ impl<'a> Packer<'a> {
                 let mut used = 0u64;
                 let mut keep = 0u32;
                 for &l in &layers {
-                    let b = self.expert_bytes_by_layer[&l];
-                    if used.saturating_add(b) <= pool {
-                        used += b;
+                    let cost = self.vram_cost(self.expert_bytes_by_layer[&l]);
+                    if used.saturating_add(cost) <= pool {
+                        used += cost;
                         keep += 1;
                     } else {
                         break;
@@ -75,11 +81,13 @@ impl<'a> Packer<'a> {
             if (i as u32) < keep {
                 gpu_expert_bytes += b;
             } else {
-                *self.per_device.entry(DeviceSlot::Cpu).or_default() += b;
+                self.charge(DeviceSlot::Cpu, b, Charge::Weights);
                 self.expert_offload_cpu_bytes += b;
                 self.expert_offload_cpu_layers.insert(l);
             }
         }
+        // Corrected, to match `pool` and the per-card charges below.
+        let gpu_expert_cost = self.vram_cost(gpu_expert_bytes);
 
         // A manual `Layers(n)` too small to relieve the cards overflows the
         // GPU pool; reject rather than silently over-committing (`Auto` chose
@@ -88,13 +96,13 @@ impl<'a> Packer<'a> {
         // model needs on an unbounded host and spawns nothing, so a manual
         // offload count that overflows the *bounded* GPU pool must still
         // produce a total rather than no figure at all.
-        if gpu_expert_bytes > pool && !matches!(self.mode, PackMode::Demand) {
+        if gpu_expert_cost > pool && !matches!(self.mode, PackMode::Demand) {
             // The retained experts are distributed evenly across the allowed
             // GPUs below, so the per-card ask is the even share — that is what
             // each GPU's remaining capacity is measured against.
-            let per_gpu = gpu_expert_bytes / self.allowed_gpus.len().max(1) as u64;
+            let per_gpu = gpu_expert_cost / self.allowed_gpus.len().max(1) as u64;
             return Err(PackError::ManualExpertsDoNotFit {
-                needed: gpu_expert_bytes,
+                needed: gpu_expert_cost,
                 available: pool,
                 shortfalls: self.gpu_shortfalls(per_gpu),
             });
@@ -115,9 +123,9 @@ impl<'a> Packer<'a> {
             let mut remainder = gpu_expert_bytes - share * n_gpus;
             for gpu in self.allowed_gpus.clone() {
                 let add = share + std::mem::take(&mut remainder);
-                *self.per_device.entry(DeviceSlot::Gpu(gpu)).or_default() += add;
+                let charged = self.charge(DeviceSlot::Gpu(gpu), add, Charge::Weights);
                 let rem = self.gpu_remaining.entry(gpu).or_default();
-                *rem = rem.saturating_sub(add);
+                *rem = rem.saturating_sub(charged);
             }
         }
 

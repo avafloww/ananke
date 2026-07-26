@@ -28,6 +28,7 @@ use crate::{
     supervise::spawn::{SpawnConfig, render_argv},
     system::Fs,
     templates::SubstituteError,
+    tracking::rolling::Corrections,
 };
 
 /// Why a launch-command preview could not be produced.
@@ -58,17 +59,18 @@ impl std::fmt::Display for PreviewError {
 impl std::error::Error for PreviewError {}
 
 /// Render the command line a service would launch with, given the current
-/// config, device snapshot, and pledge book. `rolling_mean` is the estimator
-/// drift correction for this service (1.0 if none) — pass it so the preview
-/// matches the placement the supervisor would actually compute.
+/// config, device snapshot, and pledge book. `corrections` are the service's
+/// learned per-pool estimator corrections ([`Corrections::NEUTRAL`] if none) —
+/// pass them so the preview matches the placement the supervisor would
+/// actually compute.
 pub fn preview_command(
     svc: &ServiceConfig,
     snapshot: &DeviceSnapshot,
     table: &AllocationTable,
     fs: &dyn Fs,
-    rolling_mean: f64,
+    corrections: Corrections,
 ) -> Result<SpawnConfig, PreviewError> {
-    let (alloc, cmd_args) = plan(svc, snapshot, table, fs, rolling_mean)?;
+    let (alloc, cmd_args) = plan(svc, snapshot, table, fs, corrections)?;
     render_argv(svc, &alloc, cmd_args.as_ref()).map_err(PreviewError::Render)
 }
 
@@ -81,7 +83,7 @@ fn plan(
     snapshot: &DeviceSnapshot,
     table: &AllocationTable,
     fs: &dyn Fs,
-    rolling_mean: f64,
+    corrections: Corrections,
 ) -> Result<(Allocation, Option<CommandArgs>), PreviewError> {
     if matches!(svc.template(), Template::Command) {
         let map = plan_command_map(svc, snapshot, table)?;
@@ -91,11 +93,10 @@ fn plan(
         return Ok((Allocation::from_override(&svc.placement_override), None));
     }
     let inputs = EstimatorInputs::from_service(svc).ok_or(PreviewError::NoModelPath)?;
-    let (_summary, mut est) =
+    let (_summary, est) =
         estimator::estimate_with_summary(fs, &inputs).map_err(PreviewError::Estimator)?;
-    est.weights_bytes = (est.weights_bytes as f64 * rolling_mean) as u64;
-    let packed =
-        placement::pack_optimistic(&est, svc, snapshot, table).map_err(PreviewError::Pack)?;
+    let packed = placement::pack_corrected(&est, svc, snapshot, table, corrections, true)
+        .map_err(PreviewError::Pack)?;
     Ok((packed.allocation, Some(packed.args)))
 }
 

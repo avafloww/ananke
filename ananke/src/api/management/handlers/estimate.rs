@@ -89,11 +89,10 @@ pub(crate) fn placement_preview(
         // `None` means it reserves nothing, so there is nothing to show.
         crate::supervise::preview_command_placement(svc_cfg, &snapshot, &table, running)?
     } else {
-        let mut est = estimate?.clone();
-        // Match the supervisor: apply the rolling drift correction before packing.
-        est.weights_bytes =
-            (est.weights_bytes as f64 * state.rolling.get(&svc_cfg.name).effective_mean()) as u64;
-        crate::supervise::preview_placement(svc_cfg, &est, &snapshot, &table, running)
+        let est = estimate?;
+        // Match the supervisor: pack with the service's learned corrections.
+        let corrections = state.rolling.get(&svc_cfg.name).corrections();
+        crate::supervise::preview_placement(svc_cfg, est, &snapshot, &table, running, corrections)
     };
 
     // A dynamic command service can grow past its reserved floor up to its

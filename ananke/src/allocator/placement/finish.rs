@@ -121,6 +121,7 @@ impl<'a> Packer<'a> {
 
         let expert_offload_bytes = self.expert_offload_cpu_bytes;
         let expert_offload_layers = self.expert_offload_cpu_layers.len() as u32;
+        let rolling = self.rolling_inputs();
 
         let allocation = Allocation {
             bytes: self
@@ -148,6 +149,7 @@ impl<'a> Packer<'a> {
             },
             expert_offload_bytes,
             expert_offload_layers,
+            rolling,
         }
     }
 }

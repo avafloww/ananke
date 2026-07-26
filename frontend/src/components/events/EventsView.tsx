@@ -162,8 +162,12 @@ function summarizeEvent(event: SystemEvent, t: TFunction): string {
       return t("events.configReloaded");
     case "estimator_drift": {
       const mean = event.rolling_mean;
-      if (typeof mean === "number") {
-        return t("events.estimatorDriftCorrection", { value: mean.toFixed(3) });
+      const memoryClass = event.class;
+      if (typeof mean === "number" && typeof memoryClass === "string") {
+        return t("events.estimatorDriftCorrection", {
+          class: memoryClass,
+          value: mean.toFixed(3),
+        });
       }
       return t("events.estimatorDrift");
     }

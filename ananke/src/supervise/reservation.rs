@@ -57,7 +57,7 @@ impl RunLoop {
             ReservationFailure::Misconfigured(MisconfiguredKind::NoModelPath),
         )?;
         let fingerprint = inputs.config_fingerprint();
-        let (summary, mut est) =
+        let (summary, est) =
             crate::estimator::estimate_with_summary(self.deps.system.fs.as_ref(), &inputs)
                 .map_err(ReservationFailure::EstimatorError)?;
         // Warm the daemon-wide estimate cache with the *base* estimate
@@ -83,18 +83,20 @@ impl RunLoop {
                 ),
             );
         }
-        // Apply rolling correction to weights_bytes. `effective_mean()` gates
-        // the factor to a neutral 1.0 until enough samples accumulate, so a
-        // single noisy early observation can't over-pledge a shard past a GPU's
-        // capacity.
-        let rc = self.deps.rolling.get(&svc.name);
-        est.weights_bytes = (est.weights_bytes as f64 * rc.effective_mean()) as u64;
-
-        let packed = if optimistic {
-            crate::allocator::placement::pack_optimistic(&est, svc, snap, table)
-        } else {
-            crate::allocator::placement::pack(&est, svc, snap, table)
-        }
+        // Hand the service's learned per-pool corrections to the packer, which
+        // scales every byte it charges to a device by that pool's factor.
+        // `RollingCorrection::corrections` gates each factor to a neutral 1.0
+        // until enough samples accumulate, so a single noisy early observation
+        // can't over-pledge a shard past a GPU's capacity.
+        let corrections = self.deps.rolling.get(&svc.name).corrections();
+        let packed = crate::allocator::placement::pack_corrected(
+            &est,
+            svc,
+            snap,
+            table,
+            corrections,
+            optimistic,
+        )
         .map_err(pack_err_to_reservation_failure)?;
         // Convert Allocation bytes (per-DeviceId, in bytes) to the
         // BTreeMap<DeviceSlot, u64> in MB that can_fit + insert expects.
@@ -150,6 +152,10 @@ impl RunLoop {
                 args: crate::allocator::placement::CommandArgs::default(),
                 expert_offload_bytes: 0,
                 expert_offload_layers: 0,
+                // A command service's reservation is the operator's declared
+                // `min_mb`, not an estimate, so there is nothing for the
+                // rolling correction to learn about. Zero bases skip it.
+                rolling: crate::allocator::placement::RollingInputs::default(),
             });
             return Ok(map);
         }
@@ -168,6 +174,10 @@ impl RunLoop {
                 args: crate::allocator::placement::CommandArgs::default(),
                 expert_offload_bytes: 0,
                 expert_offload_layers: 0,
+                // A command service's reservation is the operator's declared
+                // `min_mb`, not an estimate, so there is nothing for the
+                // rolling correction to learn about. Zero bases skip it.
+                rolling: crate::allocator::placement::RollingInputs::default(),
             });
             return Ok(map);
         }
@@ -206,6 +216,9 @@ impl RunLoop {
             args: crate::allocator::placement::CommandArgs::default(),
             expert_offload_bytes: 0,
             expert_offload_layers: 0,
+            // See the `min_mb == 0` arm above: an operator-declared reservation
+            // is not an estimate.
+            rolling: crate::allocator::placement::RollingInputs::default(),
         });
         Ok(map)
     }

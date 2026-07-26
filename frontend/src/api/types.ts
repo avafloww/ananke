@@ -670,7 +670,7 @@ export interface components {
     };
     /**
      * @description Estimator output projected to the wire. Carries the components a
-     *     reader needs to answer "how much VRAM will this service take?"
+     *     reader needs to answer "how much memory will this service take?"
      *     without having to re-derive any of them client-side.
      */
     EstimateSummary: {
@@ -736,6 +736,7 @@ export interface components {
       | {
           /** Format: int64 */
           at_ms: number;
+          class: string;
           /** Format: float */
           rolling_mean: number;
           service: string;
@@ -1330,14 +1331,27 @@ export interface components {
       recent_restarts?: components["schemas"]["RestartEvent"][];
       /**
        * Format: float
-       * @description Rolling estimator correction factor.
+       * @description Rolling estimator correction factor for the service's VRAM footprint.
+       *     `None` until the first observation lands.
        */
       rolling_mean?: number | null;
       /**
+       * Format: float
+       * @description Rolling estimator correction factor for the service's host-RAM
+       *     footprint, learned independently of the VRAM one. `None` for a service
+       *     that holds nothing in host RAM, which never accumulates a sample.
+       */
+      rolling_mean_host?: number | null;
+      /**
        * Format: int64
-       * @description Sample count backing the rolling mean.
+       * @description Sample count backing [`Self::rolling_mean`].
        */
       rolling_samples: number;
+      /**
+       * Format: int64
+       * @description Sample count backing [`Self::rolling_mean_host`].
+       */
+      rolling_samples_host: number;
       /**
        * Format: int64
        * @description Active run id if any.

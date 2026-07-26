@@ -37,10 +37,17 @@ pub struct ServiceDetail {
     pub pid: Option<i32>,
     /// Most recent log lines for a frontend's first-paint context.
     pub recent_logs: Vec<LogLine>,
-    /// Rolling estimator correction factor.
+    /// Rolling estimator correction factor for the service's VRAM footprint.
+    /// `None` until the first observation lands.
     pub rolling_mean: Option<f32>,
-    /// Sample count backing the rolling mean.
+    /// Sample count backing [`Self::rolling_mean`].
     pub rolling_samples: u64,
+    /// Rolling estimator correction factor for the service's host-RAM
+    /// footprint, learned independently of the VRAM one. `None` for a service
+    /// that holds nothing in host RAM, which never accumulates a sample.
+    pub rolling_mean_host: Option<f32>,
+    /// Sample count backing [`Self::rolling_mean_host`].
+    pub rolling_samples_host: u64,
     /// Observed memory peak (VRAM + RSS) across the service's lifetime.
     pub observed_peak_bytes: u64,
     /// Placeholder for elastic-borrower tracking.
