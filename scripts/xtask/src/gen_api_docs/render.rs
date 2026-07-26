@@ -136,15 +136,15 @@ fn render_endpoint_table(out: &mut String, spec: &Value) {
 
 /// Extract a human-readable description from an operation.
 fn endpoint_description(op: &Value) -> String {
-    if let Some(s) = op.get("summary").and_then(|s| s.as_str()) {
-        if !s.is_empty() {
-            return s.to_string();
-        }
+    if let Some(s) = op.get("summary").and_then(|s| s.as_str())
+        && !s.is_empty()
+    {
+        return s.to_string();
     }
-    if let Some(s) = op.get("description").and_then(|d| d.as_str()) {
-        if !s.is_empty() {
-            return s.to_string();
-        }
+    if let Some(s) = op.get("description").and_then(|d| d.as_str())
+        && !s.is_empty()
+    {
+        return s.to_string();
     }
     String::new()
 }
@@ -234,49 +234,48 @@ fn render_endpoint_detail(
     }
 
     // Parameters.
-    if let Some(params) = op.get("parameters").and_then(|p| p.as_array()) {
-        if !params.is_empty() {
-            writeln!(out, "| Parameter | In | Required | Description |").unwrap();
-            writeln!(out, "| --- | --- | --- | --- |").unwrap();
-            for param in params {
-                let name = param.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                let location = param.get("in").and_then(|i| i.as_str()).unwrap_or("");
-                let required = param
-                    .get("required")
-                    .and_then(|r| r.as_bool())
-                    .unwrap_or(false);
-                let desc = param
-                    .get("description")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("");
-                writeln!(
-                    out,
-                    "| `{}` | {} | {} | {} |",
-                    name,
-                    location,
-                    if required { "yes" } else { "no" },
-                    desc
-                )
-                .unwrap();
-            }
-            writeln!(out).unwrap();
+    if let Some(params) = op.get("parameters").and_then(|p| p.as_array())
+        && !params.is_empty()
+    {
+        writeln!(out, "| Parameter | In | Required | Description |").unwrap();
+        writeln!(out, "| --- | --- | --- | --- |").unwrap();
+        for param in params {
+            let name = param.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let location = param.get("in").and_then(|i| i.as_str()).unwrap_or("");
+            let required = param
+                .get("required")
+                .and_then(|r| r.as_bool())
+                .unwrap_or(false);
+            let desc = param
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("");
+            writeln!(
+                out,
+                "| `{}` | {} | {} | {} |",
+                name,
+                location,
+                if required { "yes" } else { "no" },
+                desc
+            )
+            .unwrap();
         }
+        writeln!(out).unwrap();
     }
 
     // Request body — TypeScript type.
-    if let Some(rb) = op.get("requestBody") {
-        if let Some(schema) = rb
+    if let Some(rb) = op.get("requestBody")
+        && let Some(schema) = rb
             .get("content")
             .and_then(|c| c.get("application/json"))
             .and_then(|j| j.get("schema"))
-        {
-            write_prose(out, "**Request body**:");
-            let mut visited = BTreeSet::new();
-            let ts = ts_type(schema, spec, &mut visited, 0);
-            writeln!(out, "```typescript").unwrap();
-            write!(out, "{}", ts.trim_end()).unwrap();
-            writeln!(out, "\n```\n").unwrap();
-        }
+    {
+        write_prose(out, "**Request body**:");
+        let mut visited = BTreeSet::new();
+        let ts = ts_type(schema, spec, &mut visited, 0);
+        writeln!(out, "```typescript").unwrap();
+        write!(out, "{}", ts.trim_end()).unwrap();
+        writeln!(out, "\n```\n").unwrap();
     }
 
     // Responses — status table.
@@ -302,15 +301,16 @@ fn render_endpoint_detail(
                 .unwrap_or("—".to_string());
             writeln!(out, "| {} | {} | {} |", code, desc, body).unwrap();
 
-            if example_schema.is_none() && code.starts_with('2') && code.as_str() != "204" {
-                if let Some(s) = resp
+            if example_schema.is_none()
+                && code.starts_with('2')
+                && code.as_str() != "204"
+                && let Some(s) = resp
                     .get("content")
                     .and_then(|c| c.get("application/json"))
                     .and_then(|j| j.get("schema"))
-                {
-                    example_schema = Some(s);
-                    example_code = code;
-                }
+            {
+                example_schema = Some(s);
+                example_code = code;
             }
         }
         writeln!(out).unwrap();

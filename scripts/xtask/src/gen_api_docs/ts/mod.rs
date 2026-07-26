@@ -49,14 +49,12 @@ fn oneof_variant_label(variant: &Value, index: usize) -> String {
             .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
         for field in &required {
-            if let Some(fs) = props.get(*field) {
-                if let Some(enums) = fs.get("enum").and_then(|e| e.as_array()) {
-                    if enums.len() == 1 {
-                        if let Some(val) = enums.first().and_then(|v| v.as_str()) {
-                            return val.to_string();
-                        }
-                    }
-                }
+            if let Some(fs) = props.get(*field)
+                && let Some(enums) = fs.get("enum").and_then(|e| e.as_array())
+                && enums.len() == 1
+                && let Some(val) = enums.first().and_then(|v| v.as_str())
+            {
+                return val.to_string();
             }
         }
     }
