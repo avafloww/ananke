@@ -104,6 +104,9 @@ impl<'a> Packer<'a> {
         if non_layer.token_embd_bytes > 0 {
             self.charge(DeviceSlot::Cpu, non_layer.token_embd_bytes, Charge::Weights);
         }
+        // This path returns before the layer walk's step 4, so it charges the
+        // host overhead itself rather than inheriting it.
+        self.add_host_overhead();
 
         for (idx, &gpu) in gpus.iter().enumerate() {
             let mut weight_bytes =

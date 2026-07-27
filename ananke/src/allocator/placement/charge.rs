@@ -360,14 +360,14 @@ mod tests {
         );
     }
 
-    /// The `Cpu` slot of a GPU-resident service is not a model of its host
-    /// footprint, and the two pack paths disagree about it wildly: the layer
-    /// walk charges the CPU a full compute buffer, the sharded path charges it
-    /// none. Whatever the host observation does with that, it must not be to
-    /// learn a multiplicative factor from it — see
-    /// [`crate::supervise::rolling::RollingBase::host_peak`].
+    /// The two pack paths must agree on the host side. They once did not: the
+    /// layer walk charged the `Cpu` slot a full GPU-calibrated compute buffer
+    /// and the sharded path charged it nothing, so the same model on the same
+    /// cards produced host slots differing by ~3.8 GiB — which is what made a
+    /// multiplicative host ratio meaningless. Both now charge the modelled
+    /// host overhead, and nothing else non-weight.
     #[test]
-    fn a_gpu_resident_service_reports_little_host_weight() {
+    fn both_pack_paths_charge_the_same_host_overhead() {
         let mut est = trivial_estimate(20, 200);
         est.non_layer.token_embd_bytes = GIB;
         let s = svc(PlacementPolicy::GpuOnly, Some(vec![0, 1]));
@@ -382,12 +382,15 @@ mod tests {
         // Both hold exactly the token embeddings on the host …
         assert_eq!(layer_split.rolling.cpu_weight_bytes, GIB);
         assert_eq!(sharded.rolling.cpu_weight_bytes, GIB);
-        // … but their `Cpu` slots disagree by the whole compute buffer, which
-        // is why that slot cannot be a ratio's denominator.
+        // … and both charge the same non-weight host bytes on top.
         assert_eq!(
-            layer_split.rolling.uncorrected_host_bytes - sharded.rolling.uncorrected_host_bytes,
-            est.compute_buffer_mb as u64 * MIB,
-            "the layer path charges the CPU a compute buffer the sharded path does not"
+            layer_split.rolling.uncorrected_host_bytes, sharded.rolling.uncorrected_host_bytes,
+            "the two paths must not disagree about the host slot"
+        );
+        assert_eq!(
+            layer_split.rolling.uncorrected_host_bytes - GIB,
+            est.host_overhead_bytes,
+            "the only non-weight host term is the modelled overhead"
         );
     }
 

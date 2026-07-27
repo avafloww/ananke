@@ -306,6 +306,8 @@ fn deepseek4_like_auto_fits_two_24gib_cards() {
         output_buffer_bytes: 0,
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
+        host_overhead_bytes: 0,
+        host_cache_bytes: 0,
         per_layer_bytes: Some(per_layer),
         attention_layers: None,
         non_layer: NonLayer {

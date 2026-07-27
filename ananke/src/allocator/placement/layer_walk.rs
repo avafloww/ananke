@@ -123,7 +123,15 @@ impl<'a> Packer<'a> {
         }
     }
 
-    /// Step 4: compute buffer per active backend (default 400 MB).
+    /// Step 4: compute buffer per active *GPU*, plus the host-side overhead
+    /// on the CPU slot.
+    ///
+    /// The two are different quantities and were once the same number: the
+    /// CPU slot used to be charged `compute_buffer_mb`, which is calibrated
+    /// against `nvidia-smi` VRAM readings and has never been measured on a
+    /// host backend. What the host actually holds is the pinned graph arena
+    /// and the prompt cache, which scale differently and exist even when every
+    /// layer is on a GPU — see [`crate::estimator::host_buffer`].
     pub(crate) fn add_compute_buffer(&mut self) {
         let compute_bytes = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
         // The output logits buffer is materialised only on the head GPU.
@@ -136,8 +144,13 @@ impl<'a> Packer<'a> {
         // tensor-split. See [`crate::estimator::Estimate::output_buffer_bytes`].
         let head_gpu = self.head_gpu();
         let logits = self.head_logits_bytes();
-        let active_slots: Vec<DeviceSlot> = self.per_device.keys().cloned().collect();
-        for slot in active_slots {
+        let active_gpus: Vec<DeviceSlot> = self
+            .per_device
+            .keys()
+            .filter(|s| matches!(s, DeviceSlot::Gpu(_)))
+            .cloned()
+            .collect();
+        for slot in active_gpus {
             let mut add = compute_bytes;
             if let DeviceSlot::Gpu(id) = slot
                 && head_gpu != Some(id)
@@ -145,6 +158,34 @@ impl<'a> Packer<'a> {
                 add = add.saturating_sub(logits);
             }
             self.charge(slot, add, Charge::Runtime);
+        }
+        self.add_host_overhead();
+    }
+
+    /// Charge the `Cpu` slot the host-side overhead. Unconditional, because it
+    /// is held whatever the placement — a fully GPU-offloaded model still pins
+    /// a KQ mask on the host and still runs a CUDA runtime there.
+    ///
+    /// The prompt cache is charged separately as slop: it is a *cap* the cache
+    /// grows into rather than an allocation made at load, so reserving it is
+    /// right but predicting it is not. Counted as a prediction it would make
+    /// every host observation read as a large over-reservation — an 8 GiB
+    /// default against tens of MiB actually held — and pin the correction to
+    /// its clamp floor.
+    pub(crate) fn add_host_overhead(&mut self) {
+        if self.estimate.host_overhead_bytes > 0 {
+            self.charge(
+                DeviceSlot::Cpu,
+                self.estimate.host_overhead_bytes,
+                Charge::Runtime,
+            );
+        }
+        if self.estimate.host_cache_bytes > 0 {
+            self.charge(
+                DeviceSlot::Cpu,
+                self.estimate.host_cache_bytes,
+                Charge::Slop,
+            );
         }
     }
 
@@ -332,6 +373,8 @@ mod tests {
             output_buffer_bytes: 0,
             mtp_bytes: 0,
             mtp_weight_bytes: 0,
+            host_overhead_bytes: 0,
+            host_cache_bytes: 0,
             per_layer_bytes: Some(per_layer_bytes),
             attention_layers: None,
             non_layer: NonLayer::default(),
@@ -376,6 +419,8 @@ mod tests {
             output_buffer_bytes: 0,
             mtp_bytes: 0,
             mtp_weight_bytes: 0,
+            host_overhead_bytes: 0,
+            host_cache_bytes: 0,
             per_layer_bytes: Some(per_layer_bytes),
             attention_layers: None,
             non_layer: NonLayer::default(),
