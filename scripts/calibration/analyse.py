@@ -81,12 +81,20 @@ def arena_terms(record: dict, charge_moe: bool = True) -> tuple[float, float, fl
     # ik keeps its MoE op intermediates on the CPU below a batch threshold,
     # measured at 81 KiB per batch token — see FINDINGS.md.
     experts, used = parsed.get("n_expert") or 0, parsed.get("n_expert_used") or 0
-    if charge_moe and ik and experts and used and tokens * used < 32 * experts:
-        hidden += IK_MOE_BYTES_PER_TOKEN * tokens
+    if charge_moe and experts and used and tokens * used < 32 * experts:
+        if ik:
+            hidden += IK_MOE_BYTES_PER_NEMBD * parsed["n_embd"] * tokens
+        elif factors.get("n_cpu_moe") and factors.get("split") == "tensor":
+            hidden += MAINLINE_TENSOR_MOE_PER_NEMBD * parsed["n_embd"] * tokens
     return mask / 1024**2, swa_mask / 1024**2, hidden / 1024**2
 
 
-IK_MOE_BYTES_PER_TOKEN = 81 * 1024
+# Kept in step with `ananke/src/estimator/tuning.json`. These were a flat
+# 81 KiB per token until the campaign showed the term scales with hidden size;
+# this file went on using the flat value afterwards, which silently inflated
+# every residual computed for an ik mixture of experts.
+IK_MOE_BYTES_PER_NEMBD = 43
+MAINLINE_TENSOR_MOE_PER_NEMBD = 57
 
 
 def check_arena(rows: list[dict]) -> None:

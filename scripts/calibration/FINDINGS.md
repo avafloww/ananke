@@ -389,6 +389,87 @@ Arena accuracy by architecture, worst case across the dataset:
 The first five are the sense in which "the arena is arithmetic, not a fit"
 holds. The last two are open.
 
+## The process baseline is not predictable from model shape
+
+Measured baseline — owned host memory less the arena and the per-device cost —
+for every fully-resident model:
+
+| model | layers | n_embd | measured base |
+|---|---|---|---|
+| LFM2.5-Embedding-350M | 16 | 1024 | 203 MiB |
+| gemma-4-26B-A4B | 30 | 2816 | 348 MiB |
+| Qwen3-4B | 36 | 2560 | 246 MiB |
+| talkie-13B | 40 | 5120 | 209 MiB |
+| Magidonia-24B | 40 | 5120 | 261 MiB |
+| gemma-4-E4B | 42 | 2560 | 363 MiB |
+| gemma-4-31B-QAT | 60 | 5376 | 367 MiB |
+| gemma-3-27b | 62 | 5376 | 264 MiB |
+| **Qwen3.6-27B** | 65 | 5120 | **600 MiB** |
+
+Two models of nearly identical shape — gemma-3-27b at 62 layers and 5376
+hidden, Qwen3.6-27B at 65 and 5120 — differ by **2.3x**. Two models of
+identical shape, talkie and Magidonia at 40 layers and 5120 hidden, differ by
+25%.
+
+A least-squares fit over the nine gives an intercept of 84 MiB, 9.3 MiB per
+layer, **minus** 48 KiB per unit of hidden size, and a 152 MiB residual. The
+negative width coefficient is not physical; it is what a fit does when its
+regressors correlate at 0.74 and the thing being fitted does not depend on
+them. Adding a width term makes the model worse, not better.
+
+A grid search for the constants that put the most cells inside the correction
+band lands at 165 MiB base and 2.2 MiB per layer, leaving 33 of 297 outside
+against the current 36. That is not enough of an improvement to justify moving
+three constants onto a fit this unstable, so they stay.
+
+**What is actually true**: 44 of 301 cells sit outside `[0.8, 1.5]`, 25 of
+them one model — Qwen3.6-27B, under-predicted by up to 2.97x. Its 763 MiB of
+anonymous memory has no CPU-resident weights behind it (`cpu_model_mib` is 0)
+and its vocabulary is *smaller* than gemma-3-27b's, so neither explains the
+gap. It carries an embedded MTP head, which is the obvious suspect and is not
+confirmed.
+
+**Why this is recorded rather than fixed**: the rolling correction clamps at
+1.5, so a service needing 2.97x stays under-reserved whatever it observes. For
+*host* memory on a 251 GiB machine that has no practical consequence, which is
+why it has never been noticed. It would matter on a smaller host, and it would
+matter a great deal if the same were true of VRAM. Closing it properly needs
+a per-architecture baseline term, which is a change to the model's shape and
+not a retune of its constants.
+
+## The two remaining arena ceilings, located
+
+**gemma3, 12.08 MiB — only when `parallel > 1`.** Every np=1 cell is exact to
+0.01-0.08 MiB across contexts, batches and both split modes. At np=4 the
+residual is 12.08 MiB, and it is *flat*: the same figure at ctx 8192 and at
+65536. So the sliding-window mask is sized differently when the cache is split
+across slots, and by a fixed amount rather than a scaling one. Not modelled.
+
+**glm-dsa, 44.99 MiB — only on a single card.** With two cards the residual is
+**-0.5 MiB**, i.e. exact. The single-card cells are *over*-predicted by 45.
+The same pattern, smaller, appears on the other two ik mixtures: laguna -10.5
+and qwen35moe -2.5 on one card against +16.0 and -2.5 on two. So ik's
+CPU-resident MoE term is not purely per-token — something about it varies with
+the card count, and the single-card cells also carry a different expert
+offload (96 layers against 92 for glm), which the dataset cannot separate.
+
+Both are over- or fixed-offset errors rather than scaling ones, which is why
+they stayed small enough to sit unnoticed under a per-architecture ceiling.
+
+## A stale constant in the analysis, and what it cost
+
+`analyse.py` went on using the flat 81 KiB per token for ik's MoE term after
+the campaign had shown it scales with hidden size and the estimator had been
+changed to match. Every residual this file computed for an ik mixture of
+experts was inflated by the difference.
+
+Correcting it moved glm-dsa's two-card fit from a 3.38x multiple with a 136
+MiB residual to **1.00 with -0.5**, and turned what looked like an unexplained
+fork behaviour into an exact one. The lesson is narrow and worth stating: the
+analysis and the estimator now share `tuning.json` as their source of truth,
+but only the Rust side reads it mechanically. The Python side copies two
+values by hand, and those copies are the one place a drift can still hide.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline
