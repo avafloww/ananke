@@ -137,22 +137,31 @@ fn process_base_bytes(summary: &GgufSummary) -> u64 {
     } else {
         0
     };
-    PROCESS_BASE_BYTES + layers * PROCESS_BASE_BYTES_PER_LAYER + moe + baseline_offset(summary)
+    (PROCESS_BASE_BYTES + layers * PROCESS_BASE_BYTES_PER_LAYER + moe)
+        .saturating_add_signed(baseline_offset(summary))
 }
 
 /// The measured correction the layer-count model above leaves behind.
+///
+/// Signed: it corrects a baseline that over-covers as well as one that
+/// under-covers. An over-prediction is only safe while it stays inside the
+/// band the rolling correction can travel, and gemma3 sat at 0.78 against a
+/// floor of 0.8 — unreachable rather than safe.
 ///
 /// Keyed on the architecture *and* the two variant distinctions that separate
 /// models sharing one architecture string: within `gemma4`, the mixture of
 /// experts is over-covered by 66 MiB, the dense model needs 17, and the
 /// E-variant 107. Both discriminators are ones the estimator already reads, so
 /// the key is one it can construct.
-fn baseline_offset(summary: &GgufSummary) -> u64 {
-    lookup(
-        crate::estimator::tuning::BASELINE_OFFSET,
-        &variant_key(summary, &summary.architecture),
-        crate::estimator::tuning::BASELINE_OFFSET_DEFAULT,
-    )
+fn baseline_offset(summary: &GgufSummary) -> i64 {
+    let key = variant_key(summary, &summary.architecture);
+    crate::estimator::tuning::BASELINE_OFFSET
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map_or(
+            crate::estimator::tuning::BASELINE_OFFSET_DEFAULT,
+            |(_, value)| *value,
+        )
 }
 
 /// Extra pinned bytes per batch token when flash attention is off.

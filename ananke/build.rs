@@ -134,7 +134,7 @@ fn generate_tuning_constants() {
         "TENSOR_SPLIT_BASELINE_DEFAULT",
         "Extra host baseline bytes a tensor split costs beyond a layer split,\n/// by architecture.",
     ));
-    out.push_str(&generate_rate_table(
+    out.push_str(&generate_signed_rate_table(
         &parsed,
         "baseline_offset",
         "BASELINE_OFFSET",
@@ -245,6 +245,39 @@ fn generate_ik_rates(parsed: &serde_json::Value) -> String {
 }
 
 /// A per-architecture rate table: `&[(arch, value)]` plus a default.
+/// The same table, for values that may be negative.
+///
+/// `baseline_offset` corrects a baseline that over-covers as well as one that
+/// under-covers, so its entries are signed. Reading them through the unsigned
+/// path silently turns every negative into the default, which is zero — the
+/// correction would vanish rather than fail.
+fn generate_signed_rate_table(
+    parsed: &serde_json::Value,
+    key: &str,
+    table: &str,
+    default_name: &str,
+    doc: &str,
+) -> String {
+    let Some(rates) = parsed.get(key) else {
+        return String::new();
+    };
+    let default = rates.get("default").and_then(|v| v.as_i64()).unwrap_or(0);
+    let mut out = format!("\n/// {doc}\npub static {table}: &[(&str, i64)] = &[\n");
+    if let Some(map) = rates.get("by_arch").and_then(|v| v.as_object()) {
+        for (arch, value) in map {
+            out.push_str(&format!(
+                "    ({arch:?}, {}),\n",
+                value.as_i64().unwrap_or(default)
+            ));
+        }
+    }
+    out.push_str(&format!(
+        "];\n\n/// Applied to an architecture this dataset has not measured.\n\
+         pub const {default_name}: i64 = {default};\n"
+    ));
+    out
+}
+
 fn generate_rate_table(
     parsed: &serde_json::Value,
     key: &str,

@@ -267,7 +267,7 @@
       }
     ]
   },
-  "measurements": 483,
+  "measurements": 484,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -312,12 +312,16 @@
     "$comment": "Per-architecture correction to the process baseline, in bytes. The layer-count model leaves a residual that is architecture-shaped and reproducible; this charges it where it is positive. `default` is zero, since an unmeasured architecture has no evidence either way.",
     "default": 0,
     "by_arch": {
+      "gemma3": -71707828,
       "gemma4": 26759192,
       "gemma4+e": 178705220,
+      "gemma4+moe": -56385524,
       "lfm2": 41134496,
+      "llama": -6406128,
       "qwen3": 22231464,
       "qwen35": 328361600,
-      "qwen35moe+moe": 45703184
+      "qwen35moe+moe": 45703184,
+      "talkie": -33742832
     }
   },
   "no_flash_attn_rates": {

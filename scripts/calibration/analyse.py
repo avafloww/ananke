@@ -437,11 +437,17 @@ def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
     # is the safe direction. The spread is reported in the evidence instead, so
     # a wide one is visible rather than silently averaged.
     spreads = {a: (min(g) / 1024**2, max(g) / 1024**2) for a, g in by_arch.items()}
-    # Only positive offsets are charged. A negative residual means the baseline
-    # already over-covers that architecture, and shaving it would trade a safe
-    # over-prediction for a risk.
+    # Negative offsets are charged too. The earlier rule kept only positive
+    # ones, reasoning that a negative residual means the baseline already
+    # over-covers and shaving it trades a safe over-prediction for a risk. That
+    # does not survive two objections. The reduction is `max` — the *least*
+    # negative residual — so subtracting it leaves every measured cell still
+    # over-predicted; and an over-prediction is only safe while it stays inside
+    # the band the rolling correction can travel. gemma3 sat at 0.78 against a
+    # floor of 0.8, which no amount of observation can pull back, so the
+    # "safe" direction had become the unreachable one.
     _BASE_OFFSET.clear()
-    _BASE_OFFSET.update({a: round(max(g)) for a, g in by_arch.items() if max(g) > 0})
+    _BASE_OFFSET.update({a: round(max(g)) for a, g in by_arch.items()})
     detail = ", ".join(
         f"{a} {hi:+.0f}" + (f" (spans {lo:+.0f})" if hi - lo > 32 else "")
         for a, (lo, hi) in sorted(spreads.items())
@@ -449,9 +455,10 @@ def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
     return round(max(max(g) for g in by_arch.values())), (
         f"residual over the layer-count baseline, per architecture, across "
         f"{sum(len(g) for g in by_arch.values())} resident served cells: "
-        f"{detail} MiB. Only positive offsets are charged, since a negative one "
-        "means the baseline already over-covers and shaving it would trade a "
-        "safe over-prediction for a risk."
+        f"{detail} MiB. Negative offsets are charged as well as positive ones: "
+        "the reduction is the maximum, so subtracting it leaves every measured "
+        "cell still over-predicted, and an over-prediction past the rolling "
+        "correction's floor is unreachable rather than safe."
     )
 
 
