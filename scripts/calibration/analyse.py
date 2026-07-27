@@ -553,11 +553,18 @@ def derive_no_flash_attn_rates(rows: list[dict]) -> str:
             continue
         if factors["ngl"] != 99 or not factors["gpus"] or factors["spec_type"]:
             continue
-        if factors["runtime"] == "ik" or factors["n_cpu_moe"]:
+        if factors["runtime"] == "ik":
             continue
         mask, swa, hidden = arena_terms(record)
         cards = len((factors["gpus"] or "0").split(","))
-        copies = 4 if cards > 1 and (factors["split"] or "layer") == "layer" else 1
+        # A hybrid does not replicate the mask across cards — the same
+        # exception the quantised-cache rate needs, and leaving it out here
+        # would put every hybrid architecture's rate wildly negative and drop
+        # it from the table, where it would then inherit the *worst* rate as
+        # its default.
+        hybrid = bool(factors["n_cpu_moe"])
+        copies = 4 if cards > 1 and (factors["split"] or "layer") == "layer" \
+            and not hybrid else 1
         residual = parsed["arena_mib"] - (copies * (mask + swa) + hidden)
         tokens = min(factors["ctx"], factors["ubatch"])
         # `arena_terms` models the mask at its widened four-byte element and
