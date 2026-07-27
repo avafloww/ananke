@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import math
 import statistics as st
 from statistics import StatisticsError
 from collections import defaultdict
@@ -80,7 +81,11 @@ def arena_terms(record: dict, charge_moe: bool = True) -> tuple[float, float, fl
     # the estimator was changed, which is the same drift that left the ik MoE
     # rate stale here — and it is why `consensus` saw a 5.27 multiple among
     # cells that are otherwise 4.00.
-    swa_copies = 3 if (slots > 1 and unified and not ik) else 1
+    # One mask per batch the window spans, plus the batch's own. The constant
+    # 3 this replaces came from a sweep taken entirely at ubatch 512, where a
+    # 1024-token window spans two batches; at 2048 the same configuration
+    # measures 2, differing by exactly one mask.
+    swa_copies = (1 + min(2, -(-swa // tokens))) if (slots > 1 and unified and not ik) else 1
     swa_mask = swa_copies * swa_rows * tokens * width if swa else 0
     # Two f32 hidden-state buffers on mainline, one on ik.
     hidden = (1 if ik else 2) * parsed["n_embd"] * tokens * 4
@@ -851,6 +856,7 @@ KINDS = {
     # Fitted against the slot sweep the first campaign's design confounded.
     "MTP_COMPUTE_MIB": "derived",
     "MTP_KV_SLOT_FACTOR_PERMILLE": "derived",
+    "DRAFT_MODEL_COMPUTE_MIB_PER_1K": "derived",
     # Has data, but the fit is contested and the value is held.
     "DRAFT_MODEL_COMPUTE_MIB": "review",
     "MTP_HOST_BYTES_EMBEDDED": "review",
@@ -888,6 +894,39 @@ def derive_mtp_kv_slot_factor(rows: list[dict]) -> tuple[int, str]:
         f"per-slot coefficient over the modelled KV term, across "
         f"{fit['models']} models: {fit['detail']}. The larger is taken. "
         f"Expressed per thousand so the constant stays an integer."
+    )
+
+
+def derive_draft_compute_slope(rows: list[dict]) -> tuple[int, str]:
+    """How a separate MTP draft's compute grows with context, MiB per 1024.
+
+    The draft shares the target's KV cache — the load log shows `layer 3:
+    sharing with layer 59` — so it has no context-scaling *cache* term, and
+    the constant covering it was flat. Its compute buffer scales anyway:
+    gemma-4-31B-QAT measures a driver delta of 724, 788, and 920 MiB at ctx
+    32768, 65536, and 131072, against a modelled 407 at every one.
+
+    Taken from differences between contexts, which cancel the draft's weight
+    term exactly and so need no figure for it. Flat in the slot count — 724,
+    724, and 728 MiB at one, two, and four slots — which is the control that
+    confirms the embedded head's slot scaling is its own per-slot cache.
+    """
+    by_ctx: dict[int, int] = {}
+    for _model, ctx, delta, _record in _mtp_pairs(rows, draft=True):
+        by_ctx[ctx] = max(by_ctx.get(ctx, 0), delta)
+    if len(by_ctx) < 2:
+        raise ValueError("fewer than two contexts for a separate draft")
+    contexts = sorted(by_ctx)
+    lo, hi = contexts[0], contexts[-1]
+    slope = (by_ctx[hi] - by_ctx[lo]) / ((hi - lo) / 1024)
+    # Rounded up, since the term is charged against an under-reservation that
+    # OOMs and the whole range it spans here is 196 MiB.
+    return math.ceil(slope), (
+        f"driver delta across ctx {lo}-{hi} on the one model with a separate "
+        f"draft: {', '.join(f'{c} -> {by_ctx[c]} MiB' for c in contexts)}. Taken "
+        f"from differences between contexts, which cancel the draft's weight "
+        f"term. Flat in the slot count, which is the control confirming the "
+        f"embedded head's slot scaling is its own per-slot cache."
     )
 
 
@@ -1236,6 +1275,7 @@ DERIVERS = {
     "IK_OP_OFFLOAD_MIN_BATCH": derive_offload_min_batch,
     "MTP_COMPUTE_MIB": derive_mtp_compute_base,
     "MTP_KV_SLOT_FACTOR_PERMILLE": derive_mtp_kv_slot_factor,
+    "DRAFT_MODEL_COMPUTE_MIB_PER_1K": derive_draft_compute_slope,
 }
 
 

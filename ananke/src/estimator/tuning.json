@@ -26,17 +26,24 @@
       "kind": "policy"
     },
     "DRAFT_MODEL_COMPUTE_MIB": {
-      "value": 300,
+      "value": 620,
       "type": "u64",
       "doc": "GPU compute buffer for a separate draft model, in MiB.",
-      "evidence": "UNDER REVIEW alongside MTP_COMPUTE_MIB; one model, two contexts.",
+      "evidence": "gemma-4-31B-QAT, the one model with a separate draft, measures a driver delta of 724, 788, and 920 MiB at ctx 32768, 65536, and 131072, and flat 724/724/728 across one, two, and four slots. Against its 107 MiB of GPU-resident draft weights and the 2 MiB per 1024 context slope, covering the worst needs 557; 620 carries roughly 8% over every measured point. Replaces 300, which modelled a flat 407 MiB total against those measurements and so under-reserved by 317 to 513 MiB at every context \u2014 the direction that OOMs, on a model the operator serves. Reachable rather than derived: one model cannot separate a per-draft weight term from a constant, so the split is asserted and only the slope is fitted.",
       "kind": "review"
+    },
+    "DRAFT_MODEL_COMPUTE_MIB_PER_1K": {
+      "value": 2,
+      "type": "u64",
+      "doc": "Extra GPU compute a separate MTP draft takes per 1024 tokens of context, in MiB.",
+      "evidence": "driver delta across ctx 32768-131072 on the one model with a separate draft: 32768 -> 728 MiB, 65536 -> 788 MiB, 131072 -> 920 MiB. Taken from differences between contexts, which cancel the draft's weight term. Flat in the slot count, which is the control confirming the embedded head's slot scaling is its own per-slot cache.",
+      "kind": "derived"
     },
     "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN": {
       "value": 1025,
       "type": "u64",
       "doc": "The Gemma 4 E-variant's per-layer embedding input, charged per layer per batch token.",
-      "evidence": "11 E-variant cells at 1025 B/layer/token, against 30 same-architecture control cells at 1. 1025 is 256 f32 elements.",
+      "evidence": "11 E-variant cells at 1025 B/layer/token, against 32 same-architecture control cells at 1. 1025 is 256 f32 elements.",
       "kind": "derived"
     },
     "IK_OP_OFFLOAD_MIN_BATCH": {
@@ -57,7 +64,7 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "74 mainline layer-split cells at 4.01, against 138 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "78 mainline layer-split cells at 4.01, against 140 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived"
     },
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
@@ -165,7 +172,7 @@
         ],
         "base_mib": 830,
         "slope_mib_per_1k": 17,
-        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 70 layer-split cells at ctx 8192-65536, peaking at 1193 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 74 layer-split cells at ctx 8192-65536, peaking at 1193 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
@@ -274,7 +281,7 @@
       }
     ]
   },
-  "measurements": 506,
+  "measurements": 514,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -367,6 +374,6 @@
   },
   "mtp_slot_scaling": {
     "$comment": "Reported, not fitted. The MTP overhead measured at a fixed context across slot counts, which is what separates a genuine slot term from the longer context the first campaign confounded it with.",
-    "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB, np4 2376 MiB; Qwen3.6-35B-A3B-UD-Q5_K_ ctx 32768: np1 584 MiB, np2 812 MiB, np4 1224 MiB"
+    "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB, np4 2376 MiB; Qwen3.6-35B-A3B-UD-Q5_K_ ctx 32768: np1 584 MiB, np2 812 MiB, np4 1224 MiB; gemma-4-31B-it-qat-UD-Q4 ctx 32768: np1 724 MiB, np2 724 MiB, np4 728 MiB"
   }
 }

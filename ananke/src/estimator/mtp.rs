@@ -29,7 +29,10 @@
 
 use crate::{
     estimator::{
-        tuning::{DRAFT_MODEL_COMPUTE_MIB, MTP_COMPUTE_MIB, MTP_KV_SLOT_FACTOR_PERMILLE},
+        tuning::{
+            DRAFT_MODEL_COMPUTE_MIB, DRAFT_MODEL_COMPUTE_MIB_PER_1K, MTP_COMPUTE_MIB,
+            MTP_KV_SLOT_FACTOR_PERMILLE,
+        },
         types::EstimatorInputs,
     },
     gguf::GgufSummary,
@@ -59,8 +62,19 @@ fn draft_model_gpu_weight_bytes(draft: &GgufSummary) -> u64 {
 /// Extra VRAM (bytes) a separate draft model (`-md`) adds: its GPU-resident
 /// weights plus a fixed draft compute buffer. The draft's attention layers
 /// reuse the target's KV cache, so there is no context-scaling KV term.
-fn separate_draft_overhead_bytes(draft: &GgufSummary) -> u64 {
-    draft_model_gpu_weight_bytes(draft) + DRAFT_MODEL_COMPUTE_MIB * 1024 * 1024
+fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32) -> u64 {
+    // The draft shares the target's KV cache — the load log shows `layer 3:
+    // sharing with layer 59` — so there is no context-scaling cache term. Its
+    // *compute* scales anyway: gemma-4-31B-QAT measures a driver delta of 724,
+    // 788, and 920 MiB at ctx 32768, 65536, and 131072, where a flat constant
+    // modelled 407 at each and so under-reserved by 317 to 513 MiB.
+    //
+    // Flat in the slot count, unlike an embedded head: 724, 724, and 728 MiB
+    // at one, two, and four slots. That is the control confirming the embedded
+    // head's slot scaling comes from keeping its own cache per slot.
+    let compute =
+        DRAFT_MODEL_COMPUTE_MIB + DRAFT_MODEL_COMPUTE_MIB_PER_1K * u64::from(context) / 1024;
+    draft_model_gpu_weight_bytes(draft) + compute * 1024 * 1024
 }
 
 /// The share of [`mtp_overhead_bytes`] that is model tensors read from a GGUF
@@ -105,7 +119,7 @@ pub fn mtp_overhead_bytes(
         return 0;
     }
     if let Some(draft) = draft {
-        return separate_draft_overhead_bytes(draft);
+        return separate_draft_overhead_bytes(draft, inputs.context);
     }
     let arch = summary.architecture.as_str();
     let nextn = meta_u32(summary, arch, "nextn_predict_layers").unwrap_or(0) as u64;
@@ -347,19 +361,45 @@ mod tests {
     fn separate_draft_counts_gpu_weights_plus_compute_not_kv() {
         // The target carries no embedded MTP head (gemma4, nextn = 0), so
         // without a draft model the overhead would be zero. With a separate
-        // draft, the overhead is `(total - token_embd) + DRAFT_MODEL_COMPUTE`
-        // and does NOT scale with context (the draft shares the target's KV).
+        // draft it is the draft's GPU-resident weights plus a compute term.
         let target = qwen35_summary("gemma4", 0, 4);
         let draft = draft_summary(144, 108);
         let empty: Vec<String> = Vec::new();
-        let mib = mtp_overhead_bytes(&target, Some(&draft), &inputs(204800, true, &empty))
-            / (1024 * 1024);
-        assert_eq!(mib, 108 + 300);
+        let at = |context: u32| {
+            mtp_overhead_bytes(&target, Some(&draft), &inputs(context, true, &empty))
+                / (1024 * 1024)
+        };
+        let expected = |context: u64| {
+            108 + DRAFT_MODEL_COMPUTE_MIB + DRAFT_MODEL_COMPUTE_MIB_PER_1K * context / 1024
+        };
+        assert_eq!(at(204800), expected(204800));
 
-        // Doubling the context must not change the draft overhead.
-        let mib_2x = mtp_overhead_bytes(&target, Some(&draft), &inputs(409600, true, &empty))
-            / (1024 * 1024);
-        assert_eq!(mib_2x, 108 + 300);
+        // It grows with context — the compute buffer does, even though the KV
+        // does not — but far too slowly to be a cache. A shared-KV draft adds
+        // single-digit MiB per 1024 tokens where its own cache would add
+        // hundreds of MiB over this range.
+        let growth = at(409600) - at(204800);
+        assert_eq!(growth, DRAFT_MODEL_COMPUTE_MIB_PER_1K * 200);
+        assert!(
+            growth < 108 + DRAFT_MODEL_COMPUTE_MIB,
+            "grew like a KV cache"
+        );
+    }
+
+    #[test]
+    fn separate_draft_does_not_scale_with_slots() {
+        // Measured flat at 724, 724, and 728 MiB across one, two, and four
+        // slots, against an embedded head that doubles: the draft shares the
+        // target's cache and so has none of its own to replicate per slot.
+        let target = qwen35_summary("gemma4", 0, 4);
+        let draft = draft_summary(144, 108);
+        let empty: Vec<String> = Vec::new();
+        let at = |slots: u32| {
+            let mut i = inputs(32768, true, &empty);
+            i.parallel = Some(slots);
+            mtp_overhead_bytes(&target, Some(&draft), &i)
+        };
+        assert_eq!(at(1), at(4));
     }
 
     #[test]

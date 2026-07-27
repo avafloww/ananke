@@ -320,7 +320,19 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
         // which is what rules the simpler rule out.
         Some(window) => {
             let shared = inputs.parallel.unwrap_or(1) > 1 && inputs.kv_unified.unwrap_or(false);
-            let masks = if shared { 3 } else { 1 };
+            // How many batches the window spans, plus the batch's own mask.
+            //
+            // The count was 3 from a sweep taken entirely at ubatch 512, where
+            // a 1024-token window spans two batches. At 2048 the same
+            // configuration measures 2, and the difference is exactly one mask
+            // — 692.3 MiB against 740.0 modelled on gemma-3-27B at four
+            // shared slots, where two masks give 692.0. Capped at the measured
+            // range rather than extrapolated below ubatch 512.
+            let masks = if shared {
+                1 + (window as u64).div_ceil(n_tokens).min(2)
+            } else {
+                1
+            };
             masks * pad_to_kv_cache(window as u64 + n_tokens) * n_tokens * element_bytes
         }
         None => 0,
