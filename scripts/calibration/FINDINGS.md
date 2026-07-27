@@ -862,6 +862,49 @@ which 8192 is this term at double what the architecture needs. It is now
 halved for MLA, which the constant's own evidence had already identified as
 over-covered without acting on it.
 
+## MTP scales with the slot count, and the [spec] line cannot see it
+
+`MTP_COMPUTE_MIB` was held under review because the paired with- and
+without-MTP cells disagreed with it by a factor of four, and the disagreement
+grew at `parallel = 4`. The design could not say why: every one-slot pair sat
+at ctx 32768 or 65536 and the only four-slot pair at 131072, so slots and
+context were confounded. Holding context fixed and moving only `parallel`
+settles it — and rules out the likelier-sounding explanation, that the
+four-slot pair was really showing the longer context.
+
+The mechanism is read off llama.cpp's own breakdown rather than fitted. The
+entire with/without difference sits in the **KV column** and none of it in
+compute:
+
+| Qwen3.6-27B, ctx 32768 | np1 | np2 | np4 |
+|---|---|---|---|
+| ΔKV MiB | 225 | 449 | 898 |
+| Δcompute MiB | 0 | 0 | 18 |
+| driver ΔVRAM MiB | 992 | 1444 | 2376 |
+| llama.cpp `[spec]` MiB | 258.02 | 258.02 | 258.02 |
+
+Every cell set `--kv-unified`, so the MTP context keeps its own cache per slot
+rather than sharing the main pool. And the measured cache is a fixed multiple
+of the term `mtp.rs` already models — 1.75 for Qwen3.6-27B and 1.47 for
+Qwen3.6-35B-A3B, each constant across slot counts to two decimals — so the
+shape was right and only the magnitude was missing. The multiple itself is
+unexplained.
+
+The separate-draft path is the control, and it behaves as the mechanism
+predicts: gemma-4-31B-QAT's draft shares the target's KV cache, and its host
+overhead is flat at 288 and 285 MiB across one and two slots where the
+embedded-head models double.
+
+The flat 1828 MiB this replaces under-reserved the 27B at four slots by 548
+MiB — the direction that OOMs, in the configuration production runs — while
+wasting 737 MiB at one slot.
+
+Note what the `[spec]` line does. The constant's evidence called it "roughly a
+quarter" of the driver delta, which reads as a scale factor to correct. It is
+worse than that: it reports the same 258.02 MiB at every slot count, so it is
+blind to the axis that dominates the cost. Nothing calibrated against it can
+be right at more than one slot.
+
 ## The design hole flash attention exposed, audited everywhere else
 
 Flash-attention-off spent the first campaign recorded as an inconsistent
