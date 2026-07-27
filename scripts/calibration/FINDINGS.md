@@ -78,11 +78,15 @@ ctx 8192, where `3 x 8 MiB` happens to equal 24 MiB.
 | 65536 | 192 MiB | 24 MiB |
 | 32768 @ ub 2048 | 384 MiB | 24 MiB |
 
-**Unresolved**: whether the multiple is 4 *because* there are two cards under
-layer split, or a fixed replication factor. The `device-scaling` cells, which
-pin placement and vary only the count of visible CUDA devices, are what
-separate those, and they have not run yet. A four-card operator inherits
-whichever answer is right.
+**RESOLVED**: it is not about the number of cards. With placement pinned to
+the CPU (`-ngl 0`) and only the count of visible CUDA devices varying, the
+arena does not move at all — 54.52 MiB on gemma3 at one card and at two,
+52.11 MiB on the 35B at one and at two. Replication happens when layers are
+*split across* devices, not when devices are merely present. So the
+multiplier belongs to layer-split placement, and an operator with more cards
+inherits the same 4x rather than a larger one — though whether it grows beyond
+two cards under layer split is still unmeasured here, since only two are
+available.
 
 ## RESOLVED: the gemma4 E-variant carries a per-layer input buffer
 
@@ -145,6 +149,38 @@ The per-token slope is also unexplained: 4800 bytes/token measured against
 against the 27B's 4, which is the factor the formula multiplies by and the
 thing one model cannot check. It is measuring now. gemma-4-31B-QAT's
 separate-draft cells are paired the same way and give the other MTP shape.
+
+## A visible CUDA device costs ~20 MiB of host memory, and the estimator has nowhere to put it
+
+Placement pinned to the CPU, so nothing varies but how many CUDA contexts get
+initialised:
+
+| model | no CUDA | one card | two cards | first card | each extra |
+|---|---|---|---|---|---|
+| gemma3-27b | 3364 MiB | 3447 MiB | 3467 MiB | +83 MiB | **+20 MiB** |
+| qwen3.6-35B-A3B | 1000 MiB | 1067 MiB | 1087 MiB | +67 MiB | **+20 MiB** |
+
+Two models of very different size and shape agree on the increment. The first
+device costs 67-83 MiB — CUDA runtime initialisation — and each additional one
+costs a further 20 MiB.
+
+`PROCESS_BASE_BYTES` is a compiled 112 MiB with no hardware input at all, so
+this increment is currently folded into a constant fitted on a two-card box. A
+four-card operator inherits it wrong by ~40 MiB and an eight-card operator by
+~120 MiB. Small, but it is exactly the kind of hidden hardware dependence that
+makes a constant unportable, and it is the one term this campaign can measure
+*because* the cells pin placement and vary only device count.
+
+Acting on it means threading device count into `EstimatorInputs` — the
+estimator takes model shape and service flags today and nothing about the
+machine. That is a real change and belongs in its own commit, after the
+campaign.
+
+**Also measured here**: a run with no CUDA visible has a much larger arena —
+199 MiB against 54.5 for gemma3, 104 against 52 for the 35B, 112 against 42
+for qwen3-4b — because the intermediates a GPU run offloads to the device have
+to live on the host instead. That confirms the existing note in
+`CONTRIBUTING.md` rather than changing it.
 
 ## Open
 
