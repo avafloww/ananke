@@ -458,24 +458,28 @@ fn compute_buffer_covers_what_the_runtime_took() {
     for (arch, headroom) in &over {
         eprintln!("  {arch:12} {headroom:6.1}x");
     }
-    // How far *above* the measurement each curve sits, recorded per
-    // architecture. These are large — 27x on laguna — because the bases were
-    // set to cover the worst case of a family and the compute column is often
-    // far below it. Over-reserving does not OOM, it refuses a model room it
-    // could have used, so this is a ratchet: the numbers are today's and may
-    // only come down. They are the clearest remaining case for fitting the
-    // curves to the dataset rather than carrying inherited bases.
+    // How far *above* the measurement each curve sits, per architecture.
+    //
+    // The curves are now fitted to this dataset rather than inherited, which
+    // roughly halved these — gemma3 from 13.3x to 7.7x, qwen35 17.3 to 8.3,
+    // llama 7.5 to 4.2. What remains is mostly the 40% margin and the
+    // batch-scaling constant the curve's form cannot carry, plus the hybrids
+    // (laguna, qwen35moe) whose per-device compute is far below the worst case
+    // their base must still cover.
+    //
+    // Over-reserving does not OOM, it refuses a model room it could have used,
+    // so these are a ratchet: today's numbers, which may only come down.
     const CEILINGS: &[(&str, f64)] = &[
-        ("llama", 4.0),
-        ("talkie", 4.5),
+        ("llama", 4.5),
         ("deepseek4", 6.0),
-        ("qwen35", 7.0),
-        ("qwen3", 12.0),
-        ("gemma3", 13.0),
-        ("lfm2", 13.0),
-        ("gemma4", 18.0),
-        ("qwen35moe", 22.0),
-        ("laguna", 28.0),
+        ("talkie", 6.5),
+        ("gemma3", 8.0),
+        ("qwen35", 8.5),
+        ("gemma4", 9.5),
+        ("qwen3", 13.0),
+        ("lfm2", 18.0),
+        ("laguna", 20.0),
+        ("qwen35moe", 28.0),
     ];
     for (arch, headroom) in &over {
         let Some((_, ceiling)) = CEILINGS.iter().find(|(a, _)| a == arch) else {

@@ -148,9 +148,9 @@
   "compute_buffer_curves": {
     "$comment": "Ordered: the first entry whose arch list contains the model's architecture wins, so a variant-guarded entry must precede the general one for the same arch. `slope_scales_with_ubatch` is true throughout: the context term is calibrated at ubatch 512 and the measured compute buffer is proportional to batch \u2014 Magidonia takes 388 MiB at ub 512 and 1552 at 2048, exactly four times, and Qwen3.6-27B 290 and 1160 \u2014 so a flat slope under-reserves at any larger batch. At the default batch this changes nothing.",
     "default": {
-      "base_mib": 700,
-      "slope_mib_per_1k": 8,
-      "evidence": "the llama-family fallback, used by any architecture without its own entry. Magidonia-24B (llama arch) measured in this campaign.",
+      "base_mib": 824,
+      "slope_mib_per_1k": 7,
+      "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 86 layer-split cells at ctx 8192-65536, peaking at 895 MiB, with 39% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
       "slope_scales_with_ubatch": true
     },
     "entries": [
@@ -170,9 +170,9 @@
           "gemma3",
           "gemma4"
         ],
-        "base_mib": 2000,
-        "slope_mib_per_1k": 7,
-        "evidence": "gemma3 and gemma4 (non-E) measured across ctx 8192-65536 and both card counts.",
+        "base_mib": 726,
+        "slope_mib_per_1k": 15,
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 58 layer-split cells at ctx 8192-65536, peaking at 1193 MiB, with 39% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
@@ -211,36 +211,36 @@
         "archs": [
           "laguna"
         ],
-        "base_mib": 2250,
-        "slope_mib_per_1k": 2,
-        "evidence": "laguna measured across ctx 8192-65536 on both runtimes, plus a ctx 131072 anchor on ik.",
+        "base_mib": 1571,
+        "slope_mib_per_1k": 1,
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 10 layer-split cells at ctx 8192-65536, peaking at 1122 MiB, with 39% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
         "archs": [
           "qwen35moe"
         ],
-        "base_mib": 900,
-        "slope_mib_per_1k": 7,
-        "evidence": "Qwen3.6-35B-A3B measured across ctx and both runtimes.",
+        "base_mib": 1234,
+        "slope_mib_per_1k": 1,
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 26 layer-split cells at ctx 8192-65536, peaking at 889 MiB, with 39% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
         "archs": [
           "qwen35"
         ],
-        "base_mib": 800,
-        "slope_mib_per_1k": 6,
-        "evidence": "Qwen3.6-27B measured across ctx and both runtimes.",
+        "base_mib": 678,
+        "slope_mib_per_1k": 11,
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 30 layer-split cells at ctx 8192-65536, peaking at 985 MiB, with 39% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
         "archs": [
           "talkie"
         ],
-        "base_mib": 500,
-        "slope_mib_per_1k": 2,
-        "evidence": "talkie-1930-13B measured; its native context is 2048, so the sweep runs 512/1024/2048 and the slope is fitted over a 1.5k span where the base dominates. The base is well determined; the slope is decoration.",
+        "base_mib": 749,
+        "slope_mib_per_1k": 6,
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 17 layer-split cells at ctx 512-2048, peaking at 543 MiB, with 39% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
@@ -265,9 +265,9 @@
         "archs": [
           "lfm2"
         ],
-        "base_mib": 420,
+        "base_mib": 575,
         "slope_mib_per_1k": 1,
-        "evidence": "LFM2.5-Embedding-350M measured on a single card with --embeddings, ctx 8192-65536.",
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 7 layer-split cells at ctx 2048-65536, peaking at 443 MiB, with 39% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {

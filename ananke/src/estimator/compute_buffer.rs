@@ -189,23 +189,45 @@ mod tests {
         s
     }
 
+    /// The default curve is `base + slope * (ctx / 1024)`, whatever those are.
+    ///
+    /// Asserted against the generated table rather than against literals: the
+    /// values come from the measurement dataset now, so a test that spelled
+    /// them out would have to be edited every time the data was extended, and
+    /// would be asserting the generator rather than the arithmetic.
     #[test]
     fn llama_family_default_tuning() {
         let s = summary_for("qwen3");
-        assert_eq!(default_for(&s, 2048, None, true), 700 + 8 * 2);
-        assert_eq!(default_for(&s, 32768, None, true), 700 + 8 * 32);
+        let (base, slope) = (DEFAULT_CURVE.base_mib, DEFAULT_CURVE.slope_mib_per_1k);
+        assert_eq!(default_for(&s, 2048, None, true), base + slope * 2);
+        assert_eq!(default_for(&s, 32768, None, true), base + slope * 32);
     }
 
+    /// gemma's curve is steeper than the llama default, though it no longer
+    /// starts higher.
+    ///
+    /// It used to, and the belief that it must was inherited: gemma's
+    /// full-attention layers were thought to need a large scratch even at
+    /// small context. Fitting both to the dataset says otherwise — gemma
+    /// starts *below* the default and overtakes it, because what it actually
+    /// has is a steeper context term, not a bigger floor. The claim is kept,
+    /// corrected, rather than deleted, since the crossover is the real
+    /// behaviour and worth guarding.
     #[test]
-    fn gemma_family_has_higher_base_than_llama_default() {
-        // gemma-4-31B's full-attention layers drive a big attention
-        // scratch allocation even at small context — the gemma tuning
-        // has to start well above the llama default to cover it.
-        let gemma_2k = default_for(&summary_for("gemma4"), 2048, None, true);
-        let llama_2k = default_for(&summary_for("qwen3"), 2048, None, true);
+    fn gemma_family_is_steeper_than_the_llama_default() {
+        let gemma = summary_for("gemma4");
+        let llama = summary_for("qwen3");
         assert!(
-            gemma_2k > llama_2k,
-            "gemma base should exceed llama default at 2k (gemma={gemma_2k} llama={llama_2k})"
+            default_for(&gemma, 65536, None, true) > default_for(&llama, 65536, None, true),
+            "gemma must exceed the default at long context"
+        );
+        let gemma_slope =
+            default_for(&gemma, 65536, None, true) - default_for(&gemma, 0, None, true);
+        let llama_slope =
+            default_for(&llama, 65536, None, true) - default_for(&llama, 0, None, true);
+        assert!(
+            gemma_slope > llama_slope,
+            "and it must be the slope that does it"
         );
     }
 
@@ -271,7 +293,12 @@ mod tests {
 
     #[test]
     fn talkie_floors_to_base() {
-        assert_eq!(default_for(&summary_for("talkie"), 0, None, true), 500);
+        let base = CURVES
+            .iter()
+            .find(|c| c.archs.contains(&"talkie"))
+            .expect("talkie has a curve")
+            .base_mib;
+        assert_eq!(default_for(&summary_for("talkie"), 0, None, true), base);
     }
 
     #[test]
@@ -369,16 +396,34 @@ mod tests {
         // that slip through the fallback still over-reserve safely.
         assert_eq!(
             default_for(&summary_for("brand-new-arch"), 8192, None, true),
-            700 + 8 * 8
+            DEFAULT_CURVE.base_mib + DEFAULT_CURVE.slope_mib_per_1k * 8
         );
     }
 
     #[test]
     fn absent_context_floors_to_base() {
-        assert_eq!(default_for(&summary_for("qwen3"), 0, None, true), 700);
-        assert_eq!(default_for(&summary_for("gpt-oss"), 512, None, true), 600);
-        assert_eq!(default_for(&summary_for("gemma4"), 0, None, true), 2000);
-        assert_eq!(default_for(&summary_for("qwen35moe"), 0, None, true), 900);
+        let base_of = |arch: &str| {
+            CURVES
+                .iter()
+                .find(|c| c.archs.contains(&arch) && c.variant.is_none())
+                .map_or(DEFAULT_CURVE.base_mib, |c| c.base_mib)
+        };
+        assert_eq!(
+            default_for(&summary_for("qwen3"), 0, None, true),
+            base_of("qwen3")
+        );
+        assert_eq!(
+            default_for(&summary_for("gpt-oss"), 512, None, true),
+            base_of("gpt-oss")
+        );
+        assert_eq!(
+            default_for(&summary_for("gemma4"), 0, None, true),
+            base_of("gemma4")
+        );
+        assert_eq!(
+            default_for(&summary_for("qwen35moe"), 0, None, true),
+            base_of("qwen35moe")
+        );
         assert_eq!(
             default_for(&gemma4_e_variant_summary(), 0, None, true),
             1100

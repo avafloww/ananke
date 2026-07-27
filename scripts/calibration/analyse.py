@@ -385,6 +385,7 @@ KINDS = {
     # Measured, but with a spread wide enough that the value is chosen so
     # every model lands inside the rolling correction's [0.8, 1.5] clamp
     # rather than to minimise error against any one of them.
+    "NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR": "reachable",
     "PROCESS_BASE_BYTES": "reachable",
     "PROCESS_BASE_BYTES_PER_LAYER": "reachable",
     "PROCESS_BASE_BYTES_MOE": "reachable",
@@ -485,6 +486,78 @@ def _measured_at(record: dict) -> float:
     return datetime.datetime.fromisoformat(stamp).timestamp()
 
 
+# Headroom over the worst per-device figure measured. The reservation must
+# cover configurations the dataset does not contain, and under-reserving OOMs
+# a load where over-reserving only costs capacity, so the margin is generous.
+# It also absorbs the batch-scaling constant the curve's form cannot carry —
+# see the note in `derive_curve`.
+CURVE_MARGIN = 1.4
+
+
+def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = ()):
+    """Fit one architecture's compute curve to what it actually needed.
+
+    The target is llama.cpp's own `compute` column plus its `unaccounted`
+    remainder — the CUDA context and whatever else sits outside its books —
+    since that is what the packer must cover beyond weights and KV.
+
+    Two exclusions matter. Tensor-split cells report a single fused `Meta()`
+    device whose unaccounted remainder is an artifact of that representation,
+    14 GiB of it, and would dominate any fit. And only the calibration batch
+    is used, because the slope is scaled by batch at the point of use.
+    """
+    def deriver(rows: list[dict]) -> tuple[int, str]:
+        by_ctx: dict[int, list[int]] = defaultdict(list)
+        for record in rows:
+            parsed, factors = record["parsed"], record["factors"]
+            if parsed.get("arch") not in archs or not parsed.get("devices"):
+                continue
+            if any(m in record["provenance"]["model_key"] for m in exclude_models):
+                continue
+            if factors["spec_type"] or factors["flash_attn"] != "on":
+                continue
+            if factors["ubatch"] != 512 or (factors["split"] or "layer") != "layer":
+                continue
+            for device in parsed["devices"]:
+                if device["compute_mib"] and not device["device"].startswith("Meta"):
+                    by_ctx[factors["ctx"]].append(
+                        (device["compute_mib"], device["unaccounted_mib"]))
+        if len(by_ctx) < 2:
+            raise ValueError(f"{'/'.join(archs)}: fewer than two contexts")
+        # Fitted from the endpoints of the context sweep against the worst
+        # per-device need at each.
+        #
+        # The curve's form limits what this can express. A reservation is
+        # `base + slope * ctx * (ubatch / 512)`, so only the slope scales with
+        # batch — but the measured compute has a constant part that scales with
+        # batch too, and there is nowhere to put it. Forcing the slope to cover
+        # it means dividing that constant by the *smallest* context in the
+        # sweep, which made talkie's slope 580 and its reservation forty times
+        # the measurement. The margin below absorbs it instead, which
+        # over-reserves a little everywhere rather than absurdly in one place.
+        points = sorted(
+            (c, max(comp + unacc for comp, unacc in v)) for c, v in by_ctx.items())
+        (c1, n1), (c2, n2) = points[0], points[-1]
+        slope = (n2 - n1) / ((c2 - c1) / 1024) if c2 != c1 else 0.0
+        base = n1 - slope * (c1 / 1024)
+        # Cover every interior point too, not just the endpoints.
+        base = max(base, max(n - slope * (c / 1024) for c, n in points))
+        base = max(0, round(base * CURVE_MARGIN))
+        slope = max(1, round(slope * CURVE_MARGIN))
+        worst = max(comp + u for v in by_ctx.values() for comp, u in v)
+        evidence = (
+            f"base from the worst unaccounted remainder, which is flat in both "
+            f"context and batch; slope from the compute buffer, which scales with "
+            f"both. Fitted across "
+            f"{sum(len(v) for v in by_ctx.values())} layer-split cells at ctx "
+            f"{points[0][0]}-{points[-1][0]}, peaking at {worst} MiB, with "
+            f"{int((CURVE_MARGIN - 1) * 100)}% headroom. Tensor-split cells are "
+            f"excluded: they report one fused device whose unaccounted remainder "
+            f"is an artifact of that representation.")
+        return base, evidence, slope
+    return deriver
+
+
 def derive_deepseek4_curve(rows: list[dict]) -> tuple[int, str]:
     """deepseek4's compute-buffer base, over the regime this hardware reaches.
 
@@ -528,7 +601,23 @@ def derive_deepseek4_curve(rows: list[dict]) -> tuple[int, str]:
 # ctx 131072 where the compute column reads 2.0 GiB. Until the end-to-end
 # predicted-versus-measured check exists, reducing this constant would risk
 # under-reserving at load, which is the one failure direction that OOMs.
-CURVE_DERIVERS: dict[str, object] = {}
+# deepseek4 is deliberately absent: its slope is held under review and cannot
+# be settled on hardware that cannot run the architecture GPU-resident.
+# Keyed by the entry each targets, not by architecture: `llama` and `qwen3`
+# share the default curve, so it has to cover the worse of the two rather than
+# be written twice, and gemma4 has a variant-guarded entry that must be fitted
+# separately from the general one.
+CURVE_DERIVERS = {
+    # One entry covers gemma2, gemma3 and gemma4, so it is fitted over all of
+    # them at once; the E-variant has its own entry and its model is held out.
+    "gemma3": derive_curve(("gemma2", "gemma3", "gemma4"), exclude_models=("E4B",)),
+    "laguna": derive_curve(("laguna",)),
+    "lfm2": derive_curve(("lfm2",)),
+    "qwen35": derive_curve(("qwen35",)),
+    "qwen35moe": derive_curve(("qwen35moe",)),
+    "talkie": derive_curve(("talkie",)),
+    "default": derive_curve(("llama", "qwen3")),
+}
 
 # `derive_mtp_embedded_compute` is likewise held back. Its quantity — the
 # driver delta between paired cells — is the right one, and it says the
@@ -577,24 +666,27 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         entry["kind"] = "derived"
 
     for arch, deriver in CURVE_DERIVERS.items():
-        entry = next((e for e in document["compute_buffer_curves"]["entries"]
-                      if arch in e["archs"]), None)
+        if arch == "default":
+            entry = document["compute_buffer_curves"]["default"]
+        else:
+            # The *unguarded* entry for this architecture: a variant-guarded
+            # one describes a different graph and is fitted separately.
+            entry = next((e for e in document["compute_buffer_curves"]["entries"]
+                          if arch in e["archs"] and not e.get("variant")), None)
         if entry is None:
             failed.append(f"{arch}: curve deriver has no matching entry")
             continue
         try:
-            base, evidence = deriver(rows)
+            base, evidence, slope = deriver(rows)
         except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
             failed.append(f"{arch} curve: cannot derive — {error}")
             continue
         if entry["base_mib"] != base:
             changed.append(f"{arch} curve base: {entry['base_mib']} -> {base}")
-        if entry.get("slope_mib_per_1k") != 1:
-            changed.append(f"{arch} curve slope: {entry.get('slope_mib_per_1k')} -> 1")
+        if entry.get("slope_mib_per_1k") != slope:
+            changed.append(f"{arch} slope: {entry.get('slope_mib_per_1k')} -> {slope}")
         entry["base_mib"] = base
-        # Nominal rather than zero: the measurement says flat, and claiming
-        # exactly zero growth asserts more than a flat measurement supports.
-        entry["slope_mib_per_1k"] = 1
+        entry["slope_mib_per_1k"] = slope
         entry["slope_scales_with_ubatch"] = True
         entry["evidence"] = evidence
 
