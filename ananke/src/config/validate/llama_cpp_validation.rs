@@ -182,6 +182,7 @@ pub(crate) fn validate_llama_cpp(
         draft_model: lc.draft_model.clone(),
         kv_unified: lc.kv_unified,
         cache_idle_slots: lc.cache_idle_slots,
+        cache_ram_mb: lc.cache_ram_mb,
         metrics: lc.metrics,
         slots: lc.slots,
         batch_size: lc.batch_size,

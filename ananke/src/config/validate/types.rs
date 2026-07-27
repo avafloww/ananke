@@ -187,6 +187,10 @@ pub struct LlamaCppConfig {
     pub kv_unified: Option<bool>,
     /// When `Some(false)`, emit `--no-cache-idle-slots`.
     pub cache_idle_slots: Option<bool>,
+    /// Host RAM cap for the server's prompt cache (`-cram`, MiB). `None`
+    /// means llama.cpp's default; the spawn path emits the resolved value
+    /// either way so the reservation and the runtime cap agree.
+    pub cache_ram_mb: Option<u32>,
     /// `--metrics` endpoint toggle.
     pub metrics: Option<bool>,
     /// `--slots` endpoint toggle.

@@ -209,6 +209,20 @@ fn render_llama_server_flags(
     if lc.cache_idle_slots == Some(false) {
         args.push("--no-cache-idle-slots".into());
     }
+    // Emitted even when it matches llama.cpp's own default: the prompt cache
+    // is host RAM the packer reserves, and the reservation is only honest if
+    // the runtime is capped at the number that was reserved. Skipped when the
+    // operator already passes the flag through `extra_args` — duplicating it
+    // would leave two conflicting values on the command line, and the
+    // estimator reads theirs for the reservation.
+    if crate::estimator::types::cache_ram_from_extra_args(&svc.extra_args).is_none() {
+        args.push("-cram".into());
+        args.push(
+            lc.cache_ram_mb
+                .unwrap_or(crate::estimator::host_buffer::DEFAULT_CACHE_RAM_MB)
+                .to_string(),
+        );
+    }
     // An embedding service needs llama-server's embeddings endpoint enabled;
     // the pooling strategy comes from the GGUF's `{arch}.pooling_type`, so
     // the flag is all the modality implies.

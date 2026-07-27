@@ -45,6 +45,7 @@ pub(crate) fn merge_llama_cpp(
         draft_model: inherit!(draft_model),
         kv_unified: inherit!(kv_unified),
         cache_idle_slots: inherit!(cache_idle_slots),
+        cache_ram_mb: inherit!(cache_ram_mb),
         metrics: inherit!(metrics),
         slots: inherit!(slots),
         batch_size: inherit!(batch_size),

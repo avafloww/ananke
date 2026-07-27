@@ -462,3 +462,28 @@ fn render_argv_env_inherit_false_propagates() {
     let cmd = render_argv(&svc, &alloc, None).unwrap();
     assert!(!cmd.env_inherit);
 }
+
+/// An operator who already passes `--cache-ram` through `extra_args` must
+/// not get a second, conflicting `-cram` from the daemon — and the
+/// estimate has to read their value so the reservation matches what the
+/// runtime is actually capped at. Production configs predate the
+/// dedicated key and still set it this way.
+#[test]
+fn an_operator_supplied_cache_ram_is_not_duplicated() {
+    let mut svc = base_service();
+    svc.extra_args = vec!["--cache-ram".into(), "0".into()];
+    let alloc = Allocation::from_override(&svc.placement_override);
+    let args = render_argv(&svc, &alloc, None).unwrap().args;
+    assert_eq!(
+        args.iter()
+            .filter(|a| *a == "-cram" || *a == "--cache-ram")
+            .count(),
+        1,
+        "exactly one cache-ram flag should reach the child: {args:?}"
+    );
+    assert_eq!(
+        crate::estimator::types::cache_ram_from_extra_args(&svc.extra_args),
+        Some(0),
+        "the estimator must read the operator's value"
+    );
+}

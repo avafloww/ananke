@@ -497,6 +497,7 @@ llama_server = "/opt/llama-cuda/llama-server"
 | `draft_model` | path | none | Separate draft-model GGUF for speculative decoding (`-md` / `--model-draft`). Requires `spec_type` to be set. |
 | `kv_unified` | bool | `false` | Use a single unified KV cache pool shared across all parallel slots (`-kvu` / `--kv-unified`). With `parallel > 1`, idle slots lend their share to active ones; total KV footprint is unchanged. |
 | `cache_idle_slots` | bool | `true` | When `false`, pass `--no-cache-idle-slots` so idle slots' prompt-cache state is dropped (a stability mitigation). |
+| `cache_ram_mb` | int (MiB) | `8192` | Host RAM cap for llama-server's prompt cache (`-cram`), which holds serialized evicted prompts so a returning conversation skips reprocessing. Always passed through explicitly, so the packer's host reservation and the runtime's cap are the same number; `0` disables the cache and frees the reservation with it. |
 | `metrics` | bool | `false`, but auto-enabled while the `generation_stall` watchdog is on | Expose llama-server's Prometheus `/metrics` endpoint. The generation-stall watchdog needs it and passes `--metrics` automatically while active; an explicit `metrics = false` suppresses the flag and disables that watchdog. |
 | `slots` | bool | `false` | Expose the `/slots` introspection endpoint. Note: reveals prompt contents - avoid on network-reachable ports. |
 | `batch_size` | u32 | none | Context batch size (`-b`). |

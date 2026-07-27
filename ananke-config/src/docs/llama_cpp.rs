@@ -109,6 +109,12 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "When `false`, pass `--no-cache-idle-slots` so idle slots' prompt-cache state is dropped (a stability mitigation).",
                 ),
                 field(
+                    "cache_ram_mb",
+                    "int (MiB)",
+                    "`8192`",
+                    "Host RAM cap for llama-server's prompt cache (`-cram`), which holds serialized evicted prompts so a returning conversation skips reprocessing. Always passed through explicitly, so the packer's host reservation and the runtime's cap are the same number; `0` disables the cache and frees the reservation with it.",
+                ),
+                field(
                     "metrics",
                     "bool",
                     "`false`, but auto-enabled while the `generation_stall` watchdog is on",

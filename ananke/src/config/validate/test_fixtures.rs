@@ -152,6 +152,7 @@ fn llama_cpp_fixture() -> LlamaCppConfig {
         draft_model: None,
         kv_unified: None,
         cache_idle_slots: None,
+        cache_ram_mb: None,
         metrics: None,
         slots: None,
         batch_size: None,

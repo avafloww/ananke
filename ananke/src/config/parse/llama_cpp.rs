@@ -69,6 +69,12 @@ pub struct RawLlamaCppService {
     /// retain idle slots' prompt-cache state. Unset leaves llama-server's
     /// default (idle-slot caching on).
     pub cache_idle_slots: Option<bool>,
+    /// Host RAM cap for the server's prompt cache (`-cram`, MiB), which
+    /// holds serialized evicted prompts so a returning conversation skips
+    /// reprocessing. Unset means llama.cpp's 8192 MiB default. The cap is
+    /// always passed through explicitly so the reservation and the runtime
+    /// agree on the same number; `0` disables the cache.
+    pub cache_ram_mb: Option<u32>,
     /// Expose the Prometheus `/metrics` endpoint (`--metrics`).
     pub metrics: Option<bool>,
     /// Expose the `/slots` introspection endpoint (`--slots`).
