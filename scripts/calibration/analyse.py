@@ -84,14 +84,19 @@ def check_arena(rows: list[dict]) -> None:
             continue  # A partly- or un-offloaded run is a different shape.
         mask, swa_mask, hidden = arena_terms(record)
         cards = len(factors["gpus"].split(","))
-        key = (parsed.get("arch", "?"), factors["runtime"], cards,
+        # Tensor split fuses the cards into one device, so it is the split
+        # mode and not the card count that decides whether the mask is
+        # replicated. Keying on cards alone attributes a layer-split effect to
+        # every two-card run.
+        placement = (factors["split"] or "layer") if cards > 1 else "single"
+        key = (parsed.get("arch", "?"), factors["runtime"], placement,
                factors["flash_attn"])
         groups[key].append((parsed["arena_mib"], mask, swa_mask, hidden, record))
 
-    print(f"{'arch':12}{'runtime':9}{'cards':>6}{'fa':>4}{'n':>4}"
+    print(f"{'arch':12}{'runtime':9}{'placement':>10}{'fa':>4}{'n':>4}"
           f"{'K (mask multiple)':>20}{'residual MiB':>14}")
     for key in sorted(groups):
-        arch, runtime, cards, fa = key
+        arch, runtime, placement, fa = key
         rows_here = groups[key]
         multiples, residuals = [], []
         for measured, mask, swa_mask, hidden, _ in rows_here:
@@ -102,7 +107,7 @@ def check_arena(rows: list[dict]) -> None:
         k = f"{st.median(multiples):.2f}" if multiples else "-"
         spread = (f" ±{(max(multiples) - min(multiples)) / 2:.2f}"
                   if len(multiples) > 1 else "")
-        print(f"{arch:12}{runtime:9}{cards:>6}{fa:>4}{len(rows_here):>4}"
+        print(f"{arch:12}{runtime:9}{placement:>10}{fa:>4}{len(rows_here):>4}"
               f"{k + spread:>20}{st.median(residuals):>14.1f}")
 
 

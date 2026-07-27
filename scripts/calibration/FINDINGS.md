@@ -41,24 +41,35 @@ appears in only one architecture is more likely a missing term than a law.
 ctx` on ik regardless. That is arithmetic over ggml's graph, not a fit, and it
 holds.
 
-## mainline allocates the mask four times on two cards; ik does not
+## mainline replicates the mask four times under LAYER split only
 
-| runtime | cards | flash attn | mask multiple |
+| placement | runtime | flash attn | mask multiple |
 |---|---|---|---|
-| mainline | 1 | on | 1.00 |
-| mainline | 2 | on | **4.00** |
-| mainline | 2 | off | **4.25 (non-SWA) / 4.8-4.9 (SWA)** |
-| ik | 1 or 2 | on/off | 1.00 |
+| one card | either | on | 1.00 |
+| two cards, **tensor** split | mainline | on | **1.00** |
+| two cards, **layer** split | mainline | on | **4.00** |
+| two cards, layer split | mainline | off | 4.25 (non-SWA) / 4.9 (SWA) |
+| two cards, either split | ik | on/off | 1.00 |
 
-Flat across context (8192-65536), batch (512-2048), slots (1 and 4), and
-unified vs per-slot cache. Confirmed on three architectures — qwen3, gemma3,
-and llama — with ik at 1.00 throughout, so this is a mainline property, not a
-consequence of having two GPUs.
+Confirmed on qwen3, gemma3, gemma4, and llama. Flat across context
+(8192-65536), batch (512-2048), slot count, and cache mode.
 
-**This contradicts a constant currently in the tree.** `CONTRIBUTING.md`
-records "extra GPU, layer-split: +24 MiB" — calibrated at ctx 8192, where
-`3 x 8 MiB` happens to equal 24 MiB. It is not a constant; it is a multiplier
-on a term that scales with `n_kv x n_tokens`:
+**This corrects an earlier entry in this file.** It first read as "four times
+on two cards", because the analysis keyed on card count. Under
+`--split-mode tensor` llama.cpp fuses the cards into one `Meta()` device and
+the mask is *not* replicated; it is the split mode that decides, not how many
+cards are present. Keying on cards attributed a layer-split effect to every
+two-card run — including tensor-split ones, where it is absent.
+
+The distinction matters for which services are affected. In the operator's
+config the Qwen 3.6 models and gemma-4-31B-QAT run `devices.split = "tensor"`
+and are **not** affected. The hybrids that run layer-split — laguna, dsv4f,
+glm-5.2 — are, and they are also the ones at long context.
+
+`CONTRIBUTING.md`'s "extra GPU, layer-split: +24 MiB" is right about *when*
+(it says layer-split) and wrong about *what*: it is a multiplier on a term
+that scales with `n_kv x n_tokens`, not a constant. It was calibrated at
+ctx 8192, where `3 x 8 MiB` happens to equal 24 MiB.
 
 | context | true excess | flat 24 MiB says |
 |---|---|---|
@@ -67,21 +78,11 @@ on a term that scales with `n_kv x n_tokens`:
 | 65536 | 192 MiB | 24 MiB |
 | 32768 @ ub 2048 | 384 MiB | 24 MiB |
 
-At production contexts a two-card mainline service is under-reserved by more
-than a gigabyte of pinned host memory. This is the failure mode the campaign
-exists to catch — a term fitted at one point and used everywhere — and it sat
-in the part of the model treated as *derived* rather than fitted, where nobody
-was checking it.
-
-The `fa=off` excess is larger than 4x and **not uniform** — 4.25 on qwen3,
-4.94 on gemma3, 4.80 on gemma4 — so it is not a single extra buffer. It is
-measured on only one or two cells per architecture so far; the interior
-fa-off points added at ub 2048 are what will give it a shape.
-
-**Unresolved**: whether the multiple is 4 because there are two cards, or for
-some other reason. The `device-scaling` cells pin placement and vary only the
-count of visible CUDA devices, which is what separates those. Do not act on
-this until they and the remaining eleven models agree.
+**Unresolved**: whether the multiple is 4 *because* there are two cards under
+layer split, or a fixed replication factor. The `device-scaling` cells, which
+pin placement and vary only the count of visible CUDA devices, are what
+separate those, and they have not run yet. A four-card operator inherits
+whichever answer is right.
 
 ## RESOLVED: the gemma4 E-variant carries a per-layer input buffer
 
