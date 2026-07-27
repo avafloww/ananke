@@ -491,6 +491,52 @@ def interactions() -> list[Cell]:
     return cells
 
 
+def review_followup() -> list[Cell]:
+    """The cells the two constants held under review actually need.
+
+    Both were left unchanged after the first campaign because the evidence
+    said the current value is wrong without saying what is right.
+
+    deepseek4's curve carries a slope of 66 MiB per 1024 tokens that the
+    production hybrid does not show — flat across a sixteenfold range of
+    context. But every cell measuring that was the hybrid, with 40 of 43
+    layers on the CPU. If the original calibration measured a GPU-resident
+    configuration then both figures are correct and the curve is being applied
+    outside the regime it was fitted in, which is a different fix from a wrong
+    number. Sweeping the offload axis at two contexts separates them: if VRAM
+    climbs with context once layers are resident, the curve is right and
+    misapplied; if it stays flat, the slope is wrong.
+
+    MTP's compute constant was fitted against llama.cpp's own `[spec]` log
+    line, which reports a quantity four times smaller than the driver delta
+    between paired with- and without-MTP cells. Correcting it needs those
+    pairs at more shapes than the first campaign ran, and on both models that
+    carry an embedded head, since they differ in the kv-head count the KV
+    formula multiplies by.
+    """
+    cells: list[Cell] = []
+    ds = MODELS["dsv4f"]
+    for n_cpu_moe in (0, 20, 40):
+        for ctx in (8192, 65536):
+            cells.append(Cell(
+                label=f"ds4-offload{n_cpu_moe}-c{ctx}", model=path_of(ds.path),
+                gpus="0,1", split="layer", ctx=ctx,
+                **{**_model_flags(ds, "0,1"), "n_cpu_moe": n_cpu_moe or None}))
+    # Paired with/without MTP on both embedded-head models and the separate
+    # draft, at a second context each, so the constant is fitted against the
+    # driver delta rather than against a log line.
+    for key, ctx in (("qwen36-27b", 65536), ("qwen36-35b-a3b", 65536),
+                     ("gemma4-31b-qat", 65536)):
+        model = MODELS[key]
+        draft = path_of(model.draft) if model.draft else None
+        for spec, name in ((None, "none"), ("draft-mtp", "mtp")):
+            cells.append(Cell(
+                label=f"mtprev-{model.key}-{name}-c{ctx}", model=path_of(model.path),
+                gpus="0,1", split="tensor", ctx=ctx, spec_type=spec,
+                draft=draft if spec else None, **_model_flags(model, "0,1")))
+    return cells
+
+
 def replication() -> list[Cell]:
     """Repeats in the regimes the noise floor never visited.
 
@@ -682,6 +728,7 @@ QUESTIONS = {
     "interactions": interactions,
     "replication": replication,
     "concurrency": concurrency,
+    "review-followup": review_followup,
     "holdout": phase5_holdout,
 }
 

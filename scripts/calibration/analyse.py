@@ -308,6 +308,34 @@ def derive_offload_min_batch(rows: list[dict]) -> tuple[int, str]:
     )
 
 
+# What kind of thing each constant is. Declared rather than inferred: an
+# earlier version read the evidence text and guessed, which filed a structural
+# fact under "reachable" and missed two constants whose review note happened
+# to be lowercase. A constant absent from here is an error, so adding one
+# forces the question of what justifies it.
+KINDS = {
+    # Read from llama.cpp's source or arithmetic over the graph; not fitted.
+    "KV_CACHE_PAD": "structural",
+    # A runtime's documented default, mirrored so the reservation and the
+    # runtime's own cap are the same number.
+    "DEFAULT_CACHE_RAM_MB": "policy",
+    "DEFAULT_UBATCH": "policy",
+    # Measured, but with a spread wide enough that the value is chosen so
+    # every model lands inside the rolling correction's [0.8, 1.5] clamp
+    # rather than to minimise error against any one of them.
+    "PROCESS_BASE_BYTES": "reachable",
+    "PROCESS_BASE_BYTES_PER_LAYER": "reachable",
+    "PROCESS_BASE_BYTES_MOE": "reachable",
+    "PINNED_EXTRA_BYTES": "reachable",
+    "NO_FLASH_ATTN_BYTES_PER_TOKEN": "reachable",
+    "DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16": "reachable",
+    # Has data, but the fit is contested and the value is held.
+    "MTP_COMPUTE_MIB": "review",
+    "DRAFT_MODEL_COMPUTE_MIB": "review",
+    "MTP_HOST_BYTES_EMBEDDED": "review",
+    "MTP_HOST_BYTES_SEPARATE_DRAFT": "review",
+}
+
 DERIVERS = {
     "IK_MOE_CPU_BYTES_PER_NEMBD": derive_ik_moe_per_nembd,
     "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN": derive_gemma_e_per_layer_token,
@@ -347,9 +375,13 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         entry["kind"] = "derived"
 
     for name, entry in constants.items():
-        entry.setdefault("kind", "review" if "UNDER REVIEW" in entry.get("evidence", "")
-                         else "policy" if entry.get("evidence", "").startswith("policy")
-                         else "reachable")
+        if name in DERIVERS:
+            continue
+        kind = KINDS.get(name)
+        if kind is None:
+            failed.append(f"{name}: no declared kind — add it to KINDS")
+            continue
+        entry["kind"] = kind
 
     document["constants"] = dict(sorted(constants.items()))
     document["measurements"] = len(rows)
