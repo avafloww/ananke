@@ -262,8 +262,14 @@ _META = re.compile(
     r"|n_embd_head_k|n_embd_head_v|n_ctx_train) *= *(\d+)")
 _META_KEYS = ("n_layer", "n_embd", "n_expert", "n_expert_used", "n_swa", "n_vocab",
               "n_head", "n_head_kv", "n_embd_head_k", "n_embd_head_v", "n_ctx_train")
-# llama.cpp's own figure for an MTP context, the stated calibration source for
-# the constants in estimator/mtp.rs.
+# The embedded MTP head's depth, which sizes the modelled KV term. It is a
+# metadata key rather than one of llama.cpp's `n_* = ` summary lines, so it
+# needs its own pattern.
+_NEXTN = re.compile(r"\.nextn_predict_layers[^=]*= *(\d+)")
+# llama.cpp's own figure for an MTP context. It was the stated calibration
+# source for the constants in estimator/mtp.rs, and it is reported *per
+# context* — flat across slot counts while the real cost scales with them —
+# so it is recorded to keep that discrepancy visible rather than to fit to.
 _MTP = re.compile(r"estimated memory usage of MTP context is *([0-9.]+)")
 # llama.cpp's own memory-breakdown row, which splits each device into
 # model / context / compute. The compute column is what the estimator's
@@ -311,6 +317,8 @@ def parse_log(text: str) -> dict[str, float | str]:
             parsed[f"{key}_all"] = found
     mtp = _MTP.search(text)
     parsed["mtp_context_mib"] = float(mtp.group(1)) if mtp else 0.0
+    nextn = _NEXTN.search(text)
+    parsed["nextn_predict_layers"] = int(nextn.group(1)) if nextn else 0
     arch = _ARCH.search(text)
     parsed["arch"] = arch.group(1) if arch else "?"
 
