@@ -324,8 +324,12 @@ def phase4_special() -> list[Cell]:
     # ik-only paths that change where weights land, and so which counter the
     # daemon's weights detection reads.
     lag = MODELS["laguna"]
+    # `--use-thp` is absent from this ik build — passing it is an argument
+    # error, not a no-op. Restore the cell on a build that has the flag; there
+    # is no way to ask for it conditionally from here, since the failure looks
+    # like any other load failure.
     for label, over in [("plain", {}), ("rtr", {"rtr": True}),
-                        ("thp", {"thp": True}), ("nommap", {"no_mmap": True})]:
+                        ("nommap", {"no_mmap": True})]:
         cells.append(Cell(label=f"ik-laguna-{label}", model=path_of(lag.path),
                           runtime="ik", gpus="0,1", ctx=32768, ubatch=512,
                           n_cpu_moe=lag.n_cpu_moe, **over))
