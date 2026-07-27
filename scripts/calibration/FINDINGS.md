@@ -741,6 +741,70 @@ Fitted by the general deriver, the curve becomes 3842 + 1 per 1k: a *higher*
 base than before at every context under 30k, and a sixth of the reservation at
 131072.
 
+## The per-model residual is a first-request step, and it is bounded
+
+Attributing it rather than correlating against it settles what a long list of
+ruled-out variables could not. `/proc/<pid>/smaps` puts the whole difference
+between Qwen3.6-27B and gemma3-27B in `[heap]` (+171 MiB) and an unnamed
+anonymous mapping (+150 MiB) — ordinary allocator memory, no CUDA or library
+arena — and nothing in either load log accounts for it. Qwen3.6-27B's logged
+compute buffers are in fact the *smaller* of the two.
+
+Watching it over successive identical requests says what it is:
+
+| model | `-cram 0` | `-cram 8192` |
+|---|---|---|
+| Qwen3.6-27B | 306 → 556, then flat | 306 → 555 → 856 → 856 → 856 → 1157 → 1458 |
+| gemma-3-27B | 226 → 238, then flat | 226 → 238 → 252 → 252 → 266 → 279 |
+| Magidonia-24B | 220 → 237, then flat | 220 → 237 → 241 → 245 → 248 → 252 |
+| Qwen3-4B | 212 → 219, then flat | 212 → 219 → 223 → 226 → 229 → 233 |
+
+Two separate effects, and only one of them is the residual:
+
+- **The prompt cache grows with use and stops at its cap**, which is what
+  `-cram` documents. The step size tracks the model's KV state — ~300 MiB for
+  Qwen3.6-27B against ~14 for the sliding-window gemma3 — so it is a per-model
+  quantity, but a *reserved* one. ananke passes `-cram` explicitly and the
+  packer charges it as slop, which is the right treatment: at `-cram 0` the
+  growth is gone entirely.
+- **A one-time step on the first request**, present at `-cram 0` and flat
+  forever after. This is the residual the baseline offset charges: +250 MiB for
+  Qwen3.6-27B against +7 to +17 for the other three. It is bounded and it does
+  not accumulate, so a constant is the right shape for it after all.
+
+The campaign measures at `-cram 0` and every cell in the baseline group serves
+exactly two requests, so neither effect is confounded with the derivation. The
+offset stands.
+
+### The step is on the prefill path, and it saturates
+
+Varying prompt length and generation length independently against a fresh
+server, Qwen3.6-27B at `-cram 0`:
+
+| prompt tokens | 1 | 8 | 64 | 400 |
+|---|---|---|---|---|
+| step MiB | 11 | 250 | 274 | 273 |
+
+Generation length does nothing at all — `n_predict` 8, 64, and 256 against a
+one-token prompt all step 11 MiB. Only the prompt moves it, and it plateaus by
+64 tokens. So it is scratch allocated the first time a *batched prefill* runs,
+sized by something that saturates well below the 512-token ubatch, and a
+one-token prompt never triggers it because that path decodes rather than
+prefills.
+
+This is why a constant is the right shape: the term is bounded, it saturates,
+and every real service prefills. The harness probe sends a four-token prompt,
+so every campaign cell crosses the threshold and the offset is measured at or
+above saturation.
+
+Two hypotheses for the mechanism are ruled out by measurement. It is not the
+output logits buffer: the estimator predicts 242 MiB for Qwen3.6-27B and 256
+for gemma-3-27B, and their steps are 273 and 12. It is not tied embeddings
+routing the output head to the CPU backend: Qwen3.6-27B and Magidonia-24B both
+carry a separate `output.weight` and step 273 and 17, while gemma-3-27B and
+Qwen3-4B both tie and step 12 and 7. The mechanism is still unidentified; what
+is established is its shape, its bound, and its trigger.
+
 ## Flash attention off is unmodelled everywhere
 
 It surfaced three times independently and is one gap, not three: it shifts the
