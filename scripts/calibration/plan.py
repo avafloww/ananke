@@ -242,6 +242,22 @@ def phase4_special() -> list[Cell]:
         cells.append(Cell(label=f"growth-cram{cram}", model=path_of(q4.path),
                           gpus="0", ctx=32768, cram=cram, bench=True,
                           bench_turns=40, verbose_log=False))
+    # The same question for the models where host memory actually matters. A
+    # 4B dense model is the one whose growth is least interesting and was the
+    # only one measured; a hybrid MoE holds tens of GiB on the host, and if it
+    # accumulates over an agent session nothing else here would see it.
+    #
+    # Turns are scaled to generation speed, not held constant: a hybrid at
+    # ~3 tok/s would spend an hour on 40 turns, and growth that only appears
+    # after 40 turns but not 12 is not a shape this campaign can resolve
+    # anyway.
+    for key, turns in [("qwen36-27b", 40), ("gemma4-31b-qat", 24),
+                       ("qwen36-35b-a3b", 24), ("laguna", 12), ("dsv4f", 8)]:
+        model = MODELS[key]
+        cells.append(Cell(label=f"growth-{model.key}", model=path_of(model.path),
+                          runtime=model.runtimes[0], gpus="0,1", split="layer",
+                          ctx=32768, cram=0, n_cpu_moe=model.n_cpu_moe,
+                          bench=True, bench_turns=turns, verbose_log=False))
     return cells
 
 
