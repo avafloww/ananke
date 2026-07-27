@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import csv
 import dataclasses
+import datetime
 import hashlib
 import json
 import os
@@ -176,13 +177,26 @@ class Measurement:
     rss: dict[str, int]
     status: str = "ok"
 
-    def row(self) -> dict[str, object]:
-        row: dict[str, object] = {"cell": self.cell.cell_id, "status": self.status}
-        row |= self.provenance
-        row |= {k: _scalar(v) for k, v in dataclasses.asdict(self.cell).items()}
-        row |= self.parsed
-        row |= self.rss
-        return row
+    hardware: dict[str, object] = dataclasses.field(default_factory=dict)
+
+    def record(self) -> dict[str, object]:
+        """One NDJSON record.
+
+        Nested rather than flat: the hardware block, the per-device VRAM split,
+        and the factor set all have their own shapes, and a fixed column set
+        would force every one of them into a lowest common denominator — which
+        is what previously capped the GPU breakdown at two devices and made
+        adding a factor a schema migration.
+        """
+        return {
+            "cell": self.cell.cell_id,
+            "status": self.status,
+            "provenance": self.provenance,
+            "hardware": self.hardware,
+            "factors": dataclasses.asdict(self.cell),
+            "parsed": self.parsed,
+            "rss": self.rss,
+        }
 
 
 def _scalar(value: object) -> object:
@@ -206,6 +220,14 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
     "cpu_model_mib": re.compile(r"CPU(?:_Mapped)? model buffer size *= *([0-9.]+)"),
 }
 _META = re.compile(r"(n_layer|n_embd|n_expert|n_expert_used|n_swa|n_vocab) *= *(\d+)")
+# llama.cpp's own memory-breakdown row, which splits each device into
+# model / context / compute. The compute column is what the estimator's
+# per-architecture GPU curves are fitted against, so it has to be captured
+# per device rather than as a total.
+_BREAKDOWN = re.compile(
+    r"- (CUDA\d+)[^|]*\|\s*\d+ = \d+ \+ \(\s*\d+ =\s*(\d+) \+\s*(\d+) \+\s*(\d+)\)"
+)
+MAX_GPUS = 2
 _ARCH = re.compile(r"arch *= *([A-Za-z0-9_.-]+)")
 
 
@@ -223,6 +245,16 @@ def parse_log(text: str) -> dict[str, float | str]:
         parsed[key] = meta.get(key, 0)
     arch = _ARCH.search(text)
     parsed["arch"] = arch.group(1) if arch else "?"
+
+    # Per-device VRAM split. Columns are fixed so the schema stays stable
+    # whatever the machine; a device that did not report leaves zeros.
+    devices = {name: (int(m), int(c), int(cp))
+               for name, m, c, cp in _BREAKDOWN.findall(text)}
+    for index in range(MAX_GPUS):
+        model, kv, compute = devices.get(f"CUDA{index}", (0, 0, 0))
+        parsed[f"gpu{index}_model_mib"] = model
+        parsed[f"gpu{index}_kv_mib"] = kv
+        parsed[f"gpu{index}_compute_mib"] = compute
     return parsed
 
 
@@ -293,23 +325,97 @@ def read_rss(pid: int) -> dict[str, int]:
     return out
 
 
-def provenance(binary: str) -> dict[str, str]:
+def hardware() -> dict[str, object]:
+    """The machine, in enough detail to key a calibration curve on.
+
+    Several terms are hardware-specific rather than universal: the CUDA
+    runtime's host footprint scales with driver and device count, and CPU-side
+    expert dequant with core count and memory topology. A constant fitted on
+    one box is only transferable to another if you can tell the two apart, so
+    the box is recorded alongside every measurement.
+    """
+    gpus = []
+    query = _run(["nvidia-smi",
+                  "--query-gpu=name,memory.total,compute_cap,driver_version",
+                  "--format=csv,noheader,nounits"])
+    for line in filter(None, query.splitlines()):
+        name, total, cap, driver = (part.strip() for part in line.split(","))
+        gpus.append({"name": name, "memory_total_mib": int(total),
+                     "compute_capability": cap, "driver": driver})
+
+    cpu: dict[str, object] = {}
+    for line in Path("/proc/cpuinfo").read_text().splitlines():
+        if line.startswith("model name"):
+            cpu["model"] = line.split(":", 1)[1].strip()
+            break
+    lscpu = _run(["lscpu"])
+    for key, field in [("Core(s) per socket", "cores_per_socket"),
+                       ("Socket(s)", "sockets"), ("CPU(s)", "threads"),
+                       ("NUMA node(s)", "numa_nodes")]:
+        for line in lscpu.splitlines():
+            if line.startswith(key + ":"):
+                cpu[field] = line.split(":", 1)[1].strip()
+                break
+
+    meminfo = Path("/proc/meminfo").read_text()
+    total_kb = next((int(l.split()[1]) for l in meminfo.splitlines()
+                     if l.startswith("MemTotal:")), 0)
+    thp = Path("/sys/kernel/mm/transparent_hugepage/enabled")
+    governor = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+    return {
+        "gpus": gpus,
+        "cpu": cpu,
+        "mem_total_gib": round(total_kb / (1024 * 1024), 1),
+        "kernel": os.uname().release,
+        # The tuning skill's first sanity check: a `powersave` governor pins
+        # cores to the base clock and silently halves CPU-bound throughput.
+        "cpu_governor": governor.read_text().strip() if governor.exists() else "?",
+        "transparent_hugepage": thp.read_text().strip() if thp.exists() else "?",
+    }
+
+
+def provenance(binary: str, cell: Cell | None = None) -> dict[str, str]:
     """Facts that make a stale row identifiable later.
 
-    A constant fitted from these measurements is specific to a driver, a build,
-    and a machine; without recording them there is no way to tell whether an
-    old row still describes the system.
+    A constant fitted from these measurements is specific to a moment, a
+    driver, a build, and a machine. Dates matter twice over: when the
+    measurement was taken, and when the thing measured was *built* — a row
+    from a llama.cpp of a given vintage stops describing the runtime the day
+    someone bumps the pin, and the binary's own timestamp is what makes that
+    visible without having to remember.
     """
-    driver = _run(["nvidia-smi", "--query-gpu=driver_version",
-                   "--format=csv,noheader"]) or "none"
-    resolved = shutil.which(binary) or binary
-    return {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    resolved = Path(shutil.which(binary) or binary)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    record = {
+        "measured_at_utc": now.isoformat(timespec="seconds"),
+        "measured_at_local": now.astimezone().isoformat(timespec="seconds"),
         "host": os.uname().nodename,
-        "driver": driver.splitlines()[0].strip() if driver else "none",
-        "binary": str(Path(resolved).resolve()),
+        "binary": str(resolved.resolve()) if resolved.exists() else str(resolved),
+        "binary_built_at": _mtime(resolved),
         "ananke_rev": _run(["git", "rev-parse", "--short", "HEAD"]) or "?",
+        "ananke_dirty": "yes" if _run(["git", "status", "--porcelain"]) else "no",
     }
+    if cell is not None:
+        record["model_file_at"] = _mtime(Path(cell.model))
+    return record
+
+
+def _mtime(path: Path) -> str:
+    """A file's modification time, as an ISO 8601 UTC timestamp.
+
+    Nix normalises store timestamps to the epoch for reproducibility, so a
+    build date is not available for a store path — but the store hash in the
+    recorded path *is* the build identity, and a more precise one than a date.
+    Say that rather than record 1970.
+    """
+    try:
+        stamp = path.stat().st_mtime
+    except OSError:
+        return "?"
+    if stamp < 86400 * 2:
+        return "nix-store (build identity is the path hash)"
+    return (datetime.datetime.fromtimestamp(stamp, datetime.timezone.utc)
+            .isoformat(timespec="seconds"))
 
 
 def _run(cmd: list[str]) -> str:
@@ -396,10 +502,43 @@ def _run_bench(cell: Cell, port: int) -> None:
     )
 
 
+def available_gib() -> float:
+    """Host memory the kernel says is available, in GiB."""
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) / (1024 * 1024)
+    return 0.0
+
+
+def model_gib(cell: Cell) -> float:
+    """On-disk size of the model, shards included, in GiB."""
+    first = Path(cell.model)
+    if not first.exists():
+        return 0.0
+    stem = re.sub(r"-\d{5}-of-\d{5}\.gguf$", "", first.name)
+    if stem == first.name:
+        return first.stat().st_size / (1024**3)
+    shards = sorted(first.parent.glob(f"{stem}-*-of-*.gguf"))
+    return sum(s.stat().st_size for s in shards) / (1024**3)
+
+
+def fits(cell: Cell, headroom_gib: float) -> bool:
+    """Whether a cell can run without risking the machine.
+
+    An unattended sweep that pushes the box into swap or the OOM killer costs
+    far more than the row it was trying to collect, so a cell that cannot fit
+    with headroom to spare is skipped and recorded as skipped. `--no-mmap`
+    charges the whole model to anonymous memory; a mapped load can rely on
+    page cache being reclaimable and needs only the host-resident share, which
+    is not known ahead of time — so the conservative figure is used for both.
+    """
+    return model_gib(cell) + headroom_gib <= available_gib()
+
+
 def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int) -> Measurement:
     binary = {"mainline": os.environ.get("MAINLINE_BIN", "llama-server"),
               "ik": os.environ.get("IK_BIN", "ik-llama-server")}[cell.runtime]
-    prov = provenance(binary)
+    prov = provenance(binary, cell)
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{cell.cell_id}-{cell.label}.log"
 
@@ -412,10 +551,12 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int) -> Measurem
             deadline = time.monotonic() + load_timeout
             while not _healthy(port):
                 if proc.poll() is not None:
-                    return Measurement(cell, prov, {}, {}, status="failed-to-load")
+                    return Measurement(cell, prov, {}, {}, status="failed-to-load",
+                                   hardware=hardware())
                 if time.monotonic() > deadline:
                     _stop(proc)
-                    return Measurement(cell, prov, {}, {}, status="timeout")
+                    return Measurement(cell, prov, {}, {}, status="timeout",
+                                       hardware=hardware())
                 time.sleep(HEALTH_POLL_SECONDS)
 
             with RssSampler(proc.pid) as sampler:
@@ -435,7 +576,7 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int) -> Measurem
         finally:
             _stop(proc)
 
-    return Measurement(cell, prov, parsed, rss)
+    return Measurement(cell, prov, parsed, rss, hardware=hardware())
 
 
 def _write_trace(path: Path, sampler: RssSampler) -> None:
@@ -465,45 +606,40 @@ def _stop(proc: subprocess.Popen) -> None:
 def already_measured(out: Path) -> set[str]:
     if not out.exists():
         return set()
-    with out.open() as handle:
-        return {row["cell"] for row in csv.DictReader(handle)}
+    seen = set()
+    for line in out.read_text().splitlines():
+        if line.strip():
+            seen.add(json.loads(line)["cell"])
+    return seen
 
 
 def append(out: Path, measurement: Measurement) -> None:
-    """Append a row, refusing to write one that does not match the header.
+    """Append one NDJSON record.
 
-    Adding a factor or an output changes the column set, and appending the new
-    shape under an old header would silently misalign every value after the
-    first difference — the worst possible failure for a dataset whose whole
-    purpose is to be trusted later. Start a new file instead.
+    Self-describing per line, so a run that adds a factor or a parsed field
+    appends happily beside older records instead of needing a schema
+    migration — and an analysis reads what each record actually carries.
     """
-    row = measurement.row()
     out.parent.mkdir(parents=True, exist_ok=True)
-    if out.exists():
-        with out.open(newline="") as handle:
-            existing = next(csv.reader(handle), [])
-        if existing and existing != list(row):
-            missing = set(row) - set(existing)
-            extra = set(existing) - set(row)
-            raise SystemExit(
-                f"{out} has a different column set than this run produces "
-                f"(added: {sorted(missing)}; dropped: {sorted(extra)}). "
-                f"Write to a new file rather than mixing schemas."
-            )
-    with out.open("a", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(row))
-        if out.stat().st_size == 0:
-            writer.writeheader()
-        writer.writerow(row)
+    with out.open("a") as handle:
+        handle.write(json.dumps(measurement.record(), default=str) + "\n")
 
 
 def run_cells(cells: list[Cell], out: Path, log_dir: Path, port: int,
-              load_timeout: int) -> None:
+              load_timeout: int, headroom_gib: float = 30.0) -> None:
     done = already_measured(out)
     for index, cell in enumerate(cells, start=1):
         prefix = f"[{index}/{len(cells)}]"
         if cell.cell_id in done:
             print(f"{prefix} skip {cell.label} ({cell.cell_id})", flush=True)
+            continue
+        if not fits(cell, headroom_gib):
+            print(f"{prefix} skip {cell.label}: needs "
+                  f"{model_gib(cell):.0f} GiB + {headroom_gib:.0f} headroom, "
+                  f"{available_gib():.0f} available", flush=True)
+            append(out, Measurement(cell, provenance("true", cell), {}, {},
+                                    status="skipped-insufficient-memory",
+                                    hardware=hardware()))
             continue
         print(f"{prefix} {cell.label} ...", end=" ", flush=True)
         measurement = measure(cell, log_dir, port, load_timeout)
@@ -533,6 +669,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-dir", type=Path,
                         default=Path(os.environ.get("TMPDIR", "/tmp")) / "ananke-calibration")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--headroom-gib", type=float, default=30.0,
+                        help="host memory to leave free; a cell needing more "
+                             "than the remainder is skipped rather than risking "
+                             "the machine")
     parser.add_argument("--load-timeout", type=int, default=1800,
                         help="seconds to wait for a model to load; a 200 GiB "
                              "--no-mmap load takes minutes")
@@ -540,7 +680,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.plan:
         parser.error("--plan is required")
-    run_cells(load_plan(args.plan), args.out, args.log_dir, args.port, args.load_timeout)
+    run_cells(load_plan(args.plan), args.out, args.log_dir, args.port,
+              args.load_timeout, args.headroom_gib)
     return 0
 
 
