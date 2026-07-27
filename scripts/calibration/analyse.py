@@ -852,6 +852,34 @@ def derive_mtp_embedded_compute(rows: list[dict]) -> tuple[int, str]:
     )
 
 
+def mtp_slot_scaling(rows: list[dict]) -> str:
+    """Does the MTP overhead depend on the slot count, at a fixed context?
+
+    This is the question `MTP_COMPUTE_MIB` was held under review for, and the
+    first campaign could not answer it: every one-slot pair sat at ctx 32768 or
+    65536 and the only four-slot pair at 131072, so slots and context were
+    confounded and the four-slot pair's much larger delta had two candidate
+    causes.
+
+    Reported rather than fitted. A flat series across slots says the earlier
+    "slot dependence" was the longer context and the constant can be fitted on
+    context alone; a rising one says the model needs a slot term before any
+    value is trustworthy.
+    """
+    by_key: dict[tuple[str, int], dict[int, int]] = defaultdict(dict)
+    for model, ctx, delta, record in _mtp_pairs(rows, draft=False) + \
+            _mtp_pairs(rows, draft=True):
+        by_key[(model.split("/")[-1][:24], ctx)][record["factors"]["parallel"]] = delta
+    series = {k: dict(sorted(v.items())) for k, v in sorted(by_key.items())
+              if len(v) > 1}
+    if not series:
+        return "no fixed-context slot series measured"
+    return "; ".join(f"{model} ctx {ctx}: " +
+                     ", ".join(f"np{n} {d} MiB" for n, d in points.items())
+                     for (model, ctx), points in series.items())
+
+
+_MTP_SLOTS: list[str] = []
 _IK_RATES: dict[str, int] = {}
 _QUANT_RATES: dict[str, int] = {}
 _NO_FA_RATES: dict[str, int] = {}
@@ -1083,6 +1111,11 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"ik MoE rates: cannot derive — {error}")
     try:
+        _MTP_SLOTS.clear()
+        _MTP_SLOTS.append(mtp_slot_scaling(rows))
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+        failed.append(f"MTP slot scaling: cannot report — {error}")
+    try:
         derive_no_flash_attn_rates(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError, Disagreement) as error:
         failed.append(f"no-flash-attention rates: cannot derive — {error}")
@@ -1169,6 +1202,14 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "an architecture not listed.",
             "default": max(_TENSOR_BASE.values()),
             "by_arch": dict(sorted(_TENSOR_BASE.items())),
+        }
+    if _MTP_SLOTS:
+        document["mtp_slot_scaling"] = {
+            "$comment": "Reported, not fitted. The MTP overhead measured at a "
+                        "fixed context across slot counts, which is what "
+                        "separates a genuine slot term from the longer context "
+                        "the first campaign confounded it with.",
+            "observed": _MTP_SLOTS[0],
         }
     if _NO_FA_RATES:
         document["no_flash_attn_rates"] = {
