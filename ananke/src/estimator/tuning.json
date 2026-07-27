@@ -36,7 +36,7 @@
       "value": 1028,
       "type": "u64",
       "doc": "The Gemma 4 E-variant's per-layer embedding input, charged per layer per batch token.",
-      "evidence": "24 E-variant cells at 1028 B/layer/token, against 35 same-architecture control cells at 3. 1028 is 257 f32 elements.",
+      "evidence": "24 E-variant cells at 1028 B/layer/token, against 40 same-architecture control cells at 3. 1028 is 257 f32 elements.",
       "kind": "derived"
     },
     "IK_MOE_CPU_BYTES_PER_NEMBD": {
@@ -64,7 +64,7 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "88 mainline layer-split cells at 4.00, against 157 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "88 mainline layer-split cells at 4.00, against 164 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived"
     },
     "MTP_COMPUTE_MIB": {
@@ -254,5 +254,5 @@
       }
     ]
   },
-  "measurements": 436
+  "measurements": 448
 }

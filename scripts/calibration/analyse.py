@@ -15,6 +15,7 @@ spread invites more confidence than the data supports.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import statistics as st
 from statistics import StatisticsError
@@ -336,6 +337,145 @@ KINDS = {
     "MTP_HOST_BYTES_SEPARATE_DRAFT": "review",
 }
 
+def derive_mtp_embedded_compute(rows: list[dict]) -> tuple[int, str]:
+    """The GPU compute an embedded MTP head costs, from paired cells.
+
+    Fitted against the *driver* delta between a with-MTP cell and its
+    without-MTP twin at identical settings, not against llama.cpp's own
+    `[spec]` line — which reports the MTP context alone and comes to roughly a
+    quarter of what the process actually takes.
+    """
+    pairs = _mtp_pairs(rows, draft=False)
+    if len(pairs) < 2:
+        raise ValueError("fewer than two embedded-MTP pairs")
+    # Two contexts per model give a slope; the intercept is the constant.
+    # Grouped by slot count as well as model: `parallel` divides the KV budget
+    # per stream, so it changes the MTP context's size. Fitting a slope across
+    # points that differ in it measures neither.
+    by_model: dict[tuple[str, int], list[tuple[int, int]]] = defaultdict(list)
+    for model, ctx, delta, record in pairs:
+        by_model[(model, record["factors"]["parallel"])].append((ctx, delta))
+    bases, detail = [], []
+    for (model, slots), points in by_model.items():
+        points.sort()
+        if len(points) < 2:
+            continue
+        (c1, d1), (c2, d2) = points[0], points[-1]
+        slope = (d2 - d1) / (c2 - c1)
+        base = d1 - slope * c1
+        bases.append(base)
+        detail.append(f"{model.split('/')[-1][:22]} np{slots} {base:.0f} MiB")
+    if not bases:
+        raise ValueError("no model has two contexts")
+    # The larger of the two, so neither model is under-reserved.
+    value = round(max(bases))
+    return value, (
+        f"{len(pairs)} paired with/without cells across {len(by_model)} models, "
+        f"fitted against the driver delta: {'; '.join(detail)}. The larger base "
+        "is taken so neither model is under-reserved. Replaces a value fitted "
+        "against llama.cpp's own [spec] line, which reports roughly a quarter "
+        "of the delta the process actually shows."
+    )
+
+
+def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]]:
+    """With/without MTP cells matched on every factor but the MTP flag."""
+    def identity(record: dict) -> tuple:
+        f = record["factors"]
+        return (record["provenance"]["model_key"], f["ctx"], f["parallel"],
+                bool(f["kv_unified"]), f["split"] or "-", f["gpus"], f["ubatch"],
+                f["kv_type"])
+
+    grouped: dict[tuple, dict[bool, dict]] = defaultdict(dict)
+    for record in rows:
+        if record["parsed"].get("arch"):
+            grouped[identity(record)][bool(record["factors"]["spec_type"])] = record
+    out = []
+    for key, pair in grouped.items():
+        if len(pair) != 2:
+            continue
+        on, off = pair[True], pair[False]
+        if bool(on["factors"]["draft"]) != draft:
+            continue
+        if not on["rss"].get("gpu_used_mib") or not off["rss"].get("gpu_used_mib"):
+            continue
+        # Both halves must come from the same sitting. Cell identity ignores
+        # the label, so a freshly-measured cell can pair with one recorded
+        # hours earlier under different machine state — which produced a
+        # *negative* delta once, a with-MTP process apparently using less VRAM
+        # than without. Repeats taken back to back reproduce to the megabyte,
+        # so the machine is not noisy; the pairing was.
+        apart = abs(_measured_at(on) - _measured_at(off))
+        if apart > _SAME_SITTING_SECONDS:
+            continue
+        delta = on["rss"]["gpu_used_mib"] - off["rss"]["gpu_used_mib"]
+        if delta <= 0:
+            continue
+        out.append((key[0], key[1], delta, on))
+    return out
+
+
+_SAME_SITTING_SECONDS = 3600
+
+
+def _measured_at(record: dict) -> float:
+    """When a record was taken, as a POSIX timestamp."""
+    stamp = record["provenance"]["measured_at_utc"]
+    return datetime.datetime.fromisoformat(stamp).timestamp()
+
+
+def derive_deepseek4_curve(rows: list[dict]) -> tuple[int, str]:
+    """deepseek4's compute-buffer base, over the regime this hardware reaches.
+
+    The architecture cannot be run GPU-resident on 48 GiB of VRAM — the
+    weights alone want 48.5 GiB on one card — so every measurable
+    configuration is a high-offload hybrid. In that regime the buffer is flat.
+    """
+    points = []
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if parsed.get("arch") != "deepseek4" or not parsed.get("devices"):
+            continue
+        if factors["flash_attn"] != "on":
+            continue
+        device = parsed["devices"][0]
+        points.append((factors["ctx"], device["compute_mib"] + device["unaccounted_mib"]))
+    if len(points) < 3:
+        raise ValueError("too few deepseek4 cells")
+    contexts = sorted({c for c, _ in points})
+    per_ctx = {c: st.median(v for cc, v in points if cc == c) for c in contexts}
+    spread = max(per_ctx.values()) - min(per_ctx.values())
+    value = round(max(per_ctx.values()) * 1.05 / 100) * 100
+    return value, (
+        f"{len(points)} cells over ctx {min(contexts)}-{max(contexts)}: the "
+        f"compute buffer plus its unaccounted share moves {spread:.0f} MiB across "
+        f"that range, i.e. it is flat. Base set {value} MiB with 5% headroom and "
+        "the slope left nominal. LIMITATION: this architecture cannot be run "
+        "GPU-resident on 48 GiB of VRAM, so the steep context scaling the "
+        "previous slope encoded is untestable here and may be real on a larger "
+        "machine."
+    )
+
+
+# Curves are derived separately: they live in the ordered table rather than
+# among the scalars, and a deriver returns a base, a slope and its evidence.
+# Empty deliberately. `derive_deepseek4_curve` works and is kept below, but
+# is not wired in: what it measures is llama.cpp's own `compute` attribution,
+# and what the constant must cover is everything the packer needs beyond
+# ananke's *own* weights and KV predictions. Those are different quantities,
+# and the existing test asserts the curve covers a 9.3 GiB residual at
+# ctx 131072 where the compute column reads 2.0 GiB. Until the end-to-end
+# predicted-versus-measured check exists, reducing this constant would risk
+# under-reserving at load, which is the one failure direction that OOMs.
+CURVE_DERIVERS: dict[str, object] = {}
+
+# `derive_mtp_embedded_compute` is likewise held back. Its quantity — the
+# driver delta between paired cells — is the right one, and it says the
+# constant over-reserves by ~700 MiB at one slot. But the single `parallel = 4`
+# pair shows a delta of 2892 MiB against the ~1100 the one-slot fit predicts,
+# so there is a slot-count dependence the model does not carry. Lowering the
+# constant without that term would under-reserve exactly the production
+# configuration, which runs four slots.
 DERIVERS = {
     "IK_MOE_CPU_BYTES_PER_NEMBD": derive_ik_moe_per_nembd,
     "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN": derive_gemma_e_per_layer_token,
@@ -373,6 +513,28 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         entry["value"] = value
         entry["evidence"] = evidence
         entry["kind"] = "derived"
+
+    for arch, deriver in CURVE_DERIVERS.items():
+        entry = next((e for e in document["compute_buffer_curves"]["entries"]
+                      if arch in e["archs"]), None)
+        if entry is None:
+            failed.append(f"{arch}: curve deriver has no matching entry")
+            continue
+        try:
+            base, evidence = deriver(rows)
+        except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+            failed.append(f"{arch} curve: cannot derive — {error}")
+            continue
+        if entry["base_mib"] != base:
+            changed.append(f"{arch} curve base: {entry['base_mib']} -> {base}")
+        if entry.get("slope_mib_per_1k") != 1:
+            changed.append(f"{arch} curve slope: {entry.get('slope_mib_per_1k')} -> 1")
+        entry["base_mib"] = base
+        # Nominal rather than zero: the measurement says flat, and claiming
+        # exactly zero growth asserts more than a flat measurement supports.
+        entry["slope_mib_per_1k"] = 1
+        entry["slope_scales_with_ubatch"] = False
+        entry["evidence"] = evidence
 
     for name, entry in constants.items():
         if name in DERIVERS:
