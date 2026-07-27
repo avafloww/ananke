@@ -435,11 +435,17 @@ def interior_points() -> list[Cell]:
                       **_model_flags(ds, "0,1")))
     # The curves are fitted to 65536 and used to 524288. One long point per
     # steep architecture bounds how far the extrapolation can drift.
-    for key, ctx in (("dsv4f", 131072), ("glm52", 131072), ("laguna", 131072)):
+    # The runtime the operator actually serves each of these with, not the
+    # first in the tuple: laguna's production runtime is ik, and anchoring its
+    # curve on mainline measures a combination nobody runs — and, at this
+    # context, one that does not fit.
+    for key, ctx, runtime in (("dsv4f", 131072, "mainline"),
+                              ("glm52", 131072, "ik"),
+                              ("laguna", 131072, "ik")):
         model = MODELS[key]
         cells.append(Cell(
             label=f"longctx-{model.key}-c{ctx}", model=path_of(model.path),
-            runtime=model.runtimes[0], gpus="0,1", split="layer", ctx=ctx,
+            runtime=runtime, gpus="0,1", split="layer", ctx=ctx,
             **_model_flags(model, "0,1")))
     # The embedded-MTP constant is a one-model number, and the second model
     # that runs it in production differs in kv-head count — the factor the KV
