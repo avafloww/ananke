@@ -38,9 +38,15 @@ class Model:
     splits: tuple[str, ...] = ("layer", "tensor")
     """Split modes the runtime can actually serve this architecture with.
 
-    Not every architecture supports every mode: mainline rejects
-    `LLAMA_SPLIT_MODE_TENSOR` for `deepseek4` outright, at load. Planning
-    cells that cannot load wastes the slot and buries the real failures.
+    Not every architecture supports every mode. mainline's
+    `llm_arch_supports_sm_tensor` (llama-arch.cpp) blocklists the mode, and
+    of the models here that catches `deepseek4` and `lfm2`; `glm-dsa` is on
+    the same list, and although ik does not gate on architecture at all, the
+    operator serves that model hybrid rather than tensor-split, so measuring
+    it would characterise a configuration nobody runs.
+
+    Planning cells that cannot load wastes the slot and buries the failures
+    that are real.
     """
     extra: tuple[str, ...] = ()
     """Flags the architecture needs to run the way production runs it.
@@ -109,7 +115,7 @@ MODELS = {
         Model("glm52", "muzzy/GLM-5.2-GGUF/IQ2_KS/GLM-5.2-smol-IQ2_KS-00001-of-00033.gguf",
               ("ik",), n_cpu_moe=92, n_cpu_moe_1gpu=96,
               extra=("-mla", "1", "-dsa", "-amb", "512"), kv_types=("f16",),
-              threads=24, no_mmap=True,
+              threads=24, no_mmap=True, splits=("layer",),
               note="MoE + MLA + DSA, 79L — the production quant"),
         # Every remaining llama.cpp service in the operator's config. These
         # were absent from the registry while being served in production
@@ -127,8 +133,9 @@ MODELS = {
               ("mainline",), max_ctx=2048,
               note="talkie arch, 40L, full MHA; native context 2048"),
         Model("lfm2-embed", "LiquidAI/LFM2.5-Embedding-350M-GGUF/LFM2.5-Embedding-350M-Q8_0.gguf",
-              ("mainline",), embeddings=True, gpus=("0",),
-              note="embedding modality; 128k native context"),
+              ("mainline",), embeddings=True, gpus=("0",), splits=("layer",),
+              note="embedding modality; 128k native context. mainline's "
+                   "llm_arch_supports_sm_tensor blocklists lfm2"),
     ]
 }
 
@@ -176,7 +183,8 @@ def _significant(model: Model, runtime: str = "mainline", **over) -> list[Cell]:
     ones affordable.
     """
     cells = []
-    for gpus, split, kv, served in product(model.gpus, model.splits,
+    for gpus, split, kv, served in product(model.gpus,
+                                           _splits_for(model, runtime),
                                            model.kv_types, [True, False]):
         cells.append(Cell(
             label=f"{model.key}-{runtime}-{gpus.replace(',', '')}-{split}-{kv}-"
@@ -186,6 +194,21 @@ def _significant(model: Model, runtime: str = "mainline", **over) -> list[Cell]:
             **({"ctx": model.max_ctx} if model.max_ctx else {}), **over,
         ))
     return cells
+
+
+# ik_llama's `--split-mode` takes none/graph/layer — there is no `tensor`, and
+# passing one is a hard argument error rather than a fallback. Its analogue is
+# `graph`, which the operator does not run, so restricting to layer keeps the
+# fork's cells comparable to mainline's rather than measuring a mode nobody uses.
+_RUNTIME_SPLITS = {"ik": ("layer",)}
+
+
+def _splits_for(model: Model, runtime: str) -> tuple[str, ...]:
+    """Split modes both the architecture and the runtime will accept."""
+    allowed = _RUNTIME_SPLITS.get(runtime)
+    if allowed is None:
+        return model.splits
+    return tuple(s for s in model.splits if s in allowed) or allowed
 
 
 def _model_flags(model: Model, gpus: str) -> dict:
