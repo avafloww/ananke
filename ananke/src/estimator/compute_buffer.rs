@@ -140,8 +140,18 @@ fn no_flash_attn_mib(summary: &GgufSummary, context: u32, ubatch: u32, flash_att
         return 0;
     }
     let tokens = u64::from(context.min(ubatch));
-    let bytes =
-        u64::from(NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR) * heads * u64::from(context) * tokens * 4;
+    // Halved for MLA, which shares one latent across heads rather than
+    // materialising a score row per head: normalised by `n_head x ctx x
+    // n_tokens x 4`, every dense and MoE architecture measures 1.07-1.88 while
+    // deepseek4 measures 0.49. Charging it the same factor as the rest is what
+    // made its flash-attention-off cell reserve 12066 MiB against the 2435 the
+    // runtime took — the largest over-reservation left in the table.
+    let per_head = if crate::estimator::host_buffer::is_mla(arch) {
+        u64::from(NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR) / 2
+    } else {
+        u64::from(NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR)
+    };
+    let bytes = per_head * heads * u64::from(context) * tokens * 4;
     (bytes / (1024 * 1024)).min(u64::from(u32::MAX)) as u32
 }
 

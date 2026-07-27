@@ -73,9 +73,9 @@ use crate::{
         tuning::{
             DEFAULT_UBATCH, GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN, IK_OP_OFFLOAD_MIN_BATCH,
             KV_CACHE_PAD, MAINLINE_LAYER_SPLIT_MASK_COPIES, MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD,
-            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT,
-            PINNED_EXTRA_BYTES, PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE,
-            PROCESS_BASE_BYTES_PER_DEVICE, PROCESS_BASE_BYTES_PER_LAYER,
+            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT, PINNED_EXTRA_BYTES,
+            PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE, PROCESS_BASE_BYTES_PER_DEVICE,
+            PROCESS_BASE_BYTES_PER_LAYER,
         },
         types::EstimatorInputs,
     },
@@ -479,7 +479,7 @@ fn embedding_length(summary: &GgufSummary, arch: &str) -> u64 {
 /// `glm-dsa` is *not* in this list despite also being MLA: it was measured
 /// needing *more* than the plain law, not less. It gets an extra mask instead,
 /// via [`extra_full_masks`].
-fn is_mla(arch: &str) -> bool {
+pub(crate) fn is_mla(arch: &str) -> bool {
     // `deepseek4` only. The DeepSeek-V2/V3/R1 family (`deepseek2`) is also
     // MLA, but it has *no measurement here* and a materially different graph —
     // no NSA indexer, no sliding window. Halving its mask on the strength of a

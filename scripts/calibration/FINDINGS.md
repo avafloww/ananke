@@ -847,6 +847,21 @@ non-SWA models against 4.8-4.9x on sliding-window ones). That reading was
 correct; what it lacked was the second axis that turns the non-uniformity into
 a per-architecture rate.
 
+### The GPU side had the same over-charge
+
+`NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR` covers the score matrix an unfused
+attention pass materialises, `n_head x ctx x n_tokens` f32 entries. Normalised
+by that product, every dense and MoE architecture measures 1.07 to 1.88 across
+four contexts and two batches — so a factor of 2 covers them — while
+deepseek4 measures 0.49, because MLA shares one latent across heads instead of
+materialising a score row per head.
+
+Charging it the same factor as the rest is the whole of the 5.0x that made
+deepseek4 look like a curve outlier: reserved 12066 MiB against 2435 taken, of
+which 8192 is this term at double what the architecture needs. It is now
+halved for MLA, which the constant's own evidence had already identified as
+over-covered without acting on it.
+
 ## The design hole flash attention exposed, audited everywhere else
 
 Flash-attention-off spent the first campaign recorded as an inconsistent
