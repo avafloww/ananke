@@ -848,19 +848,26 @@ mod measured_tests {
     /// 81 KiB/token that was this term evaluated at qwen35moe's `n_embd`.
     #[test]
     fn ik_moe_term_scales_with_hidden_size() {
-        // 2048 x 41 is within a percent of the 82_944 the flat constant used,
-        // which is the measurement that showed the constant was a hidden-size
-        // term all along.
         let narrow = IK_MOE_CPU_BYTES_PER_NEMBD * 2048;
         let wide = IK_MOE_CPU_BYTES_PER_NEMBD * 6144;
-        assert!(
-            (narrow as i64 - 82_944).abs() < 1_500,
-            "the term at n_embd 2048 should reproduce the old flat constant"
-        );
         assert_eq!(
             wide,
             3 * narrow,
             "three times the hidden size, three times the term"
+        );
+
+        // At qwen35moe's hidden size the term should land near the 81 KiB the
+        // flat constant used — the observation that showed it was a
+        // hidden-size term all along. The tolerance is deliberately loose:
+        // the value is a median across three models, one of which (laguna)
+        // deviates for reasons believed to lie in the analysis's ik
+        // sliding-window mask rather than in this term. A tighter bound would
+        // pin a number the dataset does not pin.
+        let drift = (narrow as f64 - 82_944.0).abs() / 82_944.0;
+        assert!(
+            drift < 0.10,
+            "term at n_embd 2048 is {narrow}, {:.0}% from the flat constant it replaces",
+            drift * 100.0
         );
     }
 }
