@@ -23,7 +23,10 @@
 //! Operators can still override per service via
 //! `estimation.compute_buffer_mb`, which short-circuits this table.
 
-use crate::gguf::GgufSummary;
+use crate::{
+    estimator::tuning::{CURVES, DEFAULT_CURVE, DEFAULT_UBATCH},
+    gguf::GgufSummary,
+};
 
 /// Per-architecture knobs: `base + slope × (ctx / 1024)` MiB per device.
 #[derive(Debug, Clone, Copy)]
@@ -32,205 +35,43 @@ struct Tuning {
     slope: u32,
 }
 
-/// deepseek4 compute-buffer curve, calibrated against a 2×3090 sweep at
-/// np=1, all experts on CPU (2026-07-15). The NSA indexer's prompt scratch
-/// dominates and scales steeply with *both* context and ubatch: it scores
-/// each of the `ubatch` query tokens against the whole sequence, so the
-/// residual (VRAM − GPU non-expert weights − KV) is ≈ `k × ubatch ×
-/// context`. Measured per-card residuals landed on `k ≈ 1.25e-4 MiB` —
-/// equivalently a slope of **66 MiB per 1024 tokens at the default ubatch
-/// of 512** (~9.3 GiB at 131072, ~17.5 GiB at 262144), scaling linearly
-/// with ubatch. This is by far the steepest curve in the table because it
-/// is the only arch whose scratch grows with the whole context on every
-/// prompt token; the fixed sliding-window and HCA caches (not modelled as
-/// per-token KV) ride in the base. The linear-in-ubatch scaling was
-/// confirmed against a ubatch-1024 point (residual ~17.6 GiB at 131072,
-/// vs the model's ~18.3 GiB — over-reserving by ~0.7 GiB).
-const DEEPSEEK4_CB_BASE: u32 = 1400;
-const DEEPSEEK4_CB_SLOPE_AT_UB512: u32 = 66;
-
-/// llama.cpp's default `--ubatch-size`, and the ubatch the compute-buffer
-/// curves are calibrated at. Also the fallback when a service leaves
-/// `ubatch_size` unset.
-const DEFAULT_UBATCH: u32 = 512;
-
-/// deepseek4's per-1024-token slope at a given ubatch. Linear in ubatch off
-/// the [`DEEPSEEK4_CB_SLOPE_AT_UB512`] calibration point, floored at 1 so a
-/// tiny ubatch still reserves a non-zero context term.
-fn deepseek4_cb_slope(ubatch: u32) -> u32 {
-    let scaled =
-        (DEEPSEEK4_CB_SLOPE_AT_UB512 as u64 * ubatch.max(1) as u64) / DEFAULT_UBATCH as u64;
-    scaled.max(1) as u32
-}
-
-/// Lookup table for arch-specific tuning. The `_` arm is the llama-family
-/// default, empirically the most conservative across the sweep. Add a row
-/// here when calibration shows a given arch needs a different curve.
+/// The curve for this model, from the generated table.
+///
+/// The architecture-to-curve mapping lives in `tuning.json` rather than here:
+/// which curve an architecture gets is data, so adding one is a JSON edit and
+/// arrives with its evidence attached, and an architecture nobody has
+/// measured says so in its own comment instead of looking like every other
+/// row.
 fn tuning_for(summary: &GgufSummary, ubatch: u32) -> Tuning {
     let arch = summary.architecture.as_str();
-    match arch {
-        // Gemma 4 E-variants (detected by `per_layer_token_embd.weight`):
-        // small hidden + per-layer embeddings on CPU, so neither the
-        // attention scratch nor the CUDA context take up as much room
-        // as the fat-model gemma4 default. The full (2000, 7) curve
-        // over-reserves E4B by ~2 GiB at 262k; (1100, 7) stays safely
-        // above every observed datapoint (worst-case -176 MiB over).
-        "gemma4" if is_gemma_e_variant(summary) => Tuning {
-            base: 1100,
-            slope: 7,
-        },
+    let variant = variant_of(summary);
+    let curve = CURVES
+        .iter()
+        .find(|c| c.archs.contains(&arch) && c.variant == variant)
+        .unwrap_or(&DEFAULT_CURVE);
 
-        // Gemma family has large hidden, a few full-attention layers
-        // buried under an SWA-heavy majority, and big attention scratch
-        // even at 2k context. gemma-4-31B-it under-reserved by 2.4 GiB
-        // at 8k with the old (800, 12) curve — base went up hard and
-        // slope shrunk since the full-attention minority drives less
-        // growth than a dense-everything model would.
-        "gemma2" | "gemma3" | "gemma4" => Tuning {
-            base: 2000,
-            slope: 7,
-        },
-
-        // Vision-language MoE: same _exps pattern as the pure MoE
-        // archs but a heavier attention stack + cross-attention to
-        // vision tokens. qwen3-vl-30b-a3b-instruct under-reserved by
-        // +1365 MiB at 131k with the plain MoE curve, so it gets its
-        // own (700, 7) — base slightly higher, slope much higher.
-        "qwen3vlmoe" => Tuning {
-            base: 700,
-            slope: 7,
-        },
-
-        // MoE-only (no SSM component). Attention scratch per active
-        // expert is small; compute buffer barely grows with context.
-        // Sweep showed gpt-oss 32k delta going *negative* at the 400/0
-        // baseline, so this stays conservative at 600/2.
-        "gpt-oss" | "mixtral" | "qwen3moe" | "llama4" | "deepseek2" | "glm4moe" => Tuning {
-            base: 600,
-            slope: 2,
-        },
-
-        // GLM-5 (glm-dsa) served by ik_llama with DSA sparse attention
-        // (`-dsa -fidx -mla 1 -amb 512`). The old (2300, 3) was calibrated
-        // on *mainline* llama.cpp, which runs glm on the deepseek2 graph with
-        // the DSA indexer disabled — it under-reserves the ik path by ~1.9 GiB
-        // per card (the OOM direction), because ananke now plans placement
-        // itself rather than leaning on the `--gpu-fit-margin` that used to
-        // carry the indexer scratch. Recalibrated 2026-07-23 against ik's own
-        // per-device buffer report under `--fit` (2×3090, ub2048, f16 MLA KV):
-        // the head-GPU compute buffer measured 4578 MiB at 131072 (CUDA1
-        // 3216 — the ~1362 delta is the output logits on the head card, which
-        // the packer already trims off secondaries). The DSA indexer scratch
-        // scales with context, so the slope tracks it (~15 MiB per 1024
-        // tokens, ≈1.9 GiB of indexer at 131072 over the ~2.7 GiB dense-MLA
-        // floor); the base covers the low-context floor plus the active-prefill
-        // and CUDA-context overhead (~1 GiB measured as nvidia-smi minus ik's
-        // reported buffers). Lands ~5620 at 131072, covering 4578 + headroom.
-        "glm-dsa" => Tuning {
-            base: 3700,
-            slope: 15,
-        },
-
-        // Laguna MoE. Recalibrated 2026-07-22 against ik_llama's own
-        // per-device buffer report under ananke-planned placement (not
-        // --fit), 2×3090, ub2048, q8_0 KV: the CUDA0 compute buffer measured
-        // 2058 MiB at 131072 context and is effectively flat in context
-        // (sliding window 512 caps the attention scratch), so the old
-        // (2400, 28) — a single --fit anchor — over-reserved by ~3.9 GiB per
-        // card, needlessly spilling ~7.8 GiB of experts to CPU. The base
-        // covers the 2058 measurement plus the active-prefill transient and
-        // CUDA-context/fragmentation overhead (~1 GiB observed as
-        // nvidia-smi minus ik's reported buffers), which the compute-buffer
-        // term must absorb now that there is no --fit margin backstopping it.
-        "laguna" => Tuning {
-            base: 2250,
-            slope: 2,
-        },
-
-        // DeepSeek-V4-Flash (deepseek4). Unlike the near-flat pure-MoE
-        // curve, deepseek4's NSA "lightning indexer" builds a prompt-phase
-        // scratch buffer that scales hard with context (it scores each
-        // query against the whole sequence before the top-k gather), so
-        // this arch needs a much steeper slope than any other MoE. The
-        // fixed sliding-window + HCA caches, which this estimator folds
-        // into the compute buffer rather than the per-token KV term, ride
-        // along in the base. Calibrated on the UD-IQ3_XXS quant at the
-        // default ubatch (512), 2×3090, np=1 (see below).
-        "deepseek4" => Tuning {
-            base: DEEPSEEK4_CB_BASE,
-            slope: deepseek4_cb_slope(ubatch),
-        },
-
-        // Hybrid MoE + SSM (Qwen 3.5+). Most layers are SSM with fixed
-        // state; only the 1-in-N full-attention layers contribute to
-        // context-scaled overhead. qwen3.6-35b-a3b at 2k-262k showed
-        // the old (600, 4) under-reserving by up to 1.8 GiB — both
-        // knobs went up.
-        "qwen35moe" => Tuning {
-            base: 900,
-            slope: 7,
-        },
-
-        // Hybrid dense + SSM (Qwen 3.5+ dense, e.g. qwen3.6-27b).
-        // Same 1-in-N full-attention pattern as qwen35moe but with
-        // standard dense FFNs and smaller KV (256-dim K/V vs 128+128
-        // in the MoE variant). The SSM state is absorbed by the base.
-        "qwen35" => Tuning {
-            base: 800,
-            slope: 6,
-        },
-
-        // Talkie: dense 13B with full MHA and a native 2048 context. A
-        // single-GPU sweep at 2048/4096/8192/16384 (f16 KV, llama-server
-        // defaults) put the residual compute buffer — real nvidia-smi
-        // usage minus modelled GPU weights minus KV — at a near-flat
-        // 414→428 MiB (warmup adds ~10). Slope is ~1 MiB per 1024 tokens,
-        // so the dense default's (700, 8) over-reserves by ~290 MiB at
-        // 2048. (500, 2) tracks the data with ~80 MiB of headroom and
-        // never under-reserves across the swept range.
-        "talkie" => Tuning {
-            base: 500,
-            slope: 2,
-        },
-
-        // Pure Mamba / SSM: no standard KV cache, so the compute buffer
-        // is almost flat in context. Recurrent state lives in the per-
-        // layer tensors, which the weights accounting already covers.
-        "mamba" => Tuning {
-            base: 500,
-            slope: 2,
-        },
-
-        // Jamba-style hybrid (SSM + attention, no MoE). Similar to
-        // qwen35moe but with fewer knobs exposed in GGUF metadata.
-        "jamba" => Tuning {
-            base: 600,
-            slope: 4,
-        },
-
-        // LFM2/LFM2.5: hybrid shortconv + sparse-attention with a tiny
-        // hidden size, so the scratch is dominated by the CUDA context and
-        // nearly flat in context length. Calibrated on
-        // LFM2.5-Embedding-350M-Q8_0 (2026-07-12, single 3090, --embeddings):
-        // residuals 397/403/411/427 MiB at 2k/8k/16k/32k → (420, 1) covers
-        // the worst case with ~25 MiB of headroom. The flat residual across
-        // the sweep also confirms the per-layer-array KV term in the
-        // llama-family estimator.
-        "lfm2" => Tuning {
-            base: 420,
-            slope: 1,
-        },
-
-        // Llama-family default: llama / qwen2 / qwen3 / mistral / phi3 /
-        // glm4 / deci. Covers everything that doesn't match above and
-        // falls through the fallback estimator too. qwen3-4b sweep
-        // showed the old (800, 12) curve over-reserving by 3 GiB at
-        // 262k; (700, 8) stays safely above observed without wasting.
-        _ => Tuning {
-            base: 700,
-            slope: 8,
-        },
+    // A slope that scales with ubatch is calibrated at 512 and taken linear
+    // off that point, floored at 1 so a tiny batch still reserves a non-zero
+    // context term.
+    let slope = if curve.slope_scales_with_ubatch {
+        let scaled = (curve.slope_mib_per_1k as u64 * ubatch.max(1) as u64) / DEFAULT_UBATCH as u64;
+        scaled.max(1) as u32
+    } else {
+        curve.slope_mib_per_1k
+    };
+    Tuning {
+        base: curve.base_mib,
+        slope,
     }
+}
+
+/// Which variant of an architecture this model is, where one architecture
+/// string covers models whose graphs differ enough to need separate curves.
+///
+/// `None` matches an entry with no variant, so a general entry still applies
+/// to a model that is not any special variant.
+fn variant_of(summary: &GgufSummary) -> Option<&'static str> {
+    is_gemma_e_variant(summary).then_some("gemma_e")
 }
 
 /// llama.cpp materialises the output logits (`n_vocab × n_tokens` floats)
@@ -456,7 +297,12 @@ mod tests {
             default_for(&ds4, 131072, None),
             default_for(&ds4, 131072, Some(512))
         );
-        let slope_at = |ub| default_for(&ds4, 131072, Some(ub)) - DEEPSEEK4_CB_BASE;
+        let base = CURVES
+            .iter()
+            .find(|c| c.archs.contains(&"deepseek4"))
+            .expect("deepseek4 has a curve entry")
+            .base_mib;
+        let slope_at = |ub| default_for(&ds4, 131072, Some(ub)) - base;
         // The context-scaling term is linear in ubatch off the 512 baseline.
         assert_eq!(slope_at(1024), slope_at(512) * 2);
         assert_eq!(slope_at(2048), slope_at(512) * 4);

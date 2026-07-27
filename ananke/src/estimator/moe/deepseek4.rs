@@ -3,7 +3,7 @@
 //! cache.
 
 use crate::{
-    estimator::{kv, types::EstimatorInputs},
+    estimator::{kv, tuning::DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16, types::EstimatorInputs},
     gguf::GgufSummary,
 };
 
@@ -12,16 +12,6 @@ use crate::{
 /// context. Layers with the ratio-128 HCA value or the leading `0` full-
 /// attention value do not carry a context-scaling cache worth modelling.
 const DEEPSEEK4_CSA_RATIO: u32 = 4;
-
-/// f16 KV bytes per context token, per CSA layer, for deepseek4.
-///
-/// Calibrated, not derived from head dims: a 2×3090 f16 sweep at np=1
-/// (2026-07-15) measured total KV of 836 MiB at 131072 context and 1655
-/// MiB at 262144 — linear in context (≈ 6.65 KiB/token) across this
-/// model's 21 CSA layers, i.e. ~317 bytes/token/layer. The q8_0 sweep
-/// reconciled to the same figure once scaled by the element width, which
-/// is why the per-token cost is priced off the K-cache element size below.
-const DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16: f64 = 317.0;
 
 /// KV bytes per context token for deepseek4 (DeepSeek-V4-Flash).
 ///

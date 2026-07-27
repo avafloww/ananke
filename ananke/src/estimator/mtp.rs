@@ -27,20 +27,13 @@
 //! 2×3090 run (peak 40858 MiB total) minus the target+mmproj estimate: the
 //! draft contributes ~400 MiB, of which ~108 MiB is weights.
 
-use crate::{estimator::types::EstimatorInputs, gguf::GgufSummary};
-
-/// Per-MTP-context compute buffer, MiB, for the *embedded* head. Rounded up to
-/// stay above every observed datapoint (1553 MiB on 35B, 1609 MiB on 27B) with
-/// headroom.
-const MTP_COMPUTE_MIB: u64 = 1700;
-
-/// Compute/logit buffer, MiB, for a *separate* draft model loaded via `-md`.
-/// Far smaller than the embedded head's buffer: the separate draft reuses the
-/// target's KV and its sampler runs on the CPU (`backend offload failed; using
-/// CPU sampler`), so only a modest logit/workspace buffer lands on GPU.
-/// Calibrated so `draft weights (~108 MiB) + this ≈ 400 MiB` matches the
-/// measured Gemma 4 draft contribution, with a little headroom.
-const DRAFT_MODEL_COMPUTE_MIB: u64 = 300;
+use crate::{
+    estimator::{
+        tuning::{DRAFT_MODEL_COMPUTE_MIB, MTP_COMPUTE_MIB},
+        types::EstimatorInputs,
+    },
+    gguf::GgufSummary,
+};
 
 /// Bytes per KV element for the MTP draft cache. llama.cpp leaves the draft
 /// cache type at f16 unless `--spec-draft-cache-type-*` is set (ananke never
