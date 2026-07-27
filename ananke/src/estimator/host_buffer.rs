@@ -228,6 +228,18 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     } else {
         NO_FLASH_ATTN_BYTES_PER_TOKEN * n_tokens
     };
+    // A quantised KV cache costs more pinned memory than an f16 one, measured
+    // in every one of 117 pairs differing in nothing else. The per-copy rate
+    // varies by architecture — 160 bytes per batch token on a non-sliding-
+    // window model, 6144 on deepseek4 — and is not predicted by head count,
+    // head width or layer count, so the worst is charged to all of them. That
+    // is 12 MiB at the largest batch measured, which is cheap against an
+    // under-prediction whose mechanism is not understood.
+    let quantised_cache = if quantised_kv(inputs) {
+        quantised_cache_rate(arch) * n_tokens
+    } else {
+        0
+    };
 
     // mainline replicates every mask when layers are split across more than
     // one device. Not under tensor split, where llama.cpp fuses the cards
@@ -241,6 +253,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     masks
         + hidden_inputs
         + no_fa_extra
+        + quantised_cache
         + gemma_e_variant_bytes(summary, arch, n_tokens)
         + mainline_tensor_moe_bytes(summary, arch, inputs, n_tokens)
 }
@@ -933,4 +946,30 @@ mod measured_tests {
             drift * 100.0
         );
     }
+}
+
+/// The per-token cost of a quantised cache for this architecture.
+///
+/// They span a factor of forty — 61 bytes per batch token on lfm2 against
+/// 6144 on deepseek4 — so one value would either under-reserve the worst or
+/// over-reserve everything else by about 3 MiB.
+fn quantised_cache_rate(arch: &str) -> u64 {
+    crate::estimator::tuning::QUANTISED_CACHE_RATES
+        .iter()
+        .find(|(name, _)| *name == arch)
+        .map_or(
+            crate::estimator::tuning::QUANTISED_CACHE_RATE_DEFAULT,
+            |(_, rate)| *rate,
+        )
+}
+
+/// Whether either half of the KV cache is stored quantised.
+///
+/// A quantised cache costs more pinned host memory than an f16 one, measured
+/// in every one of 117 pairs differing in nothing else.
+fn quantised_kv(inputs: &EstimatorInputs<'_>) -> bool {
+    [inputs.cache_type_k, inputs.cache_type_v]
+        .iter()
+        .flatten()
+        .any(|t| !t.eq_ignore_ascii_case("f16") && !t.eq_ignore_ascii_case("f32"))
 }

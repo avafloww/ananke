@@ -341,6 +341,72 @@ def derive_mainline_tensor_moe(rows: list[dict]) -> tuple[int, str]:
     )
 
 
+def derive_quantised_cache_bytes(rows: list[dict]) -> tuple[int, str]:
+    """Extra pinned bytes per batch token when the KV cache is quantised.
+
+    Paired cells differing in nothing but `cache_type_*` show the arena larger
+    with a quantised cache, in all 117 pairs measured, always positive and
+    scaling exactly with batch — 1.28 MiB at ub 512 against 5.12 at 2048 on the
+    same model.
+
+    The per-copy rate varies by architecture and is not predicted by head
+    count, head width, or layer count: 160 bytes per token on non-sliding-window
+    models, 328 on sliding-window ones, 532, 2621, and 6144 on deepseek4. Since
+    the mechanism is not identified, the worst observed rate is charged to all
+    of them. Doing so costs 12 MiB at the largest batch measured, which is
+    cheap insurance against an under-prediction whose size is not understood.
+    """
+    from collections import defaultdict as _dd
+    paired: dict[tuple, dict[str, float]] = _dd(dict)
+    archs: dict[str, str] = {}
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if factors["ngl"] != 99 or not factors["gpus"] or factors["spec_type"]:
+            continue
+        if not parsed.get("arena_mib"):
+            continue
+        key = (record["provenance"]["model_key"], factors["ctx"], factors["ubatch"],
+               factors["parallel"], bool(factors["kv_unified"]),
+               factors["split"] or "-", factors["gpus"], factors["flash_attn"],
+               bool(factors["served"]), bool(factors["n_cpu_moe"]))
+        paired[key][factors["kv_type"]] = parsed["arena_mib"]
+        archs[record["provenance"]["model_key"]] = parsed.get("arch", "?")
+
+    rates = []
+    by_arch: dict[str, list[float]] = _dd(list)
+    for key, pair in paired.items():
+        if len(pair) != 2:
+            continue
+        tokens = min(key[1], key[2])
+        cards = len(key[6].split(","))
+        # Divide out the layer-split replication, so the rate is per copy — but
+        # a hybrid does not replicate, and treating one as though it did put
+        # qwen35moe's rate at both 133 and 532.
+        hybrid = key[9]
+        copies = 4 if cards > 1 and key[5] == "layer" and not hybrid else 1
+        rate = (pair["q8_0"] - pair["f16"]) * 1024**2 / tokens / copies
+        rates.append(rate)
+        by_arch[archs[key[0]]].append(rate)
+    if not rates:
+        raise ValueError("no cells differing only in cache type")
+    # Per architecture, because they differ by a factor of forty and charging
+    # the worst to all costs ~3 MiB of over-prediction on every quantised cell.
+    for arch, group in by_arch.items():
+        consensus(group, f"quantised-cache rate for {arch}", tolerance=0.05)
+    _QUANT_RATES.clear()
+    _QUANT_RATES.update({a: round(max(g)) for a, g in by_arch.items()})
+    worst = max(rates)
+    return round(worst), (
+        f"{len(rates)} pairs differing in nothing but the cache type, every one "
+        f"showing the arena larger when it is quantised. Per-copy rates run "
+        f"{min(rates):.0f} to {worst:.0f} bytes per batch token and are not "
+        "predicted by head count, head width or layer count, so the worst is "
+        "charged to all — 12 MiB at the largest batch measured. Scaling with "
+        "batch is exact, and dividing out the layer-split replication is what "
+        "makes the two rates per model collapse to one."
+    )
+
+
 def derive_gemma_e_per_layer_token(rows: list[dict]) -> tuple[int, str]:
     """The E-variant's per-layer embedding input, in bytes per layer per token."""
     residuals, controls = [], []
@@ -541,6 +607,7 @@ def derive_mtp_embedded_compute(rows: list[dict]) -> tuple[int, str]:
 
 
 _IK_RATES: dict[str, int] = {}
+_QUANT_RATES: dict[str, int] = {}
 
 
 def _record_ik_rates(by_arch: dict[str, float]) -> None:
@@ -764,6 +831,11 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"ik MoE rates: cannot derive — {error}")
 
+    try:
+        derive_quantised_cache_bytes(rows)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+        failed.append(f"quantised-cache rates: cannot derive — {error}")
+
     for name, deriver in DERIVERS.items():
         entry = constants.get(name)
         if entry is None:
@@ -814,6 +886,16 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             continue
         entry["kind"] = kind
 
+    if _QUANT_RATES:
+        document["quantised_cache_rates"] = {
+            "$comment": "Extra pinned bytes per batch token when the KV cache "
+                        "is quantised, by architecture. They span a factor of "
+                        "forty, so one value would either under-reserve "
+                        "deepseek4 or over-reserve everything else by ~3 MiB. "
+                        "`default` applies to an architecture not listed.",
+            "default": max(_QUANT_RATES.values()),
+            "by_arch": dict(sorted(_QUANT_RATES.items())),
+        }
     if _IK_RATES:
         # Per architecture, because they differ and one number cannot serve
         # all three without either under-reserving the worst or over-reserving

@@ -127,6 +127,13 @@ fn generate_tuning_constants() {
 
     out.push_str(&generate_curves(&parsed));
     out.push_str(&generate_ik_rates(&parsed));
+    out.push_str(&generate_rate_table(
+        &parsed,
+        "quantised_cache_rates",
+        "QUANTISED_CACHE_RATES",
+        "QUANTISED_CACHE_RATE_DEFAULT",
+        "Extra pinned bytes per batch token when the KV cache is quantised, by\n/// architecture.",
+    ));
 
     let dest = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("tuning_constants.rs");
     std::fs::write(&dest, out).unwrap_or_else(|e| panic!("writing {}: {e}", dest.display()));
@@ -213,6 +220,34 @@ fn generate_ik_rates(parsed: &serde_json::Value) -> String {
     );
     out.push_str(&default.to_string());
     out.push_str(";\n");
+    out
+}
+
+/// A per-architecture rate table: `&[(arch, value)]` plus a default.
+fn generate_rate_table(
+    parsed: &serde_json::Value,
+    key: &str,
+    table: &str,
+    default_name: &str,
+    doc: &str,
+) -> String {
+    let Some(rates) = parsed.get(key) else {
+        return String::new();
+    };
+    let default = rates.get("default").and_then(|v| v.as_u64()).unwrap_or(0);
+    let mut out = format!("\n/// {doc}\npub static {table}: &[(&str, u64)] = &[\n");
+    if let Some(map) = rates.get("by_arch").and_then(|v| v.as_object()) {
+        for (arch, value) in map {
+            out.push_str(&format!(
+                "    ({arch:?}, {}),\n",
+                value.as_u64().unwrap_or(default)
+            ));
+        }
+    }
+    out.push_str(&format!(
+        "];\n\n/// Applied to an architecture this dataset has not measured.\n\
+         pub const {default_name}: u64 = {default};\n"
+    ));
     out
 }
 

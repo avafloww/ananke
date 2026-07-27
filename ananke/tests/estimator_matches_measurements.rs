@@ -58,13 +58,13 @@ use serde_json::Value;
 /// These are ceilings, so they can only be tightened. Raising one to make a
 /// change pass would be defeating the test.
 const CONFIRMED: &[(&str, f64)] = &[
-    ("lfm2", 0.5),
-    ("llama", 0.5),
-    ("qwen3", 0.5),
-    ("talkie", 0.5),
-    ("qwen35", 1.5),
-    ("qwen35moe", 2.5),
-    ("gemma3", 13.0),
+    ("lfm2", 0.2),
+    ("llama", 0.4),
+    ("qwen3", 0.4),
+    ("talkie", 0.4),
+    ("gemma3", 0.7),
+    ("qwen35", 1.0),
+    ("qwen35moe", 2.1),
     ("glm-dsa", 45.5),
 ];
 
@@ -229,6 +229,7 @@ struct Case {
     devices: u32,
     hybrid: bool,
     mtp: bool,
+    kv_type: String,
     device_compute_mib: Option<u64>,
     split: SplitMode,
 }
@@ -333,6 +334,14 @@ impl Case {
             // masks are not replicated across devices.
             hybrid: factors.get("n_cpu_moe").is_some_and(|v| !v.is_null()),
             mtp: factors.get("spec_type").is_some_and(|v| !v.is_null()),
+            // Passed through, because a quantised cache costs pinned memory
+            // the arena model charges for. Leaving it unset made that term
+            // silently unreachable from this test.
+            kv_type: factors
+                .get("kv_type")
+                .and_then(Value::as_str)
+                .unwrap_or("f16")
+                .to_string(),
             // Compute *plus* what llama.cpp cannot attribute, which is what a
             // reservation has to cover, and only from a real device: under
             // tensor split it reports one fused `Meta()` whose columns are not
@@ -375,8 +384,8 @@ impl Case {
             split_mode: self.split,
             context: self.context,
             ubatch: Some(self.ubatch),
-            cache_type_k: None,
-            cache_type_v: None,
+            cache_type_k: Some(&self.kv_type),
+            cache_type_v: Some(&self.kv_type),
             override_tensor: &[],
             compute_buffer_mb: None,
             allow_fallback: false,

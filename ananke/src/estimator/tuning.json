@@ -283,5 +283,21 @@
       "laguna": 54,
       "qwen35moe": 41
     }
+  },
+  "quantised_cache_rates": {
+    "$comment": "Extra pinned bytes per batch token when the KV cache is quantised, by architecture. They span a factor of forty, so one value would either under-reserve deepseek4 or over-reserve everything else by ~3 MiB. `default` applies to an architecture not listed.",
+    "default": 6144,
+    "by_arch": {
+      "deepseek4": 6144,
+      "gemma3": 328,
+      "gemma4": 2621,
+      "laguna": 328,
+      "lfm2": 61,
+      "llama": 164,
+      "qwen3": 164,
+      "qwen35": 543,
+      "qwen35moe": 532,
+      "talkie": 164
+    }
   }
 }

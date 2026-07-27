@@ -592,6 +592,45 @@ Two disagreements are carried deliberately, with the reason recorded at the
 override: glm-dsa and laguna both measure a different ik MoE rate on one card
 than on two, and the larger is taken because over-reserving does not OOM.
 
+## RESOLVED: a quantised KV cache costs pinned host memory
+
+The consensus guard surfaced this: the gemma E-variant term measured 1025
+bytes per layer per token at f16 and 1278 at q8_0, so something in the arena
+depended on the cache type and was being charged to the E-variant instead.
+
+Isolating it — pairs differing in nothing but `cache_type_*` — the arena is
+larger with a quantised cache in **all 117 pairs**, always positive, scaling
+exactly with batch (1.28 MiB at ub 512 against 5.12 at 2048 on one model).
+
+The rate is per architecture and spans a factor of forty:
+
+| architecture | bytes per batch token |
+|---|---|
+| lfm2 | 61 |
+| llama, qwen3, talkie | 164 |
+| gemma3, laguna | 328 |
+| qwen35moe | 532 |
+| qwen35 | 543 |
+| gemma4 | 2621 |
+| deepseek4 | 6144 |
+
+Charging the worst to all of them cost about 3 MiB of over-prediction on every
+quantised cell, so it is a table. The mechanism is not identified — the rate is
+not predicted by head count, head width or layer count — but it is bounded,
+measured, and now charged.
+
+Two conflations were caught getting here, both by the guard. The rate appeared
+to take two values per model until the layer-split replication was divided
+out, and qwen35moe still showed 133 and 532 until hybrids were excluded from
+that divisor, since a hybrid does not replicate.
+
+Every architecture's worst arena error improved: gemma3 0.70 to **0.54**,
+qwen35 1.13 to **0.86**, llama, qwen3 and talkie 0.36 to **0.28**.
+
+The validation test now passes the cache type through. It had been leaving it
+unset, which made the whole term unreachable from the check that exists to
+catch exactly this.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline
