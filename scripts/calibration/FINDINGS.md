@@ -182,6 +182,45 @@ for qwen3-4b — because the intermediates a GPU run offloads to the device have
 to live on the host instead. That confirms the existing note in
 `CONTRIBUTING.md` rather than changing it.
 
+## CONFIRMED: ik's CPU-MoE term and its batch threshold
+
+Sweeping ubatch 256 / 512 / 1024 / 2048 on two ik hybrids, and subtracting the
+modelled mask and hidden buffers:
+
+| model | experts/used | threshold | ub | above? | excess | bytes/token |
+|---|---|---|---|---|---|---|
+| Qwen3.6-35B-A3B | 256 / 8 | 1024 | 256 | no | 20.26 MiB | **82 985** |
+| Qwen3.6-35B-A3B | 256 / 8 | 1024 | 512 | no | 40.51 MiB | **82 964** |
+| Qwen3.6-35B-A3B | 256 / 8 | 1024 | 1024 | yes | 0.03 MiB | 31 |
+| Qwen3.6-35B-A3B | 256 / 8 | 1024 | 2048 | yes | 0.05 MiB | 26 |
+| Laguna-S-2.1 | 256 / 10 | 819 | 256 | no | 40.25 MiB | 164 864 |
+| Laguna-S-2.1 | 256 / 10 | 819 | 512 | no | 54.01 MiB | 110 612 |
+| Laguna-S-2.1 | 256 / 10 | 819 | 1024 | yes | 0.01 MiB | 10 |
+| Laguna-S-2.1 | 256 / 10 | 819 | 2048 | yes | 0.02 MiB | 10 |
+
+`IK_MOE_CPU_BYTES_PER_TOKEN` is 81 KiB = **82 944 bytes**. Qwen3.6-35B-A3B
+measures 82 985 and 82 964 — within **0.05%**, at two batch sizes.
+
+`IK_OP_OFFLOAD_MIN_BATCH` is 32, predicting the term switches off at
+`n_tokens x n_used >= 32 x n_expert`. That is ub 1024 for the Qwen (8 experts
+used) and ub 819 for laguna (10 used). **Both switch off exactly there** — the
+excess collapses from tens of MiB to hundredths. Two models with different
+expert counts, and the predicted crossing is right for both.
+
+The review judged both constants underdetermined and warned the campaign
+*loosened* the constraint on the threshold, because the original curve block
+straddled it with only ub 512 and 2048. The interior points at 256 and 1024
+were added in response, and they are what makes this a confirmation rather
+than a bracket.
+
+**Laguna's per-token figure does not match** — 164 864 and 110 612 against the
+Qwen's flat 82 985. It is not a constant across batch, so it is unlikely to be
+the MoE term misbehaving; the likelier explanation is that the modelled *SWA
+second mask* for ik is wrong for this model, which would pollute the excess
+this subtraction leaves behind. Laguna is the only SWA model in this pair. The
+threshold still lands exactly where predicted, which is evidence the MoE term
+itself is behaving.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline
