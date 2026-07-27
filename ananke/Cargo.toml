@@ -57,6 +57,9 @@ rusqlite.workspace = true
 rust-embed.workspace = true
 mime_guess.workspace = true
 
+[build-dependencies]
+serde_json.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 pretty_assertions.workspace = true

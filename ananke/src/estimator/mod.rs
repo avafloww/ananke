@@ -10,6 +10,7 @@ pub mod mamba;
 pub mod moe;
 pub mod mtp;
 pub mod override_tensor;
+pub mod tuning;
 pub mod types;
 
 use smol_str::SmolStr;
@@ -242,6 +243,8 @@ mod tests {
 
     fn inputs_for<'a>(empty_override: &'a [String]) -> EstimatorInputs<'a> {
         EstimatorInputs {
+            visible_devices: 1,
+            split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",
             model: Path::new("/fake"),
             mmproj: None,
