@@ -262,6 +262,128 @@ When a new model family ships with a `general.architecture` value that ananke do
 
 **Reference implementation:** the `dump-gguf` example at `ananke/examples/dump-gguf.rs` is the canonical tool for gathering GGUF metadata. The llama.cpp source (ask the operator where it lives) is the ground truth for tensor naming, metadata keys, and architecture classification. When in doubt about how a tensor is routed at runtime, check `llama-arch.cpp` (`LLM_TENSOR_NAMES`, `LLM_ARCH_NAMES`, `llm_arch_is_hybrid`), `llama-model.cpp` (hparams loading), and `llama-memory*.cpp` (KV cache vs recurrent state).
 
+### Host-side memory
+
+The GPU compute-buffer curves above describe VRAM. The host side is modelled
+separately in `ananke/src/estimator/host_buffer.rs`, and the two are not
+interchangeable — for a long time the `Cpu` slot was charged the GPU-calibrated
+`compute_buffer_mb`, a number derived entirely from `nvidia-smi` readings and
+never measured against a host backend.
+
+What llama-server actually holds in host RAM, beyond weights and the CPU's KV
+share:
+
+- **The pinned graph arena.** ggml pins every graph *input* tensor to the CPU
+  backend, and when a GPU is present that backend's buffer type is swapped for
+  the device's host buffer type — `cudaMallocHost`, page-locked and
+  unswappable. llama.cpp logs it as `CUDA_Host compute buffer size`, not `CPU`.
+  Three measured components, all scaling with the batch: the KQ mask at
+  `n_kv × min(context, ubatch) × (fa ? 2 : 4)`, a second window-sized mask on
+  an interleaved-SWA model (sized `n_swa + n_tokens`, not the window alone),
+  and two `n_embd × n_tokens` f32 hidden-state inputs. That last term is easy
+  to miss and *dominates at short contexts* — the token embeddings stay on the
+  CPU backend, so the embedding lookup and the split-boundary copy both land
+  here.
+- **The process baseline.** CUDA runtime host allocations, tokenizer, sampler
+  state, graph metadata. Measured at `112 MiB + 3.4 MiB × n_layer` against *serving*
+  processes (an idle one reads ~26 MiB lower) across three models; the layer count predicts it better than the hidden size does.
+- **The prompt cache.** `-cram`, default 8192 MiB of serialized evicted
+  prompts. ananke passes the flag explicitly so the reservation and the
+  runtime's cap are the same number.
+
+The two runtimes size the arena by **different rules**, so calibrate each:
+
+| | mainline | ik_llama |
+|---|---|---|
+| mask width | `ctx / parallel`, padded | `ctx` — `-np` does not divide it |
+| SWA second mask | window-sized (`n_swa + n_tokens`) | full context |
+| MLA | half-width mask (`deepseek4`; `deepseek2` unmeasured) | — |
+| sparse-attention indexer | one extra mask (`glm-dsa`) | two extra, keyed on `-dsa` |
+| hidden-state buffers | two `n_embd x n_tokens` f32 | one |
+| extra GPU, layer-split | +24 MiB | none |
+| CPU-resident MoE ops | — | 81-161 KiB/token, only below `n_tokens x n_used >= 32 x n_expert` |
+
+Same model and flags at ctx 32768 / ub 512: mainline 18 MiB, ik 37 MiB.
+
+Calibrate along **two** axes, not one. The obvious sweep is context × batch;
+the one that is easy to forget is **how much of the model is on the GPU**, and
+a `-ngl 99`-only sweep measures the regime where the host side matters least.
+The arena turns out to be offload-independent (18.01 MiB at `-ngl 99`, `-ngl
+18`, and `-ngl 0` alike) and the host side grows through the CPU's KV share
+instead — but that is a finding, not an assumption to start from. A service
+with no GPU visible at all is different again: nothing is pinned, and the CPU
+compute buffer swells to hold the op intermediates a GPU run offloads to the
+device (measured 88 MiB against 18).
+
+Sweep *real* hybrids, not a small model pushed to the CPU with `-ngl`. Expert
+offload (`--n-cpu-moe`) is a different mechanism, and a mixture of experts has
+a much larger process baseline than its layer count suggests — a 41-layer MoE
+was measured holding more than a 65-layer dense model, which is why the
+baseline carries a flat MoE allowance. Note that Laguna and other ik_llama-only
+architectures cannot be measured with a mainline build at all; keep the fork
+constant across a sweep or the fork's own differences will be read as model
+differences.
+
+**Measure both forks before trusting a host model.** Laguna-S-2.1 under
+`--n-cpu-moe 30` on two GPUs, same model and same flags:
+
+Qwen3.6-35B-A3B under `--n-cpu-moe 40`, one GPU, no `--no-mmap` on either:
+
+| runtime | load log | owned (anon+shmem) | mapped (`RssFile`) |
+|---|---|---|---|
+| mainline | `CPU_Mapped model buffer size = 24771` | 465 MiB | 24935 MiB |
+| ik_llama | `CPU buffer size` | 23759 MiB | 164 MiB |
+
+Nothing in the configuration distinguishes those runs, yet the same bytes land
+in different counters. The divergence is specific to the expert-offload path —
+at `-ngl 0` the same ik build maps normally, and honours `--no-mmap` when given
+it — so it cannot be predicted from flags at all. That is why
+`RollingBase::host_peak` decides from the measured `RssFile` rather than from
+`mmap`/`-rtr`: inferring from flags takes ik's 62.3 GiB owned against a 6.6 GiB
+base, a ratio of 9 clamped to 1.5, and over-reserves a host slot tens of GiB
+wide by half. Mainline's `RssFile` came to the host weight total plus
+~150-230 MiB of shared libraries in every configuration tried, which is what
+makes it a usable discriminator.
+
+**Aim for reachability, not closeness.** Where a term cannot be predicted well
+— the process baseline varies 400-546 MiB across three MoEs that all have 256
+experts, with layer count running the wrong way — pick the constant so that
+every known model lands inside the rolling correction's `[0.8, 1.5]` clamp of
+reality. That band is the whole distance the correction can travel, so a
+"closer" constant that pushes one model outside it is strictly worse: no amount
+of observation can bring that service back.
+
+The arena's *shape* is read from llama.cpp's graph construction; the baseline
+is a fit. Calibrate the baseline against a process that has **served a
+request** — measuring at idle understates it by ~26 MiB of first-use scratch.
+Recent builds also print a `memory breakdown` table splitting each device into
+model / context / compute, which is easier to read than the individual buffer
+lines. To re-check either:
+
+```bash
+# One run per (context, ubatch) point. Read the arena from the load log —
+# note -lv 5, without which recent builds omit the buffer lines entirely:
+llama-server -m <model> -c <ctx> -ub <ub> -ngl 99 -fa on -lv 5 2>&1 \
+  | grep "CUDA_Host compute buffer size"
+# and the host footprint from /proc once it is serving:
+grep -E "^(RssAnon|RssShmem|RssFile|VmRSS):" /proc/<pid>/status
+```
+
+**Read `RssAnon + RssShmem`, not `RssAnon`.** `cudaMallocHost` is accounted as
+*shmem*: growing the arena from 18 MiB to 72 MiB moves `RssShmem` by exactly
+that and leaves `RssAnon` flat. And **not `VmRSS`** — `RssFile` is the mapped
+GGUF, which llama.cpp maps with `MAP_POPULATE` and then unmaps only outside the
+host-resident tensor span, so a hybrid run leaves nearly the whole file
+resident as clean, reclaimable pages. That is what
+`ananke/src/supervise/rolling.rs` compares against a weights-excluded base.
+
+Two gotchas. `ik_llama`'s `-rtr` forces `--no-mmap`, so a repacked model's
+weights are anonymous and *do* appear in the owned figure. And the prompt cache
+allocates nothing at load — `-cram 0` and `-cram 4096` measure identically on a
+fresh server — so it is reserved but deliberately kept out of the rolling
+correction's base, or every observation would read as a large
+over-reservation.
+
 ### Multi-token prediction (MTP / NextN) overhead
 
 When a service sets `spec_type = "draft-mtp"`, llama.cpp enables multi-token-prediction speculative decoding. For models that ship an embedded MTP head (`{arch}.nextn_predict_layers > 0` — e.g. Qwen 3.6's `qwen35` and `qwen35moe`), this needs *no separate draft model*: llama.cpp creates a second context against the same target model whose KV cache covers only the trailing `nextn_predict_layers` block(s) — the dense-attention MTP head — using the draft cache types (f16 by default, independent of `--cache-type-*`). No extra weights load, because the nextn-layer tensors are resident regardless.
