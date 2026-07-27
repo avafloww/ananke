@@ -354,6 +354,60 @@ def derive_mainline_tensor_moe(rows: list[dict]) -> tuple[int, str]:
     )
 
 
+_TENSOR_BASE: dict[str, int] = {}
+
+
+def derive_tensor_split_baseline(rows: list[dict]) -> tuple[int, str]:
+    """Host baseline a tensor split costs beyond a layer split.
+
+    Measured on every model that ran both, at the same context, batch, slot
+    count and card count: between 96 and 184 MiB more. The estimator had no
+    term for it, so every tensor-split service was under-predicted by that
+    much — and tensor split is what the operator runs for several of them.
+    """
+    from collections import defaultdict as _dd
+    pairs: dict[tuple, dict[str, list[float]]] = _dd(lambda: _dd(list))
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if factors["ngl"] != 99 or factors["gpus"] != "0,1" or factors["spec_type"]:
+            continue
+        if factors["n_cpu_moe"] or not factors["served"] or factors["bench"]:
+            continue
+        if factors["parallel"] != 1 or not parsed.get("arena_mib"):
+            continue
+        owned = (record["rss"].get("rss_anon_kb", 0)
+                 + record["rss"].get("rss_shmem_kb", 0)) * 1024
+        mask, swa_mask, hidden = arena_terms(record)
+        split = factors["split"] or "layer"
+        copies = 4 if split == "layer" else 1
+        base = (owned - (copies * (mask + swa_mask) + hidden) * 1024**2) / 1024**2
+        key = (record["provenance"]["model_key"], factors["ctx"], factors["ubatch"],
+               parsed.get("arch"))
+        pairs[key][split].append(base)
+
+    deltas, detail = [], []
+    by_arch: dict[str, list[float]] = _dd(list)
+    for key, group in pairs.items():
+        if "layer" not in group or "tensor" not in group:
+            continue
+        delta = st.median(group["tensor"]) - st.median(group["layer"])
+        deltas.append(delta)
+        by_arch[key[3]].append(delta)
+        detail.append(f"{key[0].split('/')[-1][:18]} {delta:+.0f}")
+    if not deltas:
+        raise ValueError("no model ran both split modes at matching settings")
+    for arch, group in by_arch.items():
+        consensus(group, f"tensor-split baseline for {arch}", tolerance=0.20)
+    _TENSOR_BASE.clear()
+    _TENSOR_BASE.update({a: round(max(g) * 1024**2) for a, g in by_arch.items()})
+    return round(max(deltas) * 1024**2), (
+        f"{len(deltas)} models measured under both split modes at matching "
+        f"context, batch, slots and cards: {'; '.join(sorted(detail))} MiB. "
+        "Per architecture, since the spread across all of them is wider than "
+        "any one of them is internally."
+    )
+
+
 def derive_quantised_cache_bytes(rows: list[dict]) -> tuple[int, str]:
     """Extra pinned bytes per batch token when the KV cache is quantised.
 
@@ -845,6 +899,11 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         failed.append(f"ik MoE rates: cannot derive — {error}")
 
     try:
+        derive_tensor_split_baseline(rows)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+        failed.append(f"tensor-split baseline: cannot derive — {error}")
+
+    try:
         derive_quantised_cache_bytes(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"quantised-cache rates: cannot derive — {error}")
@@ -899,6 +958,14 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             continue
         entry["kind"] = kind
 
+    if _TENSOR_BASE:
+        document["tensor_split_baseline"] = {
+            "$comment": "Extra host baseline bytes a tensor split costs beyond "
+                        "a layer split, by architecture. `default` applies to "
+                        "an architecture not listed.",
+            "default": max(_TENSOR_BASE.values()),
+            "by_arch": dict(sorted(_TENSOR_BASE.items())),
+        }
     if _QUANT_RATES:
         document["quantised_cache_rates"] = {
             "$comment": "Extra pinned bytes per batch token when the KV cache "

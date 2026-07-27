@@ -101,11 +101,34 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
         (true, false) => MTP_HOST_BYTES_EMBEDDED,
         (false, _) => 0,
     };
+    // A tensor split costs host baseline a layer split does not — between 96
+    // and 184 MiB, measured on every model that ran both at matching settings.
+    // The operator runs several services this way, and every one of them was
+    // under-predicted by that much.
+    let tensor_split = if inputs.visible_devices > 1
+        && inputs.split_mode == crate::config::validate::SplitMode::Tensor
+    {
+        tensor_split_baseline(arch)
+    } else {
+        0
+    };
     pinned_graph_bytes(summary, arch, inputs)
         .saturating_add(PINNED_EXTRA_BYTES)
         .saturating_add(process_base_bytes(summary))
         .saturating_add(device_bytes)
+        .saturating_add(tensor_split)
         .saturating_add(mtp)
+}
+
+/// What a tensor split adds to the host baseline, for this architecture.
+fn tensor_split_baseline(arch: &str) -> u64 {
+    crate::estimator::tuning::TENSOR_SPLIT_BASELINE
+        .iter()
+        .find(|(name, _)| *name == arch)
+        .map_or(
+            crate::estimator::tuning::TENSOR_SPLIT_BASELINE_DEFAULT,
+            |(_, bytes)| *bytes,
+        )
 }
 
 /// The process's fixed host baseline for this model.
@@ -912,19 +935,23 @@ mod measured_tests {
     fn each_extra_visible_device_costs_host_memory() {
         // Tensor split throughout, so the mask replication that layer split
         // triggers cannot contaminate what is meant to be a measurement of
-        // the per-device context cost alone.
+        // the per-device context cost alone. This test has now caught two
+        // terms leaking into that delta, which is the point of it.
         let summary = fake_summary();
         let empty: [String; 0] = [];
-        let mut one = inputs("f16", "f16", 32768, &empty);
-        one.visible_devices = 1;
-        one.split_mode = SplitMode::Tensor;
+        // Two devices against four, not one against four: the tensor-split
+        // baseline is charged whenever more than one device is visible, so
+        // starting from one would fold that term into the delta as well.
+        let mut two = inputs("f16", "f16", 32768, &empty);
+        two.visible_devices = 2;
+        two.split_mode = SplitMode::Tensor;
         let mut four = inputs("f16", "f16", 32768, &empty);
         four.visible_devices = 4;
         four.split_mode = SplitMode::Tensor;
 
         let delta = host_overhead_bytes(&summary, "llama", &four)
-            - host_overhead_bytes(&summary, "llama", &one);
-        assert_eq!(delta, 3 * PROCESS_BASE_BYTES_PER_DEVICE);
+            - host_overhead_bytes(&summary, "llama", &two);
+        assert_eq!(delta, 2 * PROCESS_BASE_BYTES_PER_DEVICE);
     }
 
     /// The ik CPU-MoE term scales with hidden size rather than being the flat

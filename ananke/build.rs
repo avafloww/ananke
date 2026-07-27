@@ -129,6 +129,13 @@ fn generate_tuning_constants() {
     out.push_str(&generate_ik_rates(&parsed));
     out.push_str(&generate_rate_table(
         &parsed,
+        "tensor_split_baseline",
+        "TENSOR_SPLIT_BASELINE",
+        "TENSOR_SPLIT_BASELINE_DEFAULT",
+        "Extra host baseline bytes a tensor split costs beyond a layer split,\n/// by architecture.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
         "quantised_cache_rates",
         "QUANTISED_CACHE_RATES",
         "QUANTISED_CACHE_RATE_DEFAULT",

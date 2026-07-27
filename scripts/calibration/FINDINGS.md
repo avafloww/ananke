@@ -641,6 +641,51 @@ The validation test now passes the cache type through. It had been leaving it
 unset, which made the whole term unreachable from the check that exists to
 catch exactly this.
 
+## RESOLVED: a tensor split costs host baseline
+
+Chasing Qwen3.6-27B's baseline turned up a general term instead. Every model
+that ran under both split modes at matching context, batch, slots and cards
+holds more host memory under tensor split:
+
+| architecture | extra |
+|---|---|
+| qwen3 | 100 MiB |
+| talkie | 108 |
+| gemma3 | 127 |
+| llama | 130 |
+| gemma4 | 154 |
+| qwen35 | 184 |
+
+The estimator had no term for it, so every tensor-split service was
+under-predicted by that much — and several of the operator's are tensor-split.
+Charging it takes the out-of-band cells from 42 to **33** and the median ratio
+from 1.16 to **1.06**.
+
+## What first-use allocation is not
+
+Serving a first request allocates host memory an idle process has not: -2 MiB
+on talkie, +238 on Qwen3.6-27B, deterministic per model. Ruled out as causes,
+each by measurement rather than argument:
+
+- **The request itself.** Probes asking for 16, 64, 256 and 1024 tokens all
+  produce the same figure — 433 MiB on gemma3 and 778 on Qwen3.6-27B, flat.
+- **Vocabulary.** gemma3 has a larger one and allocates a quarter as much.
+- **Tokenizer size.** Magidonia has *more* BPE merges than Qwen3.6-27B —
+  269 443 against 247 587 — and allocates 268 MiB against 611.
+- **Model size, layer count, architecture family.** gemma3 and Qwen3.6-27B are
+  within 1% on layers and hidden size and differ fourfold.
+- **CPU-resident weights and any logged buffer.** gemma3's CPU buffer is
+  *larger*. Nothing in either load log accounts for the difference.
+
+So it is untracked heap that varies per model for a reason not visible in the
+GGUF, the log, or the request. The band test now judges against served cells,
+since a reservation is made before the first request but has to cover the
+state after it — judging against an idle process counts a required
+over-prediction as an error.
+
+Qwen3.6-27B remains 1.85x its modelled baseline and accounts for 29 of the 33
+cells still outside the band. Every other model is inside it.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline

@@ -100,6 +100,15 @@ class Cell:
     thp: bool = False
     embeddings: bool = False
     served: bool = True
+    probe_tokens: int = 64
+    """How many tokens the first request asks for.
+
+    Serving a first request allocates host memory that an idle process has not
+    — measured from -2 MiB to +238 across models, and predicted by neither
+    vocabulary, model size, nor architecture. Every served cell in the campaign
+    used the same 64-token probe, so the request itself was never a variable.
+    Varying it is what separates a per-request allocation from a per-model one.
+    """
     soak: int = 0
     concurrency: int = 1
     bench: bool = False
@@ -672,7 +681,7 @@ def exercise(cell: Cell, port: int, pid: int = 0) -> list[dict[str, object]]:
         return _exercise_embeddings(cell, port, pid)
     _post(port, "/v1/chat/completions",
           {"model": "m", "messages": [{"role": "user", "content": "Count to twenty."}],
-           "max_tokens": 64}, 300)
+           "max_tokens": cell.probe_tokens}, 300)
 
 
     if cell.bench:

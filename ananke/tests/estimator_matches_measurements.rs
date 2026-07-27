@@ -175,6 +175,14 @@ fn every_model_lands_inside_the_correction_band() {
         if case.hybrid {
             continue;
         }
+        // Served cells only. A reservation is made before the first request
+        // but has to cover the state after it — serving allocates host memory
+        // an idle process has not, deterministically per model and measured
+        // from -2 MiB to +238. Judging the reservation against an idle process
+        // counts a required over-prediction as an error.
+        if !case.served {
+            continue;
+        }
         let predicted = host_overhead_bytes(&case.summary, &case.arch, &case.inputs()) as f64;
         if predicted <= 0.0 {
             continue;
@@ -199,7 +207,7 @@ fn every_model_lands_inside_the_correction_band() {
     // the direction that OOMs. The number is recorded so it can only fall.
     // See FINDINGS.md; closing the gap needs the host baseline refitted, not
     // this threshold raised.
-    const KNOWN_OUTSIDE: usize = 44;
+    const KNOWN_OUTSIDE: usize = 33;
     assert!(
         outside.len() <= KNOWN_OUTSIDE,
         "{} of {checked} cells sit outside the correction's [0.8, 1.5] band, \
@@ -231,6 +239,7 @@ struct Case {
     hybrid: bool,
     mtp: bool,
     kv_type: String,
+    served: bool,
     device_compute_mib: Option<u64>,
     split: SplitMode,
 }
@@ -338,6 +347,10 @@ impl Case {
             // Passed through, because a quantised cache costs pinned memory
             // the arena model charges for. Leaving it unset made that term
             // silently unreachable from this test.
+            served: factors
+                .get("served")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
             kv_type: factors
                 .get("kv_type")
                 .and_then(Value::as_str)
