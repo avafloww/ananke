@@ -605,6 +605,38 @@ def flash_attention_off() -> list[Cell]:
     return cells
 
 
+def slot_batch() -> list[Cell]:
+    """The slot rules at a second batch size.
+
+    Every cell with `parallel > 1` or `--kv-unified` was measured at ubatch
+    512, and both feed rules that multiply terms which scale with the batch:
+    the stream division that sizes the KQ mask, and the three window masks an
+    interleaved-SWA model builds when slots share one cache. A rule that is
+    wrong in its batch dependence is invisible at one batch size.
+
+    That is exactly how flash-attention-off spent the first campaign recorded
+    as an inconsistent baseline shift when it is a clean per-token rate — the
+    cells that would have shown it all sat at one ubatch. This is the same
+    hole in the two remaining places it exists.
+
+    An SWA model and a plain causal one, since only the former exercises the
+    window-mask rule.
+    """
+    cells: list[Cell] = []
+    for key in ("gemma3-27b", "qwen3-4b"):
+        model = MODELS[key]
+        for parallel, unified in ((4, True), (4, False), (1, False)):
+            for ubatch in (512, 2048):
+                cells.append(Cell(
+                    label=f"slotbatch-{model.key}-np{parallel}"
+                          f"{'-unified' if unified else ''}-ub{ubatch}",
+                    purpose=("slot-batch",), model=path_of(model.path),
+                    gpus="0,1", split="layer", ctx=32768, ubatch=ubatch,
+                    parallel=parallel, kv_unified=unified,
+                    **_model_flags(model, "0,1")))
+    return cells
+
+
 def replication() -> list[Cell]:
     """Repeats in the regimes the noise floor never visited.
 
@@ -798,6 +830,7 @@ QUESTIONS = {
     "concurrency": concurrency,
     "review-followup": review_followup,
     "mtp-slots": mtp_slots,
+    "slot-batch": slot_batch,
     "flash-attention": flash_attention_off,
     "holdout": phase5_holdout,
 }

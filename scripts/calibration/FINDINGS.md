@@ -847,6 +847,35 @@ non-SWA models against 4.8-4.9x on sliding-window ones). That reading was
 correct; what it lacked was the second axis that turns the non-uniformity into
 a per-architecture rate.
 
+## The design hole flash attention exposed, audited everywhere else
+
+Flash-attention-off spent the first campaign recorded as an inconsistent
+baseline shift because seventeen of its nineteen cells sat at one context and
+one batch. A rule that is wrong in its *batch* dependence is invisible at one
+batch size, so every other modelled regime was audited the same way — cells,
+distinct contexts, distinct batches, and distinct (context, batch) pairs:
+
+| regime | cells | ctx x ub points |
+|---|---|---|
+| quantised KV | 142 | 7 |
+| tensor split | 142 | 11 |
+| ik_llama | 95 | 8 |
+| hybrid | 121 | 9 |
+| `--kv-unified` | 14 | **5, all at one ubatch** |
+| `parallel > 1` | 55 | **7, all at one ubatch** |
+| `-rtr`, `--numa` | 1 each | 1 |
+
+The two slot regimes have the same hole, and both feed rules that multiply
+terms which scale with the batch: the stream division that sizes the KQ mask,
+and the three window masks an interleaved-SWA model builds when slots share
+one cache. The `slot-batch` phase measures them at a second batch size.
+
+`-rtr` and `--numa` are single points and stay that way deliberately — neither
+feeds a modelled constant. `RollingBase::host_peak` decides from the measured
+`RssFile` rather than from either flag, precisely because their effect cannot
+be predicted from the flags. `thp` is in the cell schema and has never been
+varied at all.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline
