@@ -117,15 +117,19 @@ lack fields the current ones carry.
 - **Check the CPU governor.** `powersave` on `acpi-cpufreq` halves CPU-bound
   throughput; it is recorded in `hardware` for exactly this reason.
 
+See `PLAN.md` for the complete specification: every constant this campaign
+derives, the cells that determine it, the analysis protocol, and an explicit
+list of what it does not establish.
+
 ## Architectures this campaign cannot calibrate
 
 `compute_buffer.rs` carries tuning curves for nineteen architectures. The
-model library reaches nine of them. These eleven have **no model here at all**,
+model library reaches nine of them. These ten have **no model here at all**,
 so their curves are inherited from whoever first fitted them and are not
 re-derivable from this dataset:
 
 `deepseek2`, `gemma2`, `glm4moe`, `gpt-oss`, `jamba`, `llama4`, `mamba`,
-`mixtral`, `qwen3moe`, `qwen3vlmoe`, `talkie`
+`mixtral`, `qwen3moe`, `qwen3vlmoe`
 
 Fixing this means adding models, not rearranging phases — a VL-MoE quant for
 `qwen3vlmoe`, a Mamba or Jamba model for the recurrent curves, and so on. Any

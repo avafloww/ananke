@@ -3,3 +3,6 @@
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
+
+# ik_llama writes this into the working directory.
+llama.log

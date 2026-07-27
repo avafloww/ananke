@@ -524,6 +524,8 @@ def provenance(binary: str, cell: Cell | None = None) -> dict[str, str]:
         "host": os.uname().nodename,
         "binary": str(resolved.resolve()) if resolved.exists() else str(resolved),
         "ananke_rev": _run(["git", "rev-parse", "--short", "HEAD"]) or "?",
+        "runtime_version": _binary_version(resolved),
+        "runtime_sha256": _sha256(resolved),
         "ananke_dirty": "yes" if _run(["git", "status", "--porcelain"]) else "no",
     }
     if cell is not None:
@@ -548,6 +550,37 @@ def model_identity(path: Path) -> dict[str, str]:
             quant = token
     return {"model_key": key, "model_quant": quant,
             "model_bytes": str(model_bytes(path))}
+
+
+def _binary_version(path: Path) -> str:
+    """What the server reports about itself.
+
+    Custom forks report `version: 0 (unknown)` and a nix build normalises the
+    binary's mtime to the epoch, so neither identifies anything. The hash
+    beside this does: it cannot be mapped to an upstream commit, but it
+    answers "was this the same binary", which is what separates drift in the
+    runtime from error in a fit, and what tells a contributor's build from
+    ours. Recorded anyway because a non-nix build does report a version.
+    """
+    try:
+        out = subprocess.run([str(path), "--version"], capture_output=True,
+                             text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+    text = (out.stdout + out.stderr).strip().splitlines()
+    return text[0][:200] if text else "?"
+
+
+def _sha256(path: Path) -> str:
+    """The binary's hash: an exact identity even when it reports build 0."""
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+        return digest.hexdigest()[:16]
+    except OSError:
+        return "?"
 
 
 def _mtime(path: Path) -> str:
@@ -667,6 +700,36 @@ def exercise(cell: Cell, port: int, pid: int = 0) -> list[dict[str, object]]:
 BENCH = Path(os.environ.get("CODING_BENCH", Path(__file__).parent / "coding_bench.py"))
 
 
+def _exercise_embeddings(cell: Cell, port: int,
+                         pid: int) -> list[dict[str, object]]:
+    """An embedding model has no generation, so requests drive it instead.
+
+    The equivalent growth question for this modality is whether repeated
+    embedding calls accumulate anything, so a growth cell issues many and
+    checkpoints the same way rather than being skipped.
+    """
+    rounds = cell.bench_turns if cell.bench else 1
+    checkpoints: list[dict[str, object]] = []
+    for index in range(rounds):
+        _post(port, "/v1/embeddings",
+              {"input": f"calibration probe {index} " + "token " * 64}, 120)
+        if not cell.bench:
+            continue
+        checkpoint = {
+            "turn": index + 1,
+            "at_utc": datetime.datetime.now(datetime.timezone.utc)
+                      .isoformat(timespec="seconds"),
+            "prompt_tokens": 0, "completion_tokens": 0,
+            "generated_tokens_total": 0, "kv_depth_tokens": 0,
+            **read_rss(pid),
+        }
+        per_device = read_gpu_per_device(pid)
+        if per_device:
+            checkpoint["gpu_used_mib"] = sum(per_device.values())
+        checkpoints.append(checkpoint)
+    return checkpoints
+
+
 def run_growth(cell: Cell, port: int, pid: int) -> list[dict[str, object]]:
     """Drive an agent-shaped conversation, checkpointing memory against tokens.
 
@@ -685,10 +748,19 @@ def run_growth(cell: Cell, port: int, pid: int) -> list[dict[str, object]]:
     the prompt cache sees a real prefix rather than filler.
     """
     prompts = _bench_prompts()
-    messages = [{"role": "system", "content": _bench_system()}]
+    # `-cram` serialises prompts that have been *evicted* from a slot. One
+    # strictly-growing conversation shares a prefix and never evicts anything,
+    # so it would measure cram 0 and cram 8192 identically for a reason that
+    # has nothing to do with the cache. Alternating distinct conversations is
+    # what makes a slot's prompt get displaced and the cache get used.
+    conversations = [[{"role": "system", "content": _bench_system() + marker}]
+                     for marker in ("", " Prefer Rust.", " Prefer Python.",
+                                    " Answer tersely.")] if cell.cram else \
+        [[{"role": "system", "content": _bench_system()}]]
     checkpoints: list[dict[str, object]] = []
     generated = 0
     for turn in range(cell.bench_turns):
+        messages = conversations[turn % len(conversations)]
         messages.append({"role": "user", "content": prompts[turn % len(prompts)]})
         body = _post(port, "/v1/chat/completions",
                      {"model": "m", "messages": messages,
@@ -724,6 +796,7 @@ def run_growth(cell: Cell, port: int, pid: int) -> list[dict[str, object]]:
         checkpoints.append(checkpoint)
         # Stop before the context wraps: past that point the server evicts and
         # the footprint stops being a function of what was generated.
+        checkpoint["conversation"] = turn % len(conversations)
         if checkpoint["kv_depth_tokens"] > cell.ctx * 0.85:
             break
     return checkpoints

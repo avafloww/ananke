@@ -115,11 +115,6 @@ MODELS = {
         # were absent from the registry while being served in production
         # daily, which meant the campaign's "holdout" covered under half of
         # what the daemon actually runs.
-        Model("gemma3-glitter-27b", "mradermacher/Gemma-3-Glitter-27B-i1-GGUF/Gemma-3-Glitter-27B.i1-Q5_K_M.gguf",
-              ("mainline",), note="gemma3, 62L — a second layer count for the baseline fit"),
-        Model("gemma4-31b", "unsloth/gemma-4-31B-it-GGUF/gemma-4-31B-it-UD-Q4_K_XL.gguf",
-              ("mainline",), mmproj="unsloth/gemma-4-31B-it-GGUF/mmproj-F16.gguf",
-              note="gemma4 dense, the non-QAT sibling"),
         Model("gemma4-26b-a4b", "unsloth/gemma-4-26B-A4B-it-GGUF/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
               ("mainline",), mmproj="unsloth/gemma-4-26B-A4B-it-GGUF/mmproj-F16.gguf",
               note="gemma4 MoE, 30L"),
@@ -362,14 +357,180 @@ def _curve_points(model: Model) -> list[tuple[int, int, str]]:
     return points
 
 
-GROWTH_TURNS = 40
+GROWTH_TURNS = 10
 """Turns every growth cell runs, held constant across models.
 
 Growth as a function of turn count only means anything if the turn count is
-the same everywhere. Scaling it down for slow models — which is tempting,
-since a hybrid at ~3 tok/s spends over an hour here — makes the resulting
-curves incomparable, which defeats the measurement.
+the same everywhere, so this does not scale with model speed even though the
+slowest model costs twenty times the fastest per turn.
+
+Ten turns reaches roughly five thousand generated tokens. That is enough to
+separate "grows per token" from "allocates once on first use", which is the
+question; it is not enough to characterise a slow leak, and nothing here
+claims to.
 """
+
+
+def interior_points() -> list[Cell]:
+    """The points that turn a two-point line into a measured relationship.
+
+    Several terms are claimed linear on the strength of two samples, which
+    cannot distinguish a line through the origin from an affine one — and the
+    difference is charged to the slope, so it grows with every extrapolation.
+    Each cell here adds an interior or a wider point to a relationship the
+    rest of the campaign only brackets.
+    """
+    cells: list[Cell] = []
+    # ik's CPU-MoE term is per batch token with a threshold between them; one
+    # point below and one above forces the slope through the origin and leaves
+    # the threshold bracketed to a factor of four.
+    for key in ("qwen36-35b-a3b", "laguna", "glm52"):
+        model = MODELS[key]
+        if "ik" not in model.runtimes:
+            continue
+        for ubatch in (256, 1024):
+            cells.append(Cell(
+                label=f"ikmoe-{model.key}-ub{ubatch}", model=path_of(model.path),
+                runtime="ik", gpus="0,1", split="layer", ctx=32768,
+                ubatch=ubatch, **_model_flags(model, "0,1")))
+    # The no-flash-attention term is claimed per-token but only ever sampled at
+    # one batch size, where a flat 4 MiB fits exactly as well.
+    for key in ("qwen3-4b", "gemma3-27b"):
+        model = MODELS[key]
+        cells.append(Cell(label=f"nofa-{model.key}-ub2048",
+                          model=path_of(model.path), gpus="0,1", split="layer",
+                          ctx=32768, ubatch=2048, flash_attn="off",
+                          **_model_flags(model, "0,1")))
+    # deepseek4's slope is claimed linear in ubatch from two points.
+    ds = MODELS["dsv4f"]
+    cells.append(Cell(label="dsv4f-ub1024", model=path_of(ds.path), gpus="0,1",
+                      split="layer", ctx=32768, ubatch=1024,
+                      **_model_flags(ds, "0,1")))
+    # The curves are fitted to 65536 and used to 524288. One long point per
+    # steep architecture bounds how far the extrapolation can drift.
+    for key, ctx in (("dsv4f", 131072), ("glm52", 131072), ("laguna", 131072)):
+        model = MODELS[key]
+        cells.append(Cell(
+            label=f"longctx-{model.key}-c{ctx}", model=path_of(model.path),
+            runtime=model.runtimes[0], gpus="0,1", split="layer", ctx=ctx,
+            **_model_flags(model, "0,1")))
+    # The embedded-MTP constant is a one-model number, and the second model
+    # that runs it in production differs in kv-head count — the factor the KV
+    # formula multiplies by and which one model cannot verify.
+    q35 = MODELS["qwen36-35b-a3b"]
+    for spec, name in ((None, "none"), ("draft-mtp", "embedded")):
+        cells.append(Cell(label=f"mtp-{name}-35b", model=path_of(q35.path),
+                          gpus="0,1", split="tensor", ctx=32768,
+                          spec_type=spec, **_model_flags(q35, "0,1")))
+    return cells
+
+
+def interactions() -> list[Cell]:
+    """Whether the curves hold in the regime production actually runs.
+
+    Every curve cell is f16, one slot, layer split. Production is q8_0, two to
+    four slots, tensor split. Fitting in one regime and serving in another is
+    only safe if the curve's *slope* does not depend on those settings — which
+    is an assumption nobody has tested, and one whose failure would appear as
+    unexplained holdout error with no cell to attribute it to.
+
+    Two contexts per variant is the minimum that can distinguish "shifts the
+    base" from "changes the slope"; one point could only see the former.
+    """
+    cells: list[Cell] = []
+    for key in ("qwen3-4b", "gemma3-27b", "qwen36-27b", "qwen36-35b-a3b"):
+        model = MODELS[key]
+        if model.kv_types == ("f16",):
+            continue
+        for ctx in (8192, 65536):
+            cells.append(Cell(
+                label=f"interact-{model.key}-c{ctx}-q8", model=path_of(model.path),
+                gpus="0,1", split="layer", ctx=ctx, kv_type="q8_0",
+                **_model_flags(model, "0,1")))
+            cells.append(Cell(
+                label=f"interact-{model.key}-c{ctx}-np4", model=path_of(model.path),
+                gpus="0,1", split="layer", ctx=ctx, parallel=4, kv_unified=True,
+                **_model_flags(model, "0,1")))
+            cells.append(Cell(
+                label=f"interact-{model.key}-c{ctx}-tensor", model=path_of(model.path),
+                gpus="0,1", split="tensor", ctx=ctx,
+                **_model_flags(model, "0,1")))
+    return cells
+
+
+def replication() -> list[Cell]:
+    """Repeats in the regimes the noise floor never visited.
+
+    The floor is five repeats of one small dense model on one card with a hot
+    page cache. It licenses a significance claim for approximately that cell.
+    A hybrid under page-cache pressure, an ik no-mmap load, and a two-card
+    tensor split are all obviously noisier, and every per-model constant is
+    otherwise a single sample.
+
+    The repeats are spread across the run rather than run back to back, so a
+    monotone drift — thermal, fragmentation, page-cache composition — shows up
+    as a difference between them instead of loading onto model size, which the
+    smallest-first ordering would otherwise confound it with.
+    """
+    cells: list[Cell] = []
+    for repeat in range(3):
+        cells.append(Cell(label=f"repeat-laguna-hybrid-{repeat}",
+                          model=path_of(MODELS["laguna"].path), runtime="ik",
+                          gpus="0,1", split="layer", ctx=32768, repeat=repeat,
+                          **_model_flags(MODELS["laguna"], "0,1")))
+        cells.append(Cell(label=f"repeat-gemma3-tensor-{repeat}",
+                          model=path_of(MODELS["gemma3-27b"].path), gpus="0,1",
+                          split="tensor", ctx=32768, repeat=repeat))
+    return cells
+
+
+def concurrency() -> list[Cell]:
+    """Per-slot state, which no other cell allocates.
+
+    Production runs `parallel` 2-4. Every other cell here sends strictly
+    sequential requests, so only the first slot is ever touched and the rest
+    stay unallocated — `soak` with `concurrency` is what reaches them, and
+    until now nothing set either.
+    """
+    return [
+        Cell(label=f"slots-np{np}-c{conc}", model=path_of(MODELS["qwen36-27b"].path),
+             gpus="0,1", split="layer", ctx=32768, parallel=np,
+             kv_unified=unified, soak=6, concurrency=conc)
+        for np, conc, unified in ((4, 4, False), (4, 4, True), (2, 2, False))
+    ]
+
+
+def device_scaling() -> list[Cell]:
+    """Separate the per-device CUDA cost from everything that scales with model.
+
+    The `gpus` axis elsewhere varies placement *and* device count together, so
+    it cannot say which of the two moved a number. These cells pin placement
+    to the CPU — `-ngl 0`, no weights on any card — and vary only how many
+    CUDA contexts get initialised. The difference between them is the host
+    cost of a visible device and nothing else.
+
+    That difference is the term the estimator does not have. `PROCESS_BASE_BYTES`
+    is a compiled scalar fitted on a two-card box; an operator with four or
+    eight cards inherits it wrong by an increment nobody has measured. Three
+    cells per model, on three models of different shape, establish whether the
+    increment is constant and whether it is model-independent.
+    """
+    cells: list[Cell] = []
+    for key in ("qwen3-4b", "gemma3-27b", "qwen36-35b-a3b"):
+        model = MODELS[key]
+        for gpus, name in [("", "none"), ("0", "one"), ("0,1", "two")]:
+            cells.append(Cell(
+                label=f"devices-{model.key}-{name}",
+                model=path_of(model.path), gpus=gpus, ngl=0, ctx=32768,
+                split=None, extra=model.extra, threads=model.threads))
+    # Whether the CPU-side terms depend on core count, which every contributor
+    # with a different CPU inherits blind.
+    for threads in (8, 16, 32):
+        cells.append(Cell(label=f"threads-{threads}-laguna",
+                          model=path_of(MODELS["laguna"].path), runtime="ik",
+                          gpus="0,1", split="layer", ctx=32768, threads=threads,
+                          n_cpu_moe=MODELS["laguna"].n_cpu_moe))
+    return cells
 
 
 def phase5_holdout() -> list[Cell]:
@@ -403,7 +564,7 @@ def phase5_holdout() -> list[Cell]:
         Cell(label="prod-dsv4f", model=path_of(MODELS["dsv4f"].path),
              gpus="0,1", ctx=131072, parallel=1, ubatch=512,
              n_cpu_moe=MODELS["dsv4f"].n_cpu_moe),
-        Cell(label="prod-talkie", model=path_of(MODELS["qwen3-4b"].path), ctx=2048),
+        Cell(label="prod-talkie", model=path_of(MODELS["talkie-13b"].path), ctx=2048),
     ]
 
 
@@ -483,6 +644,11 @@ QUESTIONS = {
     "curves": phase2b_curves,
     "fork": phase3_fork,
     "switches": phase4_special,
+    "device-scaling": device_scaling,
+    "interior": interior_points,
+    "interactions": interactions,
+    "replication": replication,
+    "concurrency": concurrency,
     "holdout": phase5_holdout,
 }
 
