@@ -83,23 +83,22 @@ class Cell:
     served: bool = True
     soak: int = 0
     concurrency: int = 1
-    bench: str | None = None
-    """Scenario to drive with the vendored agent-loop benchmark.
+    bench: bool = False
+    """Drive the vendored coding-agent benchmark instead of one short request.
 
-    A single short request only reaches what the runtime allocates on first
-    use. The benchmark's `turns` scenario re-sends a growing prefix with the
-    prompt cache on, which is the one thing that exercises the cache — a term
-    that accumulates with *use* rather than at load, and so is invisible to a
-    snapshot at startup.
+    A single request only reaches what the runtime allocates on first use. The
+    benchmark runs a multi-turn loop with real coding prompts and feeds each
+    real reply back in, so the context grows the way an agent's does and the
+    prompt cache fills on representative tokens rather than on filler a cache
+    or a drafter finds unnaturally easy.
 
     It does not cover everything. The loop is strictly sequential, so with
     `parallel > 1` only one slot is ever touched and per-slot state stays
-    unallocated; `soak` with `concurrency` is what reaches those. Its
-    conversation also grows to only ~11k tokens at the default turn count, a
-    fraction of a production context, so raise `bench_turns` for anything
-    claiming to bound KV-driven growth.
+    unallocated — `soak` with `concurrency` is what reaches those. Context also
+    grows by only ~300 tokens a turn, so `bench_turns` has to be large before
+    any claim about KV-driven growth at production context lengths.
     """
-    bench_turns: int = 5
+    bench_turns: int = 40
     verbose_log: bool = True
     """Whether to raise the loader's log verbosity.
 
@@ -378,12 +377,12 @@ def exercise(cell: Cell, port: int) -> None:
             t.join()
 
 
-# The agent-loop benchmark, which drives a server the way a coding agent does:
-# a growing prefix re-sent every turn, so the prompt cache and the KV fill the
-# way they do in production rather than the way a single synthetic request
-# leaves them. Vendored beside this module so a calibration run needs nothing
-# outside the repository.
-BENCH = Path(os.environ.get("AGENTIC_BENCH", Path(__file__).parent / "agentic_bench.py"))
+# The coding-agent benchmark, which drives a server with real prompts and real
+# generated replies rather than repetitive filler. Realism is the part that
+# cannot be synthesised: prompt-cache behaviour and generation both depend on
+# what the tokens actually are. Vendored beside this module so a calibration
+# run needs nothing outside the repository.
+BENCH = Path(os.environ.get("CODING_BENCH", Path(__file__).parent / "coding_bench.py"))
 
 
 def _run_bench(cell: Cell, port: int) -> None:
@@ -392,7 +391,7 @@ def _run_bench(cell: Cell, port: int) -> None:
         return
     subprocess.run(
         [sys.executable, str(BENCH), "--url", f"http://127.0.0.1:{port}",
-         "--scenario", cell.bench, "--turns", str(cell.bench_turns)],
+         "--turns", str(cell.bench_turns), "--model", "m"],
         capture_output=True, text=True, timeout=3600, check=False,
     )
 
