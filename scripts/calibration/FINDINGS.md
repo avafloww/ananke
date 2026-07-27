@@ -934,6 +934,50 @@ feeds a modelled constant. `RollingBase::host_peak` decides from the measured
 be predicted from the flags. `thp` is in the cell schema and has never been
 varied at all.
 
+## What the slot-batch cells found
+
+The audit predicted that `--kv-unified` and `parallel > 1` had the same hole
+flash attention did — measured at one batch size, feeding rules that multiply
+batch-scaling terms. Twelve cells at a second batch size found two errors, and
+one of them is not in the slot rules at all.
+
+**The shared-cache window mask was three copies at every batch.** That came
+from a sweep taken entirely at ubatch 512, where a 1024-token window spans two
+batches. At 2048 the same configuration measures two, and the difference is
+exactly one mask: 692.3 MiB measured against 740.0 modelled, where two give
+692.0. It is now one mask per batch the window spans plus the batch's own,
+capped at the measured range rather than extrapolated below 512.
+
+**A separate MTP draft's compute scales with context**, even though its cache
+does not. The draft shares the target's KV — the load log shows `layer 3:
+sharing with layer 59` — so the constant covering it was flat, and a flat
+constant is what the shared cache justifies. The compute buffer was never
+checked: gemma-4-31B-QAT measures a driver delta of 724, 788, and 920 MiB at
+ctx 32768, 65536, and 131072 against a modelled 407 at every one. That is an
+under-reservation of 317 to 513 MiB at every context, on a model the operator
+serves.
+
+## Idle slots are free; concurrent ones are not
+
+Qwen3.6-27B, all else equal, by *concurrent* requests:
+
+| concurrent requests | 1 | 2 | 4 |
+|---|---|---|---|
+| anon MiB | 602 | 767 | 1083 |
+
+About 162 MiB per additional active slot, linear. Slots that stay idle cost
+nothing at all — the same model at `parallel` 1, 2, and 4 with a single
+sequential probe reads 716 MiB at every one — so it is the *active* slot that
+allocates, which is consistent with the first-use prefill step above being
+per-slot rather than per-process.
+
+A reservation has to assume every slot can become active, so this belongs in
+the model, and it is the whole of the two cells still outside the correction
+band. It is not modelled yet: the series covers one architecture at one
+context and one split, which is the coverage that has produced a wrong
+constant three times here. The `concurrency-models` phase measures it across
+architectures first.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline

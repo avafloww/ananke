@@ -679,6 +679,36 @@ def concurrency() -> list[Cell]:
     ]
 
 
+def concurrency_models() -> list[Cell]:
+    """The per-slot cost, across architectures rather than one.
+
+    Qwen3.6-27B holds 602, 767, and 1083 MiB of anonymous memory at one, two,
+    and four *concurrent* requests, all else equal — about 162 MiB per
+    additional active slot, linear. Slots that stay idle cost nothing: the
+    same model at `parallel` 1, 2, and 4 with a single sequential probe reads
+    716 MiB at every one. A reservation has to assume every slot can become
+    active, so this belongs in the model.
+
+    It is measured on exactly one architecture, at one context and one split.
+    That is the coverage that has produced a wrong constant three times in
+    this campaign — the flash-attention rate, the shared-cache window mask,
+    and the separate-draft compute all looked flat until a second point in the
+    axis that mattered. So the term is measured across architectures before it
+    is modelled, not fitted from the one series and generalised.
+
+    An interleaved-SWA model, a plain causal one, and the one with the
+    existing series as a control.
+    """
+    return [
+        Cell(label=f"conc-{MODELS[key].key}-c{conc}", purpose=("concurrency",),
+             model=path_of(MODELS[key].path), gpus="0,1", split="layer",
+             ctx=32768, parallel=4, kv_unified=True, soak=6, concurrency=conc,
+             **_model_flags(MODELS[key], "0,1"))
+        for key in ("gemma3-27b", "magidonia-24b", "qwen36-27b")
+        for conc in (1, 2, 4)
+    ]
+
+
 def device_scaling() -> list[Cell]:
     """Separate the per-device CUDA cost from everything that scales with model.
 
@@ -831,6 +861,7 @@ QUESTIONS = {
     "review-followup": review_followup,
     "mtp-slots": mtp_slots,
     "slot-batch": slot_batch,
+    "concurrency-models": concurrency_models,
     "flash-attention": flash_attention_off,
     "holdout": phase5_holdout,
 }
