@@ -267,7 +267,7 @@
       }
     ]
   },
-  "measurements": 484,
+  "measurements": 485,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -302,7 +302,7 @@
     "by_arch": {
       "gemma3": 132636672,
       "gemma4": 161513472,
-      "llama": 136181760,
+      "llama": 113203200,
       "qwen3": 104529920,
       "qwen35": 190494720,
       "talkie": 113256448

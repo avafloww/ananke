@@ -1105,6 +1105,33 @@ DERIVERS = {
 }
 
 
+# Tables whose values may be negative, and which `build.rs` must therefore
+# emit through `generate_signed_rate_table`.
+SIGNED_TABLES = {"baseline_offset"}
+
+
+def check_table_signs(document: dict) -> None:
+    """Refuse to write a negative into a table read as unsigned.
+
+    `build.rs` reads every table but the signed ones through `as_u64`, which
+    turns a negative into the table's default rather than raising — the value
+    vanishes with no error anywhere. That is how the negative baseline offsets
+    would have failed had they gone out through the unsigned path, so the
+    invariant is asserted here, where it can still be seen.
+    """
+    for name, table in document.items():
+        if not isinstance(table, dict) or name in SIGNED_TABLES:
+            continue
+        negative = {k: v for k, v in (table.get("by_arch") or {}).items() if v < 0}
+        if negative:
+            raise Disagreement(
+                f"{name} holds negative values {negative} but is read through "
+                f"the unsigned path in build.rs, which would silently replace "
+                f"each with the default. Emit it via "
+                f"`generate_signed_rate_table` and add it to `SIGNED_TABLES`."
+            )
+
+
 def emit(rows: list[dict], path: Path, check: bool) -> int:
     """Regenerate `tuning.json`, or verify the committed one against the data.
 
@@ -1275,6 +1302,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             print("  evidence text differs; re-run without --check to refresh")
         return 1
 
+    check_table_signs(document)
     path.write_text(json.dumps(document, indent=2) + "\n")
     print(f"wrote {path} from {len(rows)} measurements")
     for line in changed:
