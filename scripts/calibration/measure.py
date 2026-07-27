@@ -34,6 +34,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -82,6 +83,23 @@ class Cell:
     served: bool = True
     soak: int = 0
     concurrency: int = 1
+    bench: str | None = None
+    """Scenario to drive with the tuning skill's `agentic-bench.py`.
+
+    A single short request only reaches what the runtime allocates on first
+    use. An agent loop re-sends a growing prefix every turn, which is what
+    exercises the prompt cache, the per-slot checkpoints, and the KV as it
+    fills — the terms that accumulate with *use* rather than at load, and the
+    ones a snapshot at startup structurally cannot see.
+    """
+    verbose_log: bool = True
+    """Whether to raise the loader's log verbosity.
+
+    Needed to read the buffer sizes, but the tuning skill warns that verbose
+    logging serialises graph ops. Growth runs turn it off: their subject is
+    memory over time, and the arena is already known from the matching
+    non-growth cell.
+    """
     extra: tuple[str, ...] = ()
     repeat: int = 0
     """Distinguishes otherwise identical cells.
@@ -114,7 +132,8 @@ class Cell:
         ]
         # The two runtimes gate their buffer-size logging differently, and
         # without those lines there is nothing to measure.
-        args += ["-lv", "5"] if self.runtime == "mainline" else ["--verbosity", "1"]
+        if self.verbose_log:
+            args += ["-lv", "5"] if self.runtime == "mainline" else ["--verbosity", "1"]
         optional = [
             ("-b", self.batch),
             ("--split-mode", self.split),
@@ -200,6 +219,57 @@ def parse_log(text: str) -> dict[str, float | str]:
     return parsed
 
 
+class RssSampler:
+    """Sample a process's resident memory on a fixed cadence, keeping peaks.
+
+    ananke does not read `/proc` once; its snapshotter samples every two
+    seconds and keeps *monotonic peaks*, which is what the rolling correction
+    later divides by. A single snapshot therefore measures a different
+    quantity than the daemon does, and misses anything transient — the pinned
+    staging ring during a `--no-mmap` load, or growth part-way through a
+    request. Matching the cadence makes a measurement here directly
+    comparable to what the daemon will observe, and keeping the trace makes
+    growth visible rather than merely suspected.
+    """
+
+    INTERVAL_SECONDS = 2.0
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.trace: list[tuple[float, dict[str, int]]] = []
+        self.peak: dict[str, int] = {}
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._start = time.monotonic()
+
+    def __enter__(self) -> RssSampler:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=10)
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                sample = read_rss(self.pid)
+            except (FileNotFoundError, ProcessLookupError, ValueError):
+                return  # The process exited; the trace so far still stands.
+            self.trace.append((time.monotonic() - self._start, sample))
+            for key, value in sample.items():
+                if value > self.peak.get(key, 0):
+                    self.peak[key] = value
+            self._stop.wait(self.INTERVAL_SECONDS)
+
+    def growth(self) -> dict[str, int]:
+        """Peak minus the first sample: what accumulated after startup."""
+        if not self.trace:
+            return {}
+        first = self.trace[0][1]
+        return {f"growth_{k}": self.peak.get(k, 0) - v for k, v in first.items()}
+
+
 def read_rss(pid: int) -> dict[str, int]:
     """The `/proc/<pid>/status` resident-memory breakdown, in kB.
 
@@ -279,6 +349,10 @@ def exercise(cell: Cell, port: int) -> None:
           {"model": "m", "messages": [{"role": "user", "content": "Count to twenty."}],
            "max_tokens": 64}, 300)
 
+    if cell.bench:
+        _run_bench(cell, port)
+        return
+
     prompt = "Explain memory allocation."
     for i in range(cell.soak):
         prompt += f" Also cover point {i} in detail, at length, with examples."
@@ -294,6 +368,27 @@ def exercise(cell: Cell, port: int) -> None:
             t.start()
         for t in threads:
             t.join()
+
+
+# The tuning skill's agent-loop benchmark, which drives a server the way a
+# coding agent does: a growing prefix re-sent every turn, so the prompt cache
+# and the KV fill the way they do in production rather than the way a single
+# synthetic request leaves them.
+BENCH = Path(os.environ.get(
+    "AGENTIC_BENCH",
+    Path.home() / ".claude/skills/llama-cpp-model-tuning/agentic-bench.py",
+))
+
+
+def _run_bench(cell: Cell, port: int) -> None:
+    if not BENCH.exists():
+        print(f"    (bench not found at {BENCH}; falling back to soak)", flush=True)
+        return
+    subprocess.run(
+        [sys.executable, str(BENCH), "--url", f"http://127.0.0.1:{port}",
+         "--scenario", cell.bench],
+        capture_output=True, text=True, timeout=3600, check=False,
+    )
 
 
 def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int) -> Measurement:
@@ -318,14 +413,36 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int) -> Measurem
                     return Measurement(cell, prov, {}, {}, status="timeout")
                 time.sleep(HEALTH_POLL_SECONDS)
 
-            exercise(cell, port)
-            time.sleep(SETTLE_SECONDS)
-            rss = read_rss(proc.pid)
+            with RssSampler(proc.pid) as sampler:
+                exercise(cell, port)
+                time.sleep(SETTLE_SECONDS)
+                final = read_rss(proc.pid)
+            # Report the peak, because that is the figure ananke's snapshotter
+            # keeps and the correction divides by; the final reading and the
+            # growth since startup ride alongside it.
+            rss = dict(sampler.peak or final)
+            rss |= {f"final_{k}": v for k, v in final.items()}
+            rss |= sampler.growth()
+            rss["samples"] = len(sampler.trace)
             parsed = parse_log(log_path.read_text(errors="replace"))
+            if cell.bench:
+                _write_trace(log_dir / f"{cell.cell_id}-{cell.label}-trace.csv", sampler)
         finally:
             _stop(proc)
 
     return Measurement(cell, prov, parsed, rss)
+
+
+def _write_trace(path: Path, sampler: RssSampler) -> None:
+    """Persist the full time series for a growth run, not just its summary."""
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["t_seconds", "rss_total_kb", "rss_anon_kb",
+                         "rss_file_kb", "rss_shmem_kb"])
+        for elapsed, sample in sampler.trace:
+            writer.writerow([f"{elapsed:.1f}", sample["rss_total_kb"],
+                             sample["rss_anon_kb"], sample["rss_file_kb"],
+                             sample["rss_shmem_kb"]])
 
 
 def _stop(proc: subprocess.Popen) -> None:
@@ -348,12 +465,29 @@ def already_measured(out: Path) -> set[str]:
 
 
 def append(out: Path, measurement: Measurement) -> None:
+    """Append a row, refusing to write one that does not match the header.
+
+    Adding a factor or an output changes the column set, and appending the new
+    shape under an old header would silently misalign every value after the
+    first difference — the worst possible failure for a dataset whose whole
+    purpose is to be trusted later. Start a new file instead.
+    """
     row = measurement.row()
     out.parent.mkdir(parents=True, exist_ok=True)
-    exists = out.exists()
+    if out.exists():
+        with out.open(newline="") as handle:
+            existing = next(csv.reader(handle), [])
+        if existing and existing != list(row):
+            missing = set(row) - set(existing)
+            extra = set(existing) - set(row)
+            raise SystemExit(
+                f"{out} has a different column set than this run produces "
+                f"(added: {sorted(missing)}; dropped: {sorted(extra)}). "
+                f"Write to a new file rather than mixing schemas."
+            )
     with out.open("a", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(row))
-        if not exists:
+        if out.stat().st_size == 0:
             writer.writeheader()
         writer.writerow(row)
 
