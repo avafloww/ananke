@@ -273,7 +273,7 @@ pub fn default_for(summary: &GgufSummary, context: u32, ubatch: Option<u32>) -> 
 /// Does `summary` look like a Gemma 4 E-variant (E4B and siblings)?
 /// Detection is keyed on `per_layer_token_embd.weight`, the per-block
 /// input-embedding stack that only E-variants carry.
-fn is_gemma_e_variant(summary: &GgufSummary) -> bool {
+pub(crate) fn is_gemma_e_variant(summary: &GgufSummary) -> bool {
     summary.tensors.contains_key("per_layer_token_embd.weight")
 }
 

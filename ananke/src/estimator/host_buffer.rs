@@ -63,108 +63,36 @@
 //!
 //! See CONTRIBUTING for the procedure.
 
-use crate::{estimator::types::EstimatorInputs, gguf::GgufSummary};
-
-/// llama.cpp's default `-cram` in MiB (`common/common.h`'s
-/// `cache_ram_mib = 8192`).
-pub const DEFAULT_CACHE_RAM_MB: u32 = 8192;
-
-/// llama.cpp's default physical batch (`-ub`).
-const DEFAULT_UBATCH: u32 = 512;
-
-/// Granularity llama.cpp pads a KV cache to.
-const KV_CACHE_PAD: u64 = 256;
-
-/// Pinned host bytes that exist alongside the graph arena but are not part of
-/// it: the output buffer and the CUDA driver's own pinned allocations.
-/// Measured at 12–14 MiB across the calibration models; rounded up.
-const PINNED_EXTRA_BYTES: u64 = 16 * 1024 * 1024;
-
-/// Fixed part of the process baseline — CUDA runtime, tokenizer, HTTP stack,
-/// and the per-request scratch that only appears once the service has served
-/// something. Calibrated against *serving* processes: measuring at idle
-/// understates it by ~26 MiB, which is the shape of a term that is allocated
-/// on first use.
-const PROCESS_BASE_BYTES: u64 = 112 * 1024 * 1024;
-
-/// Per-layer part of the process baseline: graph metadata scales with the
-/// tensor count, which scales with layers. Measured 3.4 MiB/layer across
-/// dense models of 36, 60, and 65 layers, predicting within 1.3%.
-const PROCESS_BASE_BYTES_PER_LAYER: u64 = 3_565_158; // 3.4 MiB
-
-/// Additional baseline for a mixture-of-experts model.
-///
-/// Layer count badly under-predicts an MoE — a 41-layer MoE was measured
-/// holding more than a 65-layer dense model — but nothing available in the
-/// GGUF predicts the rest. Three MoEs measured 400, 503, and 546 MiB while all
-/// having 256 experts, and their layer counts run the *wrong* way (48 layers
-/// for the smallest baseline). So this is a flat allowance, not a fit.
-///
-/// Its value is chosen by a different criterion than closeness: the estimate
-/// has to land within the rolling correction's `[0.8, 1.5]` clamp of reality,
-/// because that band is the whole distance the correction can travel. At 200
-/// MiB every model measured lands inside it (worst 1.19), so each service can
-/// be corrected to its true value. Larger allowances fit the two big MoEs
-/// better and push Laguna to 0.78 — outside the band, where no amount of
-/// observation could ever bring the reservation back down.
-const PROCESS_BASE_BYTES_MOE: u64 = 200 * 1024 * 1024;
-
-/// Host bytes per batch token that ik_llama's arena carries when the MoE
-/// expert ops run on the CPU. Measured at exactly 81 KiB/token on
-/// Qwen3.6-35B-A3B at two batch sizes, and independent of context and of how
-/// many expert layers are CPU-resident.
-///
-/// It is not constant across models — Laguna-S-2.1 measured 161 KiB/token —
-/// and two models are not enough to say what it scales with (expert width and
-/// active-expert count both move the right way, neither alone fits). The lower
-/// figure is deliberate: under-predicting Laguna by 1.36x leaves the rolling
-/// correction able to close the gap, where over-predicting Qwen3.6-35B-A3B by
-/// 2x would put it outside the clamp permanently.
-///
-/// The term only exists *below* ik's op-offload threshold, so production
-/// batches (2048) never pay it; a service that lowers `ubatch_size` does.
-const IK_MOE_CPU_BYTES_PER_TOKEN: u64 = 81 * 1024;
-
-/// ik_llama ships MoE ops to the GPU once the batch is large enough, at which
-/// point the host term above disappears entirely. The threshold is
-/// `n_tokens × n_expert_used >= MIN_BATCH × n_expert`.
-const IK_OP_OFFLOAD_MIN_BATCH: u64 = 32;
-
-/// Host memory a multi-token-prediction draft context holds.
-///
-/// `Estimate::mtp_bytes` covers the *VRAM* the draft context takes, which the
-/// packer reserves on a GPU. It also costs host memory — a second context
-/// brings its own pinned buffers — and that had no term at all until it was
-/// measured: gemma-4-31B-QAT at its production settings held 504 MiB more
-/// owned host memory with `--spec-type draft-mtp -md` than without, split
-/// 374 MiB pinned and 130 MiB anonymous, with the graph arena unchanged.
-///
-/// One measurement, so a flat allowance rather than a law. Without it the
-/// service's host prediction sits at a ratio of 2.15 — beyond the rolling
-/// correction's reach — and with it, 1.15.
-const MTP_HOST_BYTES_SEPARATE_DRAFT: u64 = 512 * 1024 * 1024;
-
-/// Host memory an *embedded* MTP head costs, which is a different shape and a
-/// much smaller number: the trailing nextn layers are resident as part of the
-/// target model, so there is no second GGUF, no second set of weights, and no
-/// second graph — only the draft context.
-///
-/// Measured on Qwen3.6-27B (ctx 32768, `-np 2`, tensor split, q8_0 cache):
-/// 829 MiB owned without, 1038 with, so 209 MiB. Charging the separate-draft
-/// figure here instead would over-predict by ~300 MiB and put the service
-/// outside the correction's reach in the *over*-reserving direction.
-const MTP_HOST_BYTES_EMBEDDED: u64 = 224 * 1024 * 1024;
-
-/// Extra pinned bytes per batch token when flash attention is off. Measured
-/// at exactly 8 KiB/token, consistently across context and batch; its origin
-/// is not identified in ggml's source, so it is carried as a measurement.
-const NO_FLASH_ATTN_BYTES_PER_TOKEN: u64 = 8 * 1024;
+// Every tuning constant below comes from `tuning.json`, which
+// `scripts/calibration/analyse.py` generates from the measurement dataset and
+// `build.rs` turns into compile-time constants. Each carries its evidence in
+// its own doc comment — how many models it rests on, and where it is weak.
+pub use crate::estimator::tuning::DEFAULT_CACHE_RAM_MB;
+use crate::{
+    estimator::{
+        tuning::{
+            DEFAULT_UBATCH, GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN, IK_MOE_CPU_BYTES_PER_NEMBD,
+            IK_OP_OFFLOAD_MIN_BATCH, KV_CACHE_PAD, MAINLINE_LAYER_SPLIT_MASK_COPIES,
+            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT, NO_FLASH_ATTN_BYTES_PER_TOKEN,
+            PINNED_EXTRA_BYTES, PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE,
+            PROCESS_BASE_BYTES_PER_DEVICE, PROCESS_BASE_BYTES_PER_LAYER,
+        },
+        types::EstimatorInputs,
+    },
+    gguf::GgufSummary,
+};
 
 /// Host bytes the runtime is *predicted* to hold, excluding weights and KV.
 ///
 /// This is the figure the rolling correction divides an observation by, so it
 /// deliberately excludes the prompt-cache cap — see [`prompt_cache_bytes`].
 pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorInputs<'_>) -> u64 {
+    // Each visible CUDA device beyond the first costs host memory for its
+    // context. Measured with placement pinned to the CPU so only the context
+    // count varied: two models of very different size both moved by 20 MiB
+    // between one card and two.
+    let device_bytes =
+        PROCESS_BASE_BYTES_PER_DEVICE * u64::from(inputs.visible_devices.saturating_sub(1));
     // The two MTP shapes cost materially different amounts of host memory,
     // and `spec_type` alone does not distinguish them — a separate draft GGUF
     // brings a whole second model, an embedded head brings only a context.
@@ -176,6 +104,7 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
     pinned_graph_bytes(summary, arch, inputs)
         .saturating_add(PINNED_EXTRA_BYTES)
         .saturating_add(process_base_bytes(summary))
+        .saturating_add(device_bytes)
         .saturating_add(mtp)
 }
 
@@ -288,7 +217,44 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
         NO_FLASH_ATTN_BYTES_PER_TOKEN * n_tokens
     };
 
-    base_mask + indexer_masks + swa_mask + hidden_inputs + no_fa_extra
+    // mainline replicates every mask when layers are split across more than
+    // one device. Not under tensor split, where llama.cpp fuses the cards
+    // into a single device, and not on ik at any card count. Measured at
+    // 4.00-4.16 on six architectures, flat across context, batch, slot count
+    // and cache mode — so it multiplies a term that scales, and the flat
+    // "+24 MiB for a second GPU" it replaces was this evaluated at ctx 8192.
+    let masks = base_mask + indexer_masks + swa_mask;
+    let masks = masks * mask_copies(inputs);
+
+    masks + hidden_inputs + no_fa_extra + gemma_e_variant_bytes(summary, arch, n_tokens)
+}
+
+/// How many times the graph's attention masks are replicated.
+fn mask_copies(inputs: &EstimatorInputs<'_>) -> u64 {
+    let split_across_devices = inputs.visible_devices > 1
+        && matches!(
+            inputs.split_mode,
+            crate::config::validate::SplitMode::Layer | crate::config::validate::SplitMode::Row
+        );
+    if split_across_devices {
+        MAINLINE_LAYER_SPLIT_MASK_COPIES
+    } else {
+        1
+    }
+}
+
+/// The Gemma 4 E-variant pins a per-layer embedding input alongside the
+/// ordinary hidden-state buffers.
+///
+/// Measured flat at 1028 bytes per layer per batch token across three
+/// contexts, two batch sizes, and both card counts — with two same-architecture
+/// controls that are not E-variants showing none of it.
+fn gemma_e_variant_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64) -> u64 {
+    if !crate::estimator::compute_buffer::is_gemma_e_variant(summary) {
+        return 0;
+    }
+    let layers = meta_u32(summary, arch, "block_count").unwrap_or(0) as u64;
+    GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN * layers * n_tokens
 }
 
 /// Additional full-width masks an architecture's sparse-attention indexer
@@ -315,7 +281,10 @@ fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64) -> u64 {
     if n_tokens * used >= IK_OP_OFFLOAD_MIN_BATCH * experts {
         return 0;
     }
-    IK_MOE_CPU_BYTES_PER_TOKEN * n_tokens
+    // Proportional to hidden size, not flat. The previous 81 KiB/token was
+    // this term evaluated at qwen35moe's `n_embd` of 2048 and frozen, which
+    // left GLM-5.2 — three times that hidden size — under-reserved threefold.
+    IK_MOE_CPU_BYTES_PER_NEMBD * embedding_length(summary, arch) * n_tokens
 }
 
 /// Read a `{arch}.{key}` u32 from the GGUF metadata.
@@ -373,6 +342,8 @@ mod tests {
         parallel: u32,
     ) -> EstimatorInputs<'a> {
         EstimatorInputs {
+            visible_devices: 1,
+            split_mode: crate::config::validate::SplitMode::Layer,
             name: "t",
             model: std::path::Path::new("/m.gguf"),
             mmproj: None,
@@ -801,5 +772,95 @@ mod tests {
         assert_eq!(prompt_cache_bytes(&i), 0);
         i.cache_ram_mb = Some(512);
         assert_eq!(prompt_cache_bytes(&i), 512 * 1024 * 1024);
+    }
+}
+
+#[cfg(test)]
+mod measured_tests {
+    use super::*;
+    use crate::{
+        config::validate::SplitMode,
+        estimator::llama::test_support::{fake_summary, inputs},
+    };
+
+    /// Two cards under layer split replicate the masks; one card does not,
+    /// and neither does tensor split, where llama.cpp fuses the devices.
+    ///
+    /// Measured on six architectures at 4.00-4.16, flat across context and
+    /// batch — so the difference has to scale with the mask, not sit beside
+    /// it as the flat "+24 MiB for a second GPU" it replaces did.
+    #[test]
+    fn layer_split_replicates_masks_but_tensor_split_does_not() {
+        let summary = fake_summary();
+        let empty: [String; 0] = [];
+        let one = pinned_graph_bytes(&summary, "llama", &inputs("f16", "f16", 32768, &empty));
+
+        let mut two = inputs("f16", "f16", 32768, &empty);
+        two.visible_devices = 2;
+        two.split_mode = SplitMode::Layer;
+        let layered = pinned_graph_bytes(&summary, "llama", &two);
+
+        let mut fused = inputs("f16", "f16", 32768, &empty);
+        fused.visible_devices = 2;
+        fused.split_mode = SplitMode::Tensor;
+        let tensored = pinned_graph_bytes(&summary, "llama", &fused);
+
+        assert!(
+            layered > one,
+            "layer split across two cards must cost more than one card"
+        );
+        assert_eq!(
+            tensored, one,
+            "tensor split fuses the cards, so it must match the single-card figure"
+        );
+        // The replication applies to the masks and not to the hidden-state
+        // buffers, so the ratio sits below the copy count.
+        let ratio = layered as f64 / one as f64;
+        assert!(
+            (1.5..=4.0).contains(&ratio),
+            "layer-split arena ratio {ratio:.2} outside the measured range"
+        );
+    }
+
+    /// Each visible device beyond the first costs host memory for its CUDA
+    /// context: 20 MiB, measured on two models with placement pinned to the
+    /// CPU so nothing else varied.
+    #[test]
+    fn each_extra_visible_device_costs_host_memory() {
+        // Tensor split throughout, so the mask replication that layer split
+        // triggers cannot contaminate what is meant to be a measurement of
+        // the per-device context cost alone.
+        let summary = fake_summary();
+        let empty: [String; 0] = [];
+        let mut one = inputs("f16", "f16", 32768, &empty);
+        one.visible_devices = 1;
+        one.split_mode = SplitMode::Tensor;
+        let mut four = inputs("f16", "f16", 32768, &empty);
+        four.visible_devices = 4;
+        four.split_mode = SplitMode::Tensor;
+
+        let delta = host_overhead_bytes(&summary, "llama", &four)
+            - host_overhead_bytes(&summary, "llama", &one);
+        assert_eq!(delta, 3 * PROCESS_BASE_BYTES_PER_DEVICE);
+    }
+
+    /// The ik CPU-MoE term scales with hidden size rather than being the flat
+    /// 81 KiB/token that was this term evaluated at qwen35moe's `n_embd`.
+    #[test]
+    fn ik_moe_term_scales_with_hidden_size() {
+        // 2048 x 41 is within a percent of the 82_944 the flat constant used,
+        // which is the measurement that showed the constant was a hidden-size
+        // term all along.
+        let narrow = IK_MOE_CPU_BYTES_PER_NEMBD * 2048;
+        let wide = IK_MOE_CPU_BYTES_PER_NEMBD * 6144;
+        assert!(
+            (narrow as i64 - 82_944).abs() < 1_500,
+            "the term at n_embd 2048 should reproduce the old flat constant"
+        );
+        assert_eq!(
+            wide,
+            3 * narrow,
+            "three times the hidden size, three times the term"
+        );
     }
 }

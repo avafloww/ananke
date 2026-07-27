@@ -196,6 +196,8 @@ mod tests {
 
     fn inputs(context: u32, mtp: bool, empty: &[String]) -> EstimatorInputs<'_> {
         EstimatorInputs {
+            visible_devices: 1,
+            split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",
             model: Path::new("/fake"),
             mmproj: None,
