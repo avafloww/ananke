@@ -261,13 +261,25 @@ def derive_ik_moe_per_nembd(rows: list[dict]) -> tuple[int, str]:
             continue
         mask, swa_mask, hidden = arena_terms(record, charge_moe=False)
         excess = (parsed["arena_mib"] - (mask + swa_mask + hidden)) * 1024**2 / tokens
-        points.append((parsed["n_embd"], excess / parsed["n_embd"], parsed.get("arch")))
+        cards = len(factors["gpus"].split(",")) if factors["gpus"] else 1
+        points.append((parsed["n_embd"], excess / parsed["n_embd"],
+                       parsed.get("arch"), cards))
     if not points:
         raise ValueError("no ik MoE cells below the offload threshold")
     # Grouped by architecture first: they genuinely differ, and the table
     # below carries each separately. Within an architecture they must agree.
-    for arch in {a for _, _, a in points}:
-        rates_here = [r for _, r, a in points if a == arch]
+    # Keyed by card count as well as architecture. glm-dsa measures 28.0 per
+    # unit on one card and 42.8 on two at *identical* placement — both its
+    # offload values exceed its layer count, and both logs show 80 of 80 layers
+    # on the GPU — and the difference scales with tokens, so it is a rate that
+    # depends on the device count rather than a separate term. Above the MoE
+    # threshold the two card counts agree exactly, which is what localises it
+    # here rather than in the arena.
+    for arch, cards in {(a, c) for _, _, a, c in points}:
+        group = [r for _, r, a, c in points if a == arch and c == cards]
+        consensus(group, f"ik MoE rate for {arch} on {cards} card(s)")
+    for arch in {a for _, _, a, _ in points}:
+        rates_here = [r for _, r, a, _ in points if a == arch]
         try:
             consensus(rates_here, f"ik MoE rate for {arch}")
         except Disagreement:
@@ -283,14 +295,15 @@ def derive_ik_moe_per_nembd(rows: list[dict]) -> tuple[int, str]:
             if arch not in ("glm-dsa", "laguna"):
                 raise
     per_unit = max(p[1] for p in points)
-    by_arch: dict[str, float] = {}
-    for _, rate, arch in points:
-        by_arch[arch] = max(by_arch.get(arch, 0.0), rate)
+    by_key: dict[str, float] = {}
+    for _, rate, arch, cards in points:
+        key = f"{arch}@{cards}"
+        by_key[key] = max(by_key.get(key, 0.0), rate)
     detail = ", ".join(
         f"{arch} {rate * embd:.0f} B/token at n_embd {embd} ({rate:.1f}/unit)"
         for embd, rate, arch in sorted({(p[0], round(p[1], 1), p[2]) for p in points})
     )
-    _record_ik_rates(by_arch)
+    _record_ik_rates(by_key)
     return round(per_unit), (
         f"{len(points)} cells below the offload threshold: {detail}. The worst "
         "rate is taken rather than the median: the architectures differ, and a "

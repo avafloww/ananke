@@ -184,7 +184,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
         // ctx 131072 / ub 2048 came to exactly three 512 MiB masks.
         let masks = 1 + u64::from(has_swa) + if inputs.ik_dsa { 2 } else { 0 };
         let arena = masks * context * n_tokens * element_bytes + n_embd * n_tokens * 4;
-        return arena + ik_moe_cpu_bytes(summary, arch, n_tokens);
+        return arena + ik_moe_cpu_bytes(summary, arch, n_tokens, inputs.visible_devices);
     }
 
     let n_kv = pad_to_kv_cache(context / streams);
@@ -328,7 +328,7 @@ fn extra_full_masks(arch: &str) -> u64 {
 /// Zero above the threshold, which is where production batches sit — but a
 /// service that lowers `ubatch_size` crosses back over it and the term
 /// reappears, so it cannot simply be ignored.
-fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64) -> u64 {
+fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64, devices: u32) -> u64 {
     let experts = meta_u32(summary, arch, "expert_count").unwrap_or(0) as u64;
     let used = meta_u32(summary, arch, "expert_used_count").unwrap_or(0) as u64;
     if experts == 0 || used == 0 {
@@ -340,23 +340,33 @@ fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64) -> u64 {
     // Proportional to hidden size, not flat. The previous 81 KiB/token was
     // this term evaluated at qwen35moe's `n_embd` of 2048 and frozen, which
     // left GLM-5.2 — three times that hidden size — under-reserved threefold.
-    ik_moe_rate(arch) * embedding_length(summary, arch) * n_tokens
+    ik_moe_rate(arch, devices) * embedding_length(summary, arch) * n_tokens
 }
 
-/// The per-token, per-unit-of-hidden-size rate for this architecture.
+/// The per-token, per-unit-of-hidden-size rate for this architecture and
+/// device count.
 ///
-/// Measured rates differ by a third across the three ik mixtures this dataset
-/// covers — 41, 43 and 54 — so a single constant would either under-reserve
-/// laguna or over-reserve the other two. An architecture the dataset has not
-/// seen gets the worst of them.
-fn ik_moe_rate(arch: &str) -> u64 {
-    crate::estimator::tuning::IK_MOE_RATES
+/// Both axes are measured. The three ik mixtures differ by a third from each
+/// other — 41, 43 and 54 — and two of them differ again with the card count:
+/// glm-dsa is 28 on one card and 43 on two at identical placement, laguna 36
+/// and 54, while qwen35moe is 41 on both. A single constant would either
+/// under-reserve the worst or over-reserve a single-card glm by 45 MiB.
+fn ik_moe_rate(arch: &str, devices: u32) -> u64 {
+    let table = crate::estimator::tuning::IK_MOE_RATES;
+    let exact = format!("{arch}@{}", devices.max(1));
+    if let Some((_, rate)) = table.iter().find(|(name, _)| *name == exact) {
+        return *rate;
+    }
+    // No measurement at this device count. Take the worst seen for the
+    // architecture: the rate rises with cards on both models where it varies
+    // at all, and under-reserving is the direction that OOMs.
+    let prefix = format!("{arch}@");
+    table
         .iter()
-        .find(|(name, _)| *name == arch)
-        .map_or(
-            crate::estimator::tuning::IK_MOE_RATE_DEFAULT,
-            |(_, rate)| *rate,
-        )
+        .filter(|(name, _)| name.starts_with(&prefix))
+        .map(|(_, rate)| *rate)
+        .max()
+        .unwrap_or(crate::estimator::tuning::IK_MOE_RATE_DEFAULT)
 }
 
 /// Read a `{arch}.{key}` u32 from the GGUF metadata.
@@ -926,7 +936,15 @@ mod measured_tests {
     #[test]
     fn ik_moe_term_scales_with_hidden_size() {
         // qwen35moe's own rate, at its own hidden size.
-        let rate = ik_moe_rate("qwen35moe");
+        // qwen35moe measures the same rate on one card and two, which is what
+        // makes it the right model to assert the hidden-size scaling against —
+        // glm-dsa and laguna vary with the device count as well.
+        let rate = ik_moe_rate("qwen35moe", 2);
+        assert_eq!(
+            rate,
+            ik_moe_rate("qwen35moe", 1),
+            "qwen35moe is measured card-independent"
+        );
         let narrow = rate * 2048;
         let wide = rate * 6144;
         assert_eq!(

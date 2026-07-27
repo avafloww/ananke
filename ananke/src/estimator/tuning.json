@@ -43,7 +43,7 @@
       "value": 32,
       "type": "u64",
       "doc": "Batch threshold below which ik keeps the MoE ops on the CPU: the term applies while `n_tokens * n_used < this * n_expert`.",
-      "evidence": "bracketed to (20, 32] by 48 ik MoE cells across two models with different expert counts; the term collapses from tens of MiB to hundredths exactly at the predicted crossing.",
+      "evidence": "bracketed to (20, 32] by 50 ik MoE cells across two models with different expert counts; the term collapses from tens of MiB to hundredths exactly at the predicted crossing.",
       "kind": "derived"
     },
     "KV_CACHE_PAD": {
@@ -274,14 +274,17 @@
       }
     ]
   },
-  "measurements": 454,
+  "measurements": 456,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
     "by_arch": {
-      "glm-dsa": 43,
-      "laguna": 54,
-      "qwen35moe": 41
+      "glm-dsa@1": 28,
+      "glm-dsa@2": 43,
+      "laguna@1": 36,
+      "laguna@2": 54,
+      "qwen35moe@1": 41,
+      "qwen35moe@2": 41
     }
   },
   "quantised_cache_rates": {

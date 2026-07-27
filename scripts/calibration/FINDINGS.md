@@ -380,14 +380,18 @@ Arena accuracy by architecture, worst case across the dataset:
 
 | architecture | worst error |
 |---|---|
-| lfm2, llama, qwen3, talkie | < 0.5 MiB |
-| qwen35 | 1.1 MiB |
-| qwen35moe | 2.5 MiB |
-| gemma3 | 12.1 MiB |
-| glm-dsa | 45.0 MiB |
+| lfm2 | 0.05 MiB |
+| llama, qwen3, talkie | 0.28 MiB |
+| glm-dsa | 0.50 MiB |
+| gemma3 | 0.54 MiB |
+| qwen35 | 0.86 MiB |
+| qwen35moe | 1.93 MiB |
 
-The first five are the sense in which "the arena is arithmetic, not a fit"
-holds. The last two are open.
+All eight are under two mebibytes and five under half of one. That is what
+"the arena is arithmetic, not a fit" means once every term it needs is
+present — and getting there took three terms found after the campaign
+finished: the quantised cache, the shared-cache window masks, and keying ik's
+MoE rate on the device count.
 
 ## The process baseline is not predictable from model shape
 
@@ -452,20 +456,26 @@ one could not have been evidence about the other in the first place; and in
 fact they agree, once the condition is the shared cache rather than the slot
 count. gemma3's worst arena error falls from 12.08 MiB to **0.70**.
 
-**glm-dsa, 44.99 MiB — narrowed to one architecture's card-count effect.**
-The ik CPU-MoE rate is now per architecture, because the three ik mixtures
-measured differ by a third: qwen35moe 41, glm-dsa 43, laguna 54. A single
-constant either under-reserved laguna or over-reserved the other two, and the
-median that was there did both.
+**glm-dsa, 44.99 MiB — RESOLVED, and it was conflated.** The rate measured
+28.0 per unit of hidden size on one card against 42.8 on two. That was blamed
+on the expert offload differing (96 against 92), then on card count, then
+dismissed by pointing at qwen35moe — whose rate does not vary with cards, and
+which is a different architecture and therefore no evidence either way.
 
-What remains is *within* glm-dsa: 28.0 per unit of hidden size on one card
-against 42.8 on two, each figure exact across every context and batch measured.
-Both its expert-offload values exceed its layer count, so the placement is
-identical and the card count is the only difference. That was previously
-dismissed by pointing at qwen35moe, whose rate does not vary with card count —
-but qwen35moe is a different architecture and says nothing about this one. Two
-cells on the one-card side, so it is measured rather than explained, and it
-over-predicts, which costs capacity rather than risking a load.
+Checking properly: both offload values exceed glm's 79 layers, and both load
+logs report `offloaded 80/80 layers to GPU`, so the placement is identical and
+the card count is the only difference. Two further cells settle the shape.
+At **ub 1024, above the MoE offload threshold where the term vanishes
+entirely, one card and two cards measure 216.01 MiB and both match the model
+exactly** — so the card dependence lives inside the MoE term rather than
+beside it. And the gap scales with tokens: 22.25 MiB at ub 256 against 44.49
+at ub 512, exactly double.
+
+The rate is therefore keyed on architecture *and* device count. qwen35moe is
+41 on both, glm-dsa 28 and 43, laguna 36 and 54 — so the card dependence is
+real on two of three, and the one that lacks it would have been the wrong
+model to generalise from. glm-dsa's worst arena error falls from **44.99 MiB
+to 0.50**.
 
 ## A stale constant in the analysis, and what it cost
 
