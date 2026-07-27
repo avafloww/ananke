@@ -557,6 +557,41 @@ Counting the remainder also exposed two genuine under-reservations that the
 compute column alone had hidden, on Magidonia at ub 2048 and on deepseek4 at
 ctx 8192. Both are closed.
 
+## The derivers now refuse to average over a disagreement
+
+Ten conclusions in this campaign were drawn by pooling across a factor that
+turned out to matter, and every one produced a plausible law. The common
+mechanism is that a median says nothing about the spread behind it: the median
+of a bimodal set describes none of its members and looks exactly like the
+median of a tight one.
+
+`analyse.py` now reduces measurements through `consensus`, which raises rather
+than returns when the values span more than 15% of their median. A wide spread
+is treated as *a failure to have grouped properly*, not as noise to average
+over.
+
+Turning it on found four more instances immediately, all in derivers written
+earlier in this same campaign:
+
+| constant | what it was pooling | spread |
+|---|---|---|
+| layer-split mask multiple | hybrids, which do not replicate | 1.0 to 5.3 |
+| mainline tensor MoE rate | MTP cells, which lack the term | 0.02 to 62.8 |
+| gemma E-variant term | cells whose residual is neither | 103 to 1278 |
+| ik MoE rate | three architectures at once | 28 to 54 |
+
+Fixing those exposed two more. The 5.27 outlier in the mask multiple was
+gemma3 at four slots with a shared cache — the three-window-mask rule that had
+been added to the estimator and never to this file, the same drift that had
+left the ik MoE rate stale here. And the E-variant residual turned out to
+depend on the **cache type**: 1025-1028 at f16 against 1087-1278 at q8_0, so
+the arena model is missing a term that varies with it, and pooling the two
+attributed that term to the E-variant.
+
+Two disagreements are carried deliberately, with the reason recorded at the
+override: glm-dsa and laguna both measure a different ik MoE rate on one card
+than on two, and the larger is taken because over-reserving does not OOM.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline

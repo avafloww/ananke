@@ -75,7 +75,13 @@ def arena_terms(record: dict, charge_moe: bool = True) -> tuple[float, float, fl
     # mainline sizes the second mask to the window plus the batch; ik sizes it
     # to the whole context, which is why an SWA model costs it so much more.
     swa_rows = n_kv if ik else pad(swa + tokens)
-    swa_mask = swa_rows * tokens * width if swa else 0
+    # Three window masks when several slots share one cache, matching
+    # `host_buffer::pinned_graph_bytes`. This file went on modelling one after
+    # the estimator was changed, which is the same drift that left the ik MoE
+    # rate stale here — and it is why `consensus` saw a 5.27 multiple among
+    # cells that are otherwise 4.00.
+    swa_copies = 3 if (slots > 1 and unified and not ik) else 1
+    swa_mask = swa_copies * swa_rows * tokens * width if swa else 0
     # Two f32 hidden-state buffers on mainline, one on ik.
     hidden = (1 if ik else 2) * parsed["n_embd"] * tokens * 4
     # ik keeps its MoE op intermediates on the CPU below a batch threshold,
@@ -193,6 +199,41 @@ def main() -> int:
 #   review    — has data, but the fit is contested and the value is held
 #               pending another run.
 
+class Disagreement(ValueError):
+    """The cells behind a constant do not agree, so no single value fits them."""
+
+
+def consensus(values: list[float], name: str, tolerance: float = 0.15) -> float:
+    """Reduce measurements to one number, refusing when they disagree.
+
+    Every deriver here used to take a median and say nothing about the spread
+    behind it. That is how a constant absorbs a factor nobody thought to group
+    by: the median of a bimodal set is a number that describes none of its
+    members, and it looks exactly like the median of a tight one.
+
+    Ten conclusions in this campaign were drawn that way and were wrong — card
+    count, split mode, cell label, runtime, flash-attention state, placement,
+    architecture, measurement time, serving state, slot count. Each produced a
+    plausible law. So a spread wider than the tolerance is treated as a
+    *failure to have grouped properly*, not as noise to average over, and it
+    stops the derivation rather than quietly widening the constant.
+    """
+    if not values:
+        raise Disagreement(f"{name}: no measurements")
+    middle = st.median(values)
+    if middle == 0:
+        return middle
+    spread = (max(values) - min(values)) / abs(middle)
+    if spread > tolerance:
+        raise Disagreement(
+            f"{name}: {len(values)} measurements span {min(values):.4g} to "
+            f"{max(values):.4g}, which is {spread:.0%} of the median — they do not "
+            f"agree. A single value would collapse a real difference; find the "
+            f"factor that separates them and group by it."
+        )
+    return middle
+
+
 def derive_ik_moe_per_nembd(rows: list[dict]) -> tuple[int, str]:
     """Bytes per batch token per unit of hidden size for ik's CPU-MoE buffers.
 
@@ -223,6 +264,24 @@ def derive_ik_moe_per_nembd(rows: list[dict]) -> tuple[int, str]:
         points.append((parsed["n_embd"], excess / parsed["n_embd"], parsed.get("arch")))
     if not points:
         raise ValueError("no ik MoE cells below the offload threshold")
+    # Grouped by architecture first: they genuinely differ, and the table
+    # below carries each separately. Within an architecture they must agree.
+    for arch in {a for _, _, a in points}:
+        rates_here = [r for _, r, a in points if a == arch]
+        try:
+            consensus(rates_here, f"ik MoE rate for {arch}")
+        except Disagreement:
+            # glm-dsa measures 28.0 per unit on one card and 42.8 on two, at
+            # identical expert placement, each figure exact within its group.
+            # The cause is not in the dataset. Taking the larger over-reserves
+            # the single-card case rather than under-reserving the other, which
+            # is the direction that does not OOM — so the disagreement is
+            # carried deliberately rather than papered over.
+            # laguna shows the same shape — 36.0 on one card against 53.7 on
+            # two — though its expert offload differs between them too, so its
+            # cause is confounded where glm's is not.
+            if arch not in ("glm-dsa", "laguna"):
+                raise
     per_unit = max(p[1] for p in points)
     by_arch: dict[str, float] = {}
     for _, rate, arch in points:
@@ -254,6 +313,8 @@ def derive_mainline_tensor_moe(rows: list[dict]) -> tuple[int, str]:
             continue
         if factors["split"] != "tensor" or factors["flash_attn"] != "on":
             continue
+        if factors["spec_type"]:
+            continue  # an MTP run measures without this term entirely
         if not parsed.get("arena_mib") or factors["ngl"] != 99:
             continue
         mask, swa_mask, hidden = arena_terms(record, charge_moe=False)
@@ -270,6 +331,7 @@ def derive_mainline_tensor_moe(rows: list[dict]) -> tuple[int, str]:
         f"{arch} {rate:.1f}/unit"
         for arch, rate in sorted({(a, round(r, 1)) for a, _, r in points})
     )
+    consensus(rates, "MTP embedded compute")
     return round(st.median(rates)), (
         f"{len(points)} mainline tensor-split hybrid cells: {detail}. Linear in "
         "batch — qwen35moe measures 28.3, 56.5, 113.0 and 226.1 MiB at ub 256, "
@@ -290,15 +352,26 @@ def derive_gemma_e_per_layer_token(rows: list[dict]) -> tuple[int, str]:
             continue
         if factors["spec_type"]:
             continue
+        # f16 only. A quantised cache shifts this residual — 1087 and 1278
+        # against f16's steady 1025-1028 — so the arena model is missing a
+        # term that depends on the cache type, and pooling the two would
+        # attribute that term to the E-variant.
+        if factors["kv_type"] != "f16":
+            continue
         mask, swa_mask, hidden = arena_terms(record)
         cards = len(factors["gpus"].split(","))
         copies = 4 if cards > 1 and (factors["split"] or "layer") == "layer" else 1
         residual = parsed["arena_mib"] - (copies * (mask + swa_mask) + hidden)
         tokens = min(factors["ctx"], factors["ubatch"])
         per = residual * 1024**2 / (parsed["n_layer"] * tokens)
-        (residuals if per > 100 else controls).append(per)
+        # The two populations are ~1028 and ~3 bytes per layer per token, so
+        # the boundary is nowhere near either. A cell between them is not an
+        # E-variant reading and not a control; it is a sign the filter is
+        # wrong, and `consensus` will say so rather than averaging it in.
+        (residuals if per > 500 else controls).append(per)
     if not residuals:
         raise ValueError("no gemma4 E-variant cells")
+    consensus(residuals, "gemma E-variant per-layer term")
     return round(st.median(residuals)), (
         f"{len(residuals)} E-variant cells at {st.median(residuals):.0f} B/layer/token, "
         f"against {len(controls)} same-architecture control cells at "
@@ -327,6 +400,7 @@ def derive_per_device_bytes(rows: list[dict]) -> tuple[int, str]:
             detail.append(f"{model.split('/')[-1][:24]} {delta / 1024**2:.0f} MiB")
     if not deltas:
         raise ValueError("no paired one-card/two-card device-scaling cells")
+    consensus(deltas, "per-device host cost")
     return round(st.median(deltas)), (
         "measured with placement pinned to the CPU so only the CUDA context "
         f"count varies: {'; '.join(detail)} going from one card to two."
@@ -344,6 +418,8 @@ def derive_layer_split_copies(rows: list[dict]) -> tuple[int, str]:
             continue
         if parsed.get("arch") == "gemma4":
             continue  # carries its own per-layer term; excluded to keep this clean
+        if factors["n_cpu_moe"]:
+            continue  # a hybrid does not replicate the masks — that is the point
         mask, swa_mask, hidden = arena_terms(record)
         if mask + swa_mask <= 0:
             continue
@@ -355,6 +431,7 @@ def derive_layer_split_copies(rows: list[dict]) -> tuple[int, str]:
             singles.append(k)
     if not multiples:
         raise ValueError("no mainline layer-split cells")
+    consensus(multiples, "layer-split mask multiple")
     return round(st.median(multiples)), (
         f"{len(multiples)} mainline layer-split cells at {st.median(multiples):.2f}, "
         f"against {len(singles)} single-card and tensor-split cells at "
