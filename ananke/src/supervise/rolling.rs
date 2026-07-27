@@ -17,8 +17,7 @@
 use tracing::debug;
 
 use crate::{
-    allocator::placement::RollingInputs, config::validate::ServiceConfig, supervise::RunLoop,
-    tracking::rolling::MemoryClass,
+    allocator::placement::RollingInputs, supervise::RunLoop, tracking::rolling::MemoryClass,
 };
 
 impl RunLoop {
@@ -36,7 +35,7 @@ impl RunLoop {
             .as_ref()
             .map(|p| p.rolling)
             .unwrap_or_default();
-        self.rolling_base = RollingBase::new(inputs, &self.current_svc());
+        self.rolling_base = RollingBase::new(inputs);
     }
 
     /// Fold this run's observed peaks into the service's two rolling
@@ -55,8 +54,9 @@ impl RunLoop {
         let name = &self.init.identity.name;
         let base = self.rolling_base;
         let peak_vram = self.deps.observation.read_peak_vram(name);
-        let peak_rss = self.deps.observation.read_peak_rss(name);
-        let samples = base.samples_from(peak_vram, peak_rss);
+        let peak_owned = self.deps.observation.read_peak_rss_owned(name);
+        let peak_file = self.deps.observation.read_peak_rss_file(name);
+        let samples = base.samples_from(peak_vram, peak_owned, peak_file);
 
         if samples.run_was_measurable {
             // The run survived to a clean drain, so an earlier OOM bump has
@@ -89,9 +89,9 @@ impl RunLoop {
             None => debug!(
                 service = %name,
                 became_ready = base.became_ready,
-                peak_rss,
-                gpu_weight_bytes = base.inputs.gpu_weight_bytes,
-                cpu_weight_bytes = base.inputs.cpu_weight_bytes,
+                peak_owned,
+                peak_file,
+                host_base = base.host_bytes(),
                 "no host rolling sample from this run"
             ),
         }
@@ -111,33 +111,6 @@ pub(crate) struct RollingSamples {
     pub(crate) run_was_measurable: bool,
 }
 
-/// The per-process host footprint no reservation models: llama-server itself,
-/// the CUDA runtime's host-side allocations, pinned staging buffers, the HTTP
-/// stack. Roughly fixed, and an assumption rather than a measurement — it is
-/// named here so the learning gate below states a tolerance instead of a
-/// magic number.
-const ASSUMED_PROCESS_HOST_FOOTPRINT_BYTES: u64 = 3 * 1024 * 1024 * 1024;
-
-/// Minimum host-resident model weight before the host pool will learn from a
-/// run, bounding the *numerator's* unmodelled term. At nine times the assumed
-/// footprint the ratio it can distort is capped at ~11%, matching the bound
-/// [`HOST_LEARNING_MIN_WEIGHT_PERCENT`] puts on the denominator's term — the
-/// two gates share one tolerance rather than each guessing separately.
-const HOST_LEARNING_MIN_CPU_WEIGHT_BYTES: u64 = 9 * ASSUMED_PROCESS_HOST_FOOTPRINT_BYTES;
-
-/// Minimum share of the `Cpu` slot that must be model weight, in percent,
-/// bounding the *denominator's* unmodelled term at the same ~11% as
-/// [`HOST_LEARNING_MIN_CPU_WEIGHT_BYTES`] bounds the numerator's.
-///
-/// The slot's only other component of consequence is the compute buffer,
-/// charged to the CPU backend at the size calibrated for a GPU — 3792 MiB for
-/// a calibrated architecture, 400 MiB for an uncalibrated one, against a real
-/// CPU-side buffer that is neither. An absolute weight floor doesn't bound
-/// that: it is a *relative* error, and at 19 GiB of expert weight it is worth
-/// −7% while at 97 GiB it is worth −2%. Requiring the weight to dominate caps
-/// it, and caps it in the same place regardless of model size.
-const HOST_LEARNING_MIN_WEIGHT_PERCENT: u64 = 90;
-
 /// What [`RunLoop::record_rolling_observation`] needs from the placement that
 /// produced the current run's reservation, captured when the reservation is
 /// committed so a mid-run config reload can't change it.
@@ -154,82 +127,58 @@ pub(crate) struct RollingBase {
     /// quarter more model onto a card than holds. Only a run that became ready
     /// can have been measured whole.
     pub(crate) became_ready: bool,
-    /// Whether the child runs with the GGUF mmap'd (llama.cpp's default).
-    /// Decides whether the GPU-resident weight bytes have to come off the
-    /// observed RSS peak — see [`Self::host_peak`].
-    pub(crate) mmap: bool,
 }
 
 impl RollingBase {
     /// Capture the rolling inputs of a committed placement.
-    pub(crate) fn new(inputs: RollingInputs, svc: &ServiceConfig) -> Self {
+    pub(crate) fn new(inputs: RollingInputs) -> Self {
         Self {
             inputs,
             became_ready: false,
-            // llama.cpp mmaps unless told otherwise; a command service has no
-            // model mapping to worry about and reports zero weight bytes
-            // anyway, so the flag is immaterial there.
-            mmap: svc
-                .llama_cpp()
-                .map(|lc| lc.mmap != Some(false))
-                .unwrap_or(false),
         }
     }
 
-    /// The host-pool numerator derived from an observed RSS peak, or `None`
-    /// when the measurement can't support one.
+    /// The host-pool numerator: the observed peak of *anonymous* host memory,
+    /// or `None` when there was no measurement.
     ///
-    /// # The weight floor
+    /// Anonymous rather than total, because total resident memory is not a
+    /// measure of what this process holds. llama.cpp maps the GGUF with
+    /// `MAP_POPULATE` and, after loading, unmaps only the fragments outside
+    /// the span of host-resident tensors — so a hybrid model leaves nearly the
+    /// whole file resident as clean, reclaimable file pages, GPU-destined
+    /// weights included. `RssAnon + RssShmem` is what the runtime actually allocated:
+    /// the pinned graph arena, the prompt cache, the CPU-side KV cache, the
+    /// heap.
     ///
-    /// A process has a host footprint no reservation models: llama-server
-    /// itself, the CUDA runtime's host-side allocations, pinned staging
-    /// buffers, the HTTP stack. It is roughly fixed, so it is noise against a
-    /// hybrid MoE's ~100 GiB of offloaded experts and larger than the entire
-    /// `Cpu` slot of a GPU-resident service — whose slot is token embeddings
-    /// plus the CPU-side compute buffer, a couple of GiB at most. Learning a
-    /// *multiplicative* factor from the latter would read a fixed overhead as a
-    /// proportional error and pin the mean to a clamp: measured at ~0.5 on the
-    /// layer path (which charges the CPU a full compute buffer) and ~2.4 on the
-    /// sharded path (which charges it none), for the same model on the same
-    /// cards. That is issue #34's failure — a ratio whose two sides measure
-    /// different things, hidden by the clamp — with the pools swapped.
-    ///
-    /// So the host pool learns only where both unmodelled terms are minor
-    /// relative to the weight the ratio is really about — see
-    /// [`Self::host_pool_is_measurable`]. Otherwise there is no sample at all:
-    /// not learning is strictly better than learning the wrong number, and a
-    /// wrong host factor here is quieter than the bug it replaced, since a
-    /// plausible 0.93 carries no clamp artefact to signal that it is an
-    /// accounting error rather than a measurement.
-    ///
-    /// With the GGUF mmap'd, llama.cpp reads GPU-destined tensors *through the
-    /// mapping*, so their pages count against `VmRSS` even though the tensors
-    /// live in VRAM at runtime. Left alone, that inflates the host peak by
-    /// nearly the whole GPU-resident weight total. The bytes to remove are
-    /// known exactly — the packer chose which tensors go where, and their sizes
-    /// come from the GGUF tensor table, not from the modelled terms (KV,
-    /// compute buffers) that carry the estimator's uncertainty.
-    ///
-    /// Under `--no-mmap` there is nothing to subtract: GPU tensors are staged
-    /// through a buffer that is freed after upload, so `VmRSS` is already
-    /// host-resident bytes only.
-    ///
-    /// `None` when the subtraction would saturate. A peak at or below the
-    /// GPU-resident weight total means the sampler never caught the process
-    /// with its host pages resident (a short run, or reclaim under memory
-    /// pressure). Recording it would hand `update` a ratio near zero, which
-    /// pins the mean to its `0.8` clamp floor — the exact silent failure this
-    /// accounting exists to avoid.
-    pub(crate) fn host_peak(&self, peak_rss_bytes: u64) -> Option<u64> {
-        if !self.host_pool_is_measurable() {
-            return None;
-        }
-        let subtract = if self.mmap {
-            self.inputs.gpu_weight_bytes
+    /// The matching denominator is [`Self::host_bytes`], which drops the
+    /// weight term for the same reason.
+    pub(crate) fn host_peak(&self, owned: u64, file: u64) -> Option<u64> {
+        let numerator = if self.weights_are_anonymous(file) {
+            owned.saturating_sub(self.inputs.cpu_weight_bytes)
         } else {
-            0
+            owned
         };
-        peak_rss_bytes.checked_sub(subtract).filter(|b| *b > 0)
+        Some(numerator).filter(|b| *b > 0)
+    }
+
+    /// Whether this run read its host-resident weights into anonymous memory
+    /// rather than mapping them, judged by whether they showed up in the
+    /// mapped counter.
+    ///
+    /// This is measured rather than inferred from configuration because no
+    /// flag reliably says. Mainline llama.cpp maps (logging `CPU_Mapped model
+    /// buffer size`), and its mapped RSS was the host weight total plus a
+    /// couple of hundred MiB of shared libraries in every configuration tried.
+    /// ik_llama, on the same model and the same flags, logged `CPU buffer
+    /// size` and put 56 GiB of weights in anonymous memory with a mapped RSS
+    /// of 72 MiB. Trusting `mmap`/`-rtr` would have read that run's weights
+    /// into the numerator while leaving them out of the denominator — a 56 GiB
+    /// mismatch that the clamp would have turned into a 50% over-reservation.
+    ///
+    /// The halfway threshold is deliberately loose: the two regimes differ by
+    /// orders of magnitude, not by a few percent.
+    fn weights_are_anonymous(&self, file: u64) -> bool {
+        self.inputs.cpu_weight_bytes > 0 && file < self.inputs.cpu_weight_bytes / 2
     }
 
     /// Decide what this run's observations are worth to each pool.
@@ -246,9 +195,13 @@ impl RollingBase {
     ///
     /// A zero peak is likewise the absence of a measurement rather than an
     /// observation of zero — the snapshotter drops ticks that attribute
-    /// nothing — and the host side additionally needs the placement to be one
-    /// the host pool can measure at all ([`Self::host_pool_is_measurable`]).
-    pub(crate) fn samples_from(&self, peak_vram_bytes: u64, peak_rss_bytes: u64) -> RollingSamples {
+    /// nothing.
+    pub(crate) fn samples_from(
+        &self,
+        peak_vram_bytes: u64,
+        peak_owned_bytes: u64,
+        peak_file_bytes: u64,
+    ) -> RollingSamples {
         if !self.became_ready {
             return RollingSamples {
                 vram: None,
@@ -258,7 +211,7 @@ impl RollingBase {
         }
         RollingSamples {
             vram: Some(peak_vram_bytes).filter(|p| *p > 0),
-            host: self.host_peak(peak_rss_bytes),
+            host: self.host_peak(peak_owned_bytes, peak_file_bytes),
             run_was_measurable: true,
         }
     }
@@ -268,20 +221,29 @@ impl RollingBase {
         self.became_ready = true;
     }
 
-    /// Whether this placement's host side can support a meaningful ratio at
-    /// all: enough host-resident model weight, and weight enough of the `Cpu`
-    /// slot, that neither unmodelled term decides the outcome. See
-    /// [`HOST_LEARNING_MIN_CPU_WEIGHT_BYTES`] and
-    /// [`HOST_LEARNING_MIN_WEIGHT_PERCENT`].
-    pub(crate) fn host_pool_is_measurable(&self) -> bool {
-        self.inputs.cpu_weight_bytes >= HOST_LEARNING_MIN_CPU_WEIGHT_BYTES
-            && self.inputs.cpu_weight_bytes * 100
-                >= self.inputs.uncorrected_host_bytes * HOST_LEARNING_MIN_WEIGHT_PERCENT
-    }
-
-    /// The host-pool denominator: the `Cpu` slot as the estimator predicted it.
+    /// The host-pool denominator: the part of the `Cpu` slot that corresponds
+    /// to anonymous memory, as the estimator predicted it.
+    ///
+    /// Weights leave both sides of the ratio. Where they land in `/proc`
+    /// depends on the runtime — mapped by mainline llama.cpp, anonymous by
+    /// ik_llama — so [`Self::host_peak`] removes them from the numerator when
+    /// the measurement says they are there, and this removes them from the
+    /// denominator unconditionally.
+    ///
+    /// It also puts the correction where the uncertainty is. Host-resident
+    /// weight is exact arithmetic over the GGUF tensor table; there is nothing
+    /// to learn about it. What the daemon models rather than reads — the graph
+    /// arena, the prompt cache, the CPU KV share — is precisely what is left
+    /// in this denominator.
+    ///
+    /// Excluding them from both sides also puts the correction where the
+    /// uncertainty is: host-resident weight is exact arithmetic over the GGUF
+    /// tensor table, while the graph arena, the process baseline, and the CPU
+    /// KV share are all modelled.
     pub(crate) fn host_bytes(&self) -> u64 {
-        self.inputs.uncorrected_host_bytes
+        self.inputs
+            .uncorrected_host_bytes
+            .saturating_sub(self.inputs.cpu_weight_bytes)
     }
 }
 #[cfg(test)]
@@ -292,20 +254,20 @@ mod tests {
     use crate::tracking::rolling::{MIN_TRUSTED_SAMPLES, MemoryClass, RollingTable};
 
     const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
 
-    fn base(vram: u64, host: u64, gpu_weight: u64, mmap: bool) -> RollingBase {
-        // A hybrid's `Cpu` slot is offloaded expert weight plus the CPU-side
-        // compute buffer; 4% of a slot this size is the shape that clears both
-        // learning gates.
-        let cpu_weight = host - host / 25;
+    /// `host` is the whole `Cpu` slot; `cpu_weight` is the host-resident model
+    /// weight within it, which leaves both sides of the host ratio.
+    fn base(vram: u64, host: u64, cpu_weight: u64) -> RollingBase {
         RollingBase {
             inputs: RollingInputs {
                 uncorrected_vram_bytes: vram,
                 uncorrected_host_bytes: host,
-                gpu_weight_bytes: gpu_weight,
+                // Not exercised by these tests: the host pool never reads the
+                // GPU-side weight total.
+                gpu_weight_bytes: 0,
                 cpu_weight_bytes: cpu_weight,
             },
-            mmap,
             became_ready: true,
         }
     }
@@ -313,14 +275,15 @@ mod tests {
     /// The `deepseek-v4-flash` shape: ~20 GiB of VRAM and ~105 GiB of experts
     /// in host RAM. Each pool's peak is divided by that pool's own base, so an
     /// accurate estimate converges to 1.0 on both — where a single mean over
-    /// the all-device total read the VRAM peak as a 5× over-prediction and
+    /// the all-device total read the VRAM peak as a 5x over-prediction and
     /// pinned to the 0.8 clamp floor.
     #[test]
     fn hybrid_converges_to_neutral_in_both_pools() {
-        let b = base(20 * GIB, 105 * GIB, 18 * GIB, true);
-        // With the mapping in play, the observed RSS peak carries the
-        // GPU-resident weights as well as the host-resident experts.
-        let observed_rss = 105 * GIB + 18 * GIB;
+        // 105 GiB of host bytes, of which 96 GiB is mapped expert weight and
+        // the remaining 9 GiB is the prompt cache, the graph arena, and the
+        // CPU's KV share.
+        let b = base(20 * GIB, 105 * GIB, 96 * GIB);
+        assert_eq!(b.host_bytes(), 9 * GIB, "the weight term leaves the base");
 
         let table = RollingTable::new();
         let svc = SmolStr::new("hybrid-moe");
@@ -334,8 +297,7 @@ mod tests {
             table.update(
                 &svc,
                 MemoryClass::Host,
-                b.host_peak(observed_rss)
-                    .expect("peak exceeds the subtraction"),
+                b.host_peak(9 * GIB, 96 * GIB).expect("a peak was observed"),
                 b.host_bytes(),
             );
         }
@@ -345,116 +307,99 @@ mod tests {
     }
 
     /// A `cpu-only` service has no GPU slot, so the VRAM pool never learns —
-    /// but the host pool must, which is the whole point of splitting them.
-    /// Nothing is subtracted from its RSS peak either: it holds no GPU weights.
+    /// but the host pool must, at any size. The absolute weight floor this
+    /// replaced excluded every model under 27 GiB; with a denominator that is
+    /// a genuine prediction of anonymous memory there is nothing left for a
+    /// floor to protect against, so a small model learns like a large one.
     #[test]
-    fn cpu_only_learns_the_host_pool_only() {
-        let b = base(0, 60 * GIB, 0, true);
-        assert!(b.inputs.cpu_weight_bytes >= HOST_LEARNING_MIN_CPU_WEIGHT_BYTES);
-        assert_eq!(b.host_peak(66 * GIB), Some(66 * GIB));
+    fn a_small_cpu_only_service_still_learns_the_host_pool() {
+        // An 11 GiB model — a 13B at Q6_K — with 9 GiB of anonymous runtime
+        // memory on top.
+        let b = base(0, 20 * GIB, 11 * GIB);
+        assert_eq!(b.host_bytes(), 9 * GIB);
 
         let table = RollingTable::new();
         let svc = SmolStr::new("cpu-only");
         for _ in 0..MIN_TRUSTED_SAMPLES {
             table.update(&svc, MemoryClass::Vram, 0, b.inputs.uncorrected_vram_bytes);
-            table.update(&svc, MemoryClass::Host, 66 * GIB, b.host_bytes());
+            table.update(
+                &svc,
+                MemoryClass::Host,
+                b.host_peak(10 * GIB, 11 * GIB)
+                    .expect("a peak was observed"),
+                b.host_bytes(),
+            );
         }
         let rc = table.get(&svc);
-        assert_eq!(rc.vram.samples, 0);
-        assert_eq!(rc.corrections().vram, 1.0);
+        assert_eq!(rc.vram.samples, 0, "no GPU slot, nothing to learn");
         assert_eq!(rc.host.samples, MIN_TRUSTED_SAMPLES);
-        assert!(rc.corrections().host > 1.0);
+        assert!(
+            rc.corrections().host > 1.0,
+            "10 GiB observed against a 9 GiB prediction is an under-estimate"
+        );
     }
 
-    /// `--no-mmap` stages GPU tensors through a buffer it frees, so `VmRSS` is
-    /// already host-only and nothing may be subtracted. Subtracting anyway
-    /// would read a correct host reservation as a large over-prediction.
+    /// Where the weights land in `/proc` is a property of the *runtime*, not
+    /// of any flag ananke sets, so the numerator is decided by measurement.
+    ///
+    /// The two rows are the *same model with the same flags* on the two
+    /// runtimes ananke supports — Qwen3.6-35B-A3B under `--n-cpu-moe 40`,
+    /// one GPU, no `--no-mmap` on either. Mainline mapped its 24 GiB of
+    /// offloaded experts (`CPU_Mapped model buffer size`), reporting 465 MiB
+    /// owned against 24.9 GiB mapped; ik_llama allocated them anonymously
+    /// (`CPU buffer size`), reporting 23.8 GiB owned against 164 MiB mapped.
+    ///
+    /// The difference is specific to the expert-offload path: at `-ngl 0` the
+    /// same ik build *does* map, and honours `--no-mmap` when given it. So no
+    /// configuration ananke can read tells the two apart — only the
+    /// measurement does.
+    ///
+    /// Getting it wrong is not a rounding error. Treating ik's run as mapped
+    /// divides 23.8 GiB by a base of a few hundred MiB, which clamps to 1.5
+    /// and over-reserves a host slot tens of GiB wide by half.
     #[test]
-    fn no_mmap_subtracts_nothing() {
-        let mapped = base(20 * GIB, 105 * GIB, 18 * GIB, true);
-        let unmapped = base(20 * GIB, 105 * GIB, 18 * GIB, false);
-        assert_eq!(mapped.host_peak(120 * GIB), Some(102 * GIB));
-        assert_eq!(unmapped.host_peak(120 * GIB), Some(120 * GIB));
+    fn the_numerator_follows_the_measurement_not_the_flags() {
+        // mainline: experts mapped, so `owned` is already weights-free.
+        let mapped = base(4 * GIB, 25 * GIB, 24 * GIB);
+        assert_eq!(
+            mapped.host_peak(465 * MIB, 24 * GIB),
+            Some(465 * MIB),
+            "mapped weights are not in the owned figure; nothing to remove"
+        );
+
+        // ik_llama: same model, same flags, experts anonymous.
+        let anon = base(4 * GIB, 25 * GIB, 24 * GIB);
+        assert_eq!(
+            anon.host_peak(24 * GIB + 465 * MIB, 164 * MIB),
+            Some(465 * MIB),
+            "anonymous weights inflate the owned figure and must be removed"
+        );
+
+        // Either way the same host prediction is what gets divided into.
+        assert_eq!(mapped.host_bytes(), GIB);
+        assert_eq!(anon.host_bytes(), GIB);
     }
 
-    /// An RSS peak at or below the GPU-resident weight total means the sampler
-    /// never caught the host pages resident. Recording the saturated
-    /// difference would feed `update` a ratio near zero and pin the mean to
-    /// the 0.8 floor, so the sample is dropped instead.
+    /// A GPU-resident service holds no host *weight*, so its whole `Cpu` slot
+    /// is anonymous and is its own denominator. It learns like any other
+    /// service — where before, its slot was token embeddings plus a borrowed
+    /// GPU compute buffer, a pair no host measurement could match, and the
+    /// two pack paths disagreed about it by the whole buffer.
     #[test]
-    fn saturated_subtraction_yields_no_sample() {
-        let b = base(20 * GIB, 105 * GIB, 18 * GIB, true);
-        assert_eq!(b.host_peak(18 * GIB), None);
-        assert_eq!(b.host_peak(2 * GIB), None);
-        assert_eq!(b.host_peak(0), None);
-    }
-
-    /// A GPU-resident service's `Cpu` slot is token embeddings plus the
-    /// CPU-side compute buffer — a couple of GiB against a per-process host
-    /// footprint (llama-server, the CUDA runtime, pinned buffers) that no
-    /// reservation models. A multiplicative ratio there measures the
-    /// unmodelled term, so the host pool must not learn from it at all.
-    #[test]
-    fn a_gpu_resident_service_teaches_the_host_pool_nothing() {
+    fn a_gpu_resident_service_learns_from_its_whole_host_slot() {
         let b = RollingBase {
             inputs: RollingInputs {
                 uncorrected_vram_bytes: 21 * GIB,
-                // token_embd + the CPU-side compute buffer.
-                uncorrected_host_bytes: 5 * GIB,
+                // The prompt cache and the pinned graph arena; token
+                // embeddings are mapped, so they are weight, not anonymous.
+                uncorrected_host_bytes: 9 * GIB,
                 gpu_weight_bytes: 16 * GIB,
                 cpu_weight_bytes: GIB,
             },
-            mmap: true,
             became_ready: true,
         };
-        // A peak that would otherwise read as a 0.5× over-reservation.
-        assert_eq!(b.host_peak(18 * GIB), None);
-        // …and one that would read as a 2.4× under-estimate on the sharded
-        // path, whose `Cpu` slot carries no compute buffer at all.
-        let sharded = RollingBase {
-            inputs: RollingInputs {
-                uncorrected_host_bytes: GIB,
-                ..b.inputs
-            },
-            mmap: true,
-            became_ready: true,
-        };
-        assert_eq!(sharded.host_peak(18 * GIB), None);
-    }
-
-    /// A run that never finished loading yields nothing to either pool. Its
-    /// peaks are real but partial — the observation tables are monotonic, so a
-    /// model evicted mid-load leaves a fraction of its footprint recorded — and
-    /// a fractional peak over a whole-model base is exactly the ratio the
-    /// clamp launders into a plausible 0.8.
-    #[test]
-    fn a_run_that_never_became_ready_yields_no_samples() {
-        let mut b = base(21 * GIB, 60 * GIB, 18 * GIB, true);
-        b.became_ready = false;
-        // Peaks consistent with a load interrupted a third of the way in.
-        let s = b.samples_from(7 * GIB, 20 * GIB);
-        assert_eq!(s.vram, None);
-        assert_eq!(s.host, None);
-        assert!(!s.run_was_measurable);
-
-        // The same peaks from a run that did become ready are recorded — the
-        // guard is the readiness, not the values.
-        b.became_ready = true;
-        let s = b.samples_from(7 * GIB, 20 * GIB);
-        assert_eq!(s.vram, Some(7 * GIB));
-        assert!(s.host.is_some());
-        assert!(s.run_was_measurable);
-    }
-
-    /// A zero peak is the absence of a measurement, not a measurement of zero.
-    #[test]
-    fn a_zero_peak_is_not_a_sample() {
-        let b = base(21 * GIB, 60 * GIB, 0, true);
-        let s = b.samples_from(0, 0);
-        assert_eq!(s.vram, None);
-        assert_eq!(s.host, None);
-        // …but the run was still measurable, so an OOM bump is still resolved.
-        assert!(s.run_was_measurable);
+        assert_eq!(b.host_bytes(), 8 * GIB, "the mapped embeddings drop out");
+        assert_eq!(b.host_peak(8 * GIB, GIB), Some(8 * GIB));
     }
 
     /// An operator-declared reservation (`placement_override`, or a command
