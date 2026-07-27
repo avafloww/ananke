@@ -47,6 +47,7 @@ def arena_terms(record: dict) -> tuple[float, float, float]:
     the window alone.
     """
     factors, parsed = record["factors"], record["parsed"]
+    arch = parsed.get("arch", "")
     ctx, ubatch = factors["ctx"], factors["ubatch"]
     slots, unified = factors["parallel"], factors["kv_unified"]
     ik = factors["runtime"] == "ik"
@@ -56,7 +57,12 @@ def arena_terms(record: dict) -> tuple[float, float, float]:
     tokens = min(ctx, ubatch)
     width = 2 if factors["flash_attn"] == "on" else 4
 
-    mask = n_kv * tokens * width
+    # MLA compresses K and V into a shared latent, so the mask is half width.
+    mla = arch in ("deepseek4", "deepseek2", "glm-dsa")
+    mask = n_kv * tokens * width // (2 if mla else 1)
+    # ik's sparse-attention path allocates two further masks.
+    if ik and factors.get("extra") and "-dsa" in factors["extra"]:
+        mask *= 3
     swa = parsed.get("n_swa") or 0
     # mainline sizes the second mask to the window plus the batch; ik sizes it
     # to the whole context, which is why an SWA model costs it so much more.
@@ -64,7 +70,15 @@ def arena_terms(record: dict) -> tuple[float, float, float]:
     swa_mask = swa_rows * tokens * width if swa else 0
     # Two f32 hidden-state buffers on mainline, one on ik.
     hidden = (1 if ik else 2) * parsed["n_embd"] * tokens * 4
+    # ik keeps its MoE op intermediates on the CPU below a batch threshold,
+    # measured at 81 KiB per batch token — see FINDINGS.md.
+    experts, used = parsed.get("n_expert") or 0, parsed.get("n_expert_used") or 0
+    if ik and experts and used and tokens * used < 32 * experts:
+        hidden += IK_MOE_BYTES_PER_TOKEN * tokens
     return mask / 1024**2, swa_mask / 1024**2, hidden / 1024**2
+
+
+IK_MOE_BYTES_PER_TOKEN = 81 * 1024
 
 
 def check_arena(rows: list[dict]) -> None:

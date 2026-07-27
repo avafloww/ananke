@@ -49,7 +49,11 @@ def commit(message: str) -> None:
     run(["git", "add", "--"] + paths)
     if run(["git", "diff", "--cached", "--quiet", "--"] + paths).returncode == 0:
         return
-    result = run(["git", "commit", "-m", message], capture_output=True)
+    # Scoped to the data paths: a bare commit takes everything staged, which
+    # would sweep unrelated work into a data commit if someone happened to be
+    # staging while the campaign ran.
+    result = run(["git", "commit", "-m", message, "--"] + paths,
+                 capture_output=True)
     if result.returncode != 0:
         # Signing can fail if the key is gone. Say so and keep measuring: the
         # data is on disk either way, and losing the rest of an overnight run
