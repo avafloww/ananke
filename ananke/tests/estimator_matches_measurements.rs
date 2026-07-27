@@ -530,9 +530,12 @@ fn compute_buffer_covers_what_the_runtime_took() {
         ("gemma3", 2.9),
         ("qwen3", 3.1),
         ("gemma4", 3.2),
-        // The one real outlier, and the review item: its slope encodes context
-        // scaling the measurements do not show, so the gap widens with context.
-        ("deepseek4", 5.5),
+        // Not a curve error any more. Its worst cell is the one flash-attention
+        // -off run, where the estimator reserves 12066 MiB against the 2435 the
+        // runtime took; with flash attention on the same configuration sits at
+        // 2.4x, in line with every other architecture. The no-flash-attention
+        // multiplier is unfitted here — see FINDINGS.md.
+        ("deepseek4", 5.0),
     ];
     for (arch, headroom) in &over {
         let Some((_, ceiling)) = CEILINGS.iter().find(|(a, _)| a == arch) else {

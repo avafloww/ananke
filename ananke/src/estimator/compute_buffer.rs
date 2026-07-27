@@ -307,8 +307,10 @@ mod tests {
         // compute buffer measured 4578 MiB at 131072, ub2048. The DSA indexer
         // scratch scales with context, so the curve must (a) cover the 4578
         // measurement at 131072 with headroom, and (b) still stay below
-        // deepseek4, whose NSA indexer scales with ubatch × context and is far
-        // steeper.
+        // deepseek4. That ordering no longer holds and the assertion is gone:
+        // the campaign measured deepseek4's per-device compute flat at 1976 MiB
+        // from ctx 8192 to 131072, so glm-dsa's DSA scratch is the steeper of
+        // the two.
         let glm = summary_for("glm-dsa");
         let glm_base = CURVES
             .iter()
@@ -319,11 +321,6 @@ mod tests {
             default_for(&glm, 131072, None, true) >= 4578,
             "must cover the measured 4578 MiB -dsa compute at 131072 (got {})",
             default_for(&glm, 131072, None, true)
-        );
-        assert!(
-            default_for(&glm, 131072, None, true)
-                < default_for(&summary_for("deepseek4"), 131072, None, true),
-            "glm-dsa's indexer is less steep than deepseek4's NSA curve"
         );
         // The context term scales with batch here as everywhere else. It did
         // not until the campaign measured the compute buffer proportional to
@@ -338,26 +335,29 @@ mod tests {
 
     #[test]
     fn deepseek4_covers_measured_indexer_buffer() {
-        // The NSA indexer's prompt scratch is the steepest curve in the
-        // table. It must (a) grow faster than every other MoE arch and
-        // (b) cover the measured per-card residuals (~9.3 GiB at 131072,
-        // ~17.5 GiB at 262144) with a little headroom.
+        // The curve this replaces charged 66 MiB per 1k of context on the
+        // premise that the NSA indexer scales with ubatch × context. The
+        // campaign falsified it: `indexer.top_k` is 512, a fixed working set,
+        // and the primary device's compute buffer measures 1976 MiB at ctx
+        // 8192, 32768, 65536, and 131072 alike — identical to the megabyte
+        // across a sixteenfold range, and 1976/1984/2001 across ubatch
+        // 512/1024/2048. What does scale with context lives on the *secondary*
+        // device, at roughly 1 MiB per 1k, which is the slope now fitted.
+        //
+        // The worst per-device need over the whole sweep is 2401 MiB, compute
+        // plus its unaccounted remainder.
         let ds4 = summary_for("deepseek4");
-        let moe = summary_for("gpt-oss");
-        assert!(
-            default_for(&ds4, 262144, None, true) > default_for(&moe, 262144, None, true) * 4,
-            "deepseek4 cb must dwarf the flat MoE curve at long context"
-        );
-        assert!(
-            default_for(&ds4, 131072, None, true) >= 9297,
-            "must cover the measured ~9.3 GiB residual at 131072 (got {})",
-            default_for(&ds4, 131072, None, true)
-        );
-        assert!(
-            default_for(&ds4, 262144, None, true) >= 17519,
-            "must cover the measured ~17.5 GiB residual at 262144 (got {})",
-            default_for(&ds4, 262144, None, true)
-        );
+        for context in [8192, 32768, 65536, 131072] {
+            assert!(
+                default_for(&ds4, context, None, true) >= 2401,
+                "must cover the measured 2401 MiB worst per-device need at \
+                 ctx {context} (got {})",
+                default_for(&ds4, context, None, true)
+            );
+        }
+        // And it must not run away with context the way its predecessor did,
+        // which reserved 10348 MiB at 131072 for a buffer that had not moved.
+        assert!(default_for(&ds4, 131072, None, true) < 2 * default_for(&ds4, 8192, None, true));
     }
 
     #[test]
@@ -375,9 +375,10 @@ mod tests {
             .base_mib;
         let slope_at = |ub| default_for(&ds4, 131072, Some(ub), true) - base;
         // The context-scaling term is linear in ubatch off the 512 baseline.
+        // Checked at 131072 because the fitted slope is 1 MiB per 1k: at a
+        // shorter context the halving case lands inside integer rounding.
         assert_eq!(slope_at(1024), slope_at(512) * 2);
         assert_eq!(slope_at(2048), slope_at(512) * 4);
-        assert_eq!(slope_at(256), slope_at(512) / 2);
         // And so does every other architecture, for the same reason.
         let qwen = summary_for("qwen3");
         let qwen_base = CURVES

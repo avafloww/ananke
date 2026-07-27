@@ -947,16 +947,15 @@ def derive_deepseek4_curve(rows: list[dict]) -> tuple[int, str]:
 
 # Curves are derived separately: they live in the ordered table rather than
 # among the scalars, and a deriver returns a base, a slope and its evidence.
-# Empty deliberately. `derive_deepseek4_curve` works and is kept below, but
-# is not wired in: what it measures is llama.cpp's own `compute` attribution,
-# and what the constant must cover is everything the packer needs beyond
-# ananke's *own* weights and KV predictions. Those are different quantities,
-# and the existing test asserts the curve covers a 9.3 GiB residual at
-# ctx 131072 where the compute column reads 2.0 GiB. Until the end-to-end
-# predicted-versus-measured check exists, reducing this constant would risk
-# under-reserving at load, which is the one failure direction that OOMs.
-# deepseek4 is deliberately absent: its slope is held under review and cannot
-# be settled on hardware that cannot run the architecture GPU-resident.
+# `derive_deepseek4_curve` below is superseded and kept only as the record of
+# what the hold-out was protecting. Its argument was that the curve covers a
+# 9.3 GiB residual at ctx 131072 that llama.cpp's own compute column, at 2.0
+# GiB, does not describe. The sweep retires it: the total measured GPU
+# footprint is 15496 MiB at ctx 8192 and 16425 at 131072, a difference of 929
+# MiB and exactly the KV growth, so any residual beyond the compute column is
+# *flat in context*. A flat residual cannot justify a context slope — it is
+# equally present at 8192, where the old curve reserved 2428 MiB. deepseek4 is
+# therefore fitted by the general deriver like everything else.
 # Keyed by the entry each targets, not by architecture: `llama` and `qwen3`
 # share the default curve, so it has to cover the worse of the two rather than
 # be written twice, and gemma4 has a variant-guarded entry that must be fitted
@@ -964,6 +963,12 @@ def derive_deepseek4_curve(rows: list[dict]) -> tuple[int, str]:
 CURVE_DERIVERS = {
     # One entry covers gemma2, gemma3 and gemma4, so it is fitted over all of
     # them at once; the E-variant has its own entry and its model is held out.
+    # Fitted like every other architecture now. Held out until the sweep could
+    # answer the question: the worst per-device need is 2398 MiB at ctx 8192
+    # and 2396 at 131072, so the curve's context slope described nothing. See
+    # `derive_deepseek4_curve` below for what the hold-out was protecting and
+    # why the measurements retire it.
+    "deepseek4": derive_curve(("deepseek4",)),
     "gemma3": derive_curve(("gemma2", "gemma3", "gemma4"), exclude_models=("E4B",)),
     "laguna": derive_curve(("laguna",)),
     "lfm2": derive_curve(("lfm2",)),

@@ -267,10 +267,10 @@
         "archs": [
           "deepseek4"
         ],
-        "base_mib": 1900,
-        "slope_mib_per_1k": 66,
+        "base_mib": 3842,
+        "slope_mib_per_1k": 1,
         "slope_scales_with_ubatch": true,
-        "evidence": "DeepSeek-V4-Flash. UNDER REVIEW: the slope's premise is falsified \u2014 indexer.top_k is 512, a fixed working set, and quadrupling ubatch at fixed context moves the measured compute buffer from 2019 to 2001 MiB where a k x ubatch x ctx term must quadruple. Pending a second data run. Base raised from 1400 to 1900 to remove an under-reservation at ctx 8192, where the curve gave 2028 MiB against the 2398 the runtime took once its unaccounted remainder is counted. That is a safety bump in the over-reserving direction, not a resolution of the review: the question of whether the context slope is real in a GPU-resident regime is untouched, and unanswerable on 48 GiB of VRAM."
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 20 layer-split cells at ctx 8192-131072, peaking at 2401 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation."
       }
     ]
   },

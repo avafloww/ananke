@@ -713,6 +713,47 @@ Out-of-band cells fall from 33 of 211 to 5. The five that remain are each a
 regime the offset is derived without: two flash-attention-off cells, two
 `parallel = 4` slot splits, and one gemma3 cell at 0.78.
 
+## deepseek4's context slope was not real
+
+The curve charged 1900 MiB plus 66 per 1k of context, scaling with batch, on
+the premise that the NSA lightning indexer scores every query token against
+the whole context. The sweep measures the primary device's compute buffer at
+**1976 MiB at ctx 8192, 32768, 65536, and 131072** — identical to the
+megabyte across a sixteenfold range — and 1976 / 1984 / 2001 across ubatch
+512 / 1024 / 2048. `indexer.top_k` is 512, a fixed working set, so once the
+context passes it the indexer scores against a fixed-size selection and the
+buffer stops growing.
+
+The premise was not invented, only misplaced. The `k x ubatch x ctx` term is
+real on the *secondary* device — 202, 223, 279, 327 MiB at those four contexts,
+scaling cleanly with batch (223 / 448 / 904 for ub 512 / 1024 / 2048) — but at
+about 1 MiB per 1k, not 66. At ctx 131072 the old curve reserved 10348 MiB
+against the 2396 the runtime took.
+
+The hold-out that kept this out of the deriver argued the curve was covering a
+9.3 GiB residual the compute column does not describe. Total measured GPU
+footprint is 15496 MiB at ctx 8192 and 16425 at 131072 — a difference of 929
+MiB, exactly the KV growth — so any such residual is flat in context, equally
+present at 8192 where the curve reserved 2428 MiB. Whatever it is, a context
+slope is not its remedy.
+
+Fitted by the general deriver, the curve becomes 3842 + 1 per 1k: a *higher*
+base than before at every context under 30k, and a sixth of the reservation at
+131072.
+
+## Flash attention off is unmodelled everywhere
+
+It surfaced three times independently and is one gap, not three: it shifts the
+host baseline by 30-254 MiB inconsistently, it is excluded from every
+derivation for that reason, and it is now the sole cause of the largest
+remaining compute over-reservation — deepseek4's worst cell reserves 12066 MiB
+against 2435 measured, where the same configuration with flash attention on
+sits at 2.4x like everything else.
+
+Nothing here fits a no-flash-attention multiplier. The estimator over-reserves
+in that regime rather than guessing, which is the safe direction, and the
+production configurations all run with it on.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline
