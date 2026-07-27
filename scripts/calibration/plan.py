@@ -537,6 +537,74 @@ def review_followup() -> list[Cell]:
     return cells
 
 
+def mtp_slots() -> list[Cell]:
+    """Separate MTP's slot count from its context.
+
+    The first campaign left `MTP_COMPUTE_MIB` under review because the paired
+    with- and without-MTP cells disagreed with the constant by a factor of
+    four, and the disagreement grew at `parallel = 4`. But the design cannot
+    say that: every one-slot pair sits at ctx 32768 or 65536 and the only
+    four-slot pair sits at 131072, so slots and context are confounded and the
+    "slot dependence" may be nothing but the longer context.
+
+    Context is therefore held fixed and only `parallel` moves. Both models
+    with an embedded head are swept, since they differ in the kv-head count
+    the KV formula multiplies by, and the separate-draft model is swept too
+    because its overhead has no context-scaling term at all — its draft shares
+    the target's KV cache — so it is the control: if its delta moves with
+    slots, the cause is not the MTP KV.
+    """
+    cells: list[Cell] = []
+    for key in ("qwen36-27b", "qwen36-35b-a3b", "gemma4-31b-qat"):
+        model = MODELS[key]
+        draft = path_of(model.draft) if model.draft else None
+        for parallel in (1, 2, 4):
+            for spec, name in ((None, "none"), ("draft-mtp", "mtp")):
+                cells.append(Cell(
+                    label=f"mtpslot-{model.key}-{name}-np{parallel}",
+                    purpose=("mtp-slots",), model=path_of(model.path),
+                    gpus="0,1", split="tensor", ctx=32768, parallel=parallel,
+                    kv_unified=True, spec_type=spec,
+                    draft=draft if spec else None,
+                    **_model_flags(model, "0,1")))
+    return cells
+
+
+def flash_attention_off() -> list[Cell]:
+    """The no-flash-attention regime, over enough shapes to fit a term.
+
+    Nineteen cells ran with it off and seventeen of them sit at exactly ctx
+    32768, ubatch 512, one slot. That measures the *offset* at one point and
+    says nothing about how it scales, which is why the regime is excluded from
+    every derivation rather than modelled: it costs 30 to 254 MiB of host
+    residual depending on the architecture, and it is the single largest
+    remaining compute over-reservation.
+
+    Both axes the mask depends on are swept — the KQ mask is `n_kv x n_tokens`
+    and loses its f16 packing when flash attention is off, so the term should
+    be linear in both context and batch. Four architectures, chosen for the
+    mask shapes that differ: interleaved SWA, plain causal, full MHA, and the
+    embedding model whose no-flash-attention residual is the largest measured.
+
+    Each cell has a flash-attention-on twin already in the dataset from the
+    curve sweep, so the pairs are formed without measuring the twins again.
+    """
+    cells: list[Cell] = []
+    for key in ("gemma3-27b", "qwen36-27b", "magidonia-24b", "lfm2-embed"):
+        model = MODELS[key]
+        gpus = model.gpus[-1]
+        for ctx, ubatch in ((8192, 512), (32768, 512), (131072, 512),
+                            (32768, 2048), (8192, 2048)):
+            if model.max_ctx and ctx > model.max_ctx:
+                continue
+            cells.append(Cell(
+                label=f"faoff-{model.key}-c{ctx}-ub{ubatch}",
+                purpose=("flash-attention",), model=path_of(model.path),
+                gpus=gpus, split=_splits_for(model, "mainline")[0], ctx=ctx,
+                ubatch=ubatch, flash_attn="off", **_model_flags(model, gpus)))
+    return cells
+
+
 def replication() -> list[Cell]:
     """Repeats in the regimes the noise floor never visited.
 
@@ -729,6 +797,8 @@ QUESTIONS = {
     "replication": replication,
     "concurrency": concurrency,
     "review-followup": review_followup,
+    "mtp-slots": mtp_slots,
+    "flash-attention": flash_attention_off,
     "holdout": phase5_holdout,
 }
 
