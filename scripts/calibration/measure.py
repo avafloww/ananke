@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import signal
 import subprocess
 import sys
@@ -530,6 +531,30 @@ def _post(port: int, path: str, payload: dict, timeout: float) -> None:
         pass  # A failed probe still leaves the process measurable.
 
 
+def wait_for_port(port: int, timeout: float = 180.0) -> bool:
+    """Block until nothing holds the port.
+
+    Stopping a server is not the same as the port being free: the previous
+    listener's socket can outlive it, and ik_llama's server does not set
+    SO_REUSEADDR, so it loses the bind and exits instead of retrying. That
+    reads downstream as a load failure, which is how a whole run of ik cells
+    can fail for a reason that has nothing to do with the model.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            # Deliberately without SO_REUSEADDR: the question is whether the
+            # next server can bind, not whether this process could.
+            probe.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            time.sleep(1.0)
+        finally:
+            probe.close()
+    return False
+
+
 def _healthy(port: int) -> bool:
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5).read()
@@ -659,6 +684,9 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int,
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{cell.cell_id}-{cell.label}.log"
 
+    if not wait_for_port(port):
+        return Measurement(cell, prov, {}, {}, status="port-busy",
+                           hardware=hardware())
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=cell.gpus)
     with log_path.open("wb") as log_file:
         trace: list[dict[str, object]] = []
