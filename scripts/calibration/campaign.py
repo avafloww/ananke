@@ -24,7 +24,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 DATA = HERE / "data"
-ORDER = ["phase0", "phase1", "phase2", "phase3", "phase4", "phase5"]
+ORDER = ["phase0", "phase1", "phase2", "phase2b", "phase3", "phase4", "phase5"]
 
 # Host memory to leave free per phase. The holdout phase runs the production
 # hybrids, whose whole point is that they nearly fill the machine, so it gets

@@ -140,6 +140,38 @@ def phase3_fork() -> list[Cell]:
     return [c for k in keys for c in _significant(MODELS[k], runtime="ik")]
 
 
+def phase2b_curves() -> list[Cell]:
+    """Two contexts and two batches per model, so the slopes are fittable.
+
+    Everything else in this campaign holds `ctx` at 32768 and `ubatch` at 512,
+    which is enough for the host baseline — Phase 1 measured it flat in both —
+    but leaves several constants underdetermined. A slope needs two points:
+    every per-architecture curve in `estimator/compute_buffer.rs` is
+    `base + slope * (ctx / 1024)`, `deepseek4`'s slope is additionally linear
+    in `ubatch`, and ik's CPU-MoE term is per batch token with a batch-size
+    threshold. One point per model can fit none of them.
+
+    Flash attention is varied here for the same reason: it changes the KQ mask
+    element width and is the sole justification for
+    `NO_FLASH_ATTN_BYTES_PER_TOKEN`, which no cell has ever exercised.
+    """
+    cells: list[Cell] = []
+    keys = ["qwen3-4b", "qwen36-27b", "gemma3-27b", "gemma4-31b-qat",
+            "qwen36-35b-a3b", "laguna", "dsv4f"]
+    for key in keys:
+        model = MODELS[key]
+        for runtime in model.runtimes:
+            for ctx, ubatch, fa in [(8192, 512, "on"), (32768, 512, "on"),
+                                    (65536, 512, "on"), (32768, 2048, "on"),
+                                    (32768, 512, "off")]:
+                cells.append(Cell(
+                    label=f"curve-{model.key}-{runtime}-c{ctx}-ub{ubatch}-fa{fa}",
+                    model=path_of(model.path), runtime=runtime, gpus="0,1",
+                    split="layer", ctx=ctx, ubatch=ubatch, flash_attn=fa,
+                    n_cpu_moe=model.n_cpu_moe))
+    return cells
+
+
 def phase4_special() -> list[Cell]:
     """Terms with their own switch rather than a continuous factor.
 
@@ -233,6 +265,7 @@ PHASES = {
     "phase1": phase1_factorial,
     "phase2": phase2_models,
     "phase3": phase3_fork,
+    "phase2b": phase2b_curves,
     "phase4": phase4_special,
     "phase5": phase5_holdout,
 }
