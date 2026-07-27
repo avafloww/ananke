@@ -84,14 +84,22 @@ class Cell:
     soak: int = 0
     concurrency: int = 1
     bench: str | None = None
-    """Scenario to drive with the tuning skill's `agentic-bench.py`.
+    """Scenario to drive with the vendored agent-loop benchmark.
 
     A single short request only reaches what the runtime allocates on first
-    use. An agent loop re-sends a growing prefix every turn, which is what
-    exercises the prompt cache, the per-slot checkpoints, and the KV as it
-    fills — the terms that accumulate with *use* rather than at load, and the
-    ones a snapshot at startup structurally cannot see.
+    use. The benchmark's `turns` scenario re-sends a growing prefix with the
+    prompt cache on, which is the one thing that exercises the cache — a term
+    that accumulates with *use* rather than at load, and so is invisible to a
+    snapshot at startup.
+
+    It does not cover everything. The loop is strictly sequential, so with
+    `parallel > 1` only one slot is ever touched and per-slot state stays
+    unallocated; `soak` with `concurrency` is what reaches those. Its
+    conversation also grows to only ~11k tokens at the default turn count, a
+    fraction of a production context, so raise `bench_turns` for anything
+    claiming to bound KV-driven growth.
     """
+    bench_turns: int = 5
     verbose_log: bool = True
     """Whether to raise the loader's log verbosity.
 
@@ -370,14 +378,12 @@ def exercise(cell: Cell, port: int) -> None:
             t.join()
 
 
-# The tuning skill's agent-loop benchmark, which drives a server the way a
-# coding agent does: a growing prefix re-sent every turn, so the prompt cache
-# and the KV fill the way they do in production rather than the way a single
-# synthetic request leaves them.
-BENCH = Path(os.environ.get(
-    "AGENTIC_BENCH",
-    Path.home() / ".claude/skills/llama-cpp-model-tuning/agentic-bench.py",
-))
+# The agent-loop benchmark, which drives a server the way a coding agent does:
+# a growing prefix re-sent every turn, so the prompt cache and the KV fill the
+# way they do in production rather than the way a single synthetic request
+# leaves them. Vendored beside this module so a calibration run needs nothing
+# outside the repository.
+BENCH = Path(os.environ.get("AGENTIC_BENCH", Path(__file__).parent / "agentic_bench.py"))
 
 
 def _run_bench(cell: Cell, port: int) -> None:
@@ -386,7 +392,7 @@ def _run_bench(cell: Cell, port: int) -> None:
         return
     subprocess.run(
         [sys.executable, str(BENCH), "--url", f"http://127.0.0.1:{port}",
-         "--scenario", cell.bench],
+         "--scenario", cell.bench, "--turns", str(cell.bench_turns)],
         capture_output=True, text=True, timeout=3600, check=False,
     )
 
