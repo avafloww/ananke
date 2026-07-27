@@ -83,6 +83,13 @@ class Cell:
     soak: int = 0
     concurrency: int = 1
     extra: tuple[str, ...] = ()
+    repeat: int = 0
+    """Distinguishes otherwise identical cells.
+
+    Repeats are how the noise floor gets measured, and the resume key would
+    otherwise collapse them into one. It takes part in the cell identity and
+    in nothing else — `argv` never sees it.
+    """
 
     @property
     def cell_id(self) -> str:
