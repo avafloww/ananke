@@ -683,8 +683,35 @@ since a reservation is made before the first request but has to cover the
 state after it — judging against an idle process counts a required
 over-prediction as an error.
 
-Qwen3.6-27B remains 1.85x its modelled baseline and accounts for 29 of the 33
-cells still outside the band. Every other model is inside it.
+### Charged as a per-architecture offset
+
+Since the cause is not visible but the residual is reproducible, it is charged
+rather than explained: `baseline_offset` in `tuning.json`, keyed on the
+architecture and derived by `analyse.py` alongside everything else. Three
+things had to be separated out of that derivation first, each surfaced by the
+`consensus` guard refusing to reduce a group that did not agree:
+
+- **Flash attention off is its own regime.** It costs 30 to 254 MiB of host
+  residual beyond the arena term, and inconsistently — gemma3's scales with
+  batch and qwen3's does not. Pooling it put lfm2's offset at both 35 and 169
+  MiB. Excluded, and unmodelled: the estimator over-reserves there rather than
+  guessing.
+- **ik_llama does not share the baseline.** Its residuals run -264 to +120 MiB
+  where mainline's run -0 to +24. Excluded.
+- **One architecture string can cover several models.** `gemma4` is three:
+  the mixture of experts is over-covered by 66 MiB, the dense model needs 17,
+  and the E-variant 107. The key therefore carries a `+moe`/`+e` suffix — both
+  are distinctions the estimator already reads, so it is a key it can build.
+
+The deriver reduces by `max`, not median, and so deliberately does *not* call
+`consensus`: a maximum bounds a spread rather than concealing it, and erring
+high on a baseline is the safe direction. The spread is reported in the
+evidence string instead, which is how the E-variant's remaining batch
+dependence (92 MiB at ub 512, 170 at 2048) stays visible.
+
+Out-of-band cells fall from 33 of 211 to 5. The five that remain are each a
+regime the offset is derived without: two flash-attention-off cells, two
+`parallel = 4` slot splits, and one gemma3 cell at 0.78.
 
 ## Open
 
@@ -692,3 +719,6 @@ cells still outside the band. Every other model is inside it.
   block fixes ctx at 32768 and the curve block runs two cards, so single-card
   context variation is thin for every model except qwen3-4b.
 - Nothing here says anything about portability. Every row is one machine.
+- The baseline offset is charged, not understood. A machine with a different
+  CUDA runtime may well need different numbers, and nothing in the derivation
+  would notice.

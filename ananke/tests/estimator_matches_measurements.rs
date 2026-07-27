@@ -207,7 +207,10 @@ fn every_model_lands_inside_the_correction_band() {
     // the direction that OOMs. The number is recorded so it can only fall.
     // See FINDINGS.md; closing the gap needs the host baseline refitted, not
     // this threshold raised.
-    const KNOWN_OUTSIDE: usize = 33;
+    // Was 33 before the per-architecture baseline offset. The five that remain
+    // are each a regime the offset is derived without: flash attention off, a
+    // parallel > 1 slot split, and the one gemma3 cell that sits at 0.78.
+    const KNOWN_OUTSIDE: usize = 5;
     assert!(
         outside.len() <= KNOWN_OUTSIDE,
         "{} of {checked} cells sit outside the correction's [0.8, 1.5] band, \
@@ -519,7 +522,10 @@ fn compute_buffer_covers_what_the_runtime_took() {
         ("lfm2", 2.2),
         ("llama", 2.3),
         ("laguna", 2.3),
-        ("qwen35moe", 2.4),
+        // Raised from 2.4 when the qwen35 curve was refitted across 48 cells
+        // rather than 38: the wider fit found a higher worst-case unaccounted
+        // remainder, so the base is larger on more evidence, not less.
+        ("qwen35moe", 3.1),
         ("qwen35", 2.7),
         ("gemma3", 2.9),
         ("qwen3", 3.1),

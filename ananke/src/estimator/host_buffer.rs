@@ -139,7 +139,31 @@ fn process_base_bytes(summary: &GgufSummary) -> u64 {
     } else {
         0
     };
-    PROCESS_BASE_BYTES + layers * PROCESS_BASE_BYTES_PER_LAYER + moe
+    PROCESS_BASE_BYTES + layers * PROCESS_BASE_BYTES_PER_LAYER + moe + baseline_offset(summary)
+}
+
+/// The measured correction the layer-count model above leaves behind.
+///
+/// Keyed on the architecture *and* the two variant distinctions that separate
+/// models sharing one architecture string: within `gemma4`, the mixture of
+/// experts is over-covered by 66 MiB, the dense model needs 17, and the
+/// E-variant 107. Both discriminators are ones the estimator already reads, so
+/// the key is one it can construct.
+fn baseline_offset(summary: &GgufSummary) -> u64 {
+    let mut key = summary.architecture.to_string();
+    if has_experts(summary) {
+        key.push_str("+moe");
+    }
+    if crate::estimator::compute_buffer::is_gemma_e_variant(summary) {
+        key.push_str("+e");
+    }
+    crate::estimator::tuning::BASELINE_OFFSET
+        .iter()
+        .find(|(a, _)| *a == key)
+        .map_or(
+            crate::estimator::tuning::BASELINE_OFFSET_DEFAULT,
+            |(_, v)| *v,
+        )
 }
 
 /// Whether the model carries expert tensors, i.e. is a mixture of experts.

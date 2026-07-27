@@ -136,6 +136,13 @@ fn generate_tuning_constants() {
     ));
     out.push_str(&generate_rate_table(
         &parsed,
+        "baseline_offset",
+        "BASELINE_OFFSET",
+        "BASELINE_OFFSET_DEFAULT",
+        "Correction to the process baseline the layer-count model leaves behind,\n/// by architecture and variant. Keys carry a `+moe`/`+e` suffix where those\n/// distinctions separate models that share an architecture string.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
         "quantised_cache_rates",
         "QUANTISED_CACHE_RATES",
         "QUANTISED_CACHE_RATE_DEFAULT",

@@ -57,7 +57,7 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "68 mainline layer-split cells at 4.01, against 131 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "74 mainline layer-split cells at 4.01, against 131 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived"
     },
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
@@ -165,7 +165,7 @@
         ],
         "base_mib": 830,
         "slope_mib_per_1k": 17,
-        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 66 layer-split cells at ctx 8192-65536, peaking at 1193 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 70 layer-split cells at ctx 8192-65536, peaking at 1193 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
@@ -215,16 +215,16 @@
         ],
         "base_mib": 1411,
         "slope_mib_per_1k": 1,
-        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 26 layer-split cells at ctx 8192-65536, peaking at 889 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 28 layer-split cells at ctx 8192-65536, peaking at 889 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
         "archs": [
           "qwen35"
         ],
-        "base_mib": 775,
-        "slope_mib_per_1k": 13,
-        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 38 layer-split cells at ctx 8192-65536, peaking at 985 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_mib": 812,
+        "slope_mib_per_1k": 12,
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 48 layer-split cells at ctx 8192-65536, peaking at 985 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
@@ -274,7 +274,7 @@
       }
     ]
   },
-  "measurements": 464,
+  "measurements": 473,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -307,12 +307,24 @@
     "$comment": "Extra host baseline bytes a tensor split costs beyond a layer split, by architecture. `default` applies to an architecture not listed.",
     "default": 192692224,
     "by_arch": {
-      "gemma3": 132651008,
+      "gemma3": 132661248,
       "gemma4": 161513472,
       "llama": 136181760,
       "qwen3": 104529920,
       "qwen35": 192692224,
       "talkie": 113256448
+    }
+  },
+  "baseline_offset": {
+    "$comment": "Per-architecture correction to the process baseline, in bytes. The layer-count model leaves a residual that is architecture-shaped and reproducible; this charges it where it is positive. `default` is zero, since an unmeasured architecture has no evidence either way.",
+    "default": 0,
+    "by_arch": {
+      "gemma4": 26759192,
+      "gemma4+e": 178705220,
+      "lfm2": 41134496,
+      "qwen3": 22231464,
+      "qwen35": 328361600,
+      "qwen35moe+moe": 45703184
     }
   }
 }

@@ -203,7 +203,12 @@ class Disagreement(ValueError):
     """The cells behind a constant do not agree, so no single value fits them."""
 
 
-def consensus(values: list[float], name: str, tolerance: float = 0.15) -> float:
+def consensus(
+    values: list[float],
+    name: str,
+    tolerance: float = 0.15,
+    absolute_floor: float = 0.0,
+) -> float:
     """Reduce measurements to one number, refusing when they disagree.
 
     Every deriver here used to take a median and say nothing about the spread
@@ -221,9 +226,16 @@ def consensus(values: list[float], name: str, tolerance: float = 0.15) -> float:
     if not values:
         raise Disagreement(f"{name}: no measurements")
     middle = st.median(values)
+    spread_abs = max(values) - min(values)
+    # A relative tolerance is meaningless around zero: a term whose median is
+    # 0.1 and whose values span 21 reads as 218% disagreement while being 21
+    # units wide. Where the caller knows what "small" means in its own units,
+    # it says so, and a spread below that is not worth blocking on.
+    if spread_abs <= absolute_floor:
+        return middle
     if middle == 0:
         return middle
-    spread = (max(values) - min(values)) / abs(middle)
+    spread = spread_abs / abs(middle)
     if spread > tolerance:
         raise Disagreement(
             f"{name}: {len(values)} measurements span {min(values):.4g} to "
@@ -355,6 +367,105 @@ def derive_mainline_tensor_moe(rows: list[dict]) -> tuple[int, str]:
 
 
 _TENSOR_BASE: dict[str, int] = {}
+_BASE_OFFSET: dict[str, int] = {}
+
+
+def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
+    """Per-architecture correction to the process baseline.
+
+    `PROCESS_BASE_BYTES` plus a per-layer term plus a flat MoE allowance is the
+    whole model, and it leaves a residual that is *architecture-shaped*: qwen35
+    holds 297 MiB more than it predicts and qwen35moe 75, while gemma3 holds 47
+    less. Two models of the same family show it and two of near-identical shape
+    do not, so it is not size, and a long list of other causes has been ruled
+    out by measurement — see FINDINGS.md.
+
+    Modelled as an offset per architecture rather than explained. That is
+    honest about what is known: the residual is reproducible, it is keyed on
+    something the architecture string captures, and leaving it uncharged
+    under-reserves qwen35 by nearly twice.
+    """
+    from collections import defaultdict as _dd
+    import json as _json
+    constants = _json.loads(TUNING_JSON.read_text())["constants"]
+    per_layer = constants["PROCESS_BASE_BYTES_PER_LAYER"]["value"]
+    flat = constants["PROCESS_BASE_BYTES"]["value"]
+    moe = constants["PROCESS_BASE_BYTES_MOE"]["value"]
+    dev = constants["PROCESS_BASE_BYTES_PER_DEVICE"]["value"]
+    pinned = constants["PINNED_EXTRA_BYTES"]["value"]
+
+    by_arch: dict[str, list[float]] = _dd(list)
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if factors["ngl"] != 99 or not factors["gpus"] or factors["spec_type"]:
+            continue
+        if factors["n_cpu_moe"] or not factors["served"] or factors["bench"]:
+            continue
+        if factors["parallel"] != 1 or not parsed.get("arena_mib"):
+            continue
+        if (factors["split"] or "layer") != "layer" or not parsed.get("n_layer"):
+            continue
+        # Flash attention off is its own regime: it costs 30 to 254 MiB of host
+        # residual beyond the arena term, inconsistently — gemma3's scales with
+        # batch and qwen3's does not. Pooling it here put lfm2's offset at both
+        # 35 and 169.
+        if factors["flash_attn"] != "on":
+            continue
+        # mainline only. ik's residual against the same model runs from -264 to
+        # +120 MiB where mainline's is -0 to +24, so the two binaries do not
+        # share a baseline and pooling them put qwen3's offset across a 664%
+        # spread. ik's production services are hybrids, which this excludes
+        # anyway.
+        if factors["runtime"] == "ik":
+            continue
+        owned = (record["rss"].get("rss_anon_kb", 0)
+                 + record["rss"].get("rss_shmem_kb", 0)) * 1024
+        mask, swa_mask, hidden = arena_terms(record)
+        cards = len(factors["gpus"].split(","))
+        copies = 4 if cards > 1 else 1
+        modelled = (flat + parsed["n_layer"] * per_layer
+                    + (moe if parsed.get("n_expert") else 0))
+        residual = (owned - (copies * (mask + swa_mask) + hidden) * 1024**2
+                    - pinned - dev * (cards - 1) - modelled)
+        # Keyed by the discriminators the estimator itself has, not by the
+        # architecture string alone: within gemma4 the mixture-of-experts model
+        # is over-covered by 66 MiB, the dense one needs 17, and the E-variant
+        # 107. `has_experts` and the E-variant check are both things
+        # `host_buffer` already applies, so an offset keyed on them is one the
+        # estimator can look up.
+        variant = ""
+        if parsed.get("n_expert"):
+            variant += "+moe"
+        if "E4B" in record["provenance"]["model_key"]:
+            # Stands in for `compute_buffer::is_gemma_e_variant`, which reads
+            # the per-layer embedding tensor the records do not carry.
+            variant += "+e"
+        by_arch[f"{parsed.get('arch')}{variant}"].append(residual)
+
+    if not by_arch:
+        raise ValueError("no resident served cells")
+    # No `consensus` call here, deliberately. That guard exists to stop a
+    # *median* from hiding a disagreement, and this reduces by `max`: a maximum
+    # bounds a spread rather than concealing it, and erring high on a baseline
+    # is the safe direction. The spread is reported in the evidence instead, so
+    # a wide one is visible rather than silently averaged.
+    spreads = {a: (min(g) / 1024**2, max(g) / 1024**2) for a, g in by_arch.items()}
+    # Only positive offsets are charged. A negative residual means the baseline
+    # already over-covers that architecture, and shaving it would trade a safe
+    # over-prediction for a risk.
+    _BASE_OFFSET.clear()
+    _BASE_OFFSET.update({a: round(max(g)) for a, g in by_arch.items() if max(g) > 0})
+    detail = ", ".join(
+        f"{a} {hi:+.0f}" + (f" (spans {lo:+.0f})" if hi - lo > 32 else "")
+        for a, (lo, hi) in sorted(spreads.items())
+    )
+    return round(max(max(g) for g in by_arch.values())), (
+        f"residual over the layer-count baseline, per architecture, across "
+        f"{sum(len(g) for g in by_arch.values())} resident served cells: "
+        f"{detail} MiB. Only positive offsets are charged, since a negative one "
+        "means the baseline already over-covers and shaving it would trade a "
+        "safe over-prediction for a risk."
+    )
 
 
 def derive_tensor_split_baseline(rows: list[dict]) -> tuple[int, str]:
@@ -899,6 +1010,11 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         failed.append(f"ik MoE rates: cannot derive — {error}")
 
     try:
+        derive_baseline_offset(rows)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+        failed.append(f"baseline offset: cannot derive — {error}")
+
+    try:
         derive_tensor_split_baseline(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"tensor-split baseline: cannot derive — {error}")
@@ -958,6 +1074,16 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             continue
         entry["kind"] = kind
 
+    if _BASE_OFFSET:
+        document["baseline_offset"] = {
+            "$comment": "Per-architecture correction to the process baseline, "
+                        "in bytes. The layer-count model leaves a residual that "
+                        "is architecture-shaped and reproducible; this charges "
+                        "it where it is positive. `default` is zero, since an "
+                        "unmeasured architecture has no evidence either way.",
+            "default": 0,
+            "by_arch": dict(sorted(_BASE_OFFSET.items())),
+        }
     if _TENSOR_BASE:
         document["tensor_split_baseline"] = {
             "$comment": "Extra host baseline bytes a tensor split costs beyond "
