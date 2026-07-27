@@ -112,6 +112,40 @@ has no such term, so a gemma-4-E4B service is under-reserved on the host by
 Small in absolute terms. What matters is that it has a discovered shape rather
 than a fitted fudge, and the control model rules out the alternatives.
 
+## MTP: the constant was calibrated against the wrong number
+
+qwen3.6-27B, embedded MTP head, measured at two contexts:
+
+| quantity | ctx 32768, np 1 | ctx 131072, np 4 |
+|---|---|---|
+| llama.cpp's own `[spec] estimated memory usage of MTP context` | 258 MiB | 708 MiB |
+| **measured GPU delta** (MTP minus no-MTP, same config) | — | **+2892 MiB** |
+| ananke's model (KV at nextn=1, plus `MTP_COMPUTE_MIB` 1700) | — | 2212 MiB |
+
+Two problems.
+
+**The log line is not the cost.** `CONTRIBUTING.md` says `MTP_COMPUTE_MIB` was
+calibrated against that `[spec]` line. The line reports the MTP *context* —
+708 MiB — while the process actually takes 2892 MiB more VRAM in the same
+configuration. Calibrating against it measures a quantity four times smaller
+than the one being reserved for. The driver delta between a with-MTP and a
+no-MTP cell is the right target, which is why those cells are paired.
+
+**The constant is the wrong size anyway.** Fitting llama.cpp's own figure over
+the two contexts gives `108 MiB + 4800 bytes/token`; `MTP_COMPUTE_MIB` is
+1700 MiB. Against the driver delta, ananke under-predicts by ~680 MiB at
+ctx 131072 — a ratio of 1.31, inside the rolling correction's [0.8, 1.5] band,
+so recoverable but not free.
+
+The per-token slope is also unexplained: 4800 bytes/token measured against
+4096 from the modelled `nextn x head_count_kv x (key_length + value_length) x
+2` at nextn = 1.
+
+**Two points, one model.** qwen3.6-35B-A3B runs embedded MTP with 2 kv heads
+against the 27B's 4, which is the factor the formula multiplies by and the
+thing one model cannot check. It is measuring now. gemma-4-31B-QAT's
+separate-draft cells are paired the same way and give the other MTP shape.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline
