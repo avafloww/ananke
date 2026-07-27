@@ -110,18 +110,30 @@ async fn draining_records_the_host_pool_against_the_placement_that_ran() {
         .expect("a cpu-only service must hold a CPU reservation")
         * 1024
         * 1024;
-    // Comfortably above the host pool's learning floor, which is private to
-    // the daemon; the margin is what keeps this test from tracking its value.
+    // The reservation is dominated by mapped weight, which is exactly the part
+    // the anonymous numerator cannot see.
     assert!(
         reserved > 32 * GIB,
-        "the fixture must reserve enough host weight to clear the learning floor ({reserved})"
+        "the fixture must reserve the whole model on the host ({reserved})"
     );
 
-    // Stand in for the snapshotter: the service used 10% more host memory than
-    // predicted. No VRAM was ever attributed, which is the truth for a
-    // cpu-only service and must not be recorded as a ratio of zero.
-    let observed = reserved + reserved / 10;
-    h.state.observation.record_sample(&svc, 0, observed);
+    // Stand in for the snapshotter, and make the two counters disagree as far
+    // as possible: a `VmRSS` covering the whole mapped model against 16 MiB of
+    // process-owned memory, well under the ~200 MiB the host side predicts.
+    // Which counter the host pool reads is then visible in the sign of the
+    // result — the mapped figure would run into the 1.5 ceiling, the owned one
+    // lands on the floor.
+    h.state.observation.record_sample(
+        &svc,
+        0,
+        ananke::system::Rss {
+            total: reserved,
+            owned: 16 * 1024 * 1024,
+            // The mapped weights, which is what tells the daemon this run's
+            // host weight is not in the owned figure.
+            file: reserved,
+        },
+    );
 
     assert_eq!(
         h.state.rolling.get(&svc).host.samples,
@@ -142,9 +154,10 @@ async fn draining_records_the_host_pool_against_the_placement_that_ran() {
         "the drain must record exactly one host sample"
     );
     assert!(
-        rc.host.mean > 1.0,
-        "a run that used more host memory than predicted must read as an \
-         under-estimate, not the 0.8 floor an all-device base produced (mean {})",
+        rc.host.mean < 1.0,
+        "the host pool must divide the anonymous peak by the anonymous \
+         prediction; reading VmRSS against it would have hit the 1.5 ceiling \
+         instead (mean {})",
         rc.host.mean
     );
 

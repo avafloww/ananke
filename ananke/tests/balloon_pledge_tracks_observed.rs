@@ -174,7 +174,15 @@ async fn pledge_grows_to_observed_peak() {
 
     // Service grows to 10 GB observed peak. Advance the clock past one
     // sample interval so the resolver picks up the new value.
-    h.observation.record_sample(&h.svc, mb(10 * 1024), 0);
+    h.observation.record_sample(
+        &h.svc,
+        mb(10 * 1024),
+        ananke::system::Rss {
+            total: 0,
+            owned: 0,
+            file: 0,
+        },
+    );
     step().await;
 
     let p = pledge_mb(&h.allocations, &h.svc);
@@ -199,7 +207,15 @@ async fn pledge_clamps_to_max_on_overshoot() {
     // Observed peak above max_mb. The ceiling watchdog handles persistent
     // overshoots; the pledge book just clamps to max so peers see the
     // declared upper bound, not a runaway value.
-    h.observation.record_sample(&h.svc, mb(28 * 1024), 0);
+    h.observation.record_sample(
+        &h.svc,
+        mb(28 * 1024),
+        ananke::system::Rss {
+            total: 0,
+            owned: 0,
+            file: 0,
+        },
+    );
     step().await;
 
     assert_eq!(pledge_mb(&h.allocations, &h.svc), 20 * 1024);
@@ -212,7 +228,15 @@ async fn pledge_decays_as_spike_rolls_out_of_window() {
     let h = build_harness("comfy", 2 * 1024, 20 * 1024);
 
     // Tick 1: 12 GB spike. Pledge lifts.
-    h.observation.record_sample(&h.svc, mb(12 * 1024), 0);
+    h.observation.record_sample(
+        &h.svc,
+        mb(12 * 1024),
+        ananke::system::Rss {
+            total: 0,
+            owned: 0,
+            file: 0,
+        },
+    );
     step().await;
     assert_eq!(pledge_mb(&h.allocations, &h.svc), 12 * 1024);
 
@@ -220,7 +244,15 @@ async fn pledge_decays_as_spike_rolls_out_of_window() {
     // reading, so simply reporting the lower number is enough — no clearing
     // the observation table to work around a latched high-water mark. Run
     // several ticks (≥ WINDOW_SIZE) so the 12 GB spike rolls out entirely.
-    h.observation.record_sample(&h.svc, mb(4 * 1024), 0);
+    h.observation.record_sample(
+        &h.svc,
+        mb(4 * 1024),
+        ananke::system::Rss {
+            total: 0,
+            owned: 0,
+            file: 0,
+        },
+    );
     for _ in 0..7 {
         step().await;
     }
@@ -242,15 +274,30 @@ async fn pledge_does_not_emit_for_sub_threshold_drift() {
     // Lift to 12 GB, then drift by 50 MB — well below the 5 % / 256 MB
     // rate-limit floor. We expect exactly one AllocationChanged event for
     // the initial 12 GB lift, none for the drift.
-    h.observation.record_sample(&h.svc, mb(12 * 1024), 0);
+    h.observation.record_sample(
+        &h.svc,
+        mb(12 * 1024),
+        ananke::system::Rss {
+            total: 0,
+            owned: 0,
+            file: 0,
+        },
+    );
     step().await;
 
     let first = latest_event_pledge_mb(&mut h.events_rx, &h.svc);
     assert_eq!(first, Some(12 * 1024));
     assert_eq!(pledge_mb(&h.allocations, &h.svc), 12 * 1024);
 
-    h.observation
-        .record_sample(&h.svc, mb(12 * 1024) + mb(50), 0);
+    h.observation.record_sample(
+        &h.svc,
+        mb(12 * 1024) + mb(50),
+        ananke::system::Rss {
+            total: 0,
+            owned: 0,
+            file: 0,
+        },
+    );
     step().await;
 
     // No new event (rate-limited) and the pledge is unchanged.
@@ -273,7 +320,15 @@ async fn cpu_pinned_service_pledges_from_rss() {
     let (h, _mailbox) = build_harness_on("cpu-svc", 2 * 1024, 20 * 1024, DeviceSlot::Cpu);
 
     // Zero VRAM, 10 GB RSS — the shape of any cpu-only workload.
-    h.observation.record_sample(&h.svc, 0, mb(10 * 1024));
+    h.observation.record_sample(
+        &h.svc,
+        0,
+        ananke::system::Rss {
+            total: mb(10 * 1024),
+            owned: mb(10 * 1024),
+            file: 0,
+        },
+    );
     step().await;
 
     assert_eq!(
@@ -293,8 +348,15 @@ async fn cpu_pinned_service_pledges_from_rss() {
 async fn gpu_service_pledges_from_vram_and_ignores_rss() {
     let (h, _mailbox) = build_harness_on("gpu-svc", 2 * 1024, 20 * 1024, DeviceSlot::Gpu(0));
 
-    h.observation
-        .record_sample(&h.svc, mb(6 * 1024), mb(30 * 1024));
+    h.observation.record_sample(
+        &h.svc,
+        mb(6 * 1024),
+        ananke::system::Rss {
+            total: mb(30 * 1024),
+            owned: mb(30 * 1024),
+            file: 0,
+        },
+    );
     step().await;
 
     assert_eq!(

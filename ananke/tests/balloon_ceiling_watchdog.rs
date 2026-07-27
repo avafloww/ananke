@@ -120,7 +120,15 @@ impl Harness {
     /// Report the service's current usage. Unlike a high-water mark, a lower
     /// number here really is a lower reading.
     fn observe(&self, vram: u64, rss: u64) {
-        self.observation.record_sample(&self.svc, vram, rss);
+        self.observation.record_sample(
+            &self.svc,
+            vram,
+            ananke::system::Rss {
+                total: rss,
+                owned: rss,
+                file: 0,
+            },
+        );
     }
 
     async fn run_ticks(&self, n: usize) {

@@ -18,10 +18,10 @@ use crate::{
     devices::{CpuSnapshot, DeviceSnapshot, GpuProbe, GpuSnapshot, cpu},
     supervise::registry::ServiceRegistry,
     system::{
-        ProcFs,
+        ProcFs, Rss,
         proc::{descendants_from_map, parent_map, pids_in_cgroup_subtree},
     },
-    tracking::observation::{ObservationTable, read_vm_rss},
+    tracking::observation::{ObservationTable, read_rss},
 };
 
 pub type SharedSnapshot = Arc<RwLock<DeviceSnapshot>>;
@@ -100,14 +100,16 @@ fn sample_observation(
             continue;
         }
         let pid_set = attributed_pid_set(&registered, cgroup_parent.as_deref(), &parents, proc);
-        let (vram, rss) = attributed_bytes_split(&pid_set, &gpu_processes, proc);
+        let AttributedBytes { vram, rss } = attributed_bytes_split(&pid_set, &gpu_processes, proc);
         debug!(
             service = %name,
             registered_pids = ?registered,
             cgroup_parent = ?cgroup_parent.as_deref(),
             pid_set_len = pid_set.len(),
             vram_mb = vram / (1024 * 1024),
-            rss_mb = rss / (1024 * 1024),
+            rss_mb = rss.total / (1024 * 1024),
+            rss_owned_mb = rss.owned / (1024 * 1024),
+            rss_file_mb = rss.file / (1024 * 1024),
             "observation attribution sample"
         );
         // A tick that attributes nothing at all is a gap in the signal, not
@@ -116,7 +118,7 @@ fn sample_observation(
         // so the retained current reading stays the last thing we actually
         // saw, rather than dropping to zero and telling the balloon resolver
         // the service released everything.
-        if vram + rss > 0 {
+        if vram + rss.total > 0 {
             observation.record_sample(&name, vram, rss);
         }
     }
@@ -155,11 +157,20 @@ fn attributed_pid_set(
 /// VRAM — combining VRAM and RSS into a single peak and pledging that
 /// would inflate the GPU pledge with python's interpreter RSS and
 /// produce false over-commit signals.
+/// One tick's per-service memory attribution, split by what each figure can
+/// legitimately be compared against.
+struct AttributedBytes {
+    /// NVML-attributed VRAM.
+    vram: u64,
+    /// The host footprint, split by what each part can be compared against.
+    rss: Rss,
+}
+
 fn attributed_bytes_split(
     pid_set: &std::collections::BTreeSet<u32>,
     gpu_processes: &[(u32, Vec<crate::devices::GpuProcess>)],
     proc: &dyn ProcFs,
-) -> (u64, u64) {
+) -> AttributedBytes {
     let mut vram: u64 = 0;
     for (_id, processes) in gpu_processes {
         for gp in processes {
@@ -168,13 +179,15 @@ fn attributed_bytes_split(
             }
         }
     }
-    let mut rss: u64 = 0;
+    let mut rss = Rss::default();
     for pid in pid_set {
-        if let Some(r) = read_vm_rss(proc, *pid) {
-            rss = rss.saturating_add(r);
+        if let Some(r) = read_rss(proc, *pid) {
+            rss.total = rss.total.saturating_add(r.total);
+            rss.owned = rss.owned.saturating_add(r.owned);
+            rss.file = rss.file.saturating_add(r.file);
         }
     }
-    (vram, rss)
+    AttributedBytes { vram, rss }
 }
 
 fn sample(probe: &Option<Arc<dyn GpuProbe>>, proc: &dyn ProcFs) -> DeviceSnapshot {
@@ -329,9 +342,10 @@ mod tests {
                 name: "python".into(),
             }],
         )];
-        let (vram, rss) = attributed_bytes_split(&pid_set, &gpu_processes, &proc);
+        let AttributedBytes { vram, rss, .. } =
+            attributed_bytes_split(&pid_set, &gpu_processes, &proc);
         assert_eq!(vram, 10_000_000_000);
-        assert_eq!(rss, 1_000_000_000);
+        assert_eq!(rss.total, 1_000_000_000);
     }
 
     /// A service with neither a registered pid nor a cgroup_parent is a

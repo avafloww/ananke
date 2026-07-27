@@ -8,7 +8,7 @@
 
 use std::io;
 
-use crate::system::proc::{Meminfo, ProcFs};
+use crate::system::proc::{Meminfo, ProcFs, Rss};
 
 /// Real `/proc` reader. Every method shells out to `std::fs`.
 #[derive(Default, Clone, Copy)]
@@ -21,9 +21,9 @@ impl ProcFs for LocalProcFs {
             .ok_or_else(|| io::Error::other("meminfo missing MemTotal or MemAvailable"))
     }
 
-    fn vm_rss(&self, pid: u32) -> Option<u64> {
+    fn rss(&self, pid: u32) -> Option<Rss> {
         let content = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-        parse_vm_rss(&content)
+        parse_rss(&content)
     }
 
     fn comm(&self, pid: u32) -> Option<String> {
@@ -100,16 +100,29 @@ fn parse_cgroup_v2(content: &str) -> Option<String> {
     None
 }
 
-fn parse_vm_rss(content: &str) -> Option<u64> {
+/// Parse the resident-memory fields in one pass over `/proc/<pid>/status`.
+///
+/// `VmRSS` is required; the breakdown fields are not, since a kernel without
+/// them still gives a usable total. When they are absent the whole total is
+/// treated as owned, which is the conservative reading — it never
+/// under-states what the process is holding.
+fn parse_rss(content: &str) -> Option<Rss> {
+    let total = parse_status_kb(content, "VmRSS:")?;
+    let anon = parse_status_kb(content, "RssAnon:");
+    let file = parse_status_kb(content, "RssFile:").unwrap_or(0);
+    let shmem = parse_status_kb(content, "RssShmem:").unwrap_or(0);
+    Some(Rss {
+        total,
+        owned: anon.map(|a| a + shmem).unwrap_or(total),
+        file,
+    })
+}
+
+/// Read a `kB`-suffixed `/proc/<pid>/status` field, returning bytes.
+fn parse_status_kb(content: &str, key: &str) -> Option<u64> {
     for line in content.lines() {
-        if let Some(rest) = line.strip_prefix("VmRSS:") {
-            let kb = rest
-                .trim()
-                .trim_end_matches("kB")
-                .trim()
-                .parse::<u64>()
-                .ok()?;
-            return Some(kb * 1024);
+        if let Some(rest) = line.strip_prefix(key) {
+            return parse_kb(rest).map(|kb| kb * 1024);
         }
     }
     None
@@ -146,6 +159,9 @@ Buffers:        1000000 kB
 Name:\tllama-server
 VmPeak:\t 1000000 kB
 VmRSS:\t  524288 kB
+RssAnon:\t  262144 kB
+RssFile:\t  196608 kB
+RssShmem:\t   65536 kB
 ";
 
     #[test]
@@ -156,9 +172,25 @@ VmRSS:\t  524288 kB
     }
 
     #[test]
-    fn parses_vm_rss() {
-        assert_eq!(parse_vm_rss(SAMPLE_STATUS), Some(524_288 * 1024));
-        assert_eq!(parse_vm_rss("Name:\tfoo\n"), None);
+    fn parses_the_rss_breakdown() {
+        let rss = parse_rss(SAMPLE_STATUS).unwrap();
+        assert_eq!(rss.total, 524_288 * 1024);
+        // Owned is anonymous *plus* shmem: the pinned graph arena is accounted
+        // as shmem, and leaving it out would hide the largest host allocation
+        // a fully GPU-offloaded service makes.
+        assert_eq!(rss.owned, (262_144 + 65_536) * 1024);
+        assert_eq!(rss.file, 196_608 * 1024);
+        assert_eq!(parse_rss("Name:\tfoo\n"), None);
+    }
+
+    /// A kernel without the breakdown fields still yields a usable total, and
+    /// the whole of it counts as owned — never under-stating what is held.
+    #[test]
+    fn a_status_without_the_breakdown_treats_everything_as_owned() {
+        let rss = parse_rss("VmRSS:\t  524288 kB\n").unwrap();
+        assert_eq!(rss.total, 524_288 * 1024);
+        assert_eq!(rss.owned, 524_288 * 1024);
+        assert_eq!(rss.file, 0);
     }
 
     #[test]
