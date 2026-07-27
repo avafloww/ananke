@@ -439,19 +439,42 @@ not a retune of its constants.
 
 ## The two remaining arena ceilings, located
 
-**gemma3, 12.08 MiB — only when `parallel > 1`.** Every np=1 cell is exact to
-0.01-0.08 MiB across contexts, batches and both split modes. At np=4 the
-residual is 12.08 MiB, and it is *flat*: the same figure at ctx 8192 and at
-65536. So the sliding-window mask is sized differently when the cache is split
-across slots, and by a fixed amount rather than a scaling one. Not modelled.
+**gemma3, 12.08 MiB — two datasets disagree.** It appears only at four slots
+with a unified cache, and is flat across context, which is the signature of
+whole extra masks rather than a mis-sized one. Two of them fit exactly:
+`2 x 1.5 MiB x 4` copies at the layer-split multiple is 12 MiB against 12.08
+measured, and modelling it drops gemma3's worst arena error to 0.70 MiB.
 
-**glm-dsa, 44.99 MiB — only on a single card.** With two cards the residual is
-**-0.5 MiB**, i.e. exact. The single-card cells are *over*-predicted by 45.
-The same pattern, smaller, appears on the other two ik mixtures: laguna -10.5
-and qwen35moe -2.5 on one card against +16.0 and -2.5 on two. So ik's
-CPU-resident MoE term is not purely per-token — something about it varies with
-the card count, and the single-card cells also carry a different expert
-offload (96 layers against 92 for glm), which the dataset cannot separate.
+It was reverted. An earlier hardware sweep, already in the estimator's tests,
+measures gemma-4-31B-QAT — also interleaved SWA, also four slots, also a
+unified cache — at **24.52 MiB, which is one mask**. Modelling two extra masks
+predicts 27.50 for it. No rule keyed on slot count, cache mode or the presence
+of a window satisfies both models, and the discriminator is not in either
+dataset.
+
+So gemma3 keeps a recorded 12 MiB error rather than gemma4 acquiring a 3 MiB
+one. Worth stating plainly: this was fitted, verified against the campaign
+data, and then found to contradict a measurement that predates it. The
+contradiction is the finding.
+
+**glm-dsa, 44.99 MiB — the dataset contradicts every explanation.** With two
+cards the residual is -0.5 MiB, exact; on one card the term over-predicts by
+45. Measured rates per unit of hidden size:
+
+| model | n_cpu_moe, one card to two | rate |
+|---|---|---|
+| glm-dsa | 96 -> 92 | 28.0 -> 42.8 |
+| laguna | 39 -> 30 | 36.0 -> 53.7 |
+| qwen35moe | 40 -> 40 | 40.5 -> 40.5 |
+
+Card count cannot be the cause: qwen35moe's rate is identical on one card and
+two. Expert placement cannot be either: glm's two figures come from
+`n_cpu_moe` values that both exceed its 79 layers, so the placement is the
+same in both. Whatever varies is not in the dataset, and fitting a term to a
+contradiction would be worse than carrying the error.
+
+It is an *over*-prediction, so it costs host capacity rather than risking a
+load, and it is left recorded.
 
 Both are over- or fixed-offset errors rather than scaling ones, which is why
 they stayed small enough to sit unnoticed under a per-architecture ceiling.

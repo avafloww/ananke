@@ -207,6 +207,19 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     let indexer_masks = extra_full_masks(arch) * n_kv * n_tokens * element_bytes;
 
     let swa_mask = match sliding_window(summary, arch) {
+        // One window mask.
+        //
+        // gemma3 measures 12.08 MiB more than this at four slots with a
+        // unified cache — flat across context, so two further whole masks at
+        // the four-copy layer-split multiple, which fits to 0.08 MiB.
+        // gemma-4-31B-QAT, also interleaved SWA and in the same
+        // configuration, measures exactly one: 24.52 MiB where two extra
+        // masks would predict 27.50.
+        //
+        // No rule keyed on slot count, cache mode or the presence of a window
+        // satisfies both, and whatever discriminates them is in neither
+        // dataset. So gemma3 keeps a recorded 12 MiB error rather than gemma4
+        // acquiring a 3 MiB one. See scripts/calibration/FINDINGS.md.
         Some(window) => pad_to_kv_cache(window as u64 + n_tokens) * n_tokens * element_bytes,
         None => 0,
     };
