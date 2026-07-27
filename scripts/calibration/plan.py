@@ -101,7 +101,141 @@ def phase1_factorial() -> list[Cell]:
     return cells
 
 
-PHASES = {"phase0": phase0_noise, "phase1": phase1_factorial}
+def _significant(model: Model, runtime: str = "mainline", **over) -> list[Cell]:
+    """The cells Phase 1 showed matter, for one model.
+
+    Phase 1 measured `ctx` and `parallel` to be irrelevant to the baseline and
+    `gpus`/`split`/`served`/`kv_type` to matter, so only those are varied here.
+    Screening on the cheapest model first is what makes sweeping the expensive
+    ones affordable.
+    """
+    cells = []
+    for gpus, split, kv, served in product(["0", "0,1"], ["layer", "tensor"],
+                                           ["f16", "q8_0"], [True, False]):
+        cells.append(Cell(
+            label=f"{model.key}-{runtime}-{gpus.replace(',', '')}-{split}-{kv}-"
+                  f"{'srv' if served else 'idle'}",
+            model=path_of(model.path), runtime=runtime, gpus=gpus, split=split,
+            kv_type=kv, served=served, n_cpu_moe=model.n_cpu_moe, **over,
+        ))
+    return cells
+
+
+def phase2_models() -> list[Cell]:
+    """Does the per-model term follow layers, hidden size, vocabulary, or none?
+
+    Phase 1 fixed the factor set on one model; this varies the model with that
+    set held constant. Without it the baseline is a constant fitted to one
+    shape and generalised — which is the mistake this campaign exists to stop
+    repeating.
+    """
+    keys = ["qwen3-4b", "qwen36-27b", "gemma3-27b", "gemma4-31b-qat",
+            "qwen36-35b-a3b", "laguna", "dsv4f"]
+    return [c for k in keys for c in _significant(MODELS[k])]
+
+
+def phase3_fork() -> list[Cell]:
+    """The same cells on ik_llama, which sizes its graph by different rules."""
+    keys = [k for k, m in MODELS.items() if "ik" in m.runtimes]
+    return [c for k in keys for c in _significant(MODELS[k], runtime="ik")]
+
+
+def phase4_special() -> list[Cell]:
+    """Terms with their own switch rather than a continuous factor.
+
+    Each of these is currently a constant in the estimator justified by one
+    measurement or none: the two MTP shapes, the vision projector, the offload
+    regimes, ik's repacking and huge-page paths, the embedding modality, and
+    what actually accumulates once a server is doing an agent's work.
+    """
+    cells: list[Cell] = []
+    g4 = MODELS["gemma4-31b-qat"]
+    q27 = MODELS["qwen36-27b"]
+    # MTP: none, embedded head, separate draft GGUF. The estimator charges a
+    # different constant for each and has one measurement apiece.
+    for label, model, spec, draft in [
+        ("mtp-none-g4", g4, None, None),
+        ("mtp-draft-g4", g4, "draft-mtp", path_of(g4.draft)),
+        ("mtp-none-q27", q27, None, None),
+        ("mtp-embedded-q27", q27, "draft-mtp", None),
+    ]:
+        cells.append(Cell(label=label, model=path_of(model.path), gpus="0,1",
+                          split="tensor", ctx=32768, spec_type=spec, draft=draft))
+    # The vision projector, which was worth ~3 MiB in one observation.
+    for label, mmproj in [("mmproj-off", None), ("mmproj-on", path_of(g4.mmproj))]:
+        cells.append(Cell(label=f"{label}-g4", model=path_of(g4.path), gpus="0,1",
+                          split="tensor", ctx=32768, mmproj=mmproj))
+    # Offload regimes: the arena was measured invariant across them, and a
+    # host baseline with no GPU visible is a different shape entirely.
+    q4 = MODELS["qwen3-4b"]
+    for ngl, gpus, label in [(99, "0", "ngl99"), (18, "0", "ngl18"),
+                             (0, "0", "ngl0"), (0, "", "no-cuda")]:
+        cells.append(Cell(label=f"offload-{label}", model=path_of(q4.path),
+                          gpus=gpus, ngl=ngl, ctx=32768))
+    # ik-only paths that change where weights land, and so which counter the
+    # daemon's weights detection reads.
+    lag = MODELS["laguna"]
+    for label, over in [("plain", {}), ("rtr", {"rtr": True}),
+                        ("thp", {"thp": True}), ("nommap", {"no_mmap": True})]:
+        cells.append(Cell(label=f"ik-laguna-{label}", model=path_of(lag.path),
+                          runtime="ik", gpus="0,1", ctx=32768, ubatch=512,
+                          n_cpu_moe=lag.n_cpu_moe, **over))
+    # The embedding modality, which has its own graph and no generation.
+    emb = MODELS["lfm2-embed"]
+    cells.append(Cell(label="embeddings", model=path_of(emb.path), ctx=2048,
+                      embeddings=True))
+    # Growth: what accumulates once the server is doing an agent's work, with
+    # and without the prompt cache the estimator reserves 8 GiB for.
+    for cram in [0, 8192]:
+        cells.append(Cell(label=f"growth-cram{cram}", model=path_of(q4.path),
+                          gpus="0", ctx=32768, cram=cram, bench=True,
+                          bench_turns=40, verbose_log=False))
+    return cells
+
+
+def phase5_holdout() -> list[Cell]:
+    """The operator's real service configurations, held out of every fit.
+
+    Every accuracy figure quoted so far has been in-sample. These are the
+    configurations the daemon actually runs; predicting them before measuring
+    is the only test that says whether the model generalises.
+    """
+    return [
+        Cell(label="prod-gemma4-31b-qat", model=path_of(MODELS["gemma4-31b-qat"].path),
+             mmproj=path_of(MODELS["gemma4-31b-qat"].mmproj),
+             draft=path_of(MODELS["gemma4-31b-qat"].draft), spec_type="draft-mtp",
+             gpus="0,1", split="tensor", ctx=240000, parallel=4, kv_unified=True,
+             kv_type="f16", cram=0, extra=("-n", "16384")),
+        Cell(label="prod-qwen36-27b", model=path_of(MODELS["qwen36-27b"].path),
+             mmproj=path_of(MODELS["qwen36-27b"].mmproj), spec_type="draft-mtp",
+             gpus="0,1", split="tensor", ctx=360000, parallel=2, kv_type="q8_0"),
+        Cell(label="prod-qwen36-35b-a3b", model=path_of(MODELS["qwen36-35b-a3b"].path),
+             mmproj=path_of(MODELS["qwen36-35b-a3b"].mmproj), spec_type="draft-mtp",
+             gpus="0,1", split="tensor", ctx=524288, parallel=2, kv_type="q8_0",
+             n_cpu_moe=MODELS["qwen36-35b-a3b"].n_cpu_moe),
+        Cell(label="prod-laguna", model=path_of(MODELS["laguna"].path), runtime="ik",
+             gpus="0,1", ctx=131072, batch=2048, ubatch=2048, parallel=1,
+             kv_type="q8_0", no_mmap=True, threads=24, numa="distribute",
+             n_cpu_moe=MODELS["laguna"].n_cpu_moe),
+        Cell(label="prod-glm52", model=path_of(MODELS["glm52"].path), runtime="ik",
+             gpus="0,1", ctx=131072, batch=2048, ubatch=2048, parallel=1,
+             no_mmap=True, threads=24, n_cpu_moe=MODELS["glm52"].n_cpu_moe,
+             extra=("-mla", "1", "-dsa", "-amb", "512")),
+        Cell(label="prod-dsv4f", model=path_of(MODELS["dsv4f"].path),
+             gpus="0,1", ctx=131072, parallel=1, ubatch=512,
+             n_cpu_moe=MODELS["dsv4f"].n_cpu_moe),
+        Cell(label="prod-talkie", model=path_of(MODELS["qwen3-4b"].path), ctx=2048),
+    ]
+
+
+PHASES = {
+    "phase0": phase0_noise,
+    "phase1": phase1_factorial,
+    "phase2": phase2_models,
+    "phase3": phase3_fork,
+    "phase4": phase4_special,
+    "phase5": phase5_holdout,
+}
 
 
 def main() -> int:

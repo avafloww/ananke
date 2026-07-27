@@ -178,6 +178,7 @@ class Measurement:
     status: str = "ok"
 
     hardware: dict[str, object] = dataclasses.field(default_factory=dict)
+    trace: list[dict[str, object]] = dataclasses.field(default_factory=list)
 
     def record(self) -> dict[str, object]:
         """One NDJSON record.
@@ -196,6 +197,10 @@ class Measurement:
             "factors": dataclasses.asdict(self.cell),
             "parsed": self.parsed,
             "rss": self.rss,
+            # The full time series, not just its summary: growth is a shape,
+            # and a peak alone cannot distinguish "allocated on first use" from
+            # "still climbing when we stopped looking".
+            "trace": self.trace,
         }
 
 
@@ -275,7 +280,7 @@ class RssSampler:
 
     def __init__(self, pid: int) -> None:
         self.pid = pid
-        self.trace: list[tuple[float, dict[str, int]]] = []
+        self.trace: list[dict[str, object]] = []
         self.peak: dict[str, int] = {}
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -295,7 +300,12 @@ class RssSampler:
                 sample = read_rss(self.pid)
             except (FileNotFoundError, ProcessLookupError, ValueError):
                 return  # The process exited; the trace so far still stands.
-            self.trace.append((time.monotonic() - self._start, sample))
+            self.trace.append({
+                "t_seconds": round(time.monotonic() - self._start, 1),
+                "at_utc": datetime.datetime.now(datetime.timezone.utc)
+                          .isoformat(timespec="seconds"),
+                **sample,
+            })
             for key, value in sample.items():
                 if value > self.peak.get(key, 0):
                     self.peak[key] = value
@@ -305,8 +315,9 @@ class RssSampler:
         """Peak minus the first sample: what accumulated after startup."""
         if not self.trace:
             return {}
-        first = self.trace[0][1]
-        return {f"growth_{k}": self.peak.get(k, 0) - v for k, v in first.items()}
+        first = self.trace[0]
+        return {f"growth_{k}": self.peak.get(k, 0) - v
+                for k, v in first.items() if isinstance(v, int)}
 
 
 def read_rss(pid: int) -> dict[str, int]:
@@ -378,11 +389,9 @@ def provenance(binary: str, cell: Cell | None = None) -> dict[str, str]:
     """Facts that make a stale row identifiable later.
 
     A constant fitted from these measurements is specific to a moment, a
-    driver, a build, and a machine. Dates matter twice over: when the
-    measurement was taken, and when the thing measured was *built* — a row
-    from a llama.cpp of a given vintage stops describing the runtime the day
-    someone bumps the pin, and the binary's own timestamp is what makes that
-    visible without having to remember.
+    machine, and a binary. The timestamp is what lets a later reader place a
+    row in time — against a llama.cpp pin bump, a driver update, or a change
+    to the box — without having to remember when anything happened.
     """
     resolved = Path(shutil.which(binary) or binary)
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -391,7 +400,6 @@ def provenance(binary: str, cell: Cell | None = None) -> dict[str, str]:
         "measured_at_local": now.astimezone().isoformat(timespec="seconds"),
         "host": os.uname().nodename,
         "binary": str(resolved.resolve()) if resolved.exists() else str(resolved),
-        "binary_built_at": _mtime(resolved),
         "ananke_rev": _run(["git", "rev-parse", "--short", "HEAD"]) or "?",
         "ananke_dirty": "yes" if _run(["git", "status", "--porcelain"]) else "no",
     }
@@ -401,19 +409,11 @@ def provenance(binary: str, cell: Cell | None = None) -> dict[str, str]:
 
 
 def _mtime(path: Path) -> str:
-    """A file's modification time, as an ISO 8601 UTC timestamp.
-
-    Nix normalises store timestamps to the epoch for reproducibility, so a
-    build date is not available for a store path — but the store hash in the
-    recorded path *is* the build identity, and a more precise one than a date.
-    Say that rather than record 1970.
-    """
+    """A file's modification time, as an ISO 8601 UTC timestamp."""
     try:
         stamp = path.stat().st_mtime
     except OSError:
         return "?"
-    if stamp < 86400 * 2:
-        return "nix-store (build identity is the path hash)"
     return (datetime.datetime.fromtimestamp(stamp, datetime.timezone.utc)
             .isoformat(timespec="seconds"))
 
@@ -544,6 +544,7 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int) -> Measurem
 
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=cell.gpus)
     with log_path.open("wb") as log_file:
+        trace: list[dict[str, object]] = []
         proc = subprocess.Popen(cell.argv(binary, port), stdout=log_file,
                                 stderr=subprocess.STDOUT, env=env,
                                 start_new_session=True)
@@ -570,25 +571,12 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int) -> Measurem
             rss |= {f"final_{k}": v for k, v in final.items()}
             rss |= sampler.growth()
             rss["samples"] = len(sampler.trace)
+            trace = sampler.trace
             parsed = parse_log(log_path.read_text(errors="replace"))
-            if cell.bench:
-                _write_trace(log_dir / f"{cell.cell_id}-{cell.label}-trace.csv", sampler)
         finally:
             _stop(proc)
 
-    return Measurement(cell, prov, parsed, rss, hardware=hardware())
-
-
-def _write_trace(path: Path, sampler: RssSampler) -> None:
-    """Persist the full time series for a growth run, not just its summary."""
-    with path.open("w", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["t_seconds", "rss_total_kb", "rss_anon_kb",
-                         "rss_file_kb", "rss_shmem_kb"])
-        for elapsed, sample in sampler.trace:
-            writer.writerow([f"{elapsed:.1f}", sample["rss_total_kb"],
-                             sample["rss_anon_kb"], sample["rss_file_kb"],
-                             sample["rss_shmem_kb"]])
+    return Measurement(cell, prov, parsed, rss, hardware=hardware(), trace=trace)
 
 
 def _stop(proc: subprocess.Popen) -> None:
