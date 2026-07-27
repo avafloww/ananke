@@ -2,6 +2,7 @@
 
 pub mod compute_buffer;
 pub mod fallback;
+pub mod host_buffer;
 pub mod hybrid;
 pub mod kv;
 pub mod llama;
@@ -172,6 +173,14 @@ pub fn estimate_with_summary(
     // it's computed once here rather than in each family estimate.
     est.output_buffer_bytes = compute_buffer::output_logits_bytes(&summary, inputs.ubatch);
 
+    // Host-side overhead: the pinned graph arena and the server's prompt
+    // cache. Architecture-independent apart from the sliding-window lookup,
+    // and charged to the `Cpu` slot regardless of where the layers land, so
+    // it is computed here rather than in each family estimate.
+    est.host_overhead_bytes =
+        host_buffer::host_overhead_bytes(&summary, summary.architecture.as_str(), inputs);
+    est.host_cache_bytes = host_buffer::prompt_cache_bytes(inputs);
+
     info!(
         service = %inputs.name,
         weights_gb = est.weights_bytes / (1024 * 1024 * 1024),
@@ -245,6 +254,12 @@ mod tests {
             allow_fallback: true,
             mtp: false,
             draft_model: None,
+            ik_llama: false,
+            ik_dsa: false,
+            parallel: None,
+            flash_attn: None,
+            kv_unified: None,
+            cache_ram_mb: None,
         }
     }
 

@@ -40,6 +40,8 @@ pub fn estimate_fallback(summary: &GgufSummary, context: u32) -> Estimate {
         compute_buffer_mb: compute_buffer::default_for(summary, context, None),
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
+        host_overhead_bytes: 0,
+        host_cache_bytes: 0,
         output_buffer_bytes: 0,
         per_layer_bytes: None,
         attention_layers: None,

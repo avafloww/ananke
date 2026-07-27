@@ -90,5 +90,11 @@ pub fn inputs<'a>(
         allow_fallback: false,
         mtp: false,
         draft_model: None,
+        ik_llama: false,
+        ik_dsa: false,
+        parallel: None,
+        flash_attn: None,
+        kv_unified: None,
+        cache_ram_mb: None,
     }
 }

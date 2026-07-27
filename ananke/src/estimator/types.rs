@@ -55,6 +55,30 @@ pub struct EstimatorInputs<'a> {
     /// plus a draft compute buffer rather than the target model's embedded
     /// MTP head. See [`crate::estimator::mtp`].
     pub draft_model: Option<&'a Path>,
+    /// Number of parallel slots (`-np`). Absent means llama.cpp's default
+    /// of 1. With a non-unified cache this divides the KV budget per
+    /// stream, which is what the host graph mask is sized against — see
+    /// [`crate::estimator::host_buffer`].
+    pub parallel: Option<u32>,
+    /// Whether the child runs with flash attention (`-fa`). Absent means
+    /// llama.cpp's default. Decides whether the graph's KQ mask is f16 or
+    /// f32, i.e. halves or doubles the largest host-side allocation.
+    pub flash_attn: Option<bool>,
+    /// Whether the KV cache is unified across slots (`-kvu`). Absent means
+    /// llama.cpp's default. Decides whether the mask is sized against the
+    /// whole context or one slot's share.
+    pub kv_unified: Option<bool>,
+    /// Whether the child is served by ik_llama.cpp rather than mainline.
+    /// The two forks size the pinned graph arena by measurably different
+    /// rules — see [`crate::estimator::host_buffer`].
+    pub ik_llama: bool,
+    /// Whether the child runs ik_llama's DSA sparse attention (`-dsa`), which
+    /// builds two additional full-cache masks on top of the ordinary one.
+    pub ik_dsa: bool,
+    /// Host RAM cap for the server's prompt cache (`-cram`, MiB). Absent
+    /// means llama.cpp's 8192 MiB default — which is charged either way,
+    /// since the runtime will fill up to whatever the cap is.
+    pub cache_ram_mb: Option<u32>,
 }
 
 impl<'a> EstimatorInputs<'a> {
@@ -68,7 +92,9 @@ impl<'a> EstimatorInputs<'a> {
             model: lc.model.as_path(),
             mmproj: lc.mmproj.as_deref(),
             context: lc.context.unwrap_or(4096),
-            ubatch: lc.ubatch_size,
+            ubatch: extra_arg_value(&svc.extra_args, &["-ub", "--ubatch-size", "--ubatch_size"])
+                .and_then(|v| v.parse().ok())
+                .or(lc.ubatch_size),
             cache_type_k: lc.cache_type_k.as_deref(),
             cache_type_v: lc.cache_type_v.as_deref(),
             override_tensor: &lc.override_tensor,
@@ -76,6 +102,30 @@ impl<'a> EstimatorInputs<'a> {
             allow_fallback: lc.estimation.allow_fallback.unwrap_or(false),
             mtp: lc.spec_type.as_deref() == Some("draft-mtp"),
             draft_model: lc.draft_model.as_deref(),
+            ik_llama: lc.runtime.ik().is_some(),
+            ik_dsa: lc.runtime.ik().is_some_and(|ik| ik.dsa),
+            parallel: extra_arg_value(&svc.extra_args, &["-np", "--parallel"])
+                .and_then(|v| v.parse().ok())
+                .or(lc.parallel),
+            // Unset means llama.cpp's `-fa auto`, which resolves to *on* for
+            // CUDA — the only backend ananke supports — and off when there is
+            // no device to support it. Assuming off for a GPU service doubles
+            // the modelled mask and puts the prediction outside the rolling
+            // correction's reach; assuming on for a CPU-only one would halve
+            // it. Resolve the same way the runtime will.
+            flash_attn: flash_attn_from_extra_args(&svc.extra_args)
+                .or(lc.flash_attn)
+                .or(Some(!matches!(
+                    svc.placement_policy,
+                    crate::config::PlacementPolicy::CpuOnly
+                ))),
+            kv_unified: kv_unified_from_extra_args(&svc.extra_args).or(lc.kv_unified),
+            // An operator who set the flag by hand in `extra_args` gets that
+            // value in the estimate too, so the reservation matches the
+            // runtime rather than the default the flag overrode.
+            cache_ram_mb: lc
+                .cache_ram_mb
+                .or_else(|| cache_ram_from_extra_args(&svc.extra_args)),
         })
     }
 
@@ -105,7 +155,76 @@ impl<'a> EstimatorInputs<'a> {
         self.allow_fallback.hash(&mut hasher);
         self.mtp.hash(&mut hasher);
         self.draft_model.hash(&mut hasher);
+        self.ik_llama.hash(&mut hasher);
+        self.ik_dsa.hash(&mut hasher);
+        self.parallel.hash(&mut hasher);
+        self.flash_attn.hash(&mut hasher);
+        self.kv_unified.hash(&mut hasher);
+        self.cache_ram_mb.hash(&mut hasher);
         hasher.finish()
+    }
+}
+
+/// The value an operator passed for one of `names` in `extra_args`.
+///
+/// Returns the **last** occurrence, because that is what llama.cpp uses: a
+/// repeated argument logs "only last value will be used"
+/// (`common/arg.cpp`). `extra_args` is appended after every flag the daemon
+/// renders, so whatever is found here is what the child will actually run
+/// with — and therefore what the estimate has to be built from.
+///
+/// The `--flag=value` form is deliberately not handled: llama.cpp requires an
+/// exact whole-token match and exits with `invalid argument`, so it fails
+/// loudly rather than diverging silently.
+pub fn extra_arg_value<'a>(extra_args: &'a [String], names: &[&str]) -> Option<&'a str> {
+    let mut found = None;
+    let mut it = extra_args.iter().peekable();
+    while let Some(arg) = it.next() {
+        if names.contains(&arg.as_str())
+            && let Some(v) = it.peek()
+        {
+            found = Some(v.as_str());
+        }
+    }
+    found
+}
+
+/// Names llama.cpp accepts for the prompt-cache cap. `--` arguments have
+/// underscores normalised to dashes, so `--cache_ram` is valid too.
+const CACHE_RAM_FLAGS: &[&str] = &["--cache-ram", "-cram", "--cache_ram"];
+
+/// Find a `--cache-ram` / `-cram` value an operator passed through
+/// `extra_args`. Configs predate the dedicated key and still set it this way;
+/// without this the daemon would reserve the 8 GiB default for a service that
+/// runs with the cache switched off.
+pub fn cache_ram_from_extra_args(extra_args: &[String]) -> Option<u32> {
+    extra_arg_value(extra_args, CACHE_RAM_FLAGS).and_then(|v| v.parse().ok())
+}
+
+/// `-kvu` / `--kv-unified` (a bare flag) or `-no-kvu` / `--no-kv-unified`
+/// from `extra_args`.
+fn kv_unified_from_extra_args(extra_args: &[String]) -> Option<bool> {
+    extra_args.iter().rev().find_map(|a| match a.as_str() {
+        "-kvu" | "--kv-unified" => Some(true),
+        "-no-kvu" | "--no-kv-unified" => Some(false),
+        _ => None,
+    })
+}
+
+/// `-fa` / `--flash-attn`, which takes `on`/`off`/`auto`/`1`/`0`, or the bare
+/// `-no-fa`. `auto` yields `None` so the caller falls through to resolving it
+/// the way the runtime will.
+fn flash_attn_from_extra_args(extra_args: &[String]) -> Option<bool> {
+    if extra_args
+        .iter()
+        .any(|a| a == "-no-fa" || a == "--no-flash-attn")
+    {
+        return Some(false);
+    }
+    match extra_arg_value(extra_args, &["-fa", "--flash-attn"])? {
+        "on" | "1" | "true" => Some(true),
+        "off" | "0" | "false" => Some(false),
+        _ => None,
     }
 }
 
@@ -140,6 +259,15 @@ pub struct Estimate {
     /// — non-zero only for a separate draft model. See
     /// [`crate::estimator::mtp::mtp_weight_bytes`].
     pub mtp_weight_bytes: u64,
+    /// Host bytes the runtime is predicted to hold that are neither weights
+    /// nor KV: the pinned graph arena and the process baseline. Charged to the
+    /// `Cpu` slot whatever the placement, because a fully GPU-offloaded model
+    /// pays them too. See [`crate::estimator::host_buffer`].
+    pub host_overhead_bytes: u64,
+    /// The server prompt cache's host-RAM cap (`-cram`). Reserved but not
+    /// predicted — it fills with use rather than at load — so the packer
+    /// charges it as slop and the rolling correction never divides by it.
+    pub host_cache_bytes: u64,
     /// Per-layer weight bytes for index-ordered packing. `None` for
     /// architectures where layer-aware placement isn't applicable
     /// (currently SSM/Mamba; in that case `placement` uses single-device

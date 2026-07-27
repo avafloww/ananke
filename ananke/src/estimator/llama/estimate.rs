@@ -35,6 +35,8 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         }),
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
+        host_overhead_bytes: 0,
+        host_cache_bytes: 0,
         output_buffer_bytes: 0,
         per_layer_bytes: Some(per_layer_bytes),
         attention_layers: None,

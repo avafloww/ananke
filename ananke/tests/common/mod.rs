@@ -285,6 +285,7 @@ pub fn minimal_llama_service(name: &str, port: u16) -> ServiceConfig {
             draft_model: None,
             kv_unified: None,
             cache_idle_slots: None,
+            cache_ram_mb: None,
             metrics: None,
             slots: None,
             batch_size: None,

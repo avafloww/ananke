@@ -159,6 +159,12 @@ mod tests {
             allow_fallback: false,
             mtp: false,
             draft_model: None,
+            ik_llama: false,
+            ik_dsa: false,
+            parallel: None,
+            flash_attn: None,
+            kv_unified: None,
+            cache_ram_mb: None,
         };
 
         let e = estimate(&summary, &inputs);
@@ -210,6 +216,12 @@ mod tests {
             allow_fallback: false,
             mtp: false,
             draft_model: None,
+            ik_llama: false,
+            ik_dsa: false,
+            parallel: None,
+            flash_attn: None,
+            kv_unified: None,
+            cache_ram_mb: None,
         };
         // Fallback layer count (21) at f16 reproduces the 6657 figure.
         assert_eq!(estimate(&summary, &mk("f16")).kv_per_token, 6657);

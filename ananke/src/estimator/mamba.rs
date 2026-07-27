@@ -83,6 +83,8 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
             .unwrap_or_else(|| compute_buffer::default_for(summary, context, inputs.ubatch)),
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
+        host_overhead_bytes: 0,
+        host_cache_bytes: 0,
         output_buffer_bytes: 0,
         per_layer_bytes: Some(per_layer),
         attention_layers: None,

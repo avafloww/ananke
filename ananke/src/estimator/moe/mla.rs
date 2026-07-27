@@ -108,6 +108,12 @@ mod tests {
             allow_fallback: false,
             mtp: false,
             draft_model: None,
+            ik_llama: false,
+            ik_dsa: false,
+            parallel: None,
+            flash_attn: None,
+            kv_unified: None,
+            cache_ram_mb: None,
         };
         // 78 KV layers × 576 elems × 2 bytes (f16) = 89856 bytes/token.
         // The naive K+V formula would give 79 × (576 + 512) × 2 = 171904.
