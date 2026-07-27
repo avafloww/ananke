@@ -189,6 +189,7 @@ mod tests {
 
         let empty: Vec<String> = Vec::new();
         let inputs = EstimatorInputs {
+            host_resident_experts: false,
             visible_devices: 1,
             split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",
@@ -302,6 +303,7 @@ mod tests {
 
         let empty_override: Vec<String> = Vec::new();
         let inputs = EstimatorInputs {
+            host_resident_experts: false,
             visible_devices: 1,
             split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",
@@ -446,6 +448,7 @@ mod tests {
 
         let empty: Vec<String> = Vec::new();
         let inputs = EstimatorInputs {
+            host_resident_experts: false,
             visible_devices: 1,
             split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",
@@ -487,6 +490,7 @@ mod tests {
 
         // q8_0 KV shrinks by the element-width ratio (1.0625 / 2.0).
         let inputs_q8 = EstimatorInputs {
+            host_resident_experts: false,
             visible_devices: 1,
             split_mode: crate::config::validate::SplitMode::Layer,
             cache_type_k: Some("q8_0"),

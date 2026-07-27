@@ -54,6 +54,13 @@ jobs:
       - name: Test (no default features, lib only)
         run: cargo test --workspace --no-default-features --lib
 
+      # The estimator's measured constants are generated from the calibration
+      # dataset. This fails if the committed file no longer matches what the
+      # data produces — which is the whole guarantee: a constant cannot drift
+      # from its evidence without the drift being visible here.
+      - name: Tuning constants match the dataset
+        run: python3 scripts/calibration/analyse.py emit --check
+
       - name: Docs check (configuration)
         env:
           ANANKE_SKIP_FRONTEND_BUILD: "1"

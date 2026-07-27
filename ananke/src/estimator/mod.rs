@@ -243,6 +243,7 @@ mod tests {
 
     fn inputs_for<'a>(empty_override: &'a [String]) -> EstimatorInputs<'a> {
         EstimatorInputs {
+            host_resident_experts: false,
             visible_devices: 1,
             split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",

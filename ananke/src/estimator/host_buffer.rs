@@ -230,13 +230,19 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
 }
 
 /// How many times the graph's attention masks are replicated.
+///
+/// Only when the whole model is split across devices. A hybrid — experts held
+/// on the CPU — does not replicate them, measured at 1.00 on all three
+/// (deepseek4, laguna, qwen35moe) against 4.00 on every fully-resident model
+/// including a mixture of experts, which is what rules out MoE-ness as the
+/// discriminator and leaves placement.
 fn mask_copies(inputs: &EstimatorInputs<'_>) -> u64 {
     let split_across_devices = inputs.visible_devices > 1
         && matches!(
             inputs.split_mode,
             crate::config::validate::SplitMode::Layer | crate::config::validate::SplitMode::Row
         );
-    if split_across_devices {
+    if split_across_devices && !inputs.host_resident_experts {
         MAINLINE_LAYER_SPLIT_MASK_COPIES
     } else {
         1
@@ -343,6 +349,7 @@ mod tests {
     ) -> EstimatorInputs<'a> {
         EstimatorInputs {
             visible_devices: 1,
+            host_resident_experts: false,
             split_mode: crate::config::validate::SplitMode::Layer,
             name: "t",
             model: std::path::Path::new("/m.gguf"),

@@ -39,6 +39,13 @@ pub struct EstimatorInputs<'a> {
     /// for its whole history, so that cost was folded into the process
     /// baseline; an operator with four or eight cards inherited it wrong.
     pub visible_devices: u32,
+    /// Whether the child will hold expert tensors on the host.
+    ///
+    /// A hybrid does not replicate the graph's attention masks across devices
+    /// where a fully-resident model does — measured at 1.00 against 4.00, with
+    /// a resident mixture of experts also at 4.00, so it follows from the
+    /// placement rather than from the model being MoE.
+    pub host_resident_experts: bool,
     /// How the child will split the model across those devices.
     ///
     /// mainline replicates the graph's attention masks when layers are split
@@ -126,6 +133,11 @@ impl<'a> EstimatorInputs<'a> {
             // which the rolling correction can absorb, where over-stating it
             // on a single-card host could not be recovered.
             visible_devices: 1,
+            // Any expert offload at all puts the model in the hybrid regime.
+            host_resident_experts: !matches!(
+                lc.expert_offload,
+                crate::config::validate::OffloadMode::Off
+            ),
             split_mode: svc.split_mode,
             cache_type_k: lc.cache_type_k.as_deref(),
             cache_type_v: lc.cache_type_v.as_deref(),

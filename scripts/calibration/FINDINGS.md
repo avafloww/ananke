@@ -334,6 +334,45 @@ rolling correction's base because it allocates nothing at load. That is true
 at load and false thereafter, which is worth knowing when the correction reads
 a host observation taken from a server that has been working.
 
+## What the validation test found
+
+`ananke/tests/estimator_matches_measurements.rs` replays the dataset through
+the estimator. It caught three things a hand-written analysis had missed.
+
+**The layer-split mask multiple does not apply to hybrids.** Every hybrid
+measures 1.00 — deepseek4, laguna, qwen35moe — against 4.00 on every
+fully-resident model. The discriminator is placement, not mixture-of-experts:
+gemma-4-26B-A4B is a resident MoE and measures 4.00. The estimator was
+charging 4x to hybrids and over-predicting their arena by ~384 MiB until this
+test failed on it.
+
+**Mainline hybrids carry a CPU-resident MoE term the estimator models for ik
+alone.** qwen35moe on mainline leaves ~57 MiB unaccounted at ub 512, which is
+~116 KB per batch token against ik's measured 83 KB. Not yet added; it is the
+clearest remaining gap in the host model.
+
+**The reachability claim is not currently true.** Comparing owned host memory
+against the modelled overhead on fully-resident models: ratios span 0.75-2.80
+with a median of 1.11, and **44 of 301 cells sit outside the rolling
+correction's [0.8, 1.5]**, mostly under-predicted — the direction that OOMs.
+The constants marked `reachable` in `tuning.json` are chosen to make that band
+hold, and for about one cell in seven they do not. The test records the count
+as a ceiling that may only fall; closing the gap needs the host baseline
+refitted, not the threshold raised.
+
+Arena accuracy by architecture, worst case across the dataset:
+
+| architecture | worst error |
+|---|---|
+| lfm2, llama, qwen3, talkie | < 0.5 MiB |
+| qwen35 | 1.1 MiB |
+| qwen35moe | 2.5 MiB |
+| gemma3 | 12.1 MiB |
+| glm-dsa | 45.0 MiB |
+
+The first five are the sense in which "the arena is arithmetic, not a fit"
+holds. The last two are open.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline

@@ -137,6 +137,7 @@ mod tests {
 
         let empty: Vec<String> = Vec::new();
         let inputs = EstimatorInputs {
+            host_resident_experts: false,
             visible_devices: 1,
             split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",
@@ -196,6 +197,7 @@ mod tests {
         };
         let empty: Vec<String> = Vec::new();
         let mk = |ctk: &'static str| EstimatorInputs {
+            host_resident_experts: false,
             visible_devices: 1,
             split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",

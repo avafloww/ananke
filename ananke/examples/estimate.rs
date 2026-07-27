@@ -115,6 +115,7 @@ fn parse_args() -> Args {
 fn main() {
     let args = parse_args();
     let inputs = EstimatorInputs {
+        host_resident_experts: false,
         visible_devices: 1,
         split_mode: ananke::config::validate::SplitMode::Layer,
         name: "estimate-example",
