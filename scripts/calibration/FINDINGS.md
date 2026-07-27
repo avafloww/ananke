@@ -246,14 +246,30 @@ This over-reserves rather than under-reserves, so it does not crash — it
 refuses the model room it could have used, which on a hybrid means fewer
 expert layers on the GPU and a slower service.
 
-**Do not conclude the constant is simply wrong.** The note in
-`CONTRIBUTING.md` describes the NSA indexer scaling as `k x ubatch x ctx`,
-derived from `nvidia-smi` totals minus modelled terms. These cells are the
-*production hybrid*, where 40 of 43 layers are on the CPU; the original
-calibration may have measured a GPU-resident configuration, in which case both
-can be right and the curve is being applied outside the regime it was fitted
-in. Settling that needs ananke's own estimator run against these exact
-configurations, which is the end-to-end check the campaign has not done yet.
+**The architecture explains it, and the constant's own claim fails a direct
+test.** `CONTRIBUTING.md` describes the NSA indexer as scoring every one of the
+`ubatch` query tokens against the whole context, giving a residual of
+`k x ubatch x ctx`. The model's metadata says otherwise:
+
+    deepseek4.attention.indexer.top_k = 512
+
+The indexer selects a fixed top-512 keys, so its working set is bounded by
+`top_k` rather than by context — sparse attention doing exactly what sparse
+attention is for. And at fixed ctx 32768, quadrupling ubatch from 512 to 2048
+moves the per-device compute buffer from 2019 to 2001 MiB. A `k x ubatch x
+ctx` term must quadruple there. It does not move at all.
+
+That test does not depend on the hybrid regime: quadrupling the batch would
+quadruple the term wherever the layers live. So the slope is not merely being
+applied outside its fitted regime — the relationship it encodes is not present
+in this build.
+
+Whether it ever was is a separate question. The operator updated llama.cpp
+during this campaign, and an older build that materialised the full score
+matrix instead of tiling it would have shown exactly the original scaling.
+This is precisely what the recorded binary hash exists to disambiguate, and
+why "the constant was right once" and "the constant is right now" are
+different claims.
 
 **Also measured**: the gap between what the driver reports and what llama.cpp
 attributes is **757-764 MiB**, flat across every context and batch on two
