@@ -86,7 +86,12 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         weights_bytes,
         kv_per_token,
         compute_buffer_mb: inputs.compute_buffer_mb.unwrap_or_else(|| {
-            crate::estimator::compute_buffer::default_for(summary, inputs.context, inputs.ubatch)
+            crate::estimator::compute_buffer::default_for(
+                summary,
+                inputs.context,
+                inputs.ubatch,
+                inputs.flash_attn.unwrap_or(true),
+            )
         }),
         mtp_bytes: 0,
         mtp_weight_bytes: 0,

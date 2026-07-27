@@ -89,12 +89,26 @@ def arena_terms(record: dict, charge_moe: bool = True) -> tuple[float, float, fl
     return mask / 1024**2, swa_mask / 1024**2, hidden / 1024**2
 
 
-# Kept in step with `ananke/src/estimator/tuning.json`. These were a flat
-# 81 KiB per token until the campaign showed the term scales with hidden size;
-# this file went on using the flat value afterwards, which silently inflated
-# every residual computed for an ik mixture of experts.
-IK_MOE_BYTES_PER_NEMBD = 43
-MAINLINE_TENSOR_MOE_PER_NEMBD = 57
+def _constant(name: str, default: int) -> int:
+    """Read a tuning constant from the file the estimator compiles in.
+
+    Copied by hand once, and the copy went stale the moment the constant was
+    re-derived — inflating every residual this file computed for an ik mixture
+    of experts until it was noticed. Read it instead: the JSON is the source of
+    truth for the Rust side already, and there is no reason for the analysis to
+    hold its own opinion. The default only applies before the constant exists,
+    which is the bootstrap case when a new term is being added.
+    """
+    try:
+        document = json.loads(TUNING_JSON.read_text())
+    except (OSError, json.JSONDecodeError):
+        return default
+    entry = document.get("constants", {}).get(name)
+    return int(entry["value"]) if entry else default
+
+
+IK_MOE_BYTES_PER_NEMBD = _constant("IK_MOE_CPU_BYTES_PER_NEMBD", 43)
+MAINLINE_TENSOR_MOE_PER_NEMBD = _constant("MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD", 57)
 
 
 def check_arena(rows: list[dict]) -> None:
@@ -581,7 +595,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         # Nominal rather than zero: the measurement says flat, and claiming
         # exactly zero growth asserts more than a flat measurement supports.
         entry["slope_mib_per_1k"] = 1
-        entry["slope_scales_with_ubatch"] = False
+        entry["slope_scales_with_ubatch"] = True
         entry["evidence"] = evidence
 
     for name, entry in constants.items():

@@ -36,8 +36,10 @@ pub fn estimate_fallback(summary: &GgufSummary, context: u32) -> Estimate {
         weights_bytes: weights,
         kv_per_token: 0,
         // Unknown archs never hit the ubatch-sensitive deepseek4 curve, so
-        // the default ubatch is fine here.
-        compute_buffer_mb: compute_buffer::default_for(summary, context, None),
+        // the default ubatch is fine here. Flash attention is assumed on: an
+        // unknown architecture has no head count to size the unfused score
+        // matrix from, so the term would be zero regardless.
+        compute_buffer_mb: compute_buffer::default_for(summary, context, None, true),
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
         host_overhead_bytes: 0,

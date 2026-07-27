@@ -470,6 +470,39 @@ analysis and the estimator now share `tuning.json` as their source of truth,
 but only the Rust side reads it mechanically. The Python side copies two
 values by hand, and those copies are the one place a drift can still hide.
 
+## The GPU curves under-reserved, in two ways that OOM
+
+Validating `compute_buffer::default_for` against llama.cpp's own per-device
+figure found 12 of 320 cells reserving *less* than the runtime took.
+
+**Flash attention off materialises the score matrix.** With it on, the scores
+are consumed tile by tile and never exist whole; without it the graph holds
+`n_head x ctx x n_tokens` f32 entries. The curves modelled none of this:
+qwen3-4b at ub 2048 reserved 956 MiB against **9464 taken**, a tenfold
+shortfall. Normalised by `n_head x ctx x n_tokens x 4` the measurement is
+1.07-1.88 across nine architectures, so a factor of 2 covers all of them.
+deepseek4 sits at 0.49 because MLA shares a latent across heads.
+
+**The context term scales with batch on every architecture, not just
+deepseek4.** `CONTRIBUTING.md` said most compute buffers are "effectively
+independent of `--ubatch-size`", which is close enough at the calibration
+batch and wrong away from it: Magidonia measures 388 MiB at ub 512 and 1552 at
+2048, Qwen3.6-27B 290 and 1160 — exactly fourfold in both cases. Every curve
+now scales its slope with batch, which is a no-op at the default 512.
+
+Together these take the under-reserving cells from 12 to 1, and raising
+deepseek4's base by 100 MiB — the safe direction, and not a resolution of its
+review — takes it to none.
+
+**What is left is over-reservation, and it is large.** Worst headroom per
+architecture now runs from 3.8x on llama to **27.5x on laguna**. That does not
+OOM; it refuses a model room it could have used, which on a hybrid means fewer
+expert layers on the GPU and a slower service. The bases were set to cover the
+worst case of a family and the compute column is often far below them. These
+are recorded per architecture as ratchets, and they are the clearest remaining
+argument for fitting the curves to this dataset rather than carrying inherited
+numbers.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline

@@ -32,7 +32,7 @@ use std::{collections::BTreeMap, path::Path};
 use ananke::{
     config::validate::SplitMode,
     estimator::{
-        EstimatorInputs,
+        EstimatorInputs, compute_buffer,
         host_buffer::{host_overhead_bytes, pinned_graph_bytes},
     },
     gguf::{GgufSummary, GgufValue},
@@ -229,6 +229,7 @@ struct Case {
     devices: u32,
     hybrid: bool,
     mtp: bool,
+    device_compute_mib: Option<u64>,
     split: SplitMode,
 }
 
@@ -278,6 +279,7 @@ impl Case {
             ("expert_count", "n_expert"),
             ("expert_used_count", "n_expert_used"),
             ("attention.sliding_window", "n_swa"),
+            ("attention.head_count", "n_head"),
             ("attention.head_count_kv", "n_head_kv"),
             ("attention.key_length", "n_embd_head_k"),
             ("attention.value_length", "n_embd_head_v"),
@@ -331,6 +333,12 @@ impl Case {
             // masks are not replicated across devices.
             hybrid: factors.get("n_cpu_moe").is_some_and(|v| !v.is_null()),
             mtp: factors.get("spec_type").is_some_and(|v| !v.is_null()),
+            device_compute_mib: parsed
+                .get("devices")
+                .and_then(Value::as_array)
+                .and_then(|d| d.first())
+                .and_then(|d| d.get("compute_mib"))
+                .and_then(Value::as_u64),
             split: match factors.get("split").and_then(Value::as_str) {
                 Some("tensor") => SplitMode::Tensor,
                 Some("row") => SplitMode::Row,
@@ -377,4 +385,106 @@ fn load() -> Vec<Value> {
         .filter(|l| !l.trim().is_empty())
         .map(|l| serde_json::from_str(l).expect("each line is a record"))
         .collect()
+}
+
+/// The GPU compute-buffer curves against what llama.cpp reserved per device.
+///
+/// A third tier, and the one that reaches the constants the host checks
+/// cannot. `compute_buffer::default_for` is what the packer reserves per
+/// active device; llama.cpp's own memory-breakdown table reports what it
+/// actually took. Those are comparable, with one asymmetry that decides how
+/// this asserts: reserving *less* than the runtime takes is what OOMs a load,
+/// while reserving more only wastes capacity.
+///
+/// So this checks the direction, not the magnitude. Every curve must cover the
+/// measurement; how far above it sits is recorded per architecture as a
+/// ceiling, because an enormous over-reservation is its own bug — it refuses a
+/// model room it could have used.
+#[test]
+fn compute_buffer_covers_what_the_runtime_took() {
+    let records = load();
+    let mut under = Vec::new();
+    let mut over: std::collections::BTreeMap<String, f64> = Default::default();
+    let mut checked = 0usize;
+
+    for record in &records {
+        let Some(case) = Case::from_record(record) else {
+            continue;
+        };
+        // MTP adds a second context with its own buffers, which this curve
+        // does not describe.
+        if case.mtp {
+            continue;
+        }
+        let Some(measured) = case.device_compute_mib else {
+            continue;
+        };
+        if measured == 0 {
+            continue;
+        }
+        let reserved = compute_buffer::default_for(
+            &case.summary,
+            case.context,
+            Some(case.ubatch),
+            case.flash_attn,
+        ) as f64;
+        checked += 1;
+        let headroom = reserved / measured as f64;
+        if headroom < 1.0 {
+            under.push(format!(
+                "{} reserved {reserved:.0} vs {measured} MiB",
+                case.label
+            ));
+        }
+        let entry = over.entry(case.arch.clone()).or_insert(0.0);
+        if headroom > *entry {
+            *entry = headroom;
+        }
+    }
+
+    assert!(
+        checked > 50,
+        "too few cells with a per-device breakdown: {checked}"
+    );
+    assert!(
+        under.is_empty(),
+        "{} of {checked} cells reserve less compute than the runtime took, \
+         which is the direction that OOMs a load: {:?}",
+        under.len(),
+        &under[..under.len().min(5)]
+    );
+
+    eprintln!("compute-buffer headroom (reserved / measured), worst per architecture:");
+    for (arch, headroom) in &over {
+        eprintln!("  {arch:12} {headroom:6.1}x");
+    }
+    // How far *above* the measurement each curve sits, recorded per
+    // architecture. These are large — 27x on laguna — because the bases were
+    // set to cover the worst case of a family and the compute column is often
+    // far below it. Over-reserving does not OOM, it refuses a model room it
+    // could have used, so this is a ratchet: the numbers are today's and may
+    // only come down. They are the clearest remaining case for fitting the
+    // curves to the dataset rather than carrying inherited bases.
+    const CEILINGS: &[(&str, f64)] = &[
+        ("llama", 4.0),
+        ("talkie", 4.5),
+        ("deepseek4", 6.0),
+        ("qwen35", 7.0),
+        ("qwen3", 12.0),
+        ("gemma3", 13.0),
+        ("lfm2", 13.0),
+        ("gemma4", 18.0),
+        ("qwen35moe", 22.0),
+        ("laguna", 28.0),
+    ];
+    for (arch, headroom) in &over {
+        let Some((_, ceiling)) = CEILINGS.iter().find(|(a, _)| a == arch) else {
+            continue;
+        };
+        assert!(
+            *headroom <= *ceiling,
+            "{arch} reserves {headroom:.1}x the compute the runtime took, \
+             above its recorded ceiling of {ceiling:.0}x"
+        );
+    }
 }

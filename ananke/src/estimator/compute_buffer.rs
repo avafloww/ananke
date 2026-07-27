@@ -24,7 +24,7 @@
 //! `estimation.compute_buffer_mb`, which short-circuits this table.
 
 use crate::{
-    estimator::tuning::{CURVES, DEFAULT_CURVE, DEFAULT_UBATCH},
+    estimator::tuning::{CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR},
     gguf::GgufSummary,
 };
 
@@ -105,10 +105,44 @@ pub fn output_logits_bytes(summary: &GgufSummary, ubatch: Option<u32>) -> u64 {
 /// (or an unset config) means llama.cpp's [`DEFAULT_UBATCH`]. Operators can
 /// override the whole term per service via `estimation.compute_buffer_mb`.
 /// `ubatch` only affects the deepseek4 curve.
-pub fn default_for(summary: &GgufSummary, context: u32, ubatch: Option<u32>) -> u32 {
-    let t = tuning_for(summary, ubatch.unwrap_or(DEFAULT_UBATCH));
+pub fn default_for(
+    summary: &GgufSummary,
+    context: u32,
+    ubatch: Option<u32>,
+    flash_attn: bool,
+) -> u32 {
+    let batch = ubatch.unwrap_or(DEFAULT_UBATCH);
+    let t = tuning_for(summary, batch);
     t.base
         .saturating_add(t.slope.saturating_mul(context / 1024))
+        .saturating_add(no_flash_attn_mib(summary, context, batch, flash_attn))
+}
+
+/// The score matrix an unfused attention pass materialises.
+///
+/// With flash attention the scores are consumed tile by tile and never exist
+/// whole; without it the graph holds `n_head x ctx x n_tokens` f32 entries,
+/// which dwarfs everything else in the curve — measured at ten times the
+/// reserved figure at ub 2048, in the direction that OOMs a load.
+fn no_flash_attn_mib(summary: &GgufSummary, context: u32, ubatch: u32, flash_attn: bool) -> u32 {
+    if flash_attn {
+        return 0;
+    }
+    let arch = summary.architecture.as_str();
+    let heads = summary
+        .metadata
+        .get(&smol_str::SmolStr::new(format!(
+            "{arch}.attention.head_count"
+        )))
+        .and_then(|v| v.as_u32())
+        .unwrap_or(0) as u64;
+    if heads == 0 {
+        return 0;
+    }
+    let tokens = u64::from(context.min(ubatch));
+    let bytes =
+        u64::from(NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR) * heads * u64::from(context) * tokens * 4;
+    (bytes / (1024 * 1024)).min(u64::from(u32::MAX)) as u32
 }
 
 /// Does `summary` look like a Gemma 4 E-variant (E4B and siblings)?
@@ -158,8 +192,8 @@ mod tests {
     #[test]
     fn llama_family_default_tuning() {
         let s = summary_for("qwen3");
-        assert_eq!(default_for(&s, 2048, None), 700 + 8 * 2);
-        assert_eq!(default_for(&s, 32768, None), 700 + 8 * 32);
+        assert_eq!(default_for(&s, 2048, None, true), 700 + 8 * 2);
+        assert_eq!(default_for(&s, 32768, None, true), 700 + 8 * 32);
     }
 
     #[test]
@@ -167,8 +201,8 @@ mod tests {
         // gemma-4-31B's full-attention layers drive a big attention
         // scratch allocation even at small context — the gemma tuning
         // has to start well above the llama default to cover it.
-        let gemma_2k = default_for(&summary_for("gemma4"), 2048, None);
-        let llama_2k = default_for(&summary_for("qwen3"), 2048, None);
+        let gemma_2k = default_for(&summary_for("gemma4"), 2048, None, true);
+        let llama_2k = default_for(&summary_for("qwen3"), 2048, None, true);
         assert!(
             gemma_2k > llama_2k,
             "gemma base should exceed llama default at 2k (gemma={gemma_2k} llama={llama_2k})"
@@ -180,8 +214,8 @@ mod tests {
         // E-variants ship a `per_layer_token_embd.weight` tensor and
         // have a small hidden size; the fat-model gemma4 tuning over-
         // reserves them by ~2 GiB at 262k otherwise.
-        let regular = default_for(&summary_for("gemma4"), 262144, None);
-        let e_variant = default_for(&gemma4_e_variant_summary(), 262144, None);
+        let regular = default_for(&summary_for("gemma4"), 262144, None, true);
+        let e_variant = default_for(&gemma4_e_variant_summary(), 262144, None, true);
         assert!(
             e_variant < regular,
             "E-variant cb should be strictly lower than regular gemma4 \
@@ -191,8 +225,8 @@ mod tests {
 
     #[test]
     fn moe_tuning_is_flatter_than_dense() {
-        let dense_32k = default_for(&summary_for("qwen3"), 32768, None);
-        let moe_32k = default_for(&summary_for("gpt-oss"), 32768, None);
+        let dense_32k = default_for(&summary_for("qwen3"), 32768, None, true);
+        let moe_32k = default_for(&summary_for("gpt-oss"), 32768, None, true);
         assert!(
             moe_32k < dense_32k,
             "MoE compute buffer should be flatter than dense at long context; \
@@ -204,9 +238,9 @@ mod tests {
     fn qwen35moe_sits_between_moe_only_and_dense() {
         // Hybrid SSM+MoE: full-attention layers are a minority but they
         // do cost more per 1k context than pure-MoE's near-flat curve.
-        let moe_only_262k = default_for(&summary_for("gpt-oss"), 262144, None);
-        let qwen35moe_262k = default_for(&summary_for("qwen35moe"), 262144, None);
-        let dense_262k = default_for(&summary_for("qwen3"), 262144, None);
+        let moe_only_262k = default_for(&summary_for("gpt-oss"), 262144, None, true);
+        let qwen35moe_262k = default_for(&summary_for("qwen35moe"), 262144, None, true);
+        let dense_262k = default_for(&summary_for("qwen3"), 262144, None, true);
         assert!(
             moe_only_262k <= qwen35moe_262k && qwen35moe_262k <= dense_262k,
             "qwen35moe should land between MoE-only and dense at 262k \
@@ -221,8 +255,8 @@ mod tests {
         // It must (a) stay strictly below the conservative dense default it
         // would otherwise inherit, and (b) still cover the measured peak
         // (~428 MiB warmed) at the model's native 2048 context.
-        let talkie_2k = default_for(&summary_for("talkie"), 2048, None);
-        let llama_2k = default_for(&summary_for("qwen3"), 2048, None);
+        let talkie_2k = default_for(&summary_for("talkie"), 2048, None, true);
+        let llama_2k = default_for(&summary_for("qwen3"), 2048, None, true);
         assert!(
             talkie_2k < llama_2k,
             "talkie cb should be tighter than the dense default \
@@ -237,7 +271,7 @@ mod tests {
 
     #[test]
     fn talkie_floors_to_base() {
-        assert_eq!(default_for(&summary_for("talkie"), 0, None), 500);
+        assert_eq!(default_for(&summary_for("talkie"), 0, None, true), 500);
     }
 
     #[test]
@@ -249,19 +283,29 @@ mod tests {
         // deepseek4, whose NSA indexer scales with ubatch × context and is far
         // steeper.
         let glm = summary_for("glm-dsa");
+        let glm_base = CURVES
+            .iter()
+            .find(|c| c.archs.contains(&"glm-dsa"))
+            .expect("glm-dsa has a curve")
+            .base_mib;
         assert!(
-            default_for(&glm, 131072, None) >= 4578,
+            default_for(&glm, 131072, None, true) >= 4578,
             "must cover the measured 4578 MiB -dsa compute at 131072 (got {})",
-            default_for(&glm, 131072, None)
+            default_for(&glm, 131072, None, true)
         );
         assert!(
-            default_for(&glm, 131072, None) < default_for(&summary_for("deepseek4"), 131072, None),
+            default_for(&glm, 131072, None, true)
+                < default_for(&summary_for("deepseek4"), 131072, None, true),
             "glm-dsa's indexer is less steep than deepseek4's NSA curve"
         );
-        // ubatch is not a factor for glm-dsa (unlike deepseek4).
+        // The context term scales with batch here as everywhere else. It did
+        // not until the campaign measured the compute buffer proportional to
+        // ubatch on every architecture it could compare — Magidonia at 388 MiB
+        // and 1552 for ub 512 and 2048, Qwen3.6-27B at 290 and 1160 — which a
+        // flat slope under-reserves fourfold.
         assert_eq!(
-            default_for(&glm, 131072, Some(2048)),
-            default_for(&glm, 131072, Some(512))
+            default_for(&glm, 131072, Some(2048), true) - glm_base,
+            (default_for(&glm, 131072, Some(512), true) - glm_base) * 4
         );
     }
 
@@ -274,18 +318,18 @@ mod tests {
         let ds4 = summary_for("deepseek4");
         let moe = summary_for("gpt-oss");
         assert!(
-            default_for(&ds4, 262144, None) > default_for(&moe, 262144, None) * 4,
+            default_for(&ds4, 262144, None, true) > default_for(&moe, 262144, None, true) * 4,
             "deepseek4 cb must dwarf the flat MoE curve at long context"
         );
         assert!(
-            default_for(&ds4, 131072, None) >= 9297,
+            default_for(&ds4, 131072, None, true) >= 9297,
             "must cover the measured ~9.3 GiB residual at 131072 (got {})",
-            default_for(&ds4, 131072, None)
+            default_for(&ds4, 131072, None, true)
         );
         assert!(
-            default_for(&ds4, 262144, None) >= 17519,
+            default_for(&ds4, 262144, None, true) >= 17519,
             "must cover the measured ~17.5 GiB residual at 262144 (got {})",
-            default_for(&ds4, 262144, None)
+            default_for(&ds4, 262144, None, true)
         );
     }
 
@@ -294,24 +338,28 @@ mod tests {
         let ds4 = summary_for("deepseek4");
         // Unset ubatch (None) resolves to llama.cpp's default of 512.
         assert_eq!(
-            default_for(&ds4, 131072, None),
-            default_for(&ds4, 131072, Some(512))
+            default_for(&ds4, 131072, None, true),
+            default_for(&ds4, 131072, Some(512), true)
         );
         let base = CURVES
             .iter()
             .find(|c| c.archs.contains(&"deepseek4"))
             .expect("deepseek4 has a curve entry")
             .base_mib;
-        let slope_at = |ub| default_for(&ds4, 131072, Some(ub)) - base;
+        let slope_at = |ub| default_for(&ds4, 131072, Some(ub), true) - base;
         // The context-scaling term is linear in ubatch off the 512 baseline.
         assert_eq!(slope_at(1024), slope_at(512) * 2);
         assert_eq!(slope_at(2048), slope_at(512) * 4);
         assert_eq!(slope_at(256), slope_at(512) / 2);
-        // Every other arch ignores ubatch entirely.
+        // And so does every other architecture, for the same reason.
         let qwen = summary_for("qwen3");
+        let qwen_base = CURVES
+            .iter()
+            .find(|c| c.archs.contains(&"qwen3"))
+            .map_or(DEFAULT_CURVE.base_mib, |c| c.base_mib);
         assert_eq!(
-            default_for(&qwen, 131072, Some(2048)),
-            default_for(&qwen, 131072, None)
+            default_for(&qwen, 131072, Some(2048), true) - qwen_base,
+            (default_for(&qwen, 131072, None, true) - qwen_base) * 4
         );
     }
 
@@ -320,17 +368,20 @@ mod tests {
         // Matches the conservative dense-family curve so unknown archs
         // that slip through the fallback still over-reserve safely.
         assert_eq!(
-            default_for(&summary_for("brand-new-arch"), 8192, None),
+            default_for(&summary_for("brand-new-arch"), 8192, None, true),
             700 + 8 * 8
         );
     }
 
     #[test]
     fn absent_context_floors_to_base() {
-        assert_eq!(default_for(&summary_for("qwen3"), 0, None), 700);
-        assert_eq!(default_for(&summary_for("gpt-oss"), 512, None), 600);
-        assert_eq!(default_for(&summary_for("gemma4"), 0, None), 2000);
-        assert_eq!(default_for(&summary_for("qwen35moe"), 0, None), 900);
-        assert_eq!(default_for(&gemma4_e_variant_summary(), 0, None), 1100);
+        assert_eq!(default_for(&summary_for("qwen3"), 0, None, true), 700);
+        assert_eq!(default_for(&summary_for("gpt-oss"), 512, None, true), 600);
+        assert_eq!(default_for(&summary_for("gemma4"), 0, None, true), 2000);
+        assert_eq!(default_for(&summary_for("qwen35moe"), 0, None, true), 900);
+        assert_eq!(
+            default_for(&gemma4_e_variant_summary(), 0, None, true),
+            1100
+        );
     }
 }
