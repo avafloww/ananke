@@ -847,14 +847,49 @@ KINDS = {
     "PROCESS_BASE_BYTES_PER_LAYER": "reachable",
     "PROCESS_BASE_BYTES_MOE": "reachable",
     "PINNED_EXTRA_BYTES": "reachable",
-    "NO_FLASH_ATTN_BYTES_PER_TOKEN": "reachable",
     "DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16": "reachable",
+    # Fitted against the slot sweep the first campaign's design confounded.
+    "MTP_COMPUTE_MIB": "derived",
+    "MTP_KV_SLOT_FACTOR_PERMILLE": "derived",
     # Has data, but the fit is contested and the value is held.
-    "MTP_COMPUTE_MIB": "review",
     "DRAFT_MODEL_COMPUTE_MIB": "review",
     "MTP_HOST_BYTES_EMBEDDED": "review",
     "MTP_HOST_BYTES_SEPARATE_DRAFT": "review",
 }
+
+def derive_mtp_compute_base(rows: list[dict]) -> tuple[int, str]:
+    """The slot-independent part of the embedded-MTP overhead."""
+    fit = _fit_mtp_slot_model(rows)
+    _MTP_FIT.clear()
+    _MTP_FIT.update({k: v for k, v in fit.items() if isinstance(v, int)})
+    return fit["base_mib"], (
+        f"intercept of a slot fit across {fit['models']} models at a fixed "
+        f"context: {fit['detail']}. The larger intercept is taken so neither "
+        f"is under-reserved. Replaces a value fitted against llama.cpp's "
+        f"[spec] line, which reports the MTP context per *context* and is flat "
+        f"across slot counts while the real cost scales with them — so it is "
+        f"wrong in shape, not only in magnitude, and wrong exactly where "
+        f"production runs."
+    )
+
+
+def derive_mtp_kv_slot_factor(rows: list[dict]) -> tuple[int, str]:
+    """How much the MTP KV cache exceeds the modelled term, per thousand.
+
+    llama.cpp's breakdown puts the whole with/without difference in the KV
+    column and none in compute, and the measured KV is a fixed multiple of
+    `nextn x head_count_kv x (key_length + value_length) x 2 x context`:
+    1.75 for Qwen3.6-27B and 1.47 for Qwen3.6-35B-A3B, each constant across
+    slot counts to two decimals. The multiple itself is unexplained; the
+    proportionality is not.
+    """
+    fit = _fit_mtp_slot_model(rows)
+    return fit["kv_slot_factor_permille"], (
+        f"per-slot coefficient over the modelled KV term, across "
+        f"{fit['models']} models: {fit['detail']}. The larger is taken. "
+        f"Expressed per thousand so the constant stays an integer."
+    )
+
 
 def derive_mtp_embedded_compute(rows: list[dict]) -> tuple[int, str]:
     """The GPU compute an embedded MTP head costs, from paired cells.
@@ -922,6 +957,72 @@ def mtp_slot_scaling(rows: list[dict]) -> str:
     return "; ".join(f"{model} ctx {ctx}: " +
                      ", ".join(f"np{n} {d} MiB" for n, d in points.items())
                      for (model, ctx), points in series.items())
+
+
+_MTP_FIT: dict[str, int] = {}
+
+
+def _fit_mtp_slot_model(rows: list[dict]) -> dict[str, int]:
+    """Fit the embedded-MTP driver delta as `base + factor x kv_modelled x slots`.
+
+    The overhead is entirely KV cache and it scales with the slot count, which
+    the first campaign could not see because every one-slot pair sat at one
+    context and the only four-slot pair at another. Held at a fixed context
+    with only `parallel` moving, Qwen3.6-27B measures 992, 1444, and 2376 MiB
+    of driver delta at one, two, and four slots, and Qwen3.6-35B-A3B 584, 812,
+    and 1224 — both straight lines in the slot count.
+
+    That the term is KV is not inferred from the fit. llama.cpp's own
+    breakdown puts the whole difference in the KV column (225, 449, 898 MiB
+    for the 27B, exactly proportional) and none of it in compute, and the
+    measured KV comes to a fixed multiple of what `mtp.rs` already models from
+    `nextn x head_count_kv x (key_length + value_length) x 2` — 1.75 for one
+    model and 1.47 for the other, constant across slots to two decimals. So
+    the shape is right and only the magnitude was missing.
+
+    Note the cells set `--kv-unified`, and the MTP cache scales with slots
+    anyway: it does not share the main context's pool.
+    """
+    by_model: dict[str, dict[int, tuple[int, float]]] = defaultdict(dict)
+    for model, ctx, delta, record in _mtp_pairs(rows, draft=False):
+        parsed, factors = record["parsed"], record["factors"]
+        nextn = parsed.get("nextn_predict_layers") or 0
+        if not nextn or not parsed.get("n_head_kv"):
+            continue
+        kv_mib = (nextn * parsed["n_head_kv"]
+                  * (parsed["n_embd_head_k"] + parsed["n_embd_head_v"])
+                  * 2 * ctx / 1024**2)
+        by_model[model][factors["parallel"]] = (delta, kv_mib)
+
+    bases, factors_seen, detail = [], [], []
+    for model, points in by_model.items():
+        if len(points) < 2:
+            continue
+        slots = sorted(points)
+        (d1, kv), (d2, _) = points[slots[0]], points[slots[-1]]
+        per_slot = (d2 - d1) / (slots[-1] - slots[0])
+        base = d1 - per_slot * slots[0]
+        bases.append(base)
+        factors_seen.append(per_slot / kv)
+        detail.append(f"{model.split('/')[-1][:20]} {base:.0f} + "
+                      f"{per_slot:.0f}/slot ({per_slot / kv:.2f}x modelled KV)")
+    if not bases:
+        raise ValueError("no embedded-MTP model measured at two slot counts")
+    # The largest of each, so neither model is under-reserved. They are taken
+    # independently rather than as one model's pair: the point is a bound that
+    # covers every measured configuration, not a fit to the worst one.
+    #
+    # Plus a margin, because taking the maxima reproduces the worst model's
+    # line *exactly* — 992 and 2376 MiB against 992 and 2376 measured — and an
+    # exact fit under-reserves on any variation at all. Under-reserving here
+    # OOMs the load, which no later observation recovers, while over-reserving
+    # costs VRAM the rolling correction can give back. The compute curves carry
+    # 60% for the same reason; this needs far less, since the shape is measured
+    # rather than assumed.
+    margin = 1.10
+    return {"base_mib": round(max(bases) * margin),
+            "kv_slot_factor_permille": round(max(factors_seen) * margin * 1000),
+            "models": len(bases), "detail": "; ".join(detail)}
 
 
 _MTP_SLOTS: list[str] = []
@@ -1133,6 +1234,8 @@ DERIVERS = {
     "PROCESS_BASE_BYTES_PER_DEVICE": derive_per_device_bytes,
     "MAINLINE_LAYER_SPLIT_MASK_COPIES": derive_layer_split_copies,
     "IK_OP_OFFLOAD_MIN_BATCH": derive_offload_min_batch,
+    "MTP_COMPUTE_MIB": derive_mtp_compute_base,
+    "MTP_KV_SLOT_FACTOR_PERMILLE": derive_mtp_kv_slot_factor,
 }
 
 

@@ -29,7 +29,7 @@
 
 use crate::{
     estimator::{
-        tuning::{DRAFT_MODEL_COMPUTE_MIB, MTP_COMPUTE_MIB},
+        tuning::{DRAFT_MODEL_COMPUTE_MIB, MTP_COMPUTE_MIB, MTP_KV_SLOT_FACTOR_PERMILLE},
         types::EstimatorInputs,
     },
     gguf::GgufSummary,
@@ -126,8 +126,26 @@ pub fn mtp_overhead_bytes(
         meta_attn_u32(summary, arch, "value_length").unwrap_or(DEFAULT_HEAD_DIM as u32) as u64;
     let context = inputs.context as u64;
 
-    let kv_bytes =
-        nextn * n_kv_heads * (key_length + value_length) * MTP_KV_BYTES_PER_ELEMENT * context;
+    // Per slot, and *not* divided by a unified cache. The MTP context keeps
+    // its own KV per slot regardless: measured at 225, 449, and 898 MiB for
+    // Qwen3.6-27B at one, two, and four slots with `--kv-unified` set
+    // throughout, exactly proportional. llama.cpp's breakdown puts the whole
+    // with/without difference in the KV column and none of it in compute,
+    // which is what makes this the term that carries the slot count.
+    //
+    // The measured cache is a fixed multiple of the product above — 1.75 for
+    // Qwen3.6-27B and 1.47 for Qwen3.6-35B-A3B, each constant across slot
+    // counts — so the shape is right and only the magnitude was missing. The
+    // multiple itself is unexplained.
+    let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
+    let kv_bytes = nextn
+        * n_kv_heads
+        * (key_length + value_length)
+        * MTP_KV_BYTES_PER_ELEMENT
+        * context
+        * slots
+        * MTP_KV_SLOT_FACTOR_PERMILLE
+        / 1000;
     kv_bytes + MTP_COMPUTE_MIB * 1024 * 1024
 }
 
@@ -237,34 +255,59 @@ mod tests {
     #[test]
     fn qwen35_27b_matches_measured() {
         // 27B: nextn=1, 4 KV heads, 256+256, f16 draft cache, ctx 262144.
-        // KV = 1 × 4 × 512 × 2 × 262144 = 1024 MiB; + 1700 MiB compute.
         let s = qwen35_summary("qwen35", 1, 4);
         let empty: Vec<String> = Vec::new();
         let got = mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty));
-        let mib = got / (1024 * 1024);
-        assert_eq!(mib, 1024 + 1700);
+        assert_eq!(
+            got / (1024 * 1024),
+            expected_kv_mib(4, 262144) + MTP_COMPUTE_MIB
+        );
     }
 
     #[test]
     fn uses_f16_draft_cache_not_main_cache_type() {
         // The inputs declare q8_0 for the main cache, but the MTP KV must be
-        // sized in f16 (the draft cache default). 1024 MiB KV proves f16
-        // (q8_0 would give ~544 MiB).
+        // sized in f16 (the draft cache default) — q8_0 would halve it.
         let s = qwen35_summary("qwen35", 1, 4);
         let empty: Vec<String> = Vec::new();
-        let kv_mib =
-            mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty)) / (1024 * 1024) - 1700;
-        assert_eq!(kv_mib, 1024);
+        let kv_mib = mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty)) / (1024 * 1024)
+            - MTP_COMPUTE_MIB;
+        assert_eq!(kv_mib, expected_kv_mib(4, 262144));
     }
 
     #[test]
     fn qwen35moe_35b_doubled_context() {
         // 35B-A3B: nextn=1, 2 KV heads, ctx 524288 (the doubled deploy).
-        // KV = 1 × 2 × 512 × 2 × 524288 = 1024 MiB; + 1700 compute.
         let s = qwen35_summary("qwen35moe", 1, 2);
         let empty: Vec<String> = Vec::new();
         let mib = mtp_overhead_bytes(&s, None, &inputs(524288, true, &empty)) / (1024 * 1024);
-        assert_eq!(mib, 1024 + 1700);
+        assert_eq!(mib, expected_kv_mib(2, 524288) + MTP_COMPUTE_MIB);
+    }
+
+    /// The KV term the formula should produce for one slot, in MiB.
+    ///
+    /// Written against the constants rather than a baked-in figure: they are
+    /// recalibrated from the dataset, and a test that hardcodes them fails on
+    /// every recalibration while checking nothing about the shape.
+    fn expected_kv_mib(kv_heads: u64, context: u64) -> u64 {
+        kv_heads * 512 * 2 * context * MTP_KV_SLOT_FACTOR_PERMILLE / 1000 / (1024 * 1024)
+    }
+
+    #[test]
+    fn kv_scales_with_slots_and_ignores_a_unified_cache() {
+        // Measured at 225, 449, and 898 MiB for Qwen3.6-27B at one, two, and
+        // four slots with `--kv-unified` set throughout: the MTP context keeps
+        // its own cache per slot and does not share the main pool.
+        let s = qwen35_summary("qwen35", 1, 4);
+        let empty: Vec<String> = Vec::new();
+        let at = |slots: u32| {
+            let mut i = inputs(262144, true, &empty);
+            i.parallel = Some(slots);
+            i.kv_unified = Some(true);
+            mtp_overhead_bytes(&s, None, &i) / (1024 * 1024) - MTP_COMPUTE_MIB
+        };
+        assert_eq!(at(2), at(1) * 2);
+        assert_eq!(at(4), at(1) * 4);
     }
 
     /// Build a separate-draft GGUF summary (Gemma 4's `gemma4-assistant`

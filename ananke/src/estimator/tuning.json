@@ -36,7 +36,7 @@
       "value": 1025,
       "type": "u64",
       "doc": "The Gemma 4 E-variant's per-layer embedding input, charged per layer per batch token.",
-      "evidence": "11 E-variant cells at 1025 B/layer/token, against 29 same-architecture control cells at 1. 1025 is 256 f32 elements.",
+      "evidence": "11 E-variant cells at 1025 B/layer/token, against 30 same-architecture control cells at 1. 1025 is 256 f32 elements.",
       "kind": "derived"
     },
     "IK_OP_OFFLOAD_MIN_BATCH": {
@@ -57,22 +57,22 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "74 mainline layer-split cells at 4.01, against 136 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "74 mainline layer-split cells at 4.01, against 138 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived"
     },
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
       "value": 57,
       "type": "u64",
       "doc": "mainline's host-resident MoE intermediates under tensor split, per batch token per unit of hidden size. Multiply by n_embd for the per-token figure.",
-      "evidence": "24 mainline tensor-split hybrid cells: laguna 62.7/unit, laguna 62.8/unit, qwen35moe 56.5/unit, qwen35moe 56.8/unit. Linear in batch \u2014 qwen35moe measures 28.3, 56.5, 113.0 and 226.1 MiB at ub 256, 512, 1024 and 2048, a constant rate. The same models under layer split show 0.02 MiB, so this belongs to the split mode rather than to the hybrid placement alone.",
+      "evidence": "27 mainline tensor-split hybrid cells: laguna 62.7/unit, laguna 62.8/unit, qwen35moe 56.5/unit, qwen35moe 56.8/unit. Linear in batch \u2014 qwen35moe measures 28.3, 56.5, 113.0 and 226.1 MiB at ub 256, 512, 1024 and 2048, a constant rate. The same models under layer split show 0.02 MiB, so this belongs to the split mode rather than to the hybrid placement alone.",
       "kind": "derived"
     },
     "MTP_COMPUTE_MIB": {
-      "value": 1700,
+      "value": 584,
       "type": "u64",
       "doc": "GPU compute buffer for a multi-token-prediction context, in MiB.",
-      "evidence": "UNDER REVIEW \u2014 originally calibrated against llama.cpp's own '[spec] estimated memory usage of MTP context' log line, which reports 708 MiB where the paired with/without cells show the driver reporting 2892 MiB more. The log line is not the cost. Pending a second data run.",
-      "kind": "review"
+      "evidence": "intercept of a slot fit across 2 models at a fixed context: Qwen3.6-27B-UD-Q5_K_ 531 + 461/slot (3.60x modelled KV); Qwen3.6-35B-A3B-UD-Q 356 + 228/slot (3.56x modelled KV). The larger intercept is taken so neither is under-reserved. Replaces a value fitted against llama.cpp's [spec] line, which reports the MTP context per *context* and is flat across slot counts while the real cost scales with them \u2014 so it is wrong in shape, not only in magnitude, and wrong exactly where production runs.",
+      "kind": "derived"
     },
     "MTP_HOST_BYTES_EMBEDDED": {
       "value": 234881024,
@@ -87,6 +87,13 @@
       "doc": "Host cost of a separate draft GGUF for multi-token prediction.",
       "evidence": "one model (gemma-4-31B-QAT) at two contexts. Under review \u2014 the paired with/without cells show the driver reporting a far larger delta than llama.cpp's own [spec] line, which is what the constant was originally fitted against. See FINDINGS.md.",
       "kind": "review"
+    },
+    "MTP_KV_SLOT_FACTOR_PERMILLE": {
+      "value": 3965,
+      "kind": "derived",
+      "evidence": "per-slot coefficient over the modelled KV term, across 2 models: Qwen3.6-27B-UD-Q5_K_ 531 + 461/slot (3.60x modelled KV); Qwen3.6-35B-A3B-UD-Q 356 + 228/slot (3.56x modelled KV). The larger is taken. Expressed per thousand so the constant stays an integer.",
+      "type": "u64",
+      "doc": "How much an MTP context's KV cache exceeds the modelled term, per thousand. The cache is allocated per slot and does not share a unified pool."
     },
     "NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR": {
       "value": 2,
@@ -267,7 +274,7 @@
       }
     ]
   },
-  "measurements": 497,
+  "measurements": 506,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -360,6 +367,6 @@
   },
   "mtp_slot_scaling": {
     "$comment": "Reported, not fitted. The MTP overhead measured at a fixed context across slot counts, which is what separates a genuine slot term from the longer context the first campaign confounded it with.",
-    "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB"
+    "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB, np4 2376 MiB; Qwen3.6-35B-A3B-UD-Q5_K_ ctx 32768: np1 584 MiB, np2 812 MiB, np4 1224 MiB"
   }
 }
