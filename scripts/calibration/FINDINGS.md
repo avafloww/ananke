@@ -514,6 +514,49 @@ are recorded per architecture as ratchets, and they are the clearest remaining
 argument for fitting the curves to this dataset rather than carrying inherited
 numbers.
 
+## The baseline's residual is structure, not noise
+
+The process baseline was reported as a per-model constant with a wide spread.
+That reading came from taking a median over each model's cells, which
+collapsed exactly the variance that mattered. Qwen3.6-27B's cells, broken out:
+
+| factor | effect on the measured baseline |
+|---|---|
+| `served` against idle | **+21 to +238 MiB** — allocation on first request |
+| `parallel` 1 -> 2 -> 4 | 590 -> 754 -> 1082 MiB on this model |
+| tensor against layer split | +180 MiB |
+
+Its cells span 278-1082 MiB with a standard deviation of 183. The "600 MiB
+baseline" was a median across configurations that differ by a factor of four.
+
+Neither effect is uniform enough to model as it stands. First-use allocation
+runs from -2 MiB on talkie to +238 on Qwen3.6-27B; the per-slot cost runs from
+-19 to +48 across models. But they are *structure*: the model has no term for
+either, so the residual gets attributed to a per-model constant that then has
+to be wide enough to absorb them.
+
+Qwen3.6-27B remains the largest outlier on both axes, and is the only
+non-hybrid model with an embedded MTP head — one point, so a term for it would
+be fitted to itself.
+
+## Over-reservation was mostly a measurement artifact
+
+Reported at up to 27x. The comparison was wrong in two ways: it took
+llama.cpp's `compute` column alone, omitting the `unaccounted` remainder a
+reservation must also cover, and it read that column from whichever device
+came first — which under tensor split is the fused `Meta()`, whose figures are
+not a per-device quantity at all.
+
+Comparing like with like, the real headroom is **1.9x to 3.2x**, which is
+about the 60% margin plus the batch-scaling constant the curve's form cannot
+express. The hybrids are no worse than anything else, which the artifact had
+also obscured — laguna and qwen35moe read as the two worst offenders at 20 and
+28x and are in fact 2.0 and 2.1.
+
+Counting the remainder also exposed two genuine under-reservations that the
+compute column alone had hidden, on Magidonia at ub 2048 and on deepseek4 at
+ctx 8192. Both are closed.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline

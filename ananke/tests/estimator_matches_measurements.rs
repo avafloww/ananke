@@ -333,12 +333,30 @@ impl Case {
             // masks are not replicated across devices.
             hybrid: factors.get("n_cpu_moe").is_some_and(|v| !v.is_null()),
             mtp: factors.get("spec_type").is_some_and(|v| !v.is_null()),
+            // Compute *plus* what llama.cpp cannot attribute, which is what a
+            // reservation has to cover, and only from a real device: under
+            // tensor split it reports one fused `Meta()` whose columns are not
+            // comparable to a per-device reservation. Comparing against them
+            // made the headroom read as 27x when it is nearer 1.5.
             device_compute_mib: parsed
                 .get("devices")
                 .and_then(Value::as_array)
-                .and_then(|d| d.first())
-                .and_then(|d| d.get("compute_mib"))
-                .and_then(Value::as_u64),
+                .and_then(|devices| {
+                    devices.iter().find(|d| {
+                        !d.get("device")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .starts_with("Meta")
+                    })
+                })
+                .and_then(|d| {
+                    Some(
+                        d.get("compute_mib")?.as_u64()?
+                            + d.get("unaccounted_mib")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0),
+                    )
+                }),
             split: match factors.get("split").and_then(Value::as_str) {
                 Some("tensor") => SplitMode::Tensor,
                 Some("row") => SplitMode::Row,
@@ -460,26 +478,32 @@ fn compute_buffer_covers_what_the_runtime_took() {
     }
     // How far *above* the measurement each curve sits, per architecture.
     //
-    // The curves are now fitted to this dataset rather than inherited, which
-    // roughly halved these — gemma3 from 13.3x to 7.7x, qwen35 17.3 to 8.3,
-    // llama 7.5 to 4.2. What remains is mostly the 40% margin and the
-    // batch-scaling constant the curve's form cannot carry, plus the hybrids
-    // (laguna, qwen35moe) whose per-device compute is far below the worst case
-    // their base must still cover.
+    // The curves are fitted to this dataset rather than inherited, and the
+    // comparison is now like with like: compute *plus* the unaccounted
+    // remainder, from a real device rather than the fused `Meta()` that tensor
+    // split reports. Both corrections mattered — against the fused device's
+    // compute column alone these read 20-28x, which was an artifact of
+    // comparing a per-device reservation against a figure that is not one.
+    //
+    // What is left is roughly the 60% margin plus the batch-scaling constant
+    // the curve's form cannot carry. The hybrids are no worse than the rest,
+    // which is the other thing the artifact had obscured.
     //
     // Over-reserving does not OOM, it refuses a model room it could have used,
     // so these are a ratchet: today's numbers, which may only come down.
     const CEILINGS: &[(&str, f64)] = &[
-        ("llama", 4.5),
-        ("deepseek4", 6.0),
-        ("talkie", 6.5),
-        ("gemma3", 8.0),
-        ("qwen35", 8.5),
-        ("gemma4", 9.5),
-        ("qwen3", 13.0),
-        ("lfm2", 18.0),
-        ("laguna", 20.0),
-        ("qwen35moe", 28.0),
+        ("talkie", 2.2),
+        ("lfm2", 2.2),
+        ("llama", 2.3),
+        ("laguna", 2.3),
+        ("qwen35moe", 2.4),
+        ("qwen35", 2.7),
+        ("gemma3", 2.9),
+        ("qwen3", 3.1),
+        ("gemma4", 3.2),
+        // The one real outlier, and the review item: its slope encodes context
+        // scaling the measurements do not show, so the gap widens with context.
+        ("deepseek4", 5.5),
     ];
     for (arch, headroom) in &over {
         let Some((_, ceiling)) = CEILINGS.iter().find(|(a, _)| a == arch) else {

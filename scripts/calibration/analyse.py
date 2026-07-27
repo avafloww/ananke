@@ -523,7 +523,7 @@ def _measured_at(record: dict) -> float:
 # a load where over-reserving only costs capacity, so the margin is generous.
 # It also absorbs the batch-scaling constant the curve's form cannot carry —
 # see the note in `derive_curve`.
-CURVE_MARGIN = 1.4
+CURVE_MARGIN = 1.6
 
 
 def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = ()):
