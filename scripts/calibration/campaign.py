@@ -1,16 +1,18 @@
 """Run the calibration campaign end to end, committing as it goes.
 
-Designed to be left unattended. Each phase generates its plan, measures every
-cell, and commits the resulting data before the next phase starts, so an
-interrupted campaign leaves committed work behind rather than an untracked
-pile — and a resumed one skips what is already recorded.
+Designed to be left unattended:
 
-    python campaign.py                       # every phase, in order
-    python campaign.py --phases phase4 phase5
-    python campaign.py --dry-run             # print the plan sizes and stop
+    python campaign.py                  # every cell, cheapest order
+    python campaign.py --dry-run        # print the schedule and stop
+    python campaign.py --only laguna    # cells whose label matches a substring
 
-Phases run cheapest-first on purpose: the screening phases decide which
-factors the expensive ones need to vary, and a failure early is cheap.
+The schedule is one flat list, not a series of passes. See `plan.all_cells`
+for why: the questions being asked are separate, but running the schedule once
+per question would reload every model once per question, and a reload of the
+205 GiB production quant costs more than all of its measurements put together.
+
+Work is committed as it completes rather than at the end, so an interrupted
+campaign leaves committed measurements behind and a resumed one skips them.
 """
 
 from __future__ import annotations
@@ -24,87 +26,99 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 DATA = HERE / "data"
-ORDER = ["phase0", "phase1", "phase2", "phase2b", "phase3", "phase4", "phase5"]
+OUT = DATA / "measurements.ndjson"
+PLAN = DATA / "plan.json"
 
-# Host memory to leave free per phase. The holdout phase runs the production
-# hybrids, whose whole point is that they nearly fill the machine, so it gets
-# a smaller margin — still enough that the kernel is not pushed into reclaim,
-# but not so much that the phase skips the models it exists to validate.
-HEADROOM_GIB = {"phase5": 10.0}
-DEFAULT_HEADROOM_GIB = 30.0
+# Host memory to leave free. The largest models exist to nearly fill the
+# machine, and the harness is the only thing running, so a wide margin buys
+# nothing and silently skips the cells that matter most.
+HEADROOM_GIB = 12.0
+
+# How often to commit. Frequent enough that an interruption loses minutes
+# rather than hours; rare enough that the history stays readable.
+COMMIT_EVERY_SECONDS = 900
 
 
 def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=HERE.parents[1], text=True, **kw)
 
 
-def commit(paths: list[Path], message: str) -> None:
-    """Commit the phase's data, tolerating there being nothing new to commit."""
-    run(["git", "add", "--"] + [str(p) for p in paths])
-    staged = run(["git", "diff", "--cached", "--quiet", "--"] +
-                 [str(p) for p in paths])
-    if staged.returncode == 0:
-        print("    (nothing new to commit)", flush=True)
+def commit(message: str) -> None:
+    """Commit whatever has been measured, tolerating nothing new."""
+    paths = [str(OUT), str(PLAN), str(DATA / "logs")]
+    run(["git", "add", "--"] + paths)
+    if run(["git", "diff", "--cached", "--quiet", "--"] + paths).returncode == 0:
         return
     result = run(["git", "commit", "-m", message], capture_output=True)
     if result.returncode != 0:
-        # Signing can fail if the agent's key is gone. Say so loudly and keep
-        # measuring: the data is on disk either way, and losing the rest of an
-        # overnight campaign to a commit failure would be the worse outcome.
-        print(f"    COMMIT FAILED (data is still on disk): "
-              f"{result.stderr.strip().splitlines()[:1]}", flush=True)
+        # Signing can fail if the key is gone. Say so and keep measuring: the
+        # data is on disk either way, and losing the rest of an overnight run
+        # to a commit failure would be the worse outcome.
+        head = result.stderr.strip().splitlines()[:1]
+        print(f"    COMMIT FAILED (data is still on disk): {head}", flush=True)
         return
-    print(f"    committed {message.splitlines()[0]}", flush=True)
+    print(f"    committed: {message.splitlines()[0]}", flush=True)
 
 
-def phase(name: str, headroom: float, load_timeout: int) -> None:
-    plan_path = DATA / f"{name}-plan.json"
-    out_path = DATA / f"{name}.ndjson"
-    plan = run([sys.executable, str(HERE / "plan.py"), name], capture_output=True)
-    if plan.returncode != 0:
-        print(f"  {name}: plan generation failed: {plan.stderr}", flush=True)
-        return
-    plan_path.parent.mkdir(parents=True, exist_ok=True)
-    plan_path.write_text(plan.stdout)
-    cells = len(json.loads(plan.stdout))
-
-    print(f"\n=== {name}: {cells} cells, {headroom:.0f} GiB headroom ===", flush=True)
-    started = time.monotonic()
-    run([sys.executable, str(HERE / "measure.py"), "--out", str(out_path),
-         "--plan", str(plan_path), "--headroom-gib", str(headroom),
-         "--load-timeout", str(load_timeout)])
-    minutes = (time.monotonic() - started) / 60
-
-    done = sum(1 for line in out_path.read_text().splitlines() if line.strip()) \
-        if out_path.exists() else 0
-    commit([out_path, plan_path],
-           f"data(calibration): {name} measurements\n\n"
-           f"{done} records over {cells} planned cells, {minutes:.0f} minutes on "
-           f"this machine. Generated by scripts/calibration/plan.py and measured "
-           f"by measure.py; see the phase's docstring in plan.py for what it "
-           f"covers and why.")
+def measured() -> int:
+    if not OUT.exists():
+        return 0
+    return sum(1 for line in OUT.read_text().splitlines()
+               if line.strip() and json.loads(line).get("status") == "ok")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--phases", nargs="+", default=ORDER, choices=ORDER)
+    parser.add_argument("--only", help="substring filter on the cell label")
     parser.add_argument("--load-timeout", type=int, default=2400,
                         help="seconds to wait for a model to load; a 200 GiB "
                              "--no-mmap load takes minutes")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
+    plan = run([sys.executable, str(HERE / "plan.py"), "all"], capture_output=True)
+    if plan.returncode != 0:
+        print(f"plan generation failed: {plan.stderr}", flush=True)
+        return 1
+    cells = json.loads(plan.stdout)
+    if args.only:
+        cells = [c for c in cells if args.only in c["label"]]
+
     if args.dry_run:
-        for name in args.phases:
-            plan = run([sys.executable, str(HERE / "plan.py"), name],
-                       capture_output=True)
-            print(f"{name}: {len(json.loads(plan.stdout))} cells")
+        print(f"{len(cells)} cells")
+        for cell in cells:
+            print(f"  {cell['label']}")
         return 0
 
-    for name in args.phases:
-        phase(name, HEADROOM_GIB.get(name, DEFAULT_HEADROOM_GIB), args.load_timeout)
+    DATA.mkdir(parents=True, exist_ok=True)
+    PLAN.write_text(json.dumps(cells, indent=2))
+    started = measured()
+    print(f"{len(cells)} cells planned, {started} already measured", flush=True)
 
-    print("\ncampaign complete", flush=True)
+    # measure.py owns the loop so it can resume and skip; this process exists
+    # to commit alongside it, which it cannot do for itself without coupling
+    # measurement to version control.
+    process = subprocess.Popen(
+        [sys.executable, str(HERE / "measure.py"), "--out", str(OUT),
+         "--plan", str(PLAN), "--headroom-gib", str(HEADROOM_GIB),
+         "--load-timeout", str(args.load_timeout)],
+        cwd=HERE.parents[1])
+    last = time.monotonic()
+    while process.poll() is None:
+        time.sleep(30)
+        if time.monotonic() - last >= COMMIT_EVERY_SECONDS:
+            commit(f"data(calibration): {measured()} measurements\n\n"
+                   f"Generated by scripts/calibration/plan.py and measured by "
+                   f"measure.py on this machine; see the README for what each "
+                   f"cell answers and each record's hardware block for where "
+                   f"it was taken.")
+            last = time.monotonic()
+
+    done = measured()
+    commit(f"data(calibration): {done} measurements, campaign complete\n\n"
+           f"{done} of {len(cells)} planned cells measured. Generated by "
+           f"scripts/calibration/plan.py and measured by measure.py.")
+    print(f"\ncampaign finished: {done}/{len(cells)} measured", flush=True)
     return 0
 
 

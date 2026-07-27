@@ -12,6 +12,7 @@ library.
 from __future__ import annotations
 
 import argparse
+import re
 import dataclasses
 import json
 import os
@@ -41,6 +42,35 @@ class Model:
     `LLAMA_SPLIT_MODE_TENSOR` for `deepseek4` outright, at load. Planning
     cells that cannot load wastes the slot and buries the real failures.
     """
+    extra: tuple[str, ...] = ()
+    """Flags the architecture needs to run the way production runs it.
+
+    glm52 is served with `-mla 1 -dsa -amb 512`; without them ik takes a
+    different attention path entirely, so a cell that omits them measures
+    something the operator never runs — and `glm-dsa`'s curve is calibrated
+    against the DSA path specifically.
+    """
+    kv_types: tuple[str, ...] = ("f16", "q8_0")
+    """KV cache types the model can actually be served with.
+
+    `-dsa` rejects a quantised cache, so sweeping q8_0 on glm52 plans eight
+    cells that cannot load.
+    """
+    gpus: tuple[str, ...] = ("0", "0,1")
+    """Card counts worth measuring. A 350M embedding model does not need two,
+    and spreading it changes the very baseline the cell exists to isolate."""
+    max_ctx: int | None = None
+    """Native context, where it is below the sweep's range.
+
+    talkie tops out at 2048. Requesting more does not fail — llama.cpp runs
+    past `n_ctx_train` with a warning — it just makes every point on the curve
+    an extrapolation from a regime the model was never trained for, which is
+    not a calibration.
+    """
+    embeddings: bool = False
+    """Whether the model is served with `--embeddings` and has no generation."""
+    threads: int | None = None
+    no_mmap: bool = False
     n_cpu_moe: int | None = None
     n_cpu_moe_1gpu: int | None = None
     """Expert layers to keep on the CPU when only one card is visible.
@@ -78,9 +108,32 @@ MODELS = {
               note="MoE + MLA + NSA indexer, 43L; mainline rejects tensor split"),
         Model("glm52", "muzzy/GLM-5.2-GGUF/IQ2_KS/GLM-5.2-smol-IQ2_KS-00001-of-00033.gguf",
               ("ik",), n_cpu_moe=92, n_cpu_moe_1gpu=96,
+              extra=("-mla", "1", "-dsa", "-amb", "512"), kv_types=("f16",),
+              threads=24, no_mmap=True,
               note="MoE + MLA + DSA, 79L — the production quant"),
+        # Every remaining llama.cpp service in the operator's config. These
+        # were absent from the registry while being served in production
+        # daily, which meant the campaign's "holdout" covered under half of
+        # what the daemon actually runs.
+        Model("gemma3-glitter-27b", "mradermacher/Gemma-3-Glitter-27B-i1-GGUF/Gemma-3-Glitter-27B.i1-Q5_K_M.gguf",
+              ("mainline",), note="gemma3, 62L — a second layer count for the baseline fit"),
+        Model("gemma4-31b", "unsloth/gemma-4-31B-it-GGUF/gemma-4-31B-it-UD-Q4_K_XL.gguf",
+              ("mainline",), mmproj="unsloth/gemma-4-31B-it-GGUF/mmproj-F16.gguf",
+              note="gemma4 dense, the non-QAT sibling"),
+        Model("gemma4-26b-a4b", "unsloth/gemma-4-26B-A4B-it-GGUF/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf",
+              ("mainline",), mmproj="unsloth/gemma-4-26B-A4B-it-GGUF/mmproj-F16.gguf",
+              note="gemma4 MoE, 30L"),
+        Model("gemma4-e4b", "unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-UD-Q5_K_XL.gguf",
+              ("mainline",), mmproj="unsloth/gemma-4-E4B-it-GGUF/mmproj-F16.gguf",
+              note="gemma4 E-variant, 42L — the 1100/7 curve"),
+        Model("magidonia-24b", "bartowski/TheDrummer_Magidonia-24B-v4.3-GGUF/TheDrummer_Magidonia-24B-v4.3-Q5_K_M.gguf",
+              ("mainline", "ik"), note="llama arch, 40L — the llama-family default curve"),
+        Model("talkie-13b", "mradermacher/talkie-1930-13b-it-hf-GGUF/talkie-1930-13b-it-hf.Q6_K.gguf",
+              ("mainline",), max_ctx=2048,
+              note="talkie arch, 40L, full MHA; native context 2048"),
         Model("lfm2-embed", "LiquidAI/LFM2.5-Embedding-350M-GGUF/LFM2.5-Embedding-350M-Q8_0.gguf",
-              ("mainline",), note="embedding modality"),
+              ("mainline",), embeddings=True, gpus=("0",),
+              note="embedding modality; 128k native context"),
     ]
 }
 
@@ -128,17 +181,32 @@ def _significant(model: Model, runtime: str = "mainline", **over) -> list[Cell]:
     ones affordable.
     """
     cells = []
-    for gpus, split, kv, served in product(["0", "0,1"], model.splits,
-                                           ["f16", "q8_0"], [True, False]):
+    for gpus, split, kv, served in product(model.gpus, model.splits,
+                                           model.kv_types, [True, False]):
         cells.append(Cell(
             label=f"{model.key}-{runtime}-{gpus.replace(',', '')}-{split}-{kv}-"
                   f"{'srv' if served else 'idle'}",
             model=path_of(model.path), runtime=runtime, gpus=gpus, split=split,
-            kv_type=kv, served=served,
-            n_cpu_moe=(model.n_cpu_moe_1gpu or model.n_cpu_moe)
-            if gpus == "0" else model.n_cpu_moe, **over,
+            kv_type=kv, served=served, **_model_flags(model, gpus),
+            **({"ctx": model.max_ctx} if model.max_ctx else {}), **over,
         ))
     return cells
+
+
+def _model_flags(model: Model, gpus: str) -> dict:
+    """The per-model settings every phase has to carry, in one place.
+
+    Scattering these across the phase functions is how glm52 came to be
+    planned without the DSA flags it is always served with.
+    """
+    return {
+        "extra": model.extra,
+        "embeddings": model.embeddings,
+        "threads": model.threads,
+        "no_mmap": model.no_mmap,
+        "n_cpu_moe": (model.n_cpu_moe_1gpu or model.n_cpu_moe)
+        if gpus == "0" else model.n_cpu_moe,
+    }
 
 
 def phase2_models() -> list[Cell]:
@@ -149,9 +217,8 @@ def phase2_models() -> list[Cell]:
     shape and generalised — which is the mistake this campaign exists to stop
     repeating.
     """
-    keys = ["qwen3-4b", "qwen36-27b", "gemma3-27b", "gemma4-31b-qat",
-            "qwen36-35b-a3b", "laguna", "dsv4f"]
-    return [c for k in keys for c in _significant(MODELS[k])]
+    return [c for m in MODELS.values() if "mainline" in m.runtimes
+            for c in _significant(m)]
 
 
 def phase3_fork() -> list[Cell]:
@@ -176,19 +243,22 @@ def phase2b_curves() -> list[Cell]:
     `NO_FLASH_ATTN_BYTES_PER_TOKEN`, which no cell has ever exercised.
     """
     cells: list[Cell] = []
-    keys = ["qwen3-4b", "qwen36-27b", "gemma3-27b", "gemma4-31b-qat",
-            "qwen36-35b-a3b", "laguna", "dsv4f"]
-    for key in keys:
-        model = MODELS[key]
+    for model in MODELS.values():
+        # A model that needs one card keeps one: spreading a 350M embedding
+        # model across two changes the baseline the curve is fitted against.
+        gpus = "0,1" if "0,1" in model.gpus else "0"
         for runtime in model.runtimes:
-            for ctx, ubatch, fa in [(8192, 512, "on"), (32768, 512, "on"),
-                                    (65536, 512, "on"), (32768, 2048, "on"),
-                                    (32768, 512, "off")]:
+            for ctx, ubatch, fa in _curve_points(model):
+                # Flash attention is a KV-cache property; `-dsa` rejects a
+                # quantised cache and the fa-off point is not meaningful for a
+                # model that must run with it on.
+                if fa == "off" and model.kv_types == ("f16",) and model.extra:
+                    continue
                 cells.append(Cell(
                     label=f"curve-{model.key}-{runtime}-c{ctx}-ub{ubatch}-fa{fa}",
-                    model=path_of(model.path), runtime=runtime, gpus="0,1",
+                    model=path_of(model.path), runtime=runtime, gpus=gpus,
                     split="layer", ctx=ctx, ubatch=ubatch, flash_attn=fa,
-                    n_cpu_moe=model.n_cpu_moe))
+                    **_model_flags(model, gpus)))
     return cells
 
 
@@ -205,14 +275,23 @@ def phase4_special() -> list[Cell]:
     q27 = MODELS["qwen36-27b"]
     # MTP: none, embedded head, separate draft GGUF. The estimator charges a
     # different constant for each and has one measurement apiece.
+    # Two contexts and a production-shaped slot configuration, not one point.
+    # The constants these cells justify were calibrated at ctx 240000 with
+    # `-np 4 --kv-unified` (the separate-draft shape) and at ctx 32768 with
+    # `-np 2` (the embedded shape); a single small-context point can neither
+    # reproduce those nor test the claim that the separate draft's cost does
+    # not scale with context.
     for label, model, spec, draft in [
         ("mtp-none-g4", g4, None, None),
         ("mtp-draft-g4", g4, "draft-mtp", path_of(g4.draft)),
         ("mtp-none-q27", q27, None, None),
         ("mtp-embedded-q27", q27, "draft-mtp", None),
     ]:
-        cells.append(Cell(label=label, model=path_of(model.path), gpus="0,1",
-                          split="tensor", ctx=32768, spec_type=spec, draft=draft))
+        for ctx, parallel, unified in [(32768, 1, False), (131072, 4, True)]:
+            cells.append(Cell(label=f"{label}-c{ctx}-np{parallel}",
+                              model=path_of(model.path), gpus="0,1",
+                              split="tensor", ctx=ctx, parallel=parallel,
+                              kv_unified=unified, spec_type=spec, draft=draft))
     # The vision projector, which was worth ~3 MiB in one observation.
     for label, mmproj in [("mmproj-off", None), ("mmproj-on", path_of(g4.mmproj))]:
         cells.append(Cell(label=f"{label}-g4", model=path_of(g4.path), gpus="0,1",
@@ -251,14 +330,46 @@ def phase4_special() -> list[Cell]:
     # ~3 tok/s would spend an hour on 40 turns, and growth that only appears
     # after 40 turns but not 12 is not a shape this campaign can resolve
     # anyway.
-    for key, turns in [("qwen36-27b", 40), ("gemma4-31b-qat", 24),
-                       ("qwen36-35b-a3b", 24), ("laguna", 12), ("dsv4f", 8)]:
-        model = MODELS[key]
+    for model in MODELS.values():
+        if model.key == "qwen3-4b":
+            continue  # already covered by the cram pair above
+        gpus = "0,1" if "0,1" in model.gpus else "0"
         cells.append(Cell(label=f"growth-{model.key}", model=path_of(model.path),
-                          runtime=model.runtimes[0], gpus="0,1", split="layer",
-                          ctx=32768, cram=0, n_cpu_moe=model.n_cpu_moe,
-                          bench=True, bench_turns=turns, verbose_log=False))
+                          runtime=model.runtimes[0], gpus=gpus, split="layer",
+                          ctx=32768, cram=0, bench=True,
+                          bench_turns=GROWTH_TURNS, verbose_log=False,
+                          **_model_flags(model, gpus)))
     return cells
+
+
+def _curve_points(model: Model) -> list[tuple[int, int, str]]:
+    """The (context, ubatch, flash-attn) points a model's curve is fitted on.
+
+    Three contexts to check the fit is linear rather than merely fitted, one
+    larger batch for the terms that scale with it, and one flash-attention-off
+    point. A model whose native context is below the standard sweep gets the
+    same shape scaled into its own range instead of being pushed past it.
+    """
+    if model.max_ctx and model.max_ctx < 65536:
+        top = model.max_ctx
+        contexts = [max(512, top // 4), max(1024, top // 2), top]
+    else:
+        contexts = [8192, 32768, 65536]
+    mid = contexts[1]
+    points = [(c, 512, "on") for c in contexts]
+    points.append((mid, 2048, "on"))
+    points.append((mid, 512, "off"))
+    return points
+
+
+GROWTH_TURNS = 40
+"""Turns every growth cell runs, held constant across models.
+
+Growth as a function of turn count only means anything if the turn count is
+the same everywhere. Scaling it down for slow models — which is tempting,
+since a hybrid at ~3 tok/s spends over an hour here — makes the resulting
+curves incomparable, which defeats the measurement.
+"""
 
 
 def phase5_holdout() -> list[Cell]:
@@ -296,22 +407,91 @@ def phase5_holdout() -> list[Cell]:
     ]
 
 
-PHASES = {
-    "phase0": phase0_noise,
-    "phase1": phase1_factorial,
-    "phase2": phase2_models,
-    "phase3": phase3_fork,
-    "phase2b": phase2b_curves,
-    "phase4": phase4_special,
-    "phase5": phase5_holdout,
+def all_cells() -> list[Cell]:
+    """Every configuration worth measuring, once each, in the cheapest order.
+
+    The questions are separate — a noise floor, a per-model baseline, a
+    context curve, a fork comparison, growth — but they are not separate
+    *schedules*. Running them as separate passes reloads each model once per
+    question, and a reload is the single most expensive thing here: the 205
+    GiB production quant cannot even stay in the page cache alongside
+    anything else, so every revisit pays full disk cost again.
+
+    So the questions become tags and the schedule becomes one list, ordered so
+    consecutive cells disturb as little as possible: all of a model's work
+    happens while its weights are hot, and models run smallest first, because
+    the largest evicts everything behind it on the way past.
+    """
+    seen: dict[str, Cell] = {}
+    for name, build in QUESTIONS.items():
+        for cell in build():
+            existing = seen.get(cell.cell_id)
+            if existing is None:
+                seen[cell.cell_id] = dataclasses.replace(cell, purpose=(name,))
+            elif name not in existing.purpose:
+                seen[cell.cell_id] = dataclasses.replace(
+                    existing, purpose=existing.purpose + (name,))
+    return sorted(seen.values(), key=_disturbance)
+
+
+def _disturbance(cell: Cell) -> tuple:
+    """Sort key: what it costs to move from one cell to the next.
+
+    Changing the model is the expensive move, so it is the outermost key and
+    models are ordered by size. Everything below it — runtime, then the load
+    path, then placement, then the cache and batch knobs — is progressively
+    cheaper to vary while the same weights stay resident.
+    """
+    return (
+        _model_size(cell.model),
+        cell.model,
+        cell.runtime,
+        cell.no_mmap, cell.rtr, cell.thp,
+        cell.gpus, cell.split or "", cell.ngl,
+        cell.spec_type or "", cell.draft or "", cell.mmproj or "",
+        cell.ctx, cell.ubatch, cell.parallel, cell.kv_type,
+        cell.flash_attn, not cell.served, cell.bench,
+    )
+
+
+_SIZE_CACHE: dict[str, int] = {}
+
+
+def _model_size(path: str | None) -> int:
+    """Total bytes across a model's shards, cached; unreadable sorts last."""
+    if not path:
+        return 0
+    if path not in _SIZE_CACHE:
+        first = Path(path)
+        if not first.exists():
+            _SIZE_CACHE[path] = 1 << 62
+        else:
+            stem = re.sub(r"-\d{5}-of-\d{5}\.gguf$", "", first.name)
+            shards = ([first] if stem == first.name
+                      else sorted(first.parent.glob(f"{stem}-*-of-*.gguf")))
+            _SIZE_CACHE[path] = sum(s.stat().st_size for s in shards)
+    return _SIZE_CACHE[path]
+
+
+# What each cell is for. These are questions, not a schedule — `all_cells`
+# merges them into one ordered run, and a cell wanted by two questions is
+# measured once and tagged with both.
+QUESTIONS = {
+    "noise": phase0_noise,
+    "factor-screen": phase1_factorial,
+    "model-baseline": phase2_models,
+    "curves": phase2b_curves,
+    "fork": phase3_fork,
+    "switches": phase4_special,
+    "holdout": phase5_holdout,
 }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("phase", choices=sorted(PHASES))
+    parser.add_argument("phase", choices=sorted(QUESTIONS) + ["all"])
     args = parser.parse_args()
-    cells = PHASES[args.phase]()
+    cells = (all_cells() if args.phase == "all" else QUESTIONS[args.phase]())
     json.dump([{k: v for k, v in dataclasses.asdict(c).items()} for c in cells],
               sys.stdout, indent=1, default=list)
     return 0

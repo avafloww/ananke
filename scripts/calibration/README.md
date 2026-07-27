@@ -12,32 +12,44 @@ without re-deriving the method.
 ## Running it
 
 ```sh
-python campaign.py                      # every phase, in order, committing as it goes
-python campaign.py --phases phase4      # one phase
-python campaign.py --dry-run            # cell counts only
-python measure.py --out data/mine.ndjson --plan myplan.json   # ad hoc
+python campaign.py                  # every cell, cheapest order, committing as it goes
+python campaign.py --dry-run        # print the schedule and stop
+python campaign.py --only laguna    # cells whose label matches a substring
+python progress.py --watch          # how far it has got
 ```
 
-The campaign is meant to be left alone for hours. It commits each phase's data
-before starting the next, skips cells that will not fit in memory, and resumes
-where it stopped — a rerun re-measures only what did not complete.
+The campaign is meant to be left alone for hours. It commits every fifteen
+minutes, skips cells that will not fit in memory, and resumes where it
+stopped — a rerun re-measures only what did not complete.
 
 **Nothing else may use the GPUs while it runs.** A second process changes both
 the free-memory figures and the timings.
 
-## What the phases are for
+## Questions, and why they are not a schedule
 
-| phase | asks |
+Each cell is tagged with the questions it answers:
+
+| tag | asks |
 |---|---|
-| `phase0` | the noise floor — repeat one cell, so a later difference is known to be signal |
-| `phase1` | which factors move the host baseline at all, on the cheapest model |
-| `phase2` | whether the per-model term follows layers, hidden size, or nothing — seven models |
-| `phase2b` | the slopes: two contexts, two batch sizes, flash attention on and off |
-| `phase3` | the same on ik_llama, which sizes its graph by different rules |
-| `phase4` | terms with a switch rather than a curve — MTP, mmproj, offload regimes, `-rtr`, huge pages, embeddings, growth under an agent workload |
-| `phase5` | the operator's real service configurations, **held out of every fit** |
+| `noise` | the noise floor — repeat one cell, so a later difference is known to be signal |
+| `factor-screen` | which factors move the host baseline at all, on the cheapest model |
+| `model-baseline` | whether the per-model term follows layers, hidden size, or nothing |
+| `curves` | the slopes: three contexts, two batch sizes, flash attention on and off |
+| `fork` | the same on ik_llama, which sizes its graph by different rules |
+| `switches` | terms with a switch rather than a curve — MTP, mmproj, offload regimes, `-rtr`, huge pages, embeddings, and growth under an agent workload |
+| `holdout` | the operator's real service configurations, **held out of every fit** |
 
-Phase 5 is the honesty check. Everything else is in-sample.
+`holdout` is the honesty check. Everything else is in-sample.
+
+These are tags, not passes. Running one pass per question would reload every
+model once per question, and reloading is the expensive move here — the 205
+GiB production quant cannot share the page cache with anything else, so each
+revisit pays full disk cost. `plan.all_cells` merges every question into a
+single list ordered so that consecutive cells disturb as little as possible:
+all of a model's work happens while its weights are hot, and models run
+smallest first, because the largest evicts everything behind it on the way
+past. A configuration wanted by two questions is measured once and tagged
+with both.
 
 ## Contributing measurements from another machine
 
@@ -66,8 +78,10 @@ later rerun retries it.
 
 ## The record format
 
-One NDJSON object per measurement, in `data/<phase>.ndjson`, with the load log
-kept gzipped alongside in `data/logs/`.
+One NDJSON object per measurement, in `data/measurements.ndjson`, with the
+load log kept gzipped alongside in `data/logs/`. Records from earlier,
+narrower schemas are kept in `data/legacy/` rather than merged, since they
+lack fields the current ones carry.
 
 - `schema` — bump it in `measure.py` whenever the shape changes. `1` was flat
   CSV-era rows; `2` added nesting, hardware, and traces; `3` added the generic
@@ -81,6 +95,10 @@ kept gzipped alongside in `data/logs/`.
 - `rss` — `/proc` at the peak, sampled on ananke's own two-second cadence,
   plus the final reading, the growth since spawn, and per-process VRAM.
 - `trace` — every sample, each with an absolute timestamp.
+- `checkpoints` — for growth cells, one entry per turn: generated tokens, KV
+  depth, and memory read immediately after, so growth is fittable against
+  tokens rather than against the clock.
+- `factors.purpose` — which questions wanted this cell.
 - `log` — the gzipped log's filename, so anything these parsers missed is
   still recoverable.
 
@@ -98,6 +116,21 @@ kept gzipped alongside in `data/logs/`.
   take the arena from the matching non-growth cell.
 - **Check the CPU governor.** `powersave` on `acpi-cpufreq` halves CPU-bound
   throughput; it is recorded in `hardware` for exactly this reason.
+
+## Architectures this campaign cannot calibrate
+
+`compute_buffer.rs` carries tuning curves for nineteen architectures. The
+model library reaches nine of them. These eleven have **no model here at all**,
+so their curves are inherited from whoever first fitted them and are not
+re-derivable from this dataset:
+
+`deepseek2`, `gemma2`, `glm4moe`, `gpt-oss`, `jamba`, `llama4`, `mamba`,
+`mixtral`, `qwen3moe`, `qwen3vlmoe`, `talkie`
+
+Fixing this means adding models, not rearranging phases — a VL-MoE quant for
+`qwen3vlmoe`, a Mamba or Jamba model for the recurrent curves, and so on. Any
+claim that this campaign validates the estimator applies to the nine measured
+architectures and not to these.
 
 ## What this does not cover
 

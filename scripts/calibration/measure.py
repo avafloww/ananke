@@ -68,6 +68,14 @@ class Cell:
 
     label: str
     model: str
+    purpose: tuple[str, ...] = ()
+    """What questions this configuration answers.
+
+    Several questions want the same process measured — the per-model baseline
+    and the context curve overlap at their shared point, for instance. Purpose
+    is a tag rather than a schedule: it does not take part in the cell's
+    identity, so one measurement serves every question that asked for it.
+    """
     runtime: str = "mainline"
     gpus: str = "0"
     ctx: int = 32768
@@ -128,8 +136,17 @@ class Cell:
 
     @property
     def cell_id(self) -> str:
-        """Stable identity, so a rerun skips what has already been measured."""
-        payload = json.dumps(dataclasses.asdict(self), sort_keys=True, default=str)
+        """Stable identity, so a rerun skips what has already been measured.
+
+        The label and the purpose tags are deliberately excluded: they name
+        the cell and say why it was wanted, but two cells with the same flags
+        are the same measurement whatever they are called, and measuring one
+        configuration twice under two names is pure waste.
+        """
+        fields = dataclasses.asdict(self)
+        fields.pop("label", None)
+        fields.pop("purpose", None)
+        payload = json.dumps(fields, sort_keys=True, default=str)
         return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
     def argv(self, binary: str, port: int) -> list[str]:
@@ -349,9 +366,11 @@ class RssSampler:
         while not self._stop.is_set():
             try:
                 sample = read_rss(self.pid)
-                gpu = read_gpu_mib(self.pid)
-                if gpu is not None:
-                    sample["gpu_used_mib"] = gpu
+                per_device = read_gpu_per_device(self.pid)
+                if per_device:
+                    sample["gpu_used_mib"] = sum(per_device.values())
+                    for index, mib in per_device.items():
+                        sample[f"gpu{index}_used_mib"] = mib
             except (FileNotFoundError, ProcessLookupError, ValueError):
                 return  # The process exited; the trace so far still stands.
             self.trace.append({
@@ -375,28 +394,53 @@ class RssSampler:
 
 
 def read_gpu_mib(pid: int) -> int | None:
-    """Per-process VRAM as the driver reports it.
+    """Total per-process VRAM as the driver reports it."""
+    per_device = read_gpu_per_device(pid)
+    return sum(per_device.values()) if per_device else None
+
+
+def read_gpu_per_device(pid: int) -> dict[int, int]:
+    """Per-process VRAM, split by card.
 
     llama.cpp's own breakdown attributes what it allocated; the driver counts
-    the CUDA context and everything else besides. The GPU compute-buffer bases
-    in `estimator/compute_buffer.rs` are defined against *this* number, so
-    without it those constants cannot be re-derived from a record.
+    the CUDA context and everything else besides, and the GPU compute-buffer
+    bases in `estimator/compute_buffer.rs` are defined against the driver's
+    figure. ik_llama does not print mainline's breakdown table at all, so for
+    every ik cell this is the *only* per-device source — summing the cards
+    would leave the fork's placement unmeasurable.
     """
     try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-compute-apps=pid,used_memory",
+        apps = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,gpu_uuid,used_memory",
              "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.SubprocessError):
-        return None
-    total = 0
-    found = False
+        return {}
+    index_of = _gpu_index_by_uuid()
+    used: dict[int, int] = {}
+    for line in apps.stdout.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) == 3 and parts[0].isdigit() and int(parts[0]) == pid:
+            index = index_of.get(parts[1])
+            if index is not None:
+                used[index] = used.get(index, 0) + int(parts[2])
+    return used
+
+
+def _gpu_index_by_uuid() -> dict[str, int]:
+    """Map each card's UUID to its index; the app query reports only UUIDs."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    mapping = {}
     for line in out.stdout.splitlines():
         parts = [p.strip() for p in line.split(",")]
-        if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) == pid:
-            total += int(parts[1])
-            found = True
-    return total if found else None
+        if len(parts) == 2 and parts[0].isdigit():
+            mapping[parts[1]] = int(parts[0])
+    return mapping
 
 
 def read_rss(pid: int) -> dict[str, int]:
@@ -672,9 +716,11 @@ def run_growth(cell: Cell, port: int, pid: int) -> list[dict[str, object]]:
                                + int(usage.get("completion_tokens", 0)),
             **rss,
         }
-        gpu = read_gpu_mib(pid)
-        if gpu is not None:
-            checkpoint["gpu_used_mib"] = gpu
+        per_device = read_gpu_per_device(pid)
+        if per_device:
+            checkpoint["gpu_used_mib"] = sum(per_device.values())
+            for index, mib in per_device.items():
+                checkpoint[f"gpu{index}_used_mib"] = mib
         checkpoints.append(checkpoint)
         # Stop before the context wraps: past that point the server evicts and
         # the footprint stops being a function of what was generated.
