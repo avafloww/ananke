@@ -143,6 +143,13 @@ fn generate_tuning_constants() {
     ));
     out.push_str(&generate_rate_table(
         &parsed,
+        "no_flash_attn_rates",
+        "NO_FLASH_ATTN_RATES",
+        "NO_FLASH_ATTN_RATE_DEFAULT",
+        "Extra pinned bytes per batch token when flash attention is off, by\n/// architecture and variant. Flat in context, proportional to batch.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
         "quantised_cache_rates",
         "QUANTISED_CACHE_RATES",
         "QUANTISED_CACHE_RATE_DEFAULT",

@@ -805,18 +805,40 @@ carry a separate `output.weight` and step 273 and 17, while gemma-3-27B and
 Qwen3-4B both tie and step 12 and 7. The mechanism is still unidentified; what
 is established is its shape, its bound, and its trigger.
 
-## Flash attention off is unmodelled everywhere
+## Flash attention off is a per-token rate, not a baseline shift
 
-It surfaced three times independently and is one gap, not three: it shifts the
-host baseline by 30-254 MiB inconsistently, it is excluded from every
-derivation for that reason, and it is now the sole cause of the largest
-remaining compute over-reservation — deepseek4's worst cell reserves 12066 MiB
-against 2435 measured, where the same configuration with flash attention on
-sits at 2.4x like everything else.
+It was recorded as a baseline effect — "30 to 254 MiB, inconsistently" — on a
+dataset where seventeen of nineteen cells sat at one context and one batch. A
+sweep across both axes shows it is neither inconsistent nor a baseline term:
+the process baseline does not move at all (gemma-3-27B holds 289, 290, 289 MiB
+of anonymous memory at ctx 8192, 32768, and 131072 with flash attention off),
+and the whole effect is in the pinned arena.
 
-Nothing here fits a no-flash-attention multiplier. The estimator over-reserves
-in that regime rather than guessing, which is the safe direction, and the
-production configurations all run with it on.
+The residual over the modelled arena is **flat in context and proportional to
+batch tokens**. gemma-3-27B is 64 MiB over at all three contexts and 256 MiB
+over at ubatch 2048 in each of them — 128 KiB per batch token either way. So
+it is a per-token rate, the same shape as the quantised-cache rate, and it
+lands on near-exact powers of two:
+
+| | KiB per batch token |
+|---|---|
+| gemma4 (dense) | 256 |
+| talkie | 160 |
+| gemma3, gemma4+moe | 128 |
+| gemma4+e | 106 |
+| llama, qwen3, qwen35 | 32 |
+| lfm2 | 4 |
+| ik_llama, any architecture | 0 |
+
+ik is excluded and charged nothing: its fa-off arena is already modelled to
+within a megabyte, because it sizes masks against the whole cache and the
+widened four-byte element is the entire story there.
+
+The single 8 KiB constant this replaces was chosen as "a representative value
+rather than a law", and its own evidence noted the non-uniformity (4.25x on
+non-SWA models against 4.8-4.9x on sliding-window ones). That reading was
+correct; what it lacked was the second axis that turns the non-uniformity into
+a per-architecture rate.
 
 ## Open
 

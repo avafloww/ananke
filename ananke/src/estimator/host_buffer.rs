@@ -73,7 +73,7 @@ use crate::{
         tuning::{
             DEFAULT_UBATCH, GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN, IK_OP_OFFLOAD_MIN_BATCH,
             KV_CACHE_PAD, MAINLINE_LAYER_SPLIT_MASK_COPIES, MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD,
-            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT, NO_FLASH_ATTN_BYTES_PER_TOKEN,
+            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT,
             PINNED_EXTRA_BYTES, PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE,
             PROCESS_BASE_BYTES_PER_DEVICE, PROCESS_BASE_BYTES_PER_LAYER,
         },
@@ -122,13 +122,11 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
 
 /// What a tensor split adds to the host baseline, for this architecture.
 fn tensor_split_baseline(arch: &str) -> u64 {
-    crate::estimator::tuning::TENSOR_SPLIT_BASELINE
-        .iter()
-        .find(|(name, _)| *name == arch)
-        .map_or(
-            crate::estimator::tuning::TENSOR_SPLIT_BASELINE_DEFAULT,
-            |(_, bytes)| *bytes,
-        )
+    lookup(
+        crate::estimator::tuning::TENSOR_SPLIT_BASELINE,
+        arch,
+        crate::estimator::tuning::TENSOR_SPLIT_BASELINE_DEFAULT,
+    )
 }
 
 /// The process's fixed host baseline for this model.
@@ -150,20 +148,51 @@ fn process_base_bytes(summary: &GgufSummary) -> u64 {
 /// E-variant 107. Both discriminators are ones the estimator already reads, so
 /// the key is one it can construct.
 fn baseline_offset(summary: &GgufSummary) -> u64 {
-    let mut key = summary.architecture.to_string();
+    lookup(
+        crate::estimator::tuning::BASELINE_OFFSET,
+        &variant_key(summary, &summary.architecture),
+        crate::estimator::tuning::BASELINE_OFFSET_DEFAULT,
+    )
+}
+
+/// Extra pinned bytes per batch token when flash attention is off.
+///
+/// Flat in context and proportional to batch: gemma-3-27B is 64 MiB over the
+/// modelled arena at ctx 8192, 32768, and 131072 alike, and 256 MiB over at
+/// ubatch 2048 in every one of them. The rate differs fourfold between
+/// sliding-window architectures and the rest, which one representative value
+/// could not carry.
+fn no_flash_attn_rate(summary: &GgufSummary, arch: &str) -> u64 {
+    lookup(
+        crate::estimator::tuning::NO_FLASH_ATTN_RATES,
+        &variant_key(summary, arch),
+        crate::estimator::tuning::NO_FLASH_ATTN_RATE_DEFAULT,
+    )
+}
+
+/// The architecture, plus the distinctions that split one architecture string.
+///
+/// `gemma4` covers three models whose host terms differ by more than the
+/// rolling correction can travel: a mixture of experts, a dense model, and an
+/// E-variant. Both discriminators are read from the GGUF, so the key costs
+/// nothing beyond what is already loaded.
+fn variant_key(summary: &GgufSummary, arch: &str) -> String {
+    let mut key = arch.to_string();
     if has_experts(summary) {
         key.push_str("+moe");
     }
     if crate::estimator::compute_buffer::is_gemma_e_variant(summary) {
         key.push_str("+e");
     }
-    crate::estimator::tuning::BASELINE_OFFSET
+    key
+}
+
+/// The entry for `key`, or `fallback` for an architecture never measured.
+fn lookup(table: &[(&str, u64)], key: &str, fallback: u64) -> u64 {
+    table
         .iter()
-        .find(|(a, _)| *a == key)
-        .map_or(
-            crate::estimator::tuning::BASELINE_OFFSET_DEFAULT,
-            |(_, v)| *v,
-        )
+        .find(|(name, _)| *name == key)
+        .map_or(fallback, |(_, value)| *value)
 }
 
 /// Whether the model carries expert tensors, i.e. is a mixture of experts.
@@ -273,7 +302,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     let no_fa_extra = if flash_attn {
         0
     } else {
-        NO_FLASH_ATTN_BYTES_PER_TOKEN * n_tokens
+        no_flash_attn_rate(summary, arch) * n_tokens
     };
     // A quantised KV cache costs more pinned memory than an f16 one, measured
     // in every one of 117 pairs differing in nothing else. The per-copy rate
@@ -1023,13 +1052,11 @@ mod measured_tests {
 /// 6144 on deepseek4 — so one value would either under-reserve the worst or
 /// over-reserve everything else by about 3 MiB.
 fn quantised_cache_rate(arch: &str) -> u64 {
-    crate::estimator::tuning::QUANTISED_CACHE_RATES
-        .iter()
-        .find(|(name, _)| *name == arch)
-        .map_or(
-            crate::estimator::tuning::QUANTISED_CACHE_RATE_DEFAULT,
-            |(_, rate)| *rate,
-        )
+    lookup(
+        crate::estimator::tuning::QUANTISED_CACHE_RATES,
+        arch,
+        crate::estimator::tuning::QUANTISED_CACHE_RATE_DEFAULT,
+    )
 }
 
 /// Whether either half of the KV cache is stored quantised.

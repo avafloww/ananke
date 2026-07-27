@@ -35,7 +35,7 @@ use ananke::{
         EstimatorInputs, compute_buffer,
         host_buffer::{host_overhead_bytes, pinned_graph_bytes},
     },
-    gguf::{GgufSummary, GgufValue},
+    gguf::{GgufSummary, GgufTensor, GgufType, GgufValue},
 };
 use serde_json::Value;
 
@@ -304,6 +304,12 @@ impl Case {
             );
         }
 
+        let model_key = record
+            .get("provenance")
+            .and_then(|p| p.get("model_key"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
         let extra: Vec<String> = factors
             .get("extra")
             .and_then(Value::as_array)
@@ -319,7 +325,41 @@ impl Case {
             summary: GgufSummary {
                 path: std::path::PathBuf::from("/measured"),
                 total_tensor_bytes: 0,
-                tensors: BTreeMap::new(),
+                // Two host-side terms are keyed on tensor *names* rather than
+                // on metadata — the mixture-of-experts allowance looks for
+                // `_exps`, and the Gemma E-variant term for
+                // `per_layer_token_embd.weight`. An empty map makes both read
+                // false for every model here, which silently dropped the MoE
+                // allowance and the `+moe`/`+e` baseline offsets from every
+                // prediction the test made and left a resident MoE reading 1.75
+                // against a band that tops out at 1.5. The record knows the
+                // expert count, so the name it keys on is synthesised.
+                tensors: {
+                    let mut tensors = BTreeMap::new();
+                    let mut marker = |name: &str| {
+                        tensors.insert(
+                            smol_str::SmolStr::new(name),
+                            GgufTensor {
+                                name: smol_str::SmolStr::new(name),
+                                dtype: GgufType::F16,
+                                shape: Vec::new(),
+                                byte_size: 0,
+                                shard_idx: 0,
+                                offset: 0,
+                            },
+                        );
+                    };
+                    if parsed.get("n_expert").and_then(Value::as_u64).unwrap_or(0) > 0 {
+                        marker("blk.0.ffn_gate_exps.weight");
+                    }
+                    // The E-variant carries no metadata key that distinguishes
+                    // it, so this stands in for the tensor check the estimator
+                    // does against a real GGUF.
+                    if model_key.contains("E4B") {
+                        marker("per_layer_token_embd.weight");
+                    }
+                    tensors
+                },
                 metadata,
                 block_count: Some(n_layer),
                 architecture: smol_str::SmolStr::new(&arch),

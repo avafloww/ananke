@@ -88,13 +88,6 @@
       "evidence": "one model (gemma-4-31B-QAT) at two contexts. Under review \u2014 the paired with/without cells show the driver reporting a far larger delta than llama.cpp's own [spec] line, which is what the constant was originally fitted against. See FINDINGS.md.",
       "kind": "review"
     },
-    "NO_FLASH_ATTN_BYTES_PER_TOKEN": {
-      "value": 8192,
-      "type": "u64",
-      "doc": "Extra host bytes per batch token when flash attention is off, beyond the mask widening from f16 to f32.",
-      "evidence": "18 cells across 9 architectures at two batch sizes. The excess over the widened mask is not uniform across architectures (4.25x on non-SWA models, 4.8-4.9x on sliding-window ones), so this is a representative value rather than a law.",
-      "kind": "reachable"
-    },
     "NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR": {
       "value": 2,
       "type": "u32",
@@ -274,7 +267,7 @@
       }
     ]
   },
-  "measurements": 473,
+  "measurements": 479,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -307,7 +300,7 @@
     "$comment": "Extra host baseline bytes a tensor split costs beyond a layer split, by architecture. `default` applies to an architecture not listed.",
     "default": 192692224,
     "by_arch": {
-      "gemma3": 132661248,
+      "gemma3": 132636672,
       "gemma4": 161513472,
       "llama": 136181760,
       "qwen3": 104529920,
@@ -325,6 +318,21 @@
       "qwen3": 22231464,
       "qwen35": 328361600,
       "qwen35moe+moe": 45703184
+    }
+  },
+  "no_flash_attn_rates": {
+    "$comment": "Extra pinned bytes per batch token when flash attention is off, by architecture. The residual is flat in context and proportional to batch, and the rates differ fourfold between sliding-window models and the rest. `default` applies to an architecture not listed.",
+    "default": 262246,
+    "by_arch": {
+      "gemma3": 131174,
+      "gemma4": 262246,
+      "gemma4+e": 108646,
+      "gemma4+moe": 131174,
+      "lfm2": 4116,
+      "llama": 32829,
+      "qwen3": 32835,
+      "qwen35": 32870,
+      "talkie": 163901
     }
   }
 }

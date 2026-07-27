@@ -427,20 +427,7 @@ def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
                     + (moe if parsed.get("n_expert") else 0))
         residual = (owned - (copies * (mask + swa_mask) + hidden) * 1024**2
                     - pinned - dev * (cards - 1) - modelled)
-        # Keyed by the discriminators the estimator itself has, not by the
-        # architecture string alone: within gemma4 the mixture-of-experts model
-        # is over-covered by 66 MiB, the dense one needs 17, and the E-variant
-        # 107. `has_experts` and the E-variant check are both things
-        # `host_buffer` already applies, so an offset keyed on them is one the
-        # estimator can look up.
-        variant = ""
-        if parsed.get("n_expert"):
-            variant += "+moe"
-        if "E4B" in record["provenance"]["model_key"]:
-            # Stands in for `compute_buffer::is_gemma_e_variant`, which reads
-            # the per-layer embedding tensor the records do not carry.
-            variant += "+e"
-        by_arch[f"{parsed.get('arch')}{variant}"].append(residual)
+        by_arch[variant_key(record)].append(residual)
 
     if not by_arch:
         raise ValueError("no resident served cells")
@@ -516,6 +503,87 @@ def derive_tensor_split_baseline(rows: list[dict]) -> tuple[int, str]:
         f"context, batch, slots and cards: {'; '.join(sorted(detail))} MiB. "
         "Per architecture, since the spread across all of them is wider than "
         "any one of them is internally."
+    )
+
+
+def variant_key(record: dict) -> str:
+    """The architecture, plus the distinctions that split one arch string.
+
+    `gemma4` covers three models whose host terms differ by more than the
+    rolling correction can travel: a mixture of experts, a dense model, and an
+    E-variant. Both discriminators are ones `host_buffer` already applies —
+    `has_experts` and `compute_buffer::is_gemma_e_variant` — so a key built
+    from them is one the estimator can construct at lookup time.
+    """
+    parsed = record["parsed"]
+    key = str(parsed.get("arch"))
+    if parsed.get("n_expert"):
+        key += "+moe"
+    if "E4B" in record["provenance"]["model_key"]:
+        # Stands in for the per-layer embedding tensor the records do not
+        # carry, which is what the estimator keys on.
+        key += "+e"
+    return key
+
+
+def derive_no_flash_attn_rates(rows: list[dict]) -> str:
+    """Extra pinned bytes per batch token when flash attention is off.
+
+    The single constant this replaces was chosen as a representative value
+    because the excess "is not uniform across architectures", and that is
+    right — but the non-uniformity is a clean per-architecture rate rather
+    than noise, which a sweep across context makes visible and a single
+    context cannot.
+
+    What the residual over the modelled arena does *not* do is scale with
+    context: gemma-3-27B is 64 MiB out at ctx 8192, 32768, and 131072 alike,
+    and 256 MiB out at ubatch 2048 in every one of them. So it is a per-batch
+    -token term, the same shape as the quantised-cache rate, at 128 KiB per
+    token on the sliding-window models against 32 KiB on the rest.
+
+    ik_llama is excluded and keeps the small default: its fa-off arena is
+    already modelled to within a megabyte, since it sizes masks against the
+    whole cache and the widened element is the whole story there.
+    """
+    from collections import defaultdict as _dd
+    by_arch: dict[str, list[float]] = _dd(list)
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if factors["flash_attn"] == "on" or not parsed.get("arena_mib"):
+            continue
+        if factors["ngl"] != 99 or not factors["gpus"] or factors["spec_type"]:
+            continue
+        if factors["runtime"] == "ik" or factors["n_cpu_moe"]:
+            continue
+        mask, swa, hidden = arena_terms(record)
+        cards = len((factors["gpus"] or "0").split(","))
+        copies = 4 if cards > 1 and (factors["split"] or "layer") == "layer" else 1
+        residual = parsed["arena_mib"] - (copies * (mask + swa) + hidden)
+        tokens = min(factors["ctx"], factors["ubatch"])
+        # `arena_terms` models the mask at its widened four-byte element and
+        # nothing else, so the residual over it is the whole term rather than
+        # an excess over one already charged.
+        by_arch[variant_key(record)].append(residual * 1024**2 / tokens)
+    if not by_arch:
+        raise ValueError("no mainline cells with flash attention off")
+    for arch, group in by_arch.items():
+        # 4 KiB per token: below that the term is under a megabyte at the
+        # largest batch measured, which is not worth splitting a group over.
+        consensus(group, f"no-flash-attention rate for {arch}",
+                  tolerance=0.10, absolute_floor=4096.0)
+    _NO_FA_RATES.clear()
+    # Negative rates mean the current constant over-charges that architecture;
+    # clamping at zero keeps the term from *subtracting* pinned memory, which
+    # no mechanism supports.
+    _NO_FA_RATES.update({a: max(0, round(max(g))) for a, g in by_arch.items()})
+    return (
+        f"{sum(len(g) for g in by_arch.values())} mainline cells with flash "
+        f"attention off across {len(by_arch)} architectures. The residual over "
+        f"the modelled arena is flat in context and proportional to batch "
+        f"tokens, so it is a per-token rate: "
+        + ", ".join(f"{a} {v / 1024:.0f} KiB" for a, v in sorted(_NO_FA_RATES.items()))
+        + ". ik_llama is excluded — its fa-off arena is already modelled to "
+        "within a megabyte."
     )
 
 
@@ -786,6 +854,7 @@ def derive_mtp_embedded_compute(rows: list[dict]) -> tuple[int, str]:
 
 _IK_RATES: dict[str, int] = {}
 _QUANT_RATES: dict[str, int] = {}
+_NO_FA_RATES: dict[str, int] = {}
 
 
 def _record_ik_rates(by_arch: dict[str, float]) -> None:
@@ -1013,6 +1082,10 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         derive_ik_moe_per_nembd(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"ik MoE rates: cannot derive — {error}")
+    try:
+        derive_no_flash_attn_rates(rows)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError, Disagreement) as error:
+        failed.append(f"no-flash-attention rates: cannot derive — {error}")
 
     try:
         derive_baseline_offset(rows)
@@ -1096,6 +1169,17 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "an architecture not listed.",
             "default": max(_TENSOR_BASE.values()),
             "by_arch": dict(sorted(_TENSOR_BASE.items())),
+        }
+    if _NO_FA_RATES:
+        document["no_flash_attn_rates"] = {
+            "$comment": "Extra pinned bytes per batch token when flash "
+                        "attention is off, by architecture. The residual is "
+                        "flat in context and proportional to batch, and the "
+                        "rates differ fourfold between sliding-window models "
+                        "and the rest. `default` applies to an architecture "
+                        "not listed.",
+            "default": max(_NO_FA_RATES.values()),
+            "by_arch": dict(sorted(_NO_FA_RATES.items())),
         }
     if _QUANT_RATES:
         document["quantised_cache_rates"] = {
