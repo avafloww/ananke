@@ -405,29 +405,40 @@ def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
             continue
         if (factors["split"] or "layer") != "layer" or not parsed.get("n_layer"):
             continue
-        # Flash attention off is its own regime: it costs 30 to 254 MiB of host
-        # residual beyond the arena term, inconsistently — gemma3's scales with
-        # batch and qwen3's does not. Pooling it here put lfm2's offset at both
-        # 35 and 169.
-        if factors["flash_attn"] != "on":
-            continue
+        # Flash attention off is kept, under its own key. Pooling it with
+        # flash attention on is what put lfm2's offset at both 35 and 169 MiB,
+        # but excluding it left every such cell uncorrected — and while the
+        # bulk of the effect is the per-token arena rate, a flat baseline shift
+        # remains underneath it, small everywhere but lfm2 at +131 MiB.
         # mainline only. ik's residual against the same model runs from -264 to
         # +120 MiB where mainline's is -0 to +24, so the two binaries do not
-        # share a baseline and pooling them put qwen3's offset across a 664%
-        # spread. ik's production services are hybrids, which this excludes
-        # anyway.
-        if factors["runtime"] == "ik":
-            continue
+        # share a baseline. They are now separated by the key rather than by
+        # excluding one: grouped per runtime, ik's resident cells are as
+        # consistent as mainline's — spreads of 62 to 100 MiB against the same
+        # architectures — and simply sit 24 to 192 MiB higher. Excluding them
+        # left every ik configuration with no correction at all.
         owned = (record["rss"].get("rss_anon_kb", 0)
                  + record["rss"].get("rss_shmem_kb", 0)) * 1024
         mask, swa_mask, hidden = arena_terms(record)
         cards = len(factors["gpus"].split(","))
-        copies = 4 if cards > 1 else 1
+        # ik does not replicate masks across cards at any count, so including
+        # its cells means the multiplier can no longer be read off the card
+        # count alone.
+        copies = 4 if cards > 1 and factors["runtime"] != "ik" else 1
+        # The per-token flash-attention term is a separate constant, derived
+        # just above. Leaving it in the residual would charge it twice: once
+        # in the arena and again in the baseline, where it would also stop
+        # being flat and break the group.
+        no_fa = 0
+        if factors["flash_attn"] != "on":
+            rate = _NO_FA_RATES.get(variant_key(record),
+                                    max(_NO_FA_RATES.values(), default=0))
+            no_fa = rate * min(factors["ctx"], factors["ubatch"])
         modelled = (flat + parsed["n_layer"] * per_layer
                     + (moe if parsed.get("n_expert") else 0))
         residual = (owned - (copies * (mask + swa_mask) + hidden) * 1024**2
-                    - pinned - dev * (cards - 1) - modelled)
-        by_arch[variant_key(record)].append(residual)
+                    - no_fa - pinned - dev * (cards - 1) - modelled)
+        by_arch[variant_key(record, with_environment=True)].append(residual)
 
     if not by_arch:
         raise ValueError("no resident served cells")
@@ -513,7 +524,7 @@ def derive_tensor_split_baseline(rows: list[dict]) -> tuple[int, str]:
     )
 
 
-def variant_key(record: dict) -> str:
+def variant_key(record: dict, with_environment: bool = False) -> str:
     """The architecture, plus the distinctions that split one arch string.
 
     `gemma4` covers three models whose host terms differ by more than the
@@ -530,6 +541,19 @@ def variant_key(record: dict) -> str:
         # Stands in for the per-layer embedding tensor the records do not
         # carry, which is what the estimator keys on.
         key += "+e"
+    # Only where the caller asks, which is the baseline offset alone. It
+    # differs by runtime (ik sits 24 to 192 MiB above mainline on the same
+    # architecture) and by flash attention, which shifts it by +21 to +33 MiB
+    # on most architectures and +131 on lfm2 — on top of the per-token arena
+    # rate, which is a separate term.
+    #
+    # The flash-attention *rates* must not be keyed this way: ik is excluded
+    # from that derivation, so an ik-suffixed key would have no row and would
+    # inherit the table's worst rate as its default.
+    if with_environment and record["factors"]["runtime"] == "ik":
+        key += "@ik"
+    if with_environment and record["factors"]["flash_attn"] != "on":
+        key += "@nofa"
     return key
 
 
@@ -548,6 +572,11 @@ def derive_no_flash_attn_rates(rows: list[dict]) -> str:
     -token term, the same shape as the quantised-cache rate, at 128 KiB per
     token on the sliding-window models against 32 KiB on the rest.
 
+    The rate is per token *per stream*. Every cell here runs one slot, so the
+    figure derived is the per-slot one; Qwen3-4B at four slots measures a
+    quarter of it, flat across three contexts, which is why `pinned_graph_bytes`
+    divides by the stream count rather than the table carrying it.
+
     ik_llama is excluded and keeps the small default: its fa-off arena is
     already modelled to within a megabyte, since it sizes masks against the
     whole cache and the widened element is the whole story there.
@@ -560,7 +589,9 @@ def derive_no_flash_attn_rates(rows: list[dict]) -> str:
             continue
         if factors["ngl"] != 99 or not factors["gpus"] or factors["spec_type"]:
             continue
-        if factors["runtime"] == "ik":
+        # One slot only: the term divides by the stream count, so pooling slot
+        # counts would fit a quarter-sized rate against a full-sized one.
+        if factors["runtime"] == "ik" or factors["parallel"] != 1:
             continue
         mask, swa, hidden = arena_terms(record)
         cards = len((factors["gpus"] or "0").split(","))

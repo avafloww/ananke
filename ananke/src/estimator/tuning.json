@@ -57,7 +57,7 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "74 mainline layer-split cells at 4.01, against 131 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "74 mainline layer-split cells at 4.01, against 136 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived"
     },
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
@@ -267,7 +267,7 @@
       }
     ]
   },
-  "measurements": 485,
+  "measurements": 497,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -298,13 +298,13 @@
   },
   "tensor_split_baseline": {
     "$comment": "Extra host baseline bytes a tensor split costs beyond a layer split, by architecture. `default` applies to an architecture not listed.",
-    "default": 190494720,
+    "default": 186626048,
     "by_arch": {
       "gemma3": 132636672,
       "gemma4": 161513472,
       "llama": 113203200,
       "qwen3": 104529920,
-      "qwen35": 190494720,
+      "qwen35": 186626048,
       "talkie": 113256448
     }
   },
@@ -313,15 +313,32 @@
     "default": 0,
     "by_arch": {
       "gemma3": -71707828,
+      "gemma3@ik": -7093428,
+      "gemma3@ik@nofa": 17254220,
+      "gemma3@nofa": -47377588,
       "gemma4": 26759192,
       "gemma4+e": 178705220,
+      "gemma4+e@nofa": 65603396,
       "gemma4+moe": -56385524,
+      "gemma4+moe@nofa": -94186484,
+      "gemma4@nofa": 35492888,
       "lfm2": 41134496,
+      "lfm2@nofa": 179978656,
       "llama": -6406128,
+      "llama@ik": 36909072,
+      "llama@ik@nofa": 108771856,
+      "llama@nofa": 5249040,
       "qwen3": 22231464,
       "qwen35": 328361600,
+      "qwen35@ik": 345153562,
+      "qwen35@ik@nofa": 336485914,
+      "qwen35@nofa": 328429184,
       "qwen35moe+moe": 45703184,
-      "talkie": -33742832
+      "qwen3@ik": 134257064,
+      "qwen3@ik@nofa": 207668136,
+      "qwen3@nofa": 33001896,
+      "talkie": -33742832,
+      "talkie@nofa": -17336816
     }
   },
   "no_flash_attn_rates": {
@@ -334,7 +351,7 @@
       "gemma4+e": 108646,
       "gemma4+moe": 131174,
       "lfm2": 4116,
-      "llama": 32829,
+      "llama": 32835,
       "qwen3": 32835,
       "qwen35": 32881,
       "qwen35moe+moe": 4116,
@@ -343,6 +360,6 @@
   },
   "mtp_slot_scaling": {
     "$comment": "Reported, not fitted. The MTP overhead measured at a fixed context across slot counts, which is what separates a genuine slot term from the longer context the first campaign confounded it with.",
-    "observed": "no fixed-context slot series measured"
+    "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB"
   }
 }

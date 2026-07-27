@@ -114,7 +114,11 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
     };
     pinned_graph_bytes(summary, arch, inputs)
         .saturating_add(PINNED_EXTRA_BYTES)
-        .saturating_add(process_base_bytes(summary))
+        .saturating_add(process_base_bytes(
+            summary,
+            inputs.ik_llama,
+            inputs.flash_attn.unwrap_or(false),
+        ))
         .saturating_add(device_bytes)
         .saturating_add(tensor_split)
         .saturating_add(mtp)
@@ -130,7 +134,7 @@ fn tensor_split_baseline(arch: &str) -> u64 {
 }
 
 /// The process's fixed host baseline for this model.
-fn process_base_bytes(summary: &GgufSummary) -> u64 {
+fn process_base_bytes(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -> u64 {
     let layers = summary.block_count.unwrap_or(0) as u64;
     let moe = if has_experts(summary) {
         PROCESS_BASE_BYTES_MOE
@@ -138,7 +142,7 @@ fn process_base_bytes(summary: &GgufSummary) -> u64 {
         0
     };
     (PROCESS_BASE_BYTES + layers * PROCESS_BASE_BYTES_PER_LAYER + moe)
-        .saturating_add_signed(baseline_offset(summary))
+        .saturating_add_signed(baseline_offset(summary, ik_llama, flash_attn))
 }
 
 /// The measured correction the layer-count model above leaves behind.
@@ -153,8 +157,22 @@ fn process_base_bytes(summary: &GgufSummary) -> u64 {
 /// experts is over-covered by 66 MiB, the dense model needs 17, and the
 /// E-variant 107. Both discriminators are ones the estimator already reads, so
 /// the key is one it can construct.
-fn baseline_offset(summary: &GgufSummary) -> i64 {
-    let key = variant_key(summary, &summary.architecture);
+fn baseline_offset(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -> i64 {
+    let mut key = variant_key(summary, &summary.architecture);
+    // The two binaries do not share a baseline: grouped per runtime, ik's
+    // resident cells are as consistent as mainline's and simply sit 24 to 192
+    // MiB higher. Only this table is keyed on it — the flash-attention rates
+    // must not be, since ik is excluded from that derivation and an
+    // ik-suffixed key would inherit the worst rate as its default.
+    if ik_llama {
+        key.push_str("@ik");
+    }
+    // Flash attention shifts the baseline underneath the per-token arena term
+    // as well: +21 to +33 MiB on most architectures and +131 on lfm2, which is
+    // enough on a 190 MiB baseline to put that configuration outside the band.
+    if !flash_attn {
+        key.push_str("@nofa");
+    }
     crate::estimator::tuning::BASELINE_OFFSET
         .iter()
         .find(|(name, _)| *name == key)
@@ -172,6 +190,7 @@ fn baseline_offset(summary: &GgufSummary) -> i64 {
 /// sliding-window architectures and the rest, which one representative value
 /// could not carry.
 fn no_flash_attn_rate(summary: &GgufSummary, arch: &str) -> u64 {
+    // Never reached on the ik path, which returns before this term.
     lookup(
         crate::estimator::tuning::NO_FLASH_ATTN_RATES,
         &variant_key(summary, arch),
@@ -308,10 +327,15 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     };
 
     let hidden_inputs = 2 * n_embd * n_tokens * 4;
+    // Per token *per stream*. Qwen3-4B measures 4.01 MiB of it at four slots
+    // across ctx 16384, 32768, and 65536 alike, and 32 KiB per token at one
+    // slot — exactly four times, so the term follows the per-slot cache the
+    // same way the mask does. The rates are derived at one slot, which is why
+    // the division belongs here rather than in the table.
     let no_fa_extra = if flash_attn {
         0
     } else {
-        no_flash_attn_rate(summary, arch) * n_tokens
+        no_flash_attn_rate(summary, arch) * n_tokens / streams
     };
     // A quantised KV cache costs more pinned memory than an f16 one, measured
     // in every one of 117 pairs differing in nothing else. The per-copy rate
@@ -569,6 +593,10 @@ mod tests {
         ubatch: u32,
         flash_attn: bool,
         parallel: u32,
+        /// The architecture these points were measured on. Every term keyed on
+        /// it — the flash-attention rate above all — reads a synthetic name as
+        /// "never measured" and charges the table's worst default.
+        arch: &'static str,
         /// `CUDA_Host compute buffer size`, as llama.cpp logged it.
         measured_mib: f64,
     }
@@ -578,33 +606,33 @@ mod tests {
         #[rustfmt::skip]
         let points = [
             // Qwen3-4B: context sweep at a fixed batch.
-            Point { n_embd: 2560, layers: 36, swa: None, context: 8192, ubatch: 512, flash_attn: true, parallel: 4, measured_mib: 12.01 },
-            Point { n_embd: 2560, layers: 36, swa: None, context: 16384, ubatch: 512, flash_attn: true, parallel: 4, measured_mib: 14.01 },
-            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 512, flash_attn: true, parallel: 4, measured_mib: 18.01 },
-            Point { n_embd: 2560, layers: 36, swa: None, context: 65536, ubatch: 512, flash_attn: true, parallel: 4, measured_mib: 26.01 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 8192, ubatch: 512, flash_attn: true, parallel: 4, arch: "qwen3", measured_mib: 12.01 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 16384, ubatch: 512, flash_attn: true, parallel: 4, arch: "qwen3", measured_mib: 14.01 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 512, flash_attn: true, parallel: 4, arch: "qwen3", measured_mib: 18.01 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 65536, ubatch: 512, flash_attn: true, parallel: 4, arch: "qwen3", measured_mib: 26.01 },
             // … batch sweep at a fixed context.
-            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 1024, flash_attn: true, parallel: 4, measured_mib: 36.02 },
-            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 2048, flash_attn: true, parallel: 4, measured_mib: 72.05 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 1024, flash_attn: true, parallel: 4, arch: "qwen3", measured_mib: 36.02 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 2048, flash_attn: true, parallel: 4, arch: "qwen3", measured_mib: 72.05 },
             // … slot count, which divides the cache and so the mask.
-            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 512, flash_attn: true, parallel: 1, measured_mib: 42.01 },
-            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 512, flash_attn: true, parallel: 2, measured_mib: 26.01 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 512, flash_attn: true, parallel: 1, arch: "qwen3", measured_mib: 42.01 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 512, flash_attn: true, parallel: 2, arch: "qwen3", measured_mib: 26.01 },
             // … flash attention off: the mask doubles and a per-token term
             // appears.
-            Point { n_embd: 2560, layers: 36, swa: None, context: 16384, ubatch: 512, flash_attn: false, parallel: 4, measured_mib: 22.01 },
-            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 512, flash_attn: false, parallel: 4, measured_mib: 30.01 },
-            Point { n_embd: 2560, layers: 36, swa: None, context: 65536, ubatch: 512, flash_attn: false, parallel: 4, measured_mib: 46.01 },
-            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 1024, flash_attn: false, parallel: 4, measured_mib: 60.02 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 16384, ubatch: 512, flash_attn: false, parallel: 4, arch: "qwen3", measured_mib: 22.01 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 512, flash_attn: false, parallel: 4, arch: "qwen3", measured_mib: 30.01 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 65536, ubatch: 512, flash_attn: false, parallel: 4, arch: "qwen3", measured_mib: 46.01 },
+            Point { n_embd: 2560, layers: 36, swa: None, context: 32768, ubatch: 1024, flash_attn: false, parallel: 4, arch: "qwen3", measured_mib: 60.02 },
             // Qwen3.6-27B: double the hidden size, which doubles the term the
             // mask alone cannot explain.
-            Point { n_embd: 5120, layers: 64, swa: None, context: 8192, ubatch: 512, flash_attn: true, parallel: 4, measured_mib: 22.02 },
-            Point { n_embd: 5120, layers: 64, swa: None, context: 8192, ubatch: 1024, flash_attn: true, parallel: 4, measured_mib: 44.04 },
+            Point { n_embd: 5120, layers: 64, swa: None, context: 8192, ubatch: 512, flash_attn: true, parallel: 4, arch: "qwen35", measured_mib: 22.02 },
+            Point { n_embd: 5120, layers: 64, swa: None, context: 8192, ubatch: 1024, flash_attn: true, parallel: 4, arch: "qwen35", measured_mib: 44.04 },
             // Gemma-4-31B-QAT: interleaved SWA, so a second window-sized mask.
-            Point { n_embd: 5376, layers: 60, swa: Some(1024), context: 8192, ubatch: 512, flash_attn: true, parallel: 4, measured_mib: 24.52 },
+            Point { n_embd: 5376, layers: 60, swa: Some(1024), context: 8192, ubatch: 512, flash_attn: true, parallel: 4, arch: "gemma4", measured_mib: 24.52 },
         ];
         for p in points {
             let got = pinned_graph_bytes(
-                &summary("t", p.n_embd, p.layers, p.swa),
-                "t",
+                &summary(p.arch, p.n_embd, p.layers, p.swa),
+                p.arch,
                 &inputs(p.context, p.ubatch, p.flash_attn, p.parallel),
             ) as f64
                 / MIB;
@@ -817,7 +845,7 @@ mod tests {
     fn a_mixture_of_experts_gets_its_own_allowance() {
         for (layers, measured) in [(41u32, 503.0), (43, 546.0), (48, 400.0)] {
             let s = with_experts(summary("t", 2048, layers, None));
-            let predicted = process_base_bytes(&s) as f64 / MIB;
+            let predicted = process_base_bytes(&s, false, true) as f64 / MIB;
             let ratio = measured / predicted;
             assert!(
                 (0.8..=1.5).contains(&ratio),
@@ -827,8 +855,8 @@ mod tests {
             );
         }
         // A dense model of the same size gets no allowance.
-        let dense = process_base_bytes(&summary("t", 2048, 41, None));
-        let moe = process_base_bytes(&with_experts(summary("t", 2048, 41, None)));
+        let dense = process_base_bytes(&summary("t", 2048, 41, None), false, true);
+        let moe = process_base_bytes(&with_experts(summary("t", 2048, 41, None)), false, true);
         assert!(moe > dense);
     }
 
@@ -842,12 +870,12 @@ mod tests {
     /// service that has never served is not the state worth predicting.
     #[test]
     fn the_process_baseline_matches_a_serving_process() {
-        let small = process_base_bytes(&summary("t", 2560, 36, None)) as f64 / MIB;
+        let small = process_base_bytes(&summary("t", 2560, 36, None), false, true) as f64 / MIB;
         assert!(
             (small - 233.0).abs() < 8.0,
             "36-layer baseline modelled at {small:.0} MiB against 233 MiB measured"
         );
-        let large = process_base_bytes(&summary("t", 5120, 64, None)) as f64 / MIB;
+        let large = process_base_bytes(&summary("t", 5120, 64, None), false, true) as f64 / MIB;
         assert!(large > small, "more layers means more graph metadata");
     }
 

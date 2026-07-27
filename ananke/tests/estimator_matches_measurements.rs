@@ -207,10 +207,13 @@ fn every_model_lands_inside_the_correction_band() {
     // the direction that OOMs. The number is recorded so it can only fall.
     // See FINDINGS.md; closing the gap needs the host baseline refitted, not
     // this threshold raised.
-    // Was 33 before the per-architecture baseline offset. The five that remain
-    // are each a regime the offset is derived without: flash attention off, a
-    // parallel > 1 slot split, and the one gemma3 cell that sits at 0.78.
-    const KNOWN_OUTSIDE: usize = 5;
+    // Was 33 before the per-architecture baseline offset, then 5 once it went
+    // in. The two that remain are both `parallel = 4` with a shared cache,
+    // which is the one regime the offset is still derived without — every cell
+    // with more than one slot was measured at a single batch size, so a rule
+    // wrong in its batch dependence would be invisible there. The `slot-batch`
+    // phase measures it.
+    const KNOWN_OUTSIDE: usize = 2;
     assert!(
         outside.len() <= KNOWN_OUTSIDE,
         "{} of {checked} cells sit outside the correction's [0.8, 1.5] band, \
