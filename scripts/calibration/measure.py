@@ -28,6 +28,7 @@ import dataclasses
 import datetime
 import gzip
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -189,6 +190,7 @@ class Measurement:
 
     hardware: dict[str, object] = dataclasses.field(default_factory=dict)
     trace: list[dict[str, object]] = dataclasses.field(default_factory=list)
+    checkpoints: list[dict[str, object]] = dataclasses.field(default_factory=list)
 
     def record(self) -> dict[str, object]:
         """One NDJSON record.
@@ -214,6 +216,8 @@ class Measurement:
             # and a peak alone cannot distinguish "allocated on first use" from
             # "still climbing when we stopped looking".
             "trace": self.trace,
+            # Memory against tokens, which a time series alone cannot give.
+            "checkpoints": self.checkpoints,
         }
 
 
@@ -519,16 +523,25 @@ def _run(cmd: list[str]) -> str:
         return ""
 
 
-def _post(port: int, path: str, payload: dict, timeout: float) -> None:
+def _post(port: int, path: str, payload: dict, timeout: float) -> dict | None:
+    """Send a request, returning the decoded body when there is one.
+
+    The body carries the server's own token accounting, which is what ties a
+    memory reading to the work that produced it.
+    """
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}",
         data=json.dumps(payload).encode(),
         headers={"content-type": "application/json"},
     )
     try:
-        urllib.request.urlopen(request, timeout=timeout).read()
+        raw = urllib.request.urlopen(request, timeout=timeout).read()
     except (urllib.error.URLError, TimeoutError, OSError):
-        pass  # A failed probe still leaves the process measurable.
+        return None  # A failed probe still leaves the process measurable.
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
 
 
 def wait_for_port(port: int, timeout: float = 180.0) -> bool:
@@ -563,7 +576,7 @@ def _healthy(port: int) -> bool:
         return False
 
 
-def exercise(cell: Cell, port: int) -> None:
+def exercise(cell: Cell, port: int, pid: int = 0) -> list[dict[str, object]]:
     """Put the server through enough work to allocate what it allocates lazily.
 
     Several host buffers are sized on first use rather than at load, so an idle
@@ -572,17 +585,17 @@ def exercise(cell: Cell, port: int) -> None:
     with use — the prompt cache and per-slot checkpoints — rather than at load.
     """
     if not cell.served:
-        return
+        return []
     if cell.embeddings:
-        _post(port, "/v1/embeddings", {"input": "calibration probe"}, 120)
-        return
+        return _exercise_embeddings(cell, port, pid)
     _post(port, "/v1/chat/completions",
           {"model": "m", "messages": [{"role": "user", "content": "Count to twenty."}],
            "max_tokens": 64}, 300)
 
+
     if cell.bench:
-        _run_bench(cell, port)
-        return
+        return run_growth(cell, port, pid)
+
 
     prompt = "Explain memory allocation."
     for i in range(cell.soak):
@@ -599,6 +612,7 @@ def exercise(cell: Cell, port: int) -> None:
             t.start()
         for t in threads:
             t.join()
+    return []
 
 
 # The coding-agent benchmark, which drives a server with real prompts and real
@@ -607,6 +621,100 @@ def exercise(cell: Cell, port: int) -> None:
 # what the tokens actually are. Vendored beside this module so a calibration
 # run needs nothing outside the repository.
 BENCH = Path(os.environ.get("CODING_BENCH", Path(__file__).parent / "coding_bench.py"))
+
+
+def run_growth(cell: Cell, port: int, pid: int) -> list[dict[str, object]]:
+    """Drive an agent-shaped conversation, checkpointing memory against tokens.
+
+    The RSS sampler answers "did memory move"; it cannot answer "per what",
+    because nothing in a time series says how many tokens were generated
+    between two samples. A run whose footprint grows with generation and one
+    whose footprint grows with wall-clock look identical on a clock.
+
+    So each turn is a checkpoint: the conversation so far, the tokens the
+    server reports for it, and the process's memory read immediately after.
+    That makes growth fittable against cumulative tokens and against KV depth
+    separately, and it makes a flat result a *measurement* of no growth
+    rather than an absence of evidence.
+
+    Replies are fed back in, so the context grows the way an agent's does and
+    the prompt cache sees a real prefix rather than filler.
+    """
+    prompts = _bench_prompts()
+    messages = [{"role": "system", "content": _bench_system()}]
+    checkpoints: list[dict[str, object]] = []
+    generated = 0
+    for turn in range(cell.bench_turns):
+        messages.append({"role": "user", "content": prompts[turn % len(prompts)]})
+        body = _post(port, "/v1/chat/completions",
+                     {"model": "m", "messages": messages,
+                      "max_tokens": GROWTH_MAX_TOKENS}, 900)
+        if body is None:
+            break
+        try:
+            reply = body["choices"][0]["message"]["content"]
+            usage = body.get("usage", {})
+        except (KeyError, IndexError, TypeError):
+            break
+        messages.append({"role": "assistant", "content": reply or ""})
+        generated += int(usage.get("completion_tokens", 0))
+        rss = read_rss(pid)
+        checkpoint = {
+            "turn": turn + 1,
+            "at_utc": datetime.datetime.now(datetime.timezone.utc)
+                      .isoformat(timespec="seconds"),
+            "prompt_tokens": int(usage.get("prompt_tokens", 0)),
+            "completion_tokens": int(usage.get("completion_tokens", 0)),
+            "generated_tokens_total": generated,
+            # The prompt token count is the KV depth the server is holding,
+            # which is the term that scales with context rather than with use.
+            "kv_depth_tokens": int(usage.get("prompt_tokens", 0))
+                               + int(usage.get("completion_tokens", 0)),
+            **rss,
+        }
+        gpu = read_gpu_mib(pid)
+        if gpu is not None:
+            checkpoint["gpu_used_mib"] = gpu
+        checkpoints.append(checkpoint)
+        # Stop before the context wraps: past that point the server evicts and
+        # the footprint stops being a function of what was generated.
+        if checkpoint["kv_depth_tokens"] > cell.ctx * 0.85:
+            break
+    return checkpoints
+
+
+GROWTH_MAX_TOKENS = 512
+
+
+def _bench_system() -> str:
+    module = _bench_module()
+    return getattr(module, "SYSTEM", "You are a helpful assistant.") if module \
+        else "You are a helpful assistant."
+
+
+def _bench_prompts() -> list[str]:
+    module = _bench_module()
+    prompts = getattr(module, "PROMPTS", None) if module else None
+    return list(prompts) if prompts else [
+        "Write a function to parse an ISO 8601 duration.",
+        "Now add unit tests for it.",
+        "Refactor it to avoid regular expressions.",
+    ]
+
+
+def _bench_module():
+    """The vendored benchmark's prompts, so growth is driven by real work."""
+    if not BENCH.exists():
+        return None
+    spec = importlib.util.spec_from_file_location("coding_bench", BENCH)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return None
+    return module
 
 
 def _run_bench(cell: Cell, port: int) -> None:
@@ -690,6 +798,7 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int,
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=cell.gpus)
     with log_path.open("wb") as log_file:
         trace: list[dict[str, object]] = []
+        checkpoints: list[dict[str, object]] = []
         proc = subprocess.Popen(cell.argv(binary, port), stdout=log_file,
                                 stderr=subprocess.STDOUT, env=env,
                                 start_new_session=True)
@@ -716,7 +825,7 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int,
                                            if archive_dir else "")
                     time.sleep(HEALTH_POLL_SECONDS)
                 loaded_at = time.monotonic() - sampler.started_at
-                exercise(cell, port)
+                checkpoints = exercise(cell, port, proc.pid)
                 time.sleep(SETTLE_SECONDS)
                 final = read_rss(proc.pid)
             # Report the peak, because that is the figure ananke's snapshotter
@@ -738,7 +847,7 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int,
 
     archived = archive_log(log_path, archive_dir) if archive_dir else ""
     return Measurement(cell, prov, parsed, rss, hardware=hardware(), trace=trace,
-                       log=archived)
+                       log=archived, checkpoints=checkpoints)
 
 
 def _tail(path: Path, lines: int = 40) -> str:
