@@ -35,6 +35,14 @@ class Model:
     mmproj: str | None = None
     draft: str | None = None
     n_cpu_moe: int | None = None
+    n_cpu_moe_1gpu: int | None = None
+    """Expert layers to keep on the CPU when only one card is visible.
+
+    `n_cpu_moe` is sized for both cards. A hybrid tuned that way does not fit
+    on one — laguna keeps 18 layers on the GPU, which aborts a single-card
+    load — so the single-GPU cells need their own figure or the `gpus` axis is
+    simply missing for every large model.
+    """
     note: str = ""
 
 
@@ -56,11 +64,13 @@ MODELS = {
               ("mainline", "ik"), mmproj="unsloth/Qwen3.6-35B-A3B-GGUF/mmproj-F16.gguf",
               n_cpu_moe=40, note="MoE 256/8, 41L"),
         Model("laguna", "unsloth/Laguna-S-2.1-GGUF/UD-IQ4_NL/Laguna-S-2.1-UD-IQ4_NL-00001-of-00003.gguf",
-              ("mainline", "ik"), n_cpu_moe=30, note="MoE 256/10 + SWA 512, 48L"),
+              ("mainline", "ik"), n_cpu_moe=30, n_cpu_moe_1gpu=39,
+              note="MoE 256/10 + SWA 512, 48L"),
         Model("dsv4f", "unsloth/DeepSeek-V4-Flash-GGUF/UD-IQ3_XXS/DeepSeek-V4-Flash-UD-IQ3_XXS-00001-of-00004.gguf",
               ("mainline",), n_cpu_moe=40, note="MoE + MLA + NSA indexer, 43L"),
         Model("glm52", "muzzy/GLM-5.2-GGUF/IQ2_KS/GLM-5.2-smol-IQ2_KS-00001-of-00033.gguf",
-              ("ik",), n_cpu_moe=92, note="MoE + MLA + DSA, 79L — the production quant"),
+              ("ik",), n_cpu_moe=92, n_cpu_moe_1gpu=96,
+              note="MoE + MLA + DSA, 79L — the production quant"),
         Model("lfm2-embed", "LiquidAI/LFM2.5-Embedding-350M-GGUF/LFM2.5-Embedding-350M-Q8_0.gguf",
               ("mainline",), note="embedding modality"),
     ]
@@ -116,7 +126,9 @@ def _significant(model: Model, runtime: str = "mainline", **over) -> list[Cell]:
             label=f"{model.key}-{runtime}-{gpus.replace(',', '')}-{split}-{kv}-"
                   f"{'srv' if served else 'idle'}",
             model=path_of(model.path), runtime=runtime, gpus=gpus, split=split,
-            kv_type=kv, served=served, n_cpu_moe=model.n_cpu_moe, **over,
+            kv_type=kv, served=served,
+            n_cpu_moe=(model.n_cpu_moe_1gpu or model.n_cpu_moe)
+            if gpus == "0" else model.n_cpu_moe, **over,
         ))
     return cells
 
