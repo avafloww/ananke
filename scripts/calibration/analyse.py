@@ -58,7 +58,10 @@ def arena_terms(record: dict) -> tuple[float, float, float]:
 
     mask = n_kv * tokens * width
     swa = parsed.get("n_swa") or 0
-    swa_mask = pad(swa + tokens) * tokens * width if swa else 0
+    # mainline sizes the second mask to the window plus the batch; ik sizes it
+    # to the whole context, which is why an SWA model costs it so much more.
+    swa_rows = n_kv if ik else pad(swa + tokens)
+    swa_mask = swa_rows * tokens * width if swa else 0
     # Two f32 hidden-state buffers on mainline, one on ik.
     hidden = (1 if ik else 2) * parsed["n_embd"] * tokens * 4
     return mask / 1024**2, swa_mask / 1024**2, hidden / 1024**2

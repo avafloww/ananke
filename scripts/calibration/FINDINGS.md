@@ -8,19 +8,32 @@ supports.
 Reproduce any of these with `python analyse.py` against
 `data/measurements.ndjson`.
 
-## The arena law is exact — on one card
+## The arena law is exact, including for sliding-window models
 
-At 130 measurements, the modelled arena reproduces the measured
-`CUDA_Host compute buffer size` to within 0.01 MiB on a single card, for every
-model measured so far:
+At 193 measurements the modelled arena reproduces the measured
+`CUDA_Host compute buffer size` to within 0.1 MiB everywhere except two cases,
+both isolated below:
 
 | arch | runtime | cards | n | mask multiple | residual |
 |---|---|---|---|---|---|
 | qwen3 | mainline | 1 | 38 | 1.00 ±0.02 | 0.0 MiB |
-| qwen3 | ik | 1 | 4 | 1.00 | 0.0 MiB |
-| qwen3 | ik | 2 | 7 | 1.00 | 0.0 MiB |
-| lfm2 | mainline | 1 | 8 | 1.00 | 0.0 MiB |
+| qwen3 | ik | 1 | 4 | 1.00 ±0.00 | 0.0 MiB |
+| qwen3 | ik | 2 | 8 | 1.00 ±0.00 | 0.0 MiB |
+| gemma3 | mainline | 1 | 8 | 1.00 ±0.00 | 0.1 MiB |
+| gemma3 | ik | 2 | 7 | 1.00 ±0.00 | 0.0 MiB |
+| lfm2 | mainline | 1 | 9 | 1.00 ±0.00 | 0.0 MiB |
+| llama | ik | 1 | 2 | 1.00 ±0.00 | 0.0 MiB |
 | talkie | mainline | 1 | 1 | 1.01 | 0.0 MiB |
+
+gemma3 is the significant row: an interleaved-SWA model, exact on both
+runtimes, which confirms the second-mask term — window-plus-batch on mainline,
+full-context on ik — rather than leaving it assumed.
+
+That distinction was worth a mistake. The first version of `analyse.py`
+applied mainline's window sizing to ik and produced K = 1.91 for gemma3 on ik,
+which reads exactly like a fork multiplier and is not one. `CONTRIBUTING.md`
+had the rule right; the re-implementation had it wrong. A "multiplier" that
+appears in only one architecture is more likely a missing term than a law.
 
 `mask = pad(n_kv) x min(ctx, ubatch) x (fa ? 2 : 4)`, plus two f32
 `n_embd x n_tokens` hidden-state buffers on mainline and one on ik, with
@@ -59,8 +72,10 @@ exists to catch — a term fitted at one point and used everywhere — and it sa
 in the part of the model treated as *derived* rather than fitted, where nobody
 was checking it.
 
-The `fa=off` excess of 4.25x rather than 4x works out to one extra byte per
-`n_kv x n_tokens`, i.e. a buffer flash attention avoids.
+The `fa=off` excess is larger than 4x and **not uniform** — 4.25 on qwen3,
+4.94 on gemma3, 4.80 on gemma4 — so it is not a single extra buffer. It is
+measured on only one or two cells per architecture so far; the interior
+fa-off points added at ub 2048 are what will give it a shape.
 
 **Unresolved**: whether the multiple is 4 because there are two cards, or for
 some other reason. The `device-scaling` cells pin placement and vary only the
@@ -88,12 +103,16 @@ buffer.
 as `n_layer x d x n_tokens`. At 42 layers and 512 tokens, ~25 MiB implies
 `d x 4 bytes` of about 1.2 KiB per layer per token.
 
-**Testable, and not yet tested**: gemma-4-26B-A4B (30 layers) and
-gemma-4-31B-QAT (60 layers) are both in the schedule. If the term is per-layer
-it should track those counts. gemma3 is also interleaved-SWA but not an
-E-variant, so it separates the SWA term from the E-variant term. All three are
-still to run — this entry is a hypothesis with four points behind it, not a
-result.
+**One prediction has now held.** gemma3 is interleaved-SWA but not an
+E-variant, and it comes out exact on one card. So the gemma4 residual is not
+the SWA term — that term is confirmed correct — and the E-variant explanation
+survives its first test.
+
+**Still to test**: gemma-4-26B-A4B (30 layers) and gemma-4-31B-QAT (60
+layers). Both are gemma4 and neither is an E-variant, so if the residual is
+E-specific they should come out at 1.00; if it tracks their layer counts
+instead, the term is per-layer and general to gemma4. Either result is
+informative. Both are still to run.
 
 ## Open
 
