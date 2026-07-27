@@ -39,6 +39,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -380,7 +381,11 @@ class RssSampler:
                 **sample,
             })
             for key, value in sample.items():
-                if value > self.peak.get(key, 0):
+                # `key not in peak` first: a metric that is legitimately zero
+                # for the whole run — RssShmem with no CUDA, so no pinned
+                # allocations — never exceeds the default and would otherwise
+                # be absent entirely rather than present as zero.
+                if key not in self.peak or value > self.peak[key]:
                     self.peak[key] = value
             self._stop.wait(self.INTERVAL_SECONDS)
 
@@ -1036,16 +1041,28 @@ def run_cells(cells: list[Cell], out: Path, log_dir: Path, port: int,
                                     hardware=hardware()))
             continue
         print(f"{prefix} {cell.label} ...", end=" ", flush=True)
-        measurement = measure(cell, log_dir, port, load_timeout, archive_dir)
+        try:
+            measurement = measure(cell, log_dir, port, load_timeout, archive_dir)
+        except Exception as error:
+            # One cell must never end the campaign. A crash here — a parse that
+            # met an unexpected log, a counter absent for a configuration that
+            # never allocates it — costs that cell and nothing else; the run
+            # has hours of work behind it and the cell is retried on resume.
+            print(f"ERROR {type(error).__name__}: {error}", flush=True)
+            traceback.print_exc()
+            append(out, Measurement(cell, provenance("true", cell), {}, {},
+                                    status="harness-error", hardware=hardware(),
+                                    tail=traceback.format_exc()[-2000:]))
+            continue
         append(out, measurement)
         if measurement.status != "ok":
             print(f"{measurement.status}; see {log_dir}", flush=True)
             continue
         print(
-            f"arena={measurement.parsed['arena_mib']:.2f} "
-            f"anon={measurement.rss['rss_anon_kb'] // 1024} "
-            f"shmem={measurement.rss['rss_shmem_kb'] // 1024} "
-            f"file={measurement.rss['rss_file_kb'] // 1024} MiB",
+            f"arena={measurement.parsed.get('arena_mib', 0):.2f} "
+            f"anon={measurement.rss.get('rss_anon_kb', 0) // 1024} "
+            f"shmem={measurement.rss.get('rss_shmem_kb', 0) // 1024} "
+            f"file={measurement.rss.get('rss_file_kb', 0) // 1024} MiB",
             flush=True,
         )
 
