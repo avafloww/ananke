@@ -277,6 +277,63 @@ cards — the CUDA context and whatever else sits outside llama.cpp's own
 accounting. It is one of the things the per-architecture compute bases quietly
 absorb, and it is now separately measured rather than folded in.
 
+## The ik CPU-MoE "constant" is a hidden-size term frozen at one model
+
+Measured on three ik MoE models, flash attention on, two cards, ub 512,
+ctx 32768 — below the offload threshold in every case:
+
+| model | n_embd | bytes/token | / n_embd | vs the constant |
+|---|---|---|---|---|
+| qwen35moe | 2048 | 82 964 | 40.5 | **1.00x** |
+| laguna | 3072 | 164 864 | 53.7 | 1.99x |
+| glm-dsa | 6144 | 263 168 | 42.8 | **3.17x** |
+
+`2048 x 40.5 = 82 944`, which is `IK_MOE_CPU_BYTES_PER_TOKEN` exactly. The
+constant is not a constant: it is a hidden-size-proportional term evaluated at
+qwen35moe's `n_embd` and hard-coded. For GLM-5.2, whose hidden size is three
+times larger, the true figure is 3.17x the constant — an under-reservation of
+~88 MiB of host memory at ub 512.
+
+Two caveats, both real. Three models cannot separate `n_embd` from other
+quantities that co-vary with it. And laguna sits at 53.7 rather than ~41; it
+is also the model whose ik sliding-window mask this analysis is known to model
+wrongly, and that error lands in exactly this residual, so its deviation is
+more likely mine than the runtime's.
+
+## Arena model: confirmed exact for glm-dsa
+
+Above the MoE threshold, where nothing contaminates the figure, glm-dsa's
+residual is **0.0 MiB** at ctx 32768 and 131072 and at ub 1024 and 2048.
+
+Getting there needed two corrections to the analysis. The sparse path
+allocates **three masks and does not halve them** for MLA — measured at
+exactly 6.00 half-width units, consistently, which is 3 full-width. An earlier
+pass charged three *half-width* masks and produced a 3.38x multiple that
+looked like a fork law.
+
+## Growth is allocation on first use, not a leak — for most models
+
+Per-turn checkpoints separate the two directly:
+
+| model | shape |
+|---|---|
+| gemma3-27b | 352 -> 1521 MiB over three turns, then flat (+0/+1 for turns 4-10) |
+| qwen3-4b, `-cram 8192` | sawtooth, 251 -> 2212 MiB net over 40 turns |
+| qwen3-4b, `-cram 0` | 240 -> 287 MiB over *more* tokens |
+| gemma-4-31B-QAT | still climbing at turn 10, decelerating; **under investigation** |
+
+The cram pair is the clean result: with the cache enabled the process grew
+1.96 GiB over an agent session; with it disabled and more tokens generated it
+grew 47 MiB. The prompt cache does fill with use. That is only visible because
+the growth driver alternates distinct conversations — a single growing one
+shares its prefix and never evicts, so it would have measured the two
+identically.
+
+`CONTRIBUTING.md` says the prompt cache is deliberately excluded from the
+rolling correction's base because it allocates nothing at load. That is true
+at load and false thereafter, which is worth knowing when the correction reads
+a host observation taken from a server that has been working.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline

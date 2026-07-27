@@ -59,10 +59,15 @@ def arena_terms(record: dict) -> tuple[float, float, float]:
 
     # MLA compresses K and V into a shared latent, so the mask is half width.
     mla = arch in ("deepseek4", "deepseek2", "glm-dsa")
-    mask = n_kv * tokens * width // (2 if mla else 1)
-    # ik's sparse-attention path allocates two further masks.
-    if ik and factors.get("extra") and "-dsa" in factors["extra"]:
-        mask *= 3
+    dsa = ik and factors.get("extra") and "-dsa" in factors["extra"]
+    if dsa:
+        # The sparse path allocates three masks and does *not* halve them:
+        # measured at exactly 6.00 half-width units across two contexts and
+        # two batch sizes, above the MoE threshold where nothing else
+        # contaminates the figure.
+        mask = n_kv * tokens * width * 3
+    else:
+        mask = n_kv * tokens * width // (2 if mla else 1)
     swa = parsed.get("n_swa") or 0
     # mainline sizes the second mask to the window plus the batch; ik sizes it
     # to the whole context, which is why an SWA model costs it so much more.
