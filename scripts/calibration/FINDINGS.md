@@ -47,12 +47,13 @@ holds.
 |---|---|---|---|
 | mainline | 1 | on | 1.00 |
 | mainline | 2 | on | **4.00** |
-| mainline | 2 | off | **4.25** |
+| mainline | 2 | off | **4.25 (non-SWA) / 4.8-4.9 (SWA)** |
 | ik | 1 or 2 | on/off | 1.00 |
 
 Flat across context (8192-65536), batch (512-2048), slots (1 and 4), and
-unified vs per-slot cache. ik is unaffected at either card count, so this is a
-mainline property, not a consequence of having two GPUs.
+unified vs per-slot cache. Confirmed on three architectures — qwen3, gemma3,
+and llama — with ik at 1.00 throughout, so this is a mainline property, not a
+consequence of having two GPUs.
 
 **This contradicts a constant currently in the tree.** `CONTRIBUTING.md`
 records "extra GPU, layer-split: +24 MiB" — calibrated at ctx 8192, where
@@ -82,37 +83,33 @@ some other reason. The `device-scaling` cells pin placement and vary only the
 count of visible CUDA devices, which is what separates those. Do not act on
 this until they and the remaining eleven models agree.
 
-## gemma4 carries a batch-scaling term the model lacks
+## RESOLVED: the gemma4 E-variant carries a per-layer input buffer
 
 Charging the mainline law leaves gemma-4-E4B with a residual that is flat in
-context and grows with batch:
+context and grows with batch. Dividing it by `n_layer x n_tokens` gives a
+constant:
 
-| ctx | ubatch | residual |
-|---|---|---|
-| 8192 | 512 | 25.09 MiB |
-| 32768 | 512 | 25.09 MiB |
-| 65536 | 512 | 25.09 MiB |
-| 32768 | 2048 | 124.34 MiB |
+| model | layers | cards | ctx | ubatch | residual | bytes / layer / token |
+|---|---|---|---|---|---|---|
+| gemma-4-26B-A4B | 30 | 1 | 32768 | 512 | **0.02 MiB** | ~0 |
+| gemma-4-E4B | 42 | 1 | 32768 | 512 | 21.02 MiB | 1025 |
+| gemma-4-E4B | 42 | 2 | 8192 | 512 | 21.09 MiB | 1028 |
+| gemma-4-E4B | 42 | 2 | 32768 | 512 | 21.09 MiB | 1028 |
+| gemma-4-E4B | 42 | 2 | 65536 | 512 | 21.09 MiB | 1028 |
+| gemma-4-E4B | 42 | 2 | 32768 | 2048 | 84.34 MiB | 1028 |
 
-Context-independence rules out a mask — including the interleaved-SWA second
-mask, which is modelled and, at `n_swa = 512`, is far too small to account for
-this. A term flat in context and rising with batch points at a per-token input
-buffer.
+**1028 bytes is 257 x 4** — an f32 buffer of 257 elements per layer per token,
+which is the E-variant's per-layer embedding input. gemma-4-26B-A4B is the
+control: same architecture string, not an E-variant, residual 0.02 MiB.
 
-**Hypothesis**: the E-variant's per-layer embedding input, which would scale
-as `n_layer x d x n_tokens`. At 42 layers and 512 tokens, ~25 MiB implies
-`d x 4 bytes` of about 1.2 KiB per layer per token.
+So the term is `n_layer x 257 x 4 x n_tokens`, applies to E-variants only, and
+is independent of context and card count. `compute_buffer.rs` already
+special-cases the E-variant on the GPU side with its own curve; the host model
+has no such term, so a gemma-4-E4B service is under-reserved on the host by
+~21 MiB at ub 512 and ~84 MiB at ub 2048.
 
-**One prediction has now held.** gemma3 is interleaved-SWA but not an
-E-variant, and it comes out exact on one card. So the gemma4 residual is not
-the SWA term — that term is confirmed correct — and the E-variant explanation
-survives its first test.
-
-**Still to test**: gemma-4-26B-A4B (30 layers) and gemma-4-31B-QAT (60
-layers). Both are gemma4 and neither is an E-variant, so if the residual is
-E-specific they should come out at 1.00; if it tracks their layer counts
-instead, the term is per-layer and general to gemma4. Either result is
-informative. Both are still to run.
+Small in absolute terms. What matters is that it has a discovered shape rather
+than a fitted fudge, and the control model rules out the alternatives.
 
 ## Open
 
