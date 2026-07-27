@@ -676,12 +676,16 @@ def measure(cell: Cell, log_dir: Path, port: int, load_timeout: int,
                         return Measurement(cell, prov, {}, {},
                                            status="failed-to-load",
                                            hardware=hardware(),
-                                           tail=_tail(log_path))
+                                           tail=_tail(log_path),
+                                           log=archive_log(log_path, archive_dir)
+                                           if archive_dir else "")
                     if time.monotonic() > deadline:
                         _stop(proc)
                         return Measurement(cell, prov, {}, {}, status="timeout",
                                            hardware=hardware(),
-                                           tail=_tail(log_path))
+                                           tail=_tail(log_path),
+                                           log=archive_log(log_path, archive_dir)
+                                           if archive_dir else "")
                     time.sleep(HEALTH_POLL_SECONDS)
                 loaded_at = time.monotonic() - sampler.started_at
                 exercise(cell, port)

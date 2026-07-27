@@ -34,6 +34,13 @@ class Model:
     runtimes: tuple[str, ...] = ("mainline",)
     mmproj: str | None = None
     draft: str | None = None
+    splits: tuple[str, ...] = ("layer", "tensor")
+    """Split modes the runtime can actually serve this architecture with.
+
+    Not every architecture supports every mode: mainline rejects
+    `LLAMA_SPLIT_MODE_TENSOR` for `deepseek4` outright, at load. Planning
+    cells that cannot load wastes the slot and buries the real failures.
+    """
     n_cpu_moe: int | None = None
     n_cpu_moe_1gpu: int | None = None
     """Expert layers to keep on the CPU when only one card is visible.
@@ -67,7 +74,8 @@ MODELS = {
               ("mainline", "ik"), n_cpu_moe=30, n_cpu_moe_1gpu=39,
               note="MoE 256/10 + SWA 512, 48L"),
         Model("dsv4f", "unsloth/DeepSeek-V4-Flash-GGUF/UD-IQ3_XXS/DeepSeek-V4-Flash-UD-IQ3_XXS-00001-of-00004.gguf",
-              ("mainline",), n_cpu_moe=40, note="MoE + MLA + NSA indexer, 43L"),
+              ("mainline",), n_cpu_moe=40, splits=("layer",),
+              note="MoE + MLA + NSA indexer, 43L; mainline rejects tensor split"),
         Model("glm52", "muzzy/GLM-5.2-GGUF/IQ2_KS/GLM-5.2-smol-IQ2_KS-00001-of-00033.gguf",
               ("ik",), n_cpu_moe=92, n_cpu_moe_1gpu=96,
               note="MoE + MLA + DSA, 79L — the production quant"),
@@ -120,7 +128,7 @@ def _significant(model: Model, runtime: str = "mainline", **over) -> list[Cell]:
     ones affordable.
     """
     cells = []
-    for gpus, split, kv, served in product(["0", "0,1"], ["layer", "tensor"],
+    for gpus, split, kv, served in product(["0", "0,1"], model.splits,
                                            ["f16", "q8_0"], [True, False]):
         cells.append(Cell(
             label=f"{model.key}-{runtime}-{gpus.replace(',', '')}-{split}-{kv}-"
