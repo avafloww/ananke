@@ -776,6 +776,13 @@ The campaign measures at `-cram 0` and every cell in the baseline group serves
 exactly two requests, so neither effect is confounded with the derivation. The
 offset stands.
 
+The campaign's own `growth-cram0` and `growth-cram8192` cells corroborate it
+on a third model and a different harness: Qwen3-4B holds 246, 247, … 249 MiB
+across nine checkpoints at `-cram 0`, and climbs 257 → 359 → 459 → 541 → 739
+at `-cram 8192` before falling back to 601 — a cache being evicted against its
+cap, which is not a shape a leak has. That data was in the dataset before this
+investigation; what was missing was the comparison.
+
 ### The step is on the prefill path, and it saturates
 
 Varying prompt length and generation length independently against a fresh
