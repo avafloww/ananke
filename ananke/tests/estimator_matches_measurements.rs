@@ -102,13 +102,13 @@ fn arena_reproduces_the_measured_pinned_buffer() {
         if case.label.starts_with("prod-") {
             continue;
         }
-        // Mainline hybrids are excluded, and the exclusion is a finding rather
-        // than a convenience: they carry a CPU-resident MoE term the estimator
-        // models for ik alone. Measured at ~116 KB per batch token on
-        // qwen35moe against ik's 83 KB, it leaves the arena under-predicted by
-        // ~57 MiB. Adding the term is the fix; excluding it here keeps this
-        // test asserting what the dataset actually established.
-        if case.hybrid && !case.ik_llama {
+        // Mainline hybrids under *tensor* split are excluded, and the
+        // exclusion is a finding rather than a convenience: they carry an
+        // extra 56-94 MiB the model does not have, flat across context. Under
+        // layer split the same models are modelled to 0.02 MiB, which is why
+        // the exclusion is this narrow — an earlier, broader one blamed
+        // hybrids in general and was wrong.
+        if case.hybrid && !case.ik_llama && case.split == SplitMode::Tensor {
             continue;
         }
         let predicted = pinned_graph_bytes(&case.summary, &case.arch, &case.inputs()) as f64;

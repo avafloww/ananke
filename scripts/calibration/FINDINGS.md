@@ -346,10 +346,26 @@ gemma-4-26B-A4B is a resident MoE and measures 4.00. The estimator was
 charging 4x to hybrids and over-predicting their arena by ~384 MiB until this
 test failed on it.
 
-**Mainline hybrids carry a CPU-resident MoE term the estimator models for ik
-alone.** qwen35moe on mainline leaves ~57 MiB unaccounted at ub 512, which is
-~116 KB per batch token against ik's measured 83 KB. Not yet added; it is the
-clearest remaining gap in the host model.
+**CORRECTED — it is tensor split, not hybrids.** This entry first read
+"mainline hybrids carry a CPU-resident MoE term", which was the wrong
+attribution: it came from a sweep whose deduplication key dropped `gpus` and
+`split`, so one cell stood in for a group that was not uniform. Breaking the
+same data down by placement:
+
+| placement | excess over mask + hidden |
+|---|---|
+| layer split, one or two cards | **0.02 MiB** |
+| tensor split | **56.5 MiB** (qwen35moe), **94.0 MiB** (laguna) |
+
+So a mainline hybrid under *layer* split is modelled essentially exactly, and
+the shortfall belongs to **hybrid plus tensor split**, where it is flat across
+ctx 8192-65536. Per unit of hidden size it comes to 56.5 and 62.7 bytes per
+batch token on the two models — close, but two models is not a law.
+
+Whether it scales with batch is unmeasured: the campaign ran no tensor-split
+hybrid above ub 512. Cells for that are queued. Until then it is an
+under-prediction of 56-94 MiB on a configuration the operator does run, which
+is the direction that OOMs, so it is worth closing rather than noting.
 
 **The reachability claim is not currently true.** Comparing owned host memory
 against the modelled overhead on fully-resident models: ratios span 0.75-2.80
