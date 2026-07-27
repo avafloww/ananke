@@ -221,6 +221,46 @@ this subtraction leaves behind. Laguna is the only SWA model in this pair. The
 threshold still lands exactly where predicted, which is evidence the MoE term
 itself is behaving.
 
+## deepseek4's VRAM is flat in context, where the curve says it should climb
+
+The production hybrid (`--n-cpu-moe 40` of 43 layers, layer split, two cards):
+
+| ctx | ubatch | driver total | llama.cpp attributes | difference |
+|---|---|---|---|---|
+| 8192 | 512 | 16 260 MiB | 15 496 | 764 |
+| 32768 | 512 | 17 566 MiB | 16 811 | 755 |
+| 65536 | 512 | 16 706 MiB | 15 947 | 759 |
+| 131072 | 512 | 17 182 MiB | 16 425 | 757 |
+| 32768 | 1024 | 16 692 MiB | 15 930 | 762 |
+| 32768 | 2048 | 17 206 MiB | 16 446 | 760 |
+
+Total VRAM moves by about 1.4 GiB, non-monotonically, across a 16x range of
+context — it is flat, not rising. The per-device `compute` column is likewise
+~1976-2019 MiB at every context and every batch.
+
+`compute_buffer.rs` gives `deepseek4` a slope of 66 MiB per 1024 tokens of
+context at ub 512, which between ctx 8192 and 131072 predicts roughly **8 GiB**
+more compute buffer. Nothing of the sort appears.
+
+This over-reserves rather than under-reserves, so it does not crash — it
+refuses the model room it could have used, which on a hybrid means fewer
+expert layers on the GPU and a slower service.
+
+**Do not conclude the constant is simply wrong.** The note in
+`CONTRIBUTING.md` describes the NSA indexer scaling as `k x ubatch x ctx`,
+derived from `nvidia-smi` totals minus modelled terms. These cells are the
+*production hybrid*, where 40 of 43 layers are on the CPU; the original
+calibration may have measured a GPU-resident configuration, in which case both
+can be right and the curve is being applied outside the regime it was fitted
+in. Settling that needs ananke's own estimator run against these exact
+configurations, which is the end-to-end check the campaign has not done yet.
+
+**Also measured**: the gap between what the driver reports and what llama.cpp
+attributes is **757-764 MiB**, flat across every context and batch on two
+cards — the CUDA context and whatever else sits outside llama.cpp's own
+accounting. It is one of the things the per-architecture compute bases quietly
+absorb, and it is now separately measured rather than folded in.
+
 ## Open
 
 - The single-card gemma4 sample is one distinct configuration; the baseline
