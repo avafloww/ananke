@@ -142,3 +142,19 @@ Single-process llama.cpp services only. Sustained multi-hour growth, heavy
 concurrent multi-slot load, and failure modes that appear only under real
 traffic are out of scope — `phase4`'s bench cells reach toward the first two
 but do not settle them.
+
+## Probes
+
+`measure.py` samples one process once per configuration, which cannot separate
+a term allocated once from one that accumulates with use. `probe_host_growth.py`
+varies one thing at a time against a fresh server and reports the series:
+
+```sh
+python probe_host_growth.py maps    qwen36-27b gemma3-27b   # where it lives
+python probe_host_growth.py growth  qwen36-27b              # leak or prompt cache
+python probe_host_growth.py prefill qwen36-27b              # what triggers it
+```
+
+These load real models and read real memory, so run them one at a time against
+an idle machine. What they settled is in FINDINGS.md under "The per-model
+residual is a first-request step".
