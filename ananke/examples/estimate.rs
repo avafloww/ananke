@@ -115,6 +115,8 @@ fn parse_args() -> Args {
 fn main() {
     let args = parse_args();
     let inputs = EstimatorInputs {
+        visible_devices: 1,
+        split_mode: ananke::config::validate::SplitMode::Layer,
         name: "estimate-example",
         model: args.model.as_path(),
         mmproj: args.mmproj.as_deref(),

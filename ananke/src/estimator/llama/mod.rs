@@ -9,7 +9,7 @@
 mod estimate;
 mod kv_per_token;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub use estimate::estimate;
 pub(crate) use estimate::{collect_non_layer, collect_per_layer, layer_index};

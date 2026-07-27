@@ -31,6 +31,22 @@ pub struct EstimatorInputs<'a> {
     /// every other architecture's compute buffer is ~ubatch-independent, so
     /// the estimator ignores this outside that arch.
     pub ubatch: Option<u32>,
+    /// How many CUDA devices the child will have visible.
+    ///
+    /// Each one costs host memory for its context — measured at ~20 MiB per
+    /// device beyond the first, with placement pinned to the CPU so nothing
+    /// but the context count varied. The estimator ran on a two-card machine
+    /// for its whole history, so that cost was folded into the process
+    /// baseline; an operator with four or eight cards inherited it wrong.
+    pub visible_devices: u32,
+    /// How the child will split the model across those devices.
+    ///
+    /// mainline replicates the graph's attention masks when layers are split
+    /// across more than one device, and does not under tensor split, where
+    /// llama.cpp fuses the cards into a single device. The difference is a
+    /// multiple of a term that scales with `n_kv x n_tokens`, so it is worth
+    /// more than a gigabyte at production contexts.
+    pub split_mode: crate::config::validate::SplitMode,
     /// K-cache quantisation (f16, q8_0, etc.). Absent means f16.
     pub cache_type_k: Option<&'a str>,
     /// V-cache quantisation. Absent means f16.
@@ -85,6 +101,16 @@ impl<'a> EstimatorInputs<'a> {
     /// Distil the estimator-relevant fields out of a `ServiceConfig`.
     /// Returns `None` if `svc` is a command-template service — the
     /// estimator only applies to llama-cpp workloads.
+    /// Tell the estimate how many devices the child will see.
+    ///
+    /// Callers that hold a device snapshot should use this; `from_service`
+    /// alone cannot know, because a service config does not describe the
+    /// machine it will run on.
+    pub fn with_visible_devices(mut self, devices: u32) -> Self {
+        self.visible_devices = devices.max(1);
+        self
+    }
+
     pub fn from_service(svc: &'a ServiceConfig) -> Option<Self> {
         let lc = svc.llama_cpp()?;
         Some(Self {
@@ -95,6 +121,12 @@ impl<'a> EstimatorInputs<'a> {
             ubatch: extra_arg_value(&svc.extra_args, &["-ub", "--ubatch-size", "--ubatch_size"])
                 .and_then(|v| v.parse().ok())
                 .or(lc.ubatch_size),
+            // One device unless a caller that can see the machine says
+            // otherwise: under-stating this under-reserves by ~20 MiB a card,
+            // which the rolling correction can absorb, where over-stating it
+            // on a single-card host could not be recovered.
+            visible_devices: 1,
+            split_mode: svc.split_mode,
             cache_type_k: lc.cache_type_k.as_deref(),
             cache_type_v: lc.cache_type_v.as_deref(),
             override_tensor: &lc.override_tensor,

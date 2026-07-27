@@ -92,7 +92,9 @@ fn plan(
     if !svc.placement_override.is_empty() {
         return Ok((Allocation::from_override(&svc.placement_override), None));
     }
-    let inputs = EstimatorInputs::from_service(svc).ok_or(PreviewError::NoModelPath)?;
+    let inputs = EstimatorInputs::from_service(svc)
+        .map(|i| i.with_visible_devices(snapshot.gpus.len() as u32))
+        .ok_or(PreviewError::NoModelPath)?;
     let (_summary, est) =
         estimator::estimate_with_summary(fs, &inputs).map_err(PreviewError::Estimator)?;
     let packed = placement::pack_corrected(&est, svc, snapshot, table, corrections, true)

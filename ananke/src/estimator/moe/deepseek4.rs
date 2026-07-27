@@ -147,6 +147,8 @@ mod tests {
 
         let empty: Vec<String> = Vec::new();
         let inputs = EstimatorInputs {
+            visible_devices: 1,
+            split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",
             model: Path::new("/fake"),
             mmproj: None,
@@ -204,6 +206,8 @@ mod tests {
         };
         let empty: Vec<String> = Vec::new();
         let mk = |ctk: &'static str| EstimatorInputs {
+            visible_devices: 1,
+            split_mode: crate::config::validate::SplitMode::Layer,
             name: "demo",
             model: Path::new("/fake"),
             mmproj: None,
