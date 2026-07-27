@@ -39,13 +39,6 @@
       "evidence": "24 E-variant cells at 1028 B/layer/token, against 40 same-architecture control cells at 3. 1028 is 257 f32 elements.",
       "kind": "derived"
     },
-    "IK_MOE_CPU_BYTES_PER_NEMBD": {
-      "value": 43,
-      "type": "u64",
-      "doc": "ik_llama's CPU-resident MoE op buffers, per batch token per unit of hidden size. Multiply by n_embd for the per-token figure.",
-      "evidence": "40 cells below the offload threshold: qwen35moe 82944 B/token at n_embd 2048 (40.5/unit), laguna 110592 B/token at n_embd 3072 (36.0/unit), laguna 164966 B/token at n_embd 3072 (53.7/unit), glm-dsa 172032 B/token at n_embd 6144 (28.0/unit), glm-dsa 262963 B/token at n_embd 6144 (42.8/unit). Replaces a flat 81 KiB, which was this term evaluated at qwen35moe's hidden size and frozen.",
-      "kind": "derived"
-    },
     "IK_OP_OFFLOAD_MIN_BATCH": {
       "value": 32,
       "type": "u64",
@@ -281,5 +274,14 @@
       }
     ]
   },
-  "measurements": 454
+  "measurements": 454,
+  "ik_moe_rates": {
+    "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
+    "default": 54,
+    "by_arch": {
+      "glm-dsa": 43,
+      "laguna": 54,
+      "qwen35moe": 41
+    }
+  }
 }

@@ -439,45 +439,33 @@ not a retune of its constants.
 
 ## The two remaining arena ceilings, located
 
-**gemma3, 12.08 MiB — two datasets disagree.** It appears only at four slots
-with a unified cache, and is flat across context, which is the signature of
-whole extra masks rather than a mis-sized one. Two of them fit exactly:
-`2 x 1.5 MiB x 4` copies at the layer-split multiple is 12 MiB against 12.08
-measured, and modelling it drops gemma3's worst arena error to 0.70 MiB.
+**gemma3, 12.08 MiB — RESOLVED.** It appears only when several slots *share*
+one cache, and is flat across context, which is the signature of whole extra
+masks. Three window masks fit exactly where one was modelled. gemma4 shows the
+same three in the same configuration.
 
-It was reverted. An earlier hardware sweep, already in the estimator's tests,
-measures gemma-4-31B-QAT — also interleaved SWA, also four slots, also a
-unified cache — at **24.52 MiB, which is one mask**. Modelling two extra masks
-predicts 27.50 for it. No rule keyed on slot count, cache mode or the presence
-of a window satisfies both models, and the discriminator is not in either
-dataset.
+An earlier attempt gated this on slot count alone and was contradicted by a
+hardware sweep measuring gemma-4-31B-QAT at four slots with a *per-slot* cache
+and one mask. That was read as gemma3 and gemma4 disagreeing and written up as
+an unresolvable contradiction — wrongly. They are different architectures, so
+one could not have been evidence about the other in the first place; and in
+fact they agree, once the condition is the shared cache rather than the slot
+count. gemma3's worst arena error falls from 12.08 MiB to **0.70**.
 
-So gemma3 keeps a recorded 12 MiB error rather than gemma4 acquiring a 3 MiB
-one. Worth stating plainly: this was fitted, verified against the campaign
-data, and then found to contradict a measurement that predates it. The
-contradiction is the finding.
+**glm-dsa, 44.99 MiB — narrowed to one architecture's card-count effect.**
+The ik CPU-MoE rate is now per architecture, because the three ik mixtures
+measured differ by a third: qwen35moe 41, glm-dsa 43, laguna 54. A single
+constant either under-reserved laguna or over-reserved the other two, and the
+median that was there did both.
 
-**glm-dsa, 44.99 MiB — the dataset contradicts every explanation.** With two
-cards the residual is -0.5 MiB, exact; on one card the term over-predicts by
-45. Measured rates per unit of hidden size:
-
-| model | n_cpu_moe, one card to two | rate |
-|---|---|---|
-| glm-dsa | 96 -> 92 | 28.0 -> 42.8 |
-| laguna | 39 -> 30 | 36.0 -> 53.7 |
-| qwen35moe | 40 -> 40 | 40.5 -> 40.5 |
-
-Card count cannot be the cause: qwen35moe's rate is identical on one card and
-two. Expert placement cannot be either: glm's two figures come from
-`n_cpu_moe` values that both exceed its 79 layers, so the placement is the
-same in both. Whatever varies is not in the dataset, and fitting a term to a
-contradiction would be worse than carrying the error.
-
-It is an *over*-prediction, so it costs host capacity rather than risking a
-load, and it is left recorded.
-
-Both are over- or fixed-offset errors rather than scaling ones, which is why
-they stayed small enough to sit unnoticed under a per-architecture ceiling.
+What remains is *within* glm-dsa: 28.0 per unit of hidden size on one card
+against 42.8 on two, each figure exact across every context and batch measured.
+Both its expert-offload values exceed its layer count, so the placement is
+identical and the card count is the only difference. That was previously
+dismissed by pointing at qwen35moe, whose rate does not vary with card count —
+but qwen35moe is a different architecture and says nothing about this one. Two
+cells on the one-card side, so it is measured rather than explained, and it
+over-predicts, which costs capacity rather than risking a load.
 
 ## A stale constant in the analysis, and what it cost
 

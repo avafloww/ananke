@@ -71,12 +71,11 @@ pub use crate::estimator::tuning::DEFAULT_CACHE_RAM_MB;
 use crate::{
     estimator::{
         tuning::{
-            DEFAULT_UBATCH, GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN, IK_MOE_CPU_BYTES_PER_NEMBD,
-            IK_OP_OFFLOAD_MIN_BATCH, KV_CACHE_PAD, MAINLINE_LAYER_SPLIT_MASK_COPIES,
-            MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD, MTP_HOST_BYTES_EMBEDDED,
-            MTP_HOST_BYTES_SEPARATE_DRAFT, NO_FLASH_ATTN_BYTES_PER_TOKEN, PINNED_EXTRA_BYTES,
-            PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE, PROCESS_BASE_BYTES_PER_DEVICE,
-            PROCESS_BASE_BYTES_PER_LAYER,
+            DEFAULT_UBATCH, GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN, IK_OP_OFFLOAD_MIN_BATCH,
+            KV_CACHE_PAD, MAINLINE_LAYER_SPLIT_MASK_COPIES, MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD,
+            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT, NO_FLASH_ATTN_BYTES_PER_TOKEN,
+            PINNED_EXTRA_BYTES, PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE,
+            PROCESS_BASE_BYTES_PER_DEVICE, PROCESS_BASE_BYTES_PER_LAYER,
         },
         types::EstimatorInputs,
     },
@@ -207,20 +206,19 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     let indexer_masks = extra_full_masks(arch) * n_kv * n_tokens * element_bytes;
 
     let swa_mask = match sliding_window(summary, arch) {
-        // One window mask.
+        // Three window masks when several slots *share* one cache, otherwise
+        // one.
         //
-        // gemma3 measures 12.08 MiB more than this at four slots with a
-        // unified cache — flat across context, so two further whole masks at
-        // the four-copy layer-split multiple, which fits to 0.08 MiB.
-        // gemma-4-31B-QAT, also interleaved SWA and in the same
-        // configuration, measures exactly one: 24.52 MiB where two extra
-        // masks would predict 27.50.
-        //
-        // No rule keyed on slot count, cache mode or the presence of a window
-        // satisfies both, and whatever discriminates them is in neither
-        // dataset. So gemma3 keeps a recorded 12 MiB error rather than gemma4
-        // acquiring a 3 MiB one. See scripts/calibration/FINDINGS.md.
-        Some(window) => pad_to_kv_cache(window as u64 + n_tokens) * n_tokens * element_bytes,
+        // Measured on gemma3 and on gemma4 alike: both imply three at four
+        // slots with `--kv-unified`, and one everywhere else. The condition is
+        // the shared cache and not the slot count — an earlier sweep measured
+        // gemma-4-31B-QAT at four slots with a per-slot cache and found one,
+        // which is what rules the simpler rule out.
+        Some(window) => {
+            let shared = inputs.parallel.unwrap_or(1) > 1 && inputs.kv_unified.unwrap_or(false);
+            let masks = if shared { 3 } else { 1 };
+            masks * pad_to_kv_cache(window as u64 + n_tokens) * n_tokens * element_bytes
+        }
         None => 0,
     };
 
@@ -329,7 +327,23 @@ fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64) -> u64 {
     // Proportional to hidden size, not flat. The previous 81 KiB/token was
     // this term evaluated at qwen35moe's `n_embd` of 2048 and frozen, which
     // left GLM-5.2 — three times that hidden size — under-reserved threefold.
-    IK_MOE_CPU_BYTES_PER_NEMBD * embedding_length(summary, arch) * n_tokens
+    ik_moe_rate(arch) * embedding_length(summary, arch) * n_tokens
+}
+
+/// The per-token, per-unit-of-hidden-size rate for this architecture.
+///
+/// Measured rates differ by a third across the three ik mixtures this dataset
+/// covers — 41, 43 and 54 — so a single constant would either under-reserve
+/// laguna or over-reserve the other two. An architecture the dataset has not
+/// seen gets the worst of them.
+fn ik_moe_rate(arch: &str) -> u64 {
+    crate::estimator::tuning::IK_MOE_RATES
+        .iter()
+        .find(|(name, _)| *name == arch)
+        .map_or(
+            crate::estimator::tuning::IK_MOE_RATE_DEFAULT,
+            |(_, rate)| *rate,
+        )
 }
 
 /// Read a `{arch}.{key}` u32 from the GGUF metadata.
@@ -892,23 +906,26 @@ mod measured_tests {
 
     /// The ik CPU-MoE term scales with hidden size rather than being the flat
     /// 81 KiB/token that was this term evaluated at qwen35moe's `n_embd`.
+    ///
+    /// The rate is per architecture, because the three ik mixtures measured
+    /// differ by a third — 41, 43 and 54 — and one number would either
+    /// under-reserve the worst or over-reserve the rest.
     #[test]
     fn ik_moe_term_scales_with_hidden_size() {
-        let narrow = IK_MOE_CPU_BYTES_PER_NEMBD * 2048;
-        let wide = IK_MOE_CPU_BYTES_PER_NEMBD * 6144;
+        // qwen35moe's own rate, at its own hidden size.
+        let rate = ik_moe_rate("qwen35moe");
+        let narrow = rate * 2048;
+        let wide = rate * 6144;
         assert_eq!(
             wide,
             3 * narrow,
             "three times the hidden size, three times the term"
         );
 
-        // At qwen35moe's hidden size the term should land near the 81 KiB the
-        // flat constant used — the observation that showed it was a
-        // hidden-size term all along. The tolerance is deliberately loose:
-        // the value is a median across three models, one of which (laguna)
-        // deviates for reasons believed to lie in the analysis's ik
-        // sliding-window mask rather than in this term. A tighter bound would
-        // pin a number the dataset does not pin.
+        // At qwen35moe's hidden size its own rate should land near the 81 KiB
+        // the flat constant used — that model is where the flat value came
+        // from, which is the observation that showed it was a hidden-size term
+        // all along.
         let drift = (narrow as f64 - 82_944.0).abs() / 82_944.0;
         assert!(
             drift < 0.10,

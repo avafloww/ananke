@@ -83,7 +83,7 @@ def arena_terms(record: dict, charge_moe: bool = True) -> tuple[float, float, fl
     experts, used = parsed.get("n_expert") or 0, parsed.get("n_expert_used") or 0
     if charge_moe and experts and used and tokens * used < 32 * experts:
         if ik:
-            hidden += IK_MOE_BYTES_PER_NEMBD * parsed["n_embd"] * tokens
+            hidden += _ik_rate(arch) * parsed["n_embd"] * tokens
         elif factors.get("n_cpu_moe") and factors.get("split") == "tensor":
             hidden += MAINLINE_TENSOR_MOE_PER_NEMBD * parsed["n_embd"] * tokens
     return mask / 1024**2, swa_mask / 1024**2, hidden / 1024**2
@@ -107,7 +107,13 @@ def _constant(name: str, default: int) -> int:
     return int(entry["value"]) if entry else default
 
 
-IK_MOE_BYTES_PER_NEMBD = _constant("IK_MOE_CPU_BYTES_PER_NEMBD", 43)
+def _ik_rate(arch: str | None) -> int:
+    """The per-architecture ik MoE rate, as the estimator resolves it."""
+    try:
+        rates = json.loads(TUNING_JSON.read_text()).get("ik_moe_rates", {})
+    except (OSError, json.JSONDecodeError):
+        return 54
+    return rates.get("by_arch", {}).get(arch or "", rates.get("default", 54))
 MAINLINE_TENSOR_MOE_PER_NEMBD = _constant("MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD", 57)
 
 
@@ -188,7 +194,19 @@ def main() -> int:
 #               pending another run.
 
 def derive_ik_moe_per_nembd(rows: list[dict]) -> tuple[int, str]:
-    """Bytes per batch token per unit of hidden size for ik's CPU-MoE buffers."""
+    """Bytes per batch token per unit of hidden size for ik's CPU-MoE buffers.
+
+    The *worst* rate across architectures, not the median. They differ —
+    qwen35moe 40.5, glm-dsa 42.8, laguna 53.7 — and a median under-reserves
+    every architecture above it, which is the direction that OOMs. Taking the
+    maximum over-reserves the others by at most a third.
+
+    Within an architecture the rate is exact: glm-dsa measures 42.8 on nine
+    cells spanning ctx 8192-131072 and ub 256-512 without deviating. It does
+    vary with card count on two of the three — glm-dsa 28.0 on one card
+    against 42.8 on two, laguna 36.0 against 53.7 — and qwen35moe not at all.
+    That is unexplained, and it is bounded by taking the maximum.
+    """
     points = []
     for record in rows:
         factors, parsed = record["factors"], record["parsed"]
@@ -205,15 +223,20 @@ def derive_ik_moe_per_nembd(rows: list[dict]) -> tuple[int, str]:
         points.append((parsed["n_embd"], excess / parsed["n_embd"], parsed.get("arch")))
     if not points:
         raise ValueError("no ik MoE cells below the offload threshold")
-    per_unit = st.median(p[1] for p in points)
+    per_unit = max(p[1] for p in points)
+    by_arch: dict[str, float] = {}
+    for _, rate, arch in points:
+        by_arch[arch] = max(by_arch.get(arch, 0.0), rate)
     detail = ", ".join(
         f"{arch} {rate * embd:.0f} B/token at n_embd {embd} ({rate:.1f}/unit)"
         for embd, rate, arch in sorted({(p[0], round(p[1], 1), p[2]) for p in points})
     )
+    _record_ik_rates(by_arch)
     return round(per_unit), (
-        f"{len(points)} cells below the offload threshold: {detail}. "
-        "Replaces a flat 81 KiB, which was this term evaluated at qwen35moe's "
-        "hidden size and frozen."
+        f"{len(points)} cells below the offload threshold: {detail}. The worst "
+        "rate is taken rather than the median: the architectures differ, and a "
+        "median under-reserves every one above it. Replaces a flat 81 KiB, "
+        "which was this term evaluated at qwen35moe's hidden size and frozen."
     )
 
 
@@ -440,6 +463,15 @@ def derive_mtp_embedded_compute(rows: list[dict]) -> tuple[int, str]:
     )
 
 
+_IK_RATES: dict[str, int] = {}
+
+
+def _record_ik_rates(by_arch: dict[str, float]) -> None:
+    """Stash the per-architecture rates for `emit` to write out."""
+    _IK_RATES.clear()
+    _IK_RATES.update({a: round(r) for a, r in by_arch.items()})
+
+
 def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]]:
     """With/without MTP cells matched on every factor but the MTP flag."""
     def identity(record: dict) -> tuple:
@@ -628,7 +660,6 @@ CURVE_DERIVERS = {
 # configuration, which runs four slots.
 DERIVERS = {
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": derive_mainline_tensor_moe,
-    "IK_MOE_CPU_BYTES_PER_NEMBD": derive_ik_moe_per_nembd,
     "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN": derive_gemma_e_per_layer_token,
     "PROCESS_BASE_BYTES_PER_DEVICE": derive_per_device_bytes,
     "MAINLINE_LAYER_SPLIT_MASK_COPIES": derive_layer_split_copies,
@@ -648,6 +679,13 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     document = json.loads(path.read_text())
     constants = document["constants"]
     changed, failed = [], []
+
+    # Runs for its side effect of recording the per-architecture rates, which
+    # `emit` writes as a table rather than as one scalar.
+    try:
+        derive_ik_moe_per_nembd(rows)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+        failed.append(f"ik MoE rates: cannot derive — {error}")
 
     for name, deriver in DERIVERS.items():
         entry = constants.get(name)
@@ -699,6 +737,18 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             continue
         entry["kind"] = kind
 
+    if _IK_RATES:
+        # Per architecture, because they differ and one number cannot serve
+        # all three without either under-reserving the worst or over-reserving
+        # the rest. The fallback is the worst seen, for an ik mixture of
+        # experts this dataset has never measured.
+        document["ik_moe_rates"] = {
+            "$comment": "Bytes per batch token per unit of hidden size for "
+                        "ik's CPU-resident MoE intermediates, by architecture. "
+                        "`default` applies to an architecture not listed.",
+            "default": max(_IK_RATES.values()),
+            "by_arch": dict(sorted(_IK_RATES.items())),
+        }
     document["constants"] = dict(sorted(constants.items()))
     document["measurements"] = len(rows)
 

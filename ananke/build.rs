@@ -126,6 +126,7 @@ fn generate_tuning_constants() {
     }
 
     out.push_str(&generate_curves(&parsed));
+    out.push_str(&generate_ik_rates(&parsed));
 
     let dest = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("tuning_constants.rs");
     std::fs::write(&dest, out).unwrap_or_else(|e| panic!("writing {}: {e}", dest.display()));
@@ -178,6 +179,39 @@ fn generate_curves(parsed: &serde_json::Value) -> String {
         "/// Used by any architecture without its own entry.\npub static DEFAULT_CURVE: Curve = ",
     );
     out.push_str(curve_literal(default).trim().trim_end_matches(','));
+    out.push_str(";\n");
+    out
+}
+
+/// Per-architecture rates for ik's CPU-resident MoE intermediates.
+///
+/// One number cannot serve every architecture: the measured rates differ by a
+/// third, so a single value either under-reserves the worst or over-reserves
+/// the rest.
+fn generate_ik_rates(parsed: &serde_json::Value) -> String {
+    let Some(rates) = parsed.get("ik_moe_rates") else {
+        return String::new();
+    };
+    let default = rates.get("default").and_then(|v| v.as_u64()).unwrap_or(0);
+    let by_arch = rates.get("by_arch").and_then(|v| v.as_object());
+    let mut out = String::from(
+        "\n/// Bytes per batch token per unit of hidden size for ik's \
+         CPU-resident\n/// MoE intermediates, by architecture.\n\
+         pub static IK_MOE_RATES: &[(&str, u64)] = &[\n",
+    );
+    if let Some(map) = by_arch {
+        for (arch, value) in map {
+            out.push_str(&format!(
+                "    ({arch:?}, {}),\n",
+                value.as_u64().unwrap_or(default)
+            ));
+        }
+    }
+    out.push_str(
+        "];\n\n/// Applied to an ik mixture of experts this dataset has \
+                  not measured.\npub const IK_MOE_RATE_DEFAULT: u64 = ",
+    );
+    out.push_str(&default.to_string());
     out.push_str(";\n");
     out
 }
