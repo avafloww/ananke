@@ -63,7 +63,7 @@ const CONFIRMED: &[(&str, f64)] = &[
     ("qwen3", 0.5),
     ("talkie", 0.5),
     ("qwen35", 1.5),
-    ("qwen35moe", 3.0),
+    ("qwen35moe", 2.5),
     ("gemma3", 13.0),
     ("glm-dsa", 45.5),
 ];
@@ -102,15 +102,17 @@ fn arena_reproduces_the_measured_pinned_buffer() {
         if case.label.starts_with("prod-") {
             continue;
         }
-        // Mainline hybrids under *tensor* split are excluded, and the
-        // exclusion is a finding rather than a convenience: they carry an
-        // extra 56-94 MiB the model does not have, flat across context. Under
-        // layer split the same models are modelled to 0.02 MiB, which is why
-        // the exclusion is this narrow — an earlier, broader one blamed
-        // hybrids in general and was wrong.
-        if case.hybrid && !case.ik_llama && case.split == SplitMode::Tensor {
+        // A multi-token-prediction run builds a second context with its own
+        // graph, which this term does not claim to describe. Worth recording
+        // rather than merely skipping: an MTP cell on a tensor-split hybrid
+        // measures *without* the host MoE term that the same configuration
+        // carries otherwise — 40.02 MiB against the 97.00 the term predicts,
+        // i.e. exactly the no-term figure. Enabling MTP appears to move those
+        // ops off the host. Two cells, so it is an observation, not a law.
+        if case.mtp {
             continue;
         }
+
         let predicted = pinned_graph_bytes(&case.summary, &case.arch, &case.inputs()) as f64;
         let measured = case.arena_mib * 1024.0 * 1024.0;
         let delta = (predicted - measured).abs() / 1024.0 / 1024.0;
@@ -226,6 +228,7 @@ struct Case {
     ik_dsa: bool,
     devices: u32,
     hybrid: bool,
+    mtp: bool,
     split: SplitMode,
 }
 
@@ -327,6 +330,7 @@ impl Case {
             // A cell with expert offload is the hybrid regime, where the
             // masks are not replicated across devices.
             hybrid: factors.get("n_cpu_moe").is_some_and(|v| !v.is_null()),
+            mtp: factors.get("spec_type").is_some_and(|v| !v.is_null()),
             split: match factors.get("split").and_then(Value::as_str) {
                 Some("tensor") => SplitMode::Tensor,
                 Some("row") => SplitMode::Row,

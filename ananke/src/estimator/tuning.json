@@ -64,7 +64,14 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "88 mainline layer-split cells at 4.00, against 164 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "88 mainline layer-split cells at 4.00, against 168 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "kind": "derived"
+    },
+    "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
+      "value": 57,
+      "type": "u64",
+      "doc": "mainline's host-resident MoE intermediates under tensor split, per batch token per unit of hidden size. Multiply by n_embd for the per-token figure.",
+      "evidence": "24 mainline tensor-split hybrid cells: laguna 62.7/unit, laguna 62.8/unit, qwen35moe 0.0/unit, qwen35moe 56.5/unit, qwen35moe 56.8/unit. Linear in batch \u2014 qwen35moe measures 28.3, 56.5, 113.0 and 226.1 MiB at ub 256, 512, 1024 and 2048, a constant rate. The same models under layer split show 0.02 MiB, so this belongs to the split mode rather than to the hybrid placement alone.",
       "kind": "derived"
     },
     "MTP_COMPUTE_MIB": {
@@ -254,5 +261,5 @@
       }
     ]
   },
-  "measurements": 448
+  "measurements": 452
 }

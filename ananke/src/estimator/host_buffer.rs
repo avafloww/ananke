@@ -73,9 +73,10 @@ use crate::{
         tuning::{
             DEFAULT_UBATCH, GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN, IK_MOE_CPU_BYTES_PER_NEMBD,
             IK_OP_OFFLOAD_MIN_BATCH, KV_CACHE_PAD, MAINLINE_LAYER_SPLIT_MASK_COPIES,
-            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT, NO_FLASH_ATTN_BYTES_PER_TOKEN,
-            PINNED_EXTRA_BYTES, PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE,
-            PROCESS_BASE_BYTES_PER_DEVICE, PROCESS_BASE_BYTES_PER_LAYER,
+            MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD, MTP_HOST_BYTES_EMBEDDED,
+            MTP_HOST_BYTES_SEPARATE_DRAFT, NO_FLASH_ATTN_BYTES_PER_TOKEN, PINNED_EXTRA_BYTES,
+            PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE, PROCESS_BASE_BYTES_PER_DEVICE,
+            PROCESS_BASE_BYTES_PER_LAYER,
         },
         types::EstimatorInputs,
     },
@@ -226,7 +227,32 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     let masks = base_mask + indexer_masks + swa_mask;
     let masks = masks * mask_copies(inputs);
 
-    masks + hidden_inputs + no_fa_extra + gemma_e_variant_bytes(summary, arch, n_tokens)
+    masks
+        + hidden_inputs
+        + no_fa_extra
+        + gemma_e_variant_bytes(summary, arch, n_tokens)
+        + mainline_tensor_moe_bytes(summary, arch, inputs, n_tokens)
+}
+
+/// mainline's host-resident MoE intermediates under tensor split.
+///
+/// A hybrid served with `--split-mode tensor` keeps per-token MoE buffers on
+/// the host — the same shape as ik's term and at a higher rate. Under layer
+/// split the same models show none of it, which is why this keys on the split
+/// mode and not on the placement alone.
+fn mainline_tensor_moe_bytes(
+    summary: &GgufSummary,
+    arch: &str,
+    inputs: &EstimatorInputs<'_>,
+    n_tokens: u64,
+) -> u64 {
+    if inputs.ik_llama
+        || !inputs.host_resident_experts
+        || inputs.split_mode != crate::config::validate::SplitMode::Tensor
+    {
+        return 0;
+    }
+    MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD * embedding_length(summary, arch) * n_tokens
 }
 
 /// How many times the graph's attention masks are replicated.

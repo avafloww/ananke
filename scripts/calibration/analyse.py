@@ -195,6 +195,45 @@ def derive_ik_moe_per_nembd(rows: list[dict]) -> tuple[int, str]:
     )
 
 
+def derive_mainline_tensor_moe(rows: list[dict]) -> tuple[int, str]:
+    """mainline's host-resident MoE buffers under tensor split.
+
+    A hybrid served with `--split-mode tensor` keeps per-token MoE
+    intermediates on the host, the same shape as ik's term and at a higher
+    rate. Under layer split the same models show none of it.
+    """
+    points = []
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if factors["runtime"] != "mainline" or not factors["n_cpu_moe"]:
+            continue
+        if factors["split"] != "tensor" or factors["flash_attn"] != "on":
+            continue
+        if not parsed.get("arena_mib") or factors["ngl"] != 99:
+            continue
+        mask, swa_mask, hidden = arena_terms(record, charge_moe=False)
+        tokens = min(factors["ctx"], factors["ubatch"])
+        excess = (parsed["arena_mib"] - (mask + swa_mask + hidden)) * 1024**2
+        if excess <= 0:
+            continue
+        points.append((parsed.get("arch"), parsed["n_embd"],
+                       excess / tokens / parsed["n_embd"]))
+    if not points:
+        raise ValueError("no mainline tensor-split hybrid cells")
+    rates = [r for _, _, r in points]
+    detail = ", ".join(
+        f"{arch} {rate:.1f}/unit"
+        for arch, rate in sorted({(a, round(r, 1)) for a, _, r in points})
+    )
+    return round(st.median(rates)), (
+        f"{len(points)} mainline tensor-split hybrid cells: {detail}. Linear in "
+        "batch — qwen35moe measures 28.3, 56.5, 113.0 and 226.1 MiB at ub 256, "
+        "512, 1024 and 2048, a constant rate. The same models under layer split "
+        "show 0.02 MiB, so this belongs to the split mode rather than to the "
+        "hybrid placement alone."
+    )
+
+
 def derive_gemma_e_per_layer_token(rows: list[dict]) -> tuple[int, str]:
     """The E-variant's per-layer embedding input, in bytes per layer per token."""
     residuals, controls = [], []
@@ -477,6 +516,7 @@ CURVE_DERIVERS: dict[str, object] = {}
 # constant without that term would under-reserve exactly the production
 # configuration, which runs four slots.
 DERIVERS = {
+    "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": derive_mainline_tensor_moe,
     "IK_MOE_CPU_BYTES_PER_NEMBD": derive_ik_moe_per_nembd,
     "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN": derive_gemma_e_per_layer_token,
     "PROCESS_BASE_BYTES_PER_DEVICE": derive_per_device_bytes,
