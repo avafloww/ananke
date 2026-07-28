@@ -37,12 +37,18 @@ first-request step":
 
 Run these against an idle machine, one at a time: they load real models and
 read real memory, and anything else resident moves the numbers.
+
+If you wrap the server in a tracer, remember the tracer becomes the parent:
+terminating it does not reach the server, which then outlives the probe still
+holding the GPU and the port. That orphan made every cell of two later runs
+fail to load before it was spotted.
 """
 
 from __future__ import annotations
 
 import collections
 import json
+import socket
 import os
 import subprocess
 import sys
@@ -130,9 +136,19 @@ class Server:
         except Exception:
             self.proc.kill()
         # The next server binds the same port, and llama-server does not set
-        # SO_REUSEADDR — without a pause the successor silently loses the bind
-        # and the probe measures the wrong process.
-        time.sleep(3)
+        # SO_REUSEADDR — without a pause the successor loses the bind and dies
+        # with "exiting due to HTTP server error", leaving the probe to sample
+        # a zombie. Three seconds was not always enough.
+        for _ in range(30):
+            time.sleep(1)
+            probe = socket.socket()
+            try:
+                probe.bind(("127.0.0.1", PORT))
+                return
+            except OSError:
+                continue
+            finally:
+                probe.close()
 
     def complete(self, prompt: str, n_predict: int) -> None:
         body = json.dumps({"prompt": prompt, "n_predict": n_predict,
