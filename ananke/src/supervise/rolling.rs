@@ -56,6 +56,13 @@ impl RunLoop {
         let peak_vram = self.deps.observation.read_peak_vram(name);
         let peak_owned = self.deps.observation.read_peak_rss_owned(name);
         let peak_file = self.deps.observation.read_peak_rss_file(name);
+        debug!(
+            service = %name,
+            peak_rss_file = peak_file,
+            cpu_weight_bytes = base.inputs.cpu_weight_bytes,
+            weights_anonymous = base.weights_are_anonymous(peak_file),
+            "host-pool: classified host-resident weights as mapped or anonymous"
+        );
         let samples = base.samples_from(peak_vram, peak_owned, peak_file);
 
         if samples.run_was_measurable {
