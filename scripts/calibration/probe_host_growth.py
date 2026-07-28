@@ -50,6 +50,7 @@ import collections
 import json
 import socket
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -106,7 +107,7 @@ class Server:
     def __init__(self, model: str, cram: int = 0, **flags):
         self.model = model
         self.argv = [
-            "llama-server", "-m", str(LLM_DIR / MODELS[model]),
+            os.environ.get("MAINLINE_BIN", "llama-server"), "-m", str(LLM_DIR / MODELS[model]),
             "-c", str(MAX_CTX.get(model, 32768)), "-ub", "512", "-ngl", "99",
             "-fa", "on", "-np", "1", "--port", str(PORT), "--host", "127.0.0.1",
             "-lv", "5", "-cram", str(cram),
@@ -118,7 +119,8 @@ class Server:
         self.proc = subprocess.Popen(
             self.argv, stdout=open(f"/tmp/probe-{self.model}.log", "w"),
             stderr=subprocess.STDOUT,
-            env=dict(os.environ, CUDA_VISIBLE_DEVICES="0"))
+            env=dict(os.environ, CUDA_VISIBLE_DEVICES="0"),
+            start_new_session=True)
         for _ in range(1800):
             time.sleep(1)
             try:
@@ -130,11 +132,11 @@ class Server:
         raise SystemExit(f"{self.model} never became healthy")
 
     def __exit__(self, *exc):
-        self.proc.terminate()
+        os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
         try:
             self.proc.wait(60)
         except Exception:
-            self.proc.kill()
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
         # The next server binds the same port, and llama-server does not set
         # SO_REUSEADDR — without a pause the successor loses the bind and dies
         # with "exiting due to HTTP server error", leaving the probe to sample
