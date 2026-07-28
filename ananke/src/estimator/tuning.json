@@ -64,7 +64,7 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "85 mainline layer-split cells at 4.01, against 140 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "91 mainline layer-split cells at 4.01, against 140 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived"
     },
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
@@ -150,7 +150,7 @@
     "default": {
       "base_mib": 942,
       "slope_mib_per_1k": 8,
-      "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 92 layer-split cells at ctx 8192-65536, peaking at 895 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+      "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 98 layer-split cells at ctx 8192-65536, peaking at 895 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
       "slope_scales_with_ubatch": true
     },
     "entries": [
@@ -172,7 +172,7 @@
         ],
         "base_mib": 830,
         "slope_mib_per_1k": 17,
-        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 74 layer-split cells at ctx 8192-65536, peaking at 1193 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 80 layer-split cells at ctx 8192-65536, peaking at 1193 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
@@ -281,7 +281,7 @@
       }
     ]
   },
-  "measurements": 521,
+  "measurements": 527,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -375,5 +375,13 @@
   "mtp_slot_scaling": {
     "$comment": "Reported, not fitted. The MTP overhead measured at a fixed context across slot counts, which is what separates a genuine slot term from the longer context the first campaign confounded it with.",
     "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB, np4 2376 MiB; Qwen3.6-35B-A3B-UD-Q5_K_ ctx 32768: np1 584 MiB, np2 812 MiB, np4 1224 MiB; gemma-4-31B-it-qat-UD-Q4 ctx 32768: np1 724 MiB, np2 724 MiB, np4 728 MiB"
+  },
+  "per_slot_host_bytes": {
+    "$comment": "Host memory each concurrently active slot costs, by architecture. They disagree by two orders of magnitude, and idle slots cost nothing. `default` applies to an architecture not listed; the worst is used, since this is host memory rather than VRAM and over-reserving it is cheap.",
+    "default": 93220864,
+    "by_arch": {
+      "gemma3": 93220864,
+      "llama": 3807915
+    }
   }
 }

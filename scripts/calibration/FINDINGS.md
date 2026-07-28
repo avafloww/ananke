@@ -973,10 +973,32 @@ per-slot rather than per-process.
 
 A reservation has to assume every slot can become active, so this belongs in
 the model, and it is the whole of the two cells still outside the correction
-band. It is not modelled yet: the series covers one architecture at one
-context and one split, which is the coverage that has produced a wrong
-constant three times here. The `concurrency-models` phase measures it across
-architectures first.
+band.
+
+Measured across three architectures before being modelled, which was the right
+call: they disagree by two orders of magnitude.
+
+| | per active slot |
+|---|---|
+| qwen35 | ~160 MiB |
+| gemma3 | 89 MiB |
+| llama | 4 MiB |
+
+A single value taken from the one series that existed — qwen35's — would have
+over-reserved a llama-family model by half a gigabyte at four slots. Nothing
+the estimator already reads predicts the spread: it is monotonic in layer
+count over these three (64, 62, 40) but far too steep to be a layer term, and
+unrelated to hidden size, KV-head count, or vocabulary. So it is charged per
+architecture, with the worst as the default — cheap here, because this is host
+memory rather than VRAM.
+
+Two conflations had to come out of the derivation first, both of the same kind
+that has bitten repeatedly. `soak` grows the prompt over six rounds and costs
+memory of its own, so pooling a soak-free single-request cell with a soaked
+concurrent one measured both at once and put gemma3 at 211 MiB per slot. And
+the rate has to be the worst slope against the *lowest* concurrency rather
+than the endpoint average: gemma3's endpoint average is 63 MiB per slot, which
+under-reserves its own two-slot measurement by 26.
 
 ## Open
 

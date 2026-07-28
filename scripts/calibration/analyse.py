@@ -637,6 +637,80 @@ def derive_no_flash_attn_rates(rows: list[dict]) -> str:
     )
 
 
+def derive_per_slot_bytes(rows: list[dict]) -> str:
+    """Host memory each *concurrently active* slot costs, by architecture.
+
+    Idle slots are free. The same model at `parallel` 1, 2, and 4 with a
+    single sequential probe holds the same anonymous memory at every one; it
+    is a slot that actually serves a request that allocates, which fits the
+    first-use prefill step being per-slot rather than per-process. A
+    reservation cannot know how many will be busy, so it charges all of them.
+
+    Measured per architecture because they disagree by two orders of
+    magnitude — about 165 MiB per slot on qwen35, 89 on gemma3, and 3 on
+    llama — and a single value taken from the one architecture that had a
+    series would have over-reserved llama by half a gigabyte at four slots.
+    Nothing the estimator already reads predicts the spread: it is monotonic
+    in layer count over these three but far too steep to be a layer term, and
+    unrelated to hidden size, KV-head count, or vocabulary.
+
+    The arena does not move at all across the series, so this is a baseline
+    term and not an arena one.
+    """
+    from collections import defaultdict as _dd
+    groups: dict[tuple, dict[int, int]] = _dd(dict)
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if not factors.get("served") or factors.get("bench") or factors["spec_type"]:
+            continue
+        if factors["n_cpu_moe"] or not parsed.get("arch"):
+            continue
+        # `soak` belongs in the key. It grows the prompt over six rounds and
+        # costs memory of its own, so pooling a soak-free single-request cell
+        # with a soaked concurrent one measures both at once — which put
+        # gemma3 at 211 MiB per slot against the 89 its own series shows.
+        #
+        # `parallel` deliberately does not: an idle slot costs nothing, so a
+        # cell with four slots and one request is a valid one-slot reading,
+        # and excluding it would drop every series whose slot count moves
+        # alongside its concurrency.
+        key = (parsed["arch"], factors["runtime"], factors["ctx"], factors["ubatch"],
+               factors["gpus"], factors["split"] or "layer", factors["kv_type"],
+               bool(factors["kv_unified"]), factors.get("soak") or 0)
+        owned = record["rss"].get("rss_anon_kb", 0) * 1024
+        concurrency = factors.get("concurrency") or 1
+        # The lowest reading at each point: a higher one means the process had
+        # done more, and the difference being measured is the slot count.
+        seen = groups[key].get(concurrency)
+        groups[key][concurrency] = owned if seen is None else min(seen, owned)
+
+    by_arch: dict[str, list[float]] = _dd(list)
+    for key, points in groups.items():
+        if len(points) < 2:
+            continue
+        # Taken against the lowest point and maximised, so the rate covers
+        # *every* measured concurrency rather than just the largest. gemma3
+        # holds 378, 467, and 568 MiB at one, two, and four: the endpoint
+        # average is 63 MiB per slot, which under-reserves the two-slot point
+        # by 26, while the worst interval gives 89 and covers both.
+        lo = min(points)
+        by_arch[key[0]].append(
+            max((points[c] - points[lo]) / (c - lo) for c in points if c > lo))
+    if not by_arch:
+        raise ValueError("no architecture measured at two concurrency levels")
+    _PER_SLOT.clear()
+    _PER_SLOT.update({a: max(0, round(max(g))) for a, g in by_arch.items()})
+    return (
+        "anonymous memory against the number of concurrent requests, all else "
+        "equal: "
+        + ", ".join(f"{a} {v / 1024**2:.0f} MiB/slot" for a, v in sorted(_PER_SLOT.items()))
+        + ". Idle slots cost nothing — the same models at parallel 1, 2, and 4 "
+        "with one sequential probe read the same — so it is the active slot "
+        "that allocates. Charged for every slot, since a reservation cannot "
+        "know how many will be busy."
+    )
+
+
 def derive_quantised_cache_bytes(rows: list[dict]) -> tuple[int, str]:
     """Extra pinned bytes per batch token when the KV cache is quantised.
 
@@ -1068,6 +1142,7 @@ _MTP_SLOTS: list[str] = []
 _IK_RATES: dict[str, int] = {}
 _QUANT_RATES: dict[str, int] = {}
 _NO_FA_RATES: dict[str, int] = {}
+_PER_SLOT: dict[str, int] = {}
 
 
 def _record_ik_rates(by_arch: dict[str, float]) -> None:
@@ -1331,6 +1406,10 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"MTP slot scaling: cannot report — {error}")
     try:
+        derive_per_slot_bytes(rows)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+        failed.append(f"per-slot host bytes: cannot derive — {error}")
+    try:
         derive_no_flash_attn_rates(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError, Disagreement) as error:
         failed.append(f"no-flash-attention rates: cannot derive — {error}")
@@ -1425,6 +1504,17 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "separates a genuine slot term from the longer context "
                         "the first campaign confounded it with.",
             "observed": _MTP_SLOTS[0],
+        }
+    if _PER_SLOT:
+        document["per_slot_host_bytes"] = {
+            "$comment": "Host memory each concurrently active slot costs, by "
+                        "architecture. They disagree by two orders of "
+                        "magnitude, and idle slots cost nothing. `default` "
+                        "applies to an architecture not listed; the worst is "
+                        "used, since this is host memory rather than VRAM and "
+                        "over-reserving it is cheap.",
+            "default": max(_PER_SLOT.values()),
+            "by_arch": dict(sorted(_PER_SLOT.items())),
         }
     if _NO_FA_RATES:
         document["no_flash_attn_rates"] = {
