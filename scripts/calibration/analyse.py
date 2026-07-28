@@ -2035,7 +2035,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
 
     check_arena_model(rows)
     check_table_signs(document)
-    path.write_text(json.dumps(document, indent=2) + "\n")
+    path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
     print(f"wrote {path} from {len(rows)} measurements")
     for line in changed:
         print(f"  changed: {line}")
