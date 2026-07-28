@@ -24,7 +24,10 @@
 //! `estimation.compute_buffer_mb`, which short-circuits this table.
 
 use crate::{
-    estimator::tuning::{CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR},
+    estimator::tuning::{
+        CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR,
+        QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN,
+    },
     gguf::GgufSummary,
 };
 
@@ -32,6 +35,7 @@ use crate::{
 #[derive(Debug, Clone, Copy)]
 struct Tuning {
     base: u32,
+    base_batch: u32,
     slope: u32,
 }
 
@@ -61,6 +65,7 @@ fn tuning_for(summary: &GgufSummary, ubatch: u32) -> Tuning {
     };
     Tuning {
         base: curve.base_mib,
+        base_batch: curve.base_batch_mib,
         slope,
     }
 }
@@ -129,9 +134,43 @@ pub fn default_for_streams(
     flash_attn: bool,
     streams: u32,
 ) -> u32 {
+    default_for_inputs(summary, context, ubatch, flash_attn, streams, false)
+}
+
+/// As [`default_for_streams`], plus the allowance a quantised KV cache needs.
+///
+/// A quantised cache costs the *compute* buffer as well as the pinned host
+/// one: paired cells differing in nothing else measure up to 394 MiB more per
+/// device at ctx 65536, 1.86x on gemma3 and 1.95x on qwen3. It used to be
+/// absorbed into the curves, which are fitted from the worst cell at each
+/// context and did not key on cache type — so one quantised cell set the
+/// slope and every f16 service paid it.
+pub fn default_for_inputs(
+    summary: &GgufSummary,
+    context: u32,
+    ubatch: Option<u32>,
+    flash_attn: bool,
+    streams: u32,
+    quantised_kv: bool,
+) -> u32 {
     let batch = ubatch.unwrap_or(DEFAULT_UBATCH);
     let t = tuning_for(summary, batch);
+    // The batch-scaling constant, off the 512-token calibration point. It is
+    // separate from `base` because it is not flat — 357 MiB on gemma3 at
+    // ubatch 512 and four times that at 2048 — and separate from `slope`
+    // because it does not grow with context.
+    let batch_term =
+        (u64::from(t.base_batch) * u64::from(batch.max(1)) / u64::from(DEFAULT_UBATCH)) as u32;
+    let quantised = if quantised_kv {
+        let bytes = QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN
+            * u64::from(context)
+            * u64::from(context.min(batch));
+        (bytes / (1024 * 1024)).min(u64::from(u32::MAX)) as u32
+    } else {
+        0
+    };
     t.base
+        .saturating_add(batch_term)
         .saturating_add(t.slope.saturating_mul(context / 1024))
         .saturating_add(no_flash_attn_mib(
             summary,
@@ -139,6 +178,7 @@ pub fn default_for_streams(
             batch,
             flash_attn,
         ))
+        .saturating_add(quantised)
 }
 
 /// The score matrix an unfused attention pass materialises.
@@ -230,8 +270,14 @@ mod tests {
     /// would be asserting the generator rather than the arithmetic.
     #[test]
     fn llama_family_default_tuning() {
-        let s = summary_for("qwen3");
-        let (base, slope) = (DEFAULT_CURVE.base_mib, DEFAULT_CURVE.slope_mib_per_1k);
+        // An architecture with no entry of its own, so it lands on the default
+        // curve. qwen3 used to serve here and no longer does: it has its own.
+        let s = summary_for("brand-new-arch");
+        // `base` here is the flat term plus the batch term, which is charged
+        // in full at the default 512-token batch; only the slope varies with
+        // the context.
+        let base = DEFAULT_CURVE.base_mib + DEFAULT_CURVE.base_batch_mib;
+        let slope = DEFAULT_CURVE.slope_mib_per_1k;
         assert_eq!(default_for(&s, 2048, None, true), base + slope * 2);
         assert_eq!(default_for(&s, 32768, None, true), base + slope * 32);
     }
@@ -247,28 +293,41 @@ mod tests {
     /// corrected, rather than deleted, since the crossover is the real
     /// behaviour and worth guarding.
     #[test]
-    fn gemma_family_is_steeper_than_the_llama_default() {
+    fn gemma_family_no_longer_needs_a_steeper_curve() {
+        // It used to, and the belief was an artifact. The curves are fitted
+        // from the worst cell at each context and did not key on cache type,
+        // and a quantised KV cache costs the compute buffer up to 394 MiB more
+        // at ctx 65536 — so the gemma family's apparent steepness was one
+        // quantised cell setting the slope. Fitted on f16 cells alone, gemma
+        // and the llama default have the *same* slope, and gemma's base is
+        // lower.
+        //
+        // Kept as a guard rather than deleted: if a future refit makes gemma
+        // steeper again, that is worth knowing rather than absorbing.
         let gemma = summary_for("gemma4");
-        let llama = summary_for("qwen3");
-        assert!(
-            default_for(&gemma, 65536, None, true) > default_for(&llama, 65536, None, true),
-            "gemma must exceed the default at long context"
+        // The default curve, via an architecture with no entry of its own:
+        // qwen3 has had one since it stopped sharing the default.
+        let llama = summary_for("brand-new-arch");
+        let slope_of =
+            |s: &GgufSummary| default_for(s, 65536, None, true) - default_for(s, 0, None, true);
+        assert_eq!(
+            slope_of(&gemma),
+            slope_of(&llama),
+            "gemma and the default curve are fitted to the same slope"
         );
-        let gemma_slope =
-            default_for(&gemma, 65536, None, true) - default_for(&gemma, 0, None, true);
-        let llama_slope =
-            default_for(&llama, 65536, None, true) - default_for(&llama, 0, None, true);
         assert!(
-            gemma_slope > llama_slope,
-            "and it must be the slope that does it"
+            default_for(&gemma, 65536, None, true) < default_for(&llama, 65536, None, true),
+            "and gemma sits below it, on the lower base"
         );
     }
 
     #[test]
     fn gemma4_e_variant_uses_smaller_curve() {
-        // E-variants ship a `per_layer_token_embd.weight` tensor and
-        // have a small hidden size; the fat-model gemma4 tuning over-
-        // reserves them by ~2 GiB at 262k otherwise.
+        // E-variants ship a `per_layer_token_embd.weight` tensor and have a
+        // small hidden size. This entry was the one curve nobody derived — a
+        // hand-set 1100/7 that stayed put while every other curve moved, which
+        // briefly put it *above* the general gemma curve once that one was
+        // corrected. It is now fitted from the E-variant's own cells.
         let regular = default_for(&summary_for("gemma4"), 262144, None, true);
         let e_variant = default_for(&gemma4_e_variant_summary(), 262144, None, true);
         assert!(
@@ -311,7 +370,8 @@ mod tests {
         // would otherwise inherit, and (b) still cover the measured peak
         // (~428 MiB warmed) at the model's native 2048 context.
         let talkie_2k = default_for(&summary_for("talkie"), 2048, None, true);
-        let llama_2k = default_for(&summary_for("qwen3"), 2048, None, true);
+        // The default curve, via an architecture with no entry of its own.
+        let llama_2k = default_for(&summary_for("brand-new-arch"), 2048, None, true);
         assert!(
             talkie_2k < llama_2k,
             "talkie cb should be tighter than the dense default \
@@ -326,12 +386,14 @@ mod tests {
 
     #[test]
     fn talkie_floors_to_base() {
-        let base = CURVES
+        let curve = CURVES
             .iter()
             .find(|c| c.archs.contains(&"talkie"))
-            .expect("talkie has a curve")
-            .base_mib;
-        assert_eq!(default_for(&summary_for("talkie"), 0, None, true), base);
+            .expect("talkie has a curve");
+        assert_eq!(
+            default_for(&summary_for("talkie"), 0, None, true),
+            curve.base_mib + curve.base_batch_mib
+        );
     }
 
     #[test]
@@ -430,17 +492,24 @@ mod tests {
         // that slip through the fallback still over-reserve safely.
         assert_eq!(
             default_for(&summary_for("brand-new-arch"), 8192, None, true),
-            DEFAULT_CURVE.base_mib + DEFAULT_CURVE.slope_mib_per_1k * 8
+            DEFAULT_CURVE.base_mib
+                + DEFAULT_CURVE.base_batch_mib
+                + DEFAULT_CURVE.slope_mib_per_1k * 8
         );
     }
 
     #[test]
     fn absent_context_floors_to_base() {
+        // The floor at zero context is the flat base *plus* the batch term,
+        // which is charged in full at the 512-token calibration batch. Only
+        // the context-scaling part disappears.
         let base_of = |arch: &str| {
             CURVES
                 .iter()
                 .find(|c| c.archs.contains(&arch) && c.variant.is_none())
-                .map_or(DEFAULT_CURVE.base_mib, |c| c.base_mib)
+                .map_or(DEFAULT_CURVE.base_mib + DEFAULT_CURVE.base_batch_mib, |c| {
+                    c.base_mib + c.base_batch_mib
+                })
         };
         assert_eq!(
             default_for(&summary_for("qwen3"), 0, None, true),
@@ -458,9 +527,16 @@ mod tests {
             default_for(&summary_for("qwen35moe"), 0, None, true),
             base_of("qwen35moe")
         );
+        // Against the entry rather than a literal: the E-variant curve is
+        // derived now, so a hardcoded figure fails on every recalibration
+        // while checking nothing about the floor.
+        let e = CURVES
+            .iter()
+            .find(|c| c.variant == Some("gemma_e"))
+            .expect("the E-variant entry");
         assert_eq!(
             default_for(&gemma4_e_variant_summary(), 0, None, true),
-            1100
+            e.base_mib + e.base_batch_mib
         );
     }
 }

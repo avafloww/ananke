@@ -181,7 +181,8 @@ fn generate_curves(parsed: &serde_json::Value) -> String {
     };
     let mut out = String::from(
         "\n/// A per-architecture GPU compute-buffer curve: \
-         `base_mib + slope_mib_per_1k * (ctx / 1024)`, per device.\n\
+         `base_mib + base_batch_mib * k + slope_mib_per_1k * (ctx / 1024) * k`, \
+         where `k = ubatch / 512`, per device.\n\
          #[derive(Debug, Clone, Copy)]\n\
          pub struct Curve {\n\
          \x20   /// Architectures this curve applies to.\n\
@@ -190,6 +191,10 @@ fn generate_curves(parsed: &serde_json::Value) -> String {
          \x20   /// architecture string covers models with different graphs.\n\
          \x20   pub variant: Option<&'static str>,\n\
          \x20   pub base_mib: u32,\n\
+         \x20   /// A constant that scales with the batch but not the context —\n\
+         \x20   /// large on some architectures, and with nowhere to go in a\n\
+         \x20   /// two-term curve but the flat base or the margin.\n\
+         \x20   pub base_batch_mib: u32,\n\
          \x20   pub slope_mib_per_1k: u32,\n\
          \x20   /// Whether the slope is linear in ubatch off the 512-token\n\
          \x20   /// calibration point.\n\
@@ -332,6 +337,10 @@ fn curve_literal(entry: &serde_json::Value) -> String {
             .and_then(|v| v.as_u64())
             .unwrap_or_else(|| panic!("curve entry missing `{key}`"))
     };
+    let base_batch = entry
+        .get("base_batch_mib")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let scales = entry
         .get("slope_scales_with_ubatch")
         .and_then(|v| v.as_bool())
@@ -343,7 +352,8 @@ fn curve_literal(entry: &serde_json::Value) -> String {
     }
     out.push_str(&format!(
         "    Curve {{ archs: &[{}], variant: {variant}, base_mib: {}, \
-         slope_mib_per_1k: {}, slope_scales_with_ubatch: {scales} }},\n",
+         base_batch_mib: {base_batch}, slope_mib_per_1k: {}, \
+         slope_scales_with_ubatch: {scales} }},\n",
         archs.join(", "),
         number("base_mib"),
         number("slope_mib_per_1k"),

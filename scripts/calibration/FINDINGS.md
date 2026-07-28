@@ -942,6 +942,66 @@ wrong three times in the axis it was never swept is, here, right.
 (Magidonia at ctx 65536 on one card cannot load — `failed to allocate compute
 pp buffers` — which is a genuine limit of 24 GiB, not a harness fault.)
 
+## The compute curve was missing a term
+
+gemma3 reserved 1918 MiB of compute against 562 taken. Two causes, and neither
+was the slope being wrong in the way it looked.
+
+**A quantised KV cache costs the compute buffer, and nothing modelled it.**
+Paired cells differing in nothing else measure up to 394 MiB more per device at
+ctx 65536 — 1.86x on gemma3, 1.95x on qwen3, 1.77x on gemma4, and nothing at
+all on deepseek4, laguna, llama, and qwen35moe, or anywhere at ctx 8192. The
+curves are fitted from the worst cell at each context and did not key on cache
+type, so a single quantised cell set the slope and every f16 service paid it.
+It is charged as its own term now.
+
+**And the curve's form had no place for a batch-scaling constant.** A device's
+need decomposes into three parts, not two:
+
+    need = base + base_batch x k + slope x (ctx / 1024) x k,   k = ubatch / 512
+
+`base` is the CUDA context — flat in everything, ~340 MiB per device on every
+architecture here. `slope` grows with context and batch together. `base_batch`
+grows with batch alone, and it is *large*: 357 MiB on gemma3. Solving gemma3's
+four points for all three gives 330 / 227 / 3.5, and that 330 is the measured
+CUDA context to within 10 MiB — the decomposition is physical, not a fit.
+
+With only two terms it has to land somewhere. It went into the flat base, which
+then over-reserved every small batch; and while the quantised cells were
+inflating each fit, the margin absorbed the rest. Removing the quantised
+contamination without adding the term made things worse, not better — eight
+cells at ubatch 2048 began reserving *less* than the runtime took.
+
+Two other fits were tried and are recorded because they look reasonable and are
+not. Fitting base and slope both against `(ctx / 1024) x (ubatch / 512)` fixes
+gemma3 and pushes qwen3 to 4.0x and llama to 2.9x: one line cannot hold a
+floor, a sublinear context term, and a linear batch term at once. Dividing the
+whole need by that axis — treating it as a pure rate — explodes, because
+compute has a floor and the smallest context then sets the rate for every
+long-context reservation.
+
+Worst reserved-over-measured, per architecture, before and after:
+
+| | before | after |
+|---|---|---|
+| gemma3 | 3.4x | 2.5x |
+| gemma4 | 2.9x | 2.3x |
+| qwen3 | 2.8x | 2.3x |
+| qwen35 | 2.4x | 2.2x |
+| deepseek4 | 3.3x | 3.3x |
+| llama | 2.0x | 2.3x |
+
+Two smaller things fell out. The E-variant curve was the one nobody derived —
+a hand-set 1100/7 that stayed put while every other curve moved, which briefly
+left it *above* the general gemma curve once that was corrected; it is fitted
+from its own cells now. And qwen3 has its own entry rather than sharing the
+default, which has to cover the worse of llama and qwen3 *and* serve as the
+fallback for an unmeasured architecture.
+
+The belief that the gemma family needs a steeper curve than the llama default
+was an artifact of the quantised cells. Fitted on f16 alone the slopes are
+equal and gemma's base is lower.
+
 ## The design hole flash attention exposed, audited everywhere else
 
 Flash-attention-off spent the first campaign recorded as an inconsistent

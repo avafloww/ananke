@@ -1150,7 +1150,7 @@ fn quantised_cache_rate(arch: &str) -> u64 {
 ///
 /// A quantised cache costs more pinned host memory than an f16 one, measured
 /// in every one of 117 pairs differing in nothing else.
-fn quantised_kv(inputs: &EstimatorInputs<'_>) -> bool {
+pub(crate) fn quantised_kv(inputs: &EstimatorInputs<'_>) -> bool {
     [inputs.cache_type_k, inputs.cache_type_v]
         .iter()
         .flatten()

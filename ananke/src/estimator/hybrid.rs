@@ -100,12 +100,13 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         weights_bytes,
         kv_per_token,
         compute_buffer_mb: inputs.compute_buffer_mb.unwrap_or_else(|| {
-            compute_buffer::default_for_streams(
+            compute_buffer::default_for_inputs(
                 summary,
                 inputs.context,
                 inputs.ubatch,
                 inputs.flash_attn.unwrap_or(true),
                 inputs.streams(),
+                crate::estimator::host_buffer::quantised_kv(inputs),
             )
         }),
         mtp_bytes: 0,

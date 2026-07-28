@@ -714,6 +714,70 @@ def derive_per_slot_bytes(rows: list[dict]) -> str:
     )
 
 
+def derive_quantised_kv_compute(rows: list[dict]) -> tuple[int, str]:
+    """Extra *GPU* compute a quantised KV cache costs, per context-token byte.
+
+    The host side of a quantised cache is already modelled. The GPU side was
+    not, and it is much larger: paired cells differing in nothing but
+    `cache_type_*` show the per-device compute buffer up to 394 MiB higher at
+    ctx 65536, with gemma3 at 1.86x, qwen3 at 1.95x, gemma4 at 1.77x.
+
+    It was being absorbed into the compute *curves*, which are fitted from the
+    worst cell at each context and did not key on cache type — so one
+    quantised cell at a long context set the slope, and every f16 service paid
+    it. That is the whole of gemma3 reserving 1918 MiB against 562 taken.
+
+    Normalised by `ctx x n_tokens` because that is what the score matrix it
+    perturbs scales with. The rate is not constant across architectures or
+    contexts — zero below ctx 8192 for everything, and zero at every context
+    for deepseek4, laguna, llama, and qwen35moe — so the worst is charged to
+    all, which over-reserves an f16-sized cache by nothing and a quantised one
+    by at most a few hundred MiB.
+    """
+    from collections import defaultdict as _dd
+    pairs: dict[tuple, dict[str, int]] = _dd(dict)
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if factors["spec_type"] or not parsed.get("devices"):
+            continue
+        devices = [d for d in parsed["devices"]
+                   if not d["device"].startswith(("Meta", "CPU")) and d["compute_mib"]]
+        if not devices:
+            continue
+        # `n_cpu_moe` belongs in the key. Without it a resident cell pairs
+        # with a hybrid one — qwen35moe read 116 MiB against 486 at ctx 8192,
+        # a "4.19x cache-type effect" that is entirely the expert placement.
+        # Its true same-placement pair is 486 against 486, i.e. nothing.
+        key = (parsed.get("arch"), factors["runtime"], factors["ctx"], factors["ubatch"],
+               factors["gpus"], factors["split"] or "layer", factors["parallel"],
+               bool(factors["kv_unified"]), factors["flash_attn"],
+               factors["n_cpu_moe"] or 0)
+        pairs[key][factors["kv_type"]] = max(d["compute_mib"] for d in devices)
+
+    rates = []
+    for key, pair in pairs.items():
+        if "f16" not in pair:
+            continue
+        for kind, taken in pair.items():
+            if kind == "f16":
+                continue
+            tokens = min(key[2], key[3])
+            rates.append((taken - pair["f16"]) * 1024**2 / (key[2] * tokens))
+    if not rates:
+        raise ValueError("no cells differing only in cache type")
+    worst = max(rates)
+    return math.ceil(worst), (
+        f"{len(rates)} pairs differing in nothing but the cache type, "
+        f"normalised by ctx x n_tokens. Rates run {min(rates):.1f} to "
+        f"{worst:.1f} bytes and are zero at ctx 8192 for everything and at "
+        f"every context for deepseek4, laguna, llama, and qwen35moe, so the "
+        f"worst is charged to all. Previously absorbed into the compute "
+        f"curves, which are fitted from the worst cell per context and did not "
+        f"key on cache type, so one quantised cell set the slope and every f16 "
+        f"service paid it."
+    )
+
+
 def derive_quantised_cache_bytes(rows: list[dict]) -> tuple[int, str]:
     """Extra pinned bytes per batch token when the KV cache is quantised.
 
@@ -933,6 +997,7 @@ KINDS = {
     # Fitted against the slot sweep the first campaign's design confounded.
     "MTP_COMPUTE_MIB": "derived",
     "MTP_KV_SLOT_FACTOR_PERMILLE": "derived",
+    "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": "derived",
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": "derived",
     # Has data, but the fit is contested and the value is held.
     "DRAFT_MODEL_COMPUTE_MIB": "review",
@@ -1208,7 +1273,8 @@ def _measured_at(record: dict) -> float:
 CURVE_MARGIN = 1.6
 
 
-def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = ()):
+def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
+                 only_models: tuple[str, ...] = ()):
     """Fit one architecture's compute curve to what it actually needed.
 
     The target is llama.cpp's own `compute` column plus its `unaccounted`
@@ -1222,53 +1288,92 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = ()):
     """
     def deriver(rows: list[dict]) -> tuple[int, str]:
         by_ctx: dict[int, list[int]] = defaultdict(list)
+        every_batch: list[tuple[int, int, int, int]] = []
         for record in rows:
             parsed, factors = record["parsed"], record["factors"]
             if parsed.get("arch") not in archs or not parsed.get("devices"):
                 continue
             if any(m in record["provenance"]["model_key"] for m in exclude_models):
                 continue
+            if only_models and not any(m in record["provenance"]["model_key"]
+                                       for m in only_models):
+                continue
             if factors["spec_type"] or factors["flash_attn"] != "on":
                 continue
-            if factors["ubatch"] != 512 or (factors["split"] or "layer") != "layer":
+            if (factors["split"] or "layer") != "layer":
+                continue
+            # f16 only. A quantised cache costs the GPU compute buffer up to
+            # 394 MiB more at the same context — measured across four
+            # architectures — and pooling those cells sets the worst case at
+            # each context, which is fitted as slope and then charged to every
+            # f16 service. It is charged as its own term instead.
+            if factors["kv_type"] != "f16":
                 continue
             for device in parsed["devices"]:
                 if device["compute_mib"] and not device["device"].startswith("Meta"):
-                    by_ctx[factors["ctx"]].append(
-                        (device["compute_mib"], device["unaccounted_mib"]))
+                    every_batch.append((factors["ctx"], factors["ubatch"],
+                                        device["compute_mib"],
+                                        device["unaccounted_mib"]))
+                    if factors["ubatch"] == 512:
+                        by_ctx[factors["ctx"]].append(
+                            (device["compute_mib"], device["unaccounted_mib"]))
         if len(by_ctx) < 2:
             raise ValueError(f"{'/'.join(archs)}: fewer than two contexts")
-        # Fitted from the endpoints of the context sweep against the worst
-        # per-device need at each.
+        # Fitted as two separate things, because they behave separately.
         #
-        # The curve's form limits what this can express. A reservation is
-        # `base + slope * ctx * (ubatch / 512)`, so only the slope scales with
-        # batch — but the measured compute has a constant part that scales with
-        # batch too, and there is nowhere to put it. Forcing the slope to cover
-        # it means dividing that constant by the *smallest* context in the
-        # sweep, which made talkie's slope 580 and its reservation forty times
-        # the measurement. The margin below absorbs it instead, which
-        # over-reserves a little everywhere rather than absurdly in one place.
+        # A device's need is its compute buffer plus its unaccounted remainder,
+        # and the remainder is the CUDA context — flat in context and in batch,
+        # ~340 MiB per device on every architecture here. The compute buffer is
+        # what scales, with both. The curve's form is `base + slope x (ctx /
+        # 1024) x (ubatch / 512)`, which is exactly that shape, so the base
+        # takes the flat part and the slope the scaling one.
+        #
+        # Fitting the base from `need - slope x ctx` instead mixes them, and
+        # then the base has to absorb whatever the slope's linear-in-context
+        # assumption misses. That is what made these curves over-reserve: gemma3
+        # reserved 1918 MiB against 562 taken at one card and ctx 65536.
+        # Three terms, because the measurement has three.
+        #
+        #   need = base + base_batch x k + slope x (ctx / 1024) x k,   k = ub/512
+        #
+        # `base` is the CUDA context, flat in everything at ~340 MiB per
+        # device. `slope` is the part that grows with context and batch
+        # together. `base_batch` is a constant that scales with batch but not
+        # context, and it is large — 227 MiB on gemma3 — with nowhere to go in
+        # a two-term curve. Fitted without it, it lands either in the flat base
+        # (over-reserving every small batch) or in the margin (which then has
+        # to be big enough that nothing else fits well). Solving gemma3's four
+        # points for all three gives 330 / 227 / 3.5, and the 330 is the
+        # measured CUDA context to within 10 MiB.
         points = sorted(
             (c, max(comp + unacc for comp, unacc in v)) for c, v in by_ctx.items())
         (c1, n1), (c2, n2) = points[0], points[-1]
-        slope = (n2 - n1) / ((c2 - c1) / 1024) if c2 != c1 else 0.0
-        base = n1 - slope * (c1 / 1024)
-        # Cover every interior point too, not just the endpoints.
-        base = max(base, max(n - slope * (c / 1024) for c, n in points))
-        base = max(0, round(base * CURVE_MARGIN))
-        slope = max(1, round(slope * CURVE_MARGIN))
+        rate = (n2 - n1) / ((c2 - c1) / 1024) if c2 != c1 else 0.0
+        # base + base_batch, from the calibration batch where k = 1.
+        at_k1 = max(n - rate * (c / 1024) for c, n in points)
+        # And base_batch itself, from any larger batch: subtracting the k = 1
+        # line leaves (k - 1) x base_batch.
+        batch_only = [((comp + unacc - rate * (c / 1024) * (ub / 512) - at_k1)
+                       / ((ub / 512) - 1))
+                      for c, ub, comp, unacc in every_batch if ub > 512]
+        base_batch = max([0.0, *batch_only])
+        flat = max(0.0, at_k1 - base_batch)
+        base = max(0, round(flat * CURVE_MARGIN))
+        base_batch_mib = max(0, round(base_batch * CURVE_MARGIN))
+        slope = max(1, round(rate * CURVE_MARGIN))
+        points = sorted((c, max(comp + unacc for comp, unacc in v))
+                        for c, v in by_ctx.items())
         worst = max(comp + u for v in by_ctx.values() for comp, u in v)
         evidence = (
             f"base from the worst unaccounted remainder, which is flat in both "
-            f"context and batch; slope from the compute buffer, which scales with "
-            f"both. Fitted across "
+            f"context and batch; slope from the compute buffer per unit of "
+            f"ctx x batch, which is what scales. Fitted across "
             f"{sum(len(v) for v in by_ctx.values())} layer-split cells at ctx "
             f"{points[0][0]}-{points[-1][0]}, peaking at {worst} MiB, with "
             f"{int((CURVE_MARGIN - 1) * 100)}% headroom. Tensor-split cells are "
             f"excluded: they report one fused device whose unaccounted remainder "
             f"is an artifact of that representation.")
-        return base, evidence, slope
+        return base, evidence, slope, base_batch_mib
     return deriver
 
 
@@ -1329,12 +1434,22 @@ CURVE_DERIVERS = {
     # `derive_deepseek4_curve` below for what the hold-out was protecting and
     # why the measurements retire it.
     "deepseek4": derive_curve(("deepseek4",)),
+    # The variant-guarded entry, fitted from the E-variant's own cells. It was
+    # the one curve nobody derived: a hand-set 1100/7 that stayed put while
+    # every other curve moved, which is how it came to sit *above* the general
+    # gemma curve after that one was corrected.
+    "gemma4@gemma_e": derive_curve(("gemma4",), only_models=("E4B",)),
     "gemma3": derive_curve(("gemma2", "gemma3", "gemma4"), exclude_models=("E4B",)),
     "laguna": derive_curve(("laguna",)),
     "lfm2": derive_curve(("lfm2",)),
     "qwen35": derive_curve(("qwen35",)),
     "qwen35moe": derive_curve(("qwen35moe",)),
     "talkie": derive_curve(("talkie",)),
+    # Its own entry rather than the shared default. The default has to cover
+    # the worse of llama and qwen3 *and* serve as the fallback for an
+    # architecture nobody has measured, and the batch term amplifies that
+    # spread: pooled, qwen3 reserved 3.5x what it took.
+    "qwen3": derive_curve(("qwen3",)),
     "default": derive_curve(("llama", "qwen3")),
 }
 
@@ -1353,6 +1468,7 @@ DERIVERS = {
     "IK_OP_OFFLOAD_MIN_BATCH": derive_offload_min_batch,
     "MTP_COMPUTE_MIB": derive_mtp_compute_base,
     "MTP_KV_SLOT_FACTOR_PERMILLE": derive_mtp_kv_slot_factor,
+    "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": derive_quantised_kv_compute,
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": derive_draft_compute_slope,
 }
 
@@ -1451,6 +1567,10 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     for arch, deriver in CURVE_DERIVERS.items():
         if arch == "default":
             entry = document["compute_buffer_curves"]["default"]
+        elif "@" in arch:
+            name, variant = arch.split("@", 1)
+            entry = next((e for e in document["compute_buffer_curves"]["entries"]
+                          if name in e["archs"] and e.get("variant") == variant), None)
         else:
             # The *unguarded* entry for this architecture: a variant-guarded
             # one describes a different graph and is fitted separately.
@@ -1460,7 +1580,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             failed.append(f"{arch}: curve deriver has no matching entry")
             continue
         try:
-            base, evidence, slope = deriver(rows)
+            base, evidence, slope, base_batch = deriver(rows)
         except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
             failed.append(f"{arch} curve: cannot derive — {error}")
             continue
@@ -1468,6 +1588,10 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             changed.append(f"{arch} curve base: {entry['base_mib']} -> {base}")
         if entry.get("slope_mib_per_1k") != slope:
             changed.append(f"{arch} slope: {entry.get('slope_mib_per_1k')} -> {slope}")
+        if entry.get("base_batch_mib", 0) != base_batch:
+            changed.append(
+                f"{arch} base_batch: {entry.get('base_batch_mib', 0)} -> {base_batch}")
+        entry["base_batch_mib"] = base_batch
         entry["base_mib"] = base
         entry["slope_mib_per_1k"] = slope
         entry["slope_scales_with_ubatch"] = True
