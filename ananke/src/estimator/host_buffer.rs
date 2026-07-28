@@ -73,9 +73,9 @@ use crate::{
         tuning::{
             DEFAULT_UBATCH, GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN, IK_OP_OFFLOAD_MIN_BATCH,
             KV_CACHE_PAD, MAINLINE_LAYER_SPLIT_MASK_COPIES, MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD,
-            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT, PINNED_EXTRA_BYTES,
-            PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE, PROCESS_BASE_BYTES_PER_DEVICE,
-            PROCESS_BASE_BYTES_PER_LAYER,
+            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT, MTP_HOST_MIB_PER_1K,
+            PINNED_EXTRA_BYTES, PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE,
+            PROCESS_BASE_BYTES_PER_DEVICE, PROCESS_BASE_BYTES_PER_LAYER,
         },
         types::EstimatorInputs,
     },
@@ -96,10 +96,20 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
     // The two MTP shapes cost materially different amounts of host memory,
     // and `spec_type` alone does not distinguish them — a separate draft GGUF
     // brings a whole second model, an embedded head brings only a context.
+    // Both shapes are flat in the slot count and linear in context at 2 MiB
+    // per 1024 — measured at 239, 243, and 240 MiB for Qwen3.6-27B at one,
+    // two, and four slots, and 240, 274, 341 across ctx 32768, 65536, and
+    // 131072. The flat constants these replace were wrong in shape, and so in
+    // opposite directions at the ends of that range.
     let mtp = match (inputs.mtp, inputs.draft_model.is_some()) {
         (true, true) => MTP_HOST_BYTES_SEPARATE_DRAFT,
         (true, false) => MTP_HOST_BYTES_EMBEDDED,
         (false, _) => 0,
+    };
+    let mtp = if inputs.mtp {
+        mtp + MTP_HOST_MIB_PER_1K * u64::from(inputs.context) / 1024 * 1024 * 1024
+    } else {
+        0
     };
     // A tensor split costs host baseline a layer split does not — between 96
     // and 184 MiB, measured on every model that ran both at matching settings.

@@ -30,7 +30,7 @@
       "type": "u64",
       "doc": "GPU compute buffer for a separate draft model, in MiB.",
       "evidence": "gemma-4-31B-QAT, the one model with a separate draft, measures a driver delta of 724, 788, and 920 MiB at ctx 32768, 65536, and 131072, and flat 724/724/728 across one, two, and four slots. Against its 107 MiB of GPU-resident draft weights and the 2 MiB per 1024 context slope, covering the worst needs 557; 620 carries roughly 8% over every measured point. Replaces 300, which modelled a flat 407 MiB total against those measurements and so under-reserved by 317 to 513 MiB at every context \u2014 the direction that OOMs, on a model the operator serves. Reachable rather than derived: one model cannot separate a per-draft weight term from a constant, so the split is asserted and only the slope is fitted.",
-      "kind": "review"
+      "kind": "reachable"
     },
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": {
       "value": 2,
@@ -82,18 +82,25 @@
       "kind": "derived"
     },
     "MTP_HOST_BYTES_EMBEDDED": {
-      "value": 234881024,
+      "value": 288358400,
       "type": "u64",
       "doc": "Host cost of an embedded multi-token-prediction head.",
-      "evidence": "two models, one at two contexts. Under review for the same reason as the separate-draft figure.",
-      "kind": "review"
+      "evidence": "3 paired with/without cells across 2 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 1.0 MiB per 1024, so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
+      "kind": "derived"
     },
     "MTP_HOST_BYTES_SEPARATE_DRAFT": {
-      "value": 536870912,
+      "value": 257949696,
       "type": "u64",
       "doc": "Host cost of a separate draft GGUF for multi-token prediction.",
-      "evidence": "one model (gemma-4-31B-QAT) at two contexts. Under review \u2014 the paired with/without cells show the driver reporting a far larger delta than llama.cpp's own [spec] line, which is what the constant was originally fitted against. See FINDINGS.md.",
-      "kind": "review"
+      "evidence": "3 paired with/without cells across 1 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 1.0 MiB per 1024, so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
+      "kind": "derived"
+    },
+    "MTP_HOST_MIB_PER_1K": {
+      "value": 2,
+      "type": "u64",
+      "doc": "Host memory an MTP context costs per 1024 tokens of context, in MiB.",
+      "evidence": "the larger of the two MTP shapes' host context slopes \u2014 embedded 2, separate draft 2 MiB per 1024 tokens. One value for both, since they measure within a megabyte of each other and a second constant would claim a distinction the data does not show.",
+      "kind": "derived"
     },
     "MTP_KV_SLOT_FACTOR_PERMILLE": {
       "value": 3965,

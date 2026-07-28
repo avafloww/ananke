@@ -1097,6 +1097,33 @@ derived from the Cell's fields, and dropping one would change every existing
 cell's identity and make the whole dataset read as unmeasured; the plan phase
 simply no longer emits it.
 
+## The MTP host constants were wrong in shape too
+
+Both were held under review on one or two models at two contexts, and the slot
+sweep supplied the axis they lacked. Slots turn out not to be it: the host cost
+is flat in slot count — 239, 243, and 240 MiB for Qwen3.6-27B at one, two, and
+four — and scales with *context*, at about 1.1 MiB per 1024 on every model of
+both shapes.
+
+| | ctx 32768 | 65536 | 131072 |
+|---|---|---|---|
+| embedded head (Qwen3.6-27B) | 240 | 274 | 341 |
+| separate draft (gemma-4-31B-QAT) | 286 | 318 | 384 |
+
+So the two flat constants were wrong in opposite directions at the ends of that
+range: 224 MiB under-reserved the embedded shape by 117 at ctx 131072, and 512
+over-reserved the separate draft by 128. They are now a base plus a shared
+slope.
+
+One conflation had to come out of the pairing first, and it is the same kind
+that has recurred throughout: `_mtp_pairs` matched on every factor *except*
+`served`, so an idle cell paired with a served one and the whole first-use
+step — the context checkpoint above all — was read as MTP overhead. That pair
+showed 568 MiB where every same-sitting served pair of the same configuration
+shows 239 to 243, and it drove the fitted base to 632 MiB, which would have
+over-reserved ctx 32768 by nearly threefold. The absurd number is what exposed
+it; a plausible one would not have been questioned.
+
 ## The design hole flash attention exposed, audited everywhere else
 
 Flash-attention-off spent the first campaign recorded as an inconsistent

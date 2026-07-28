@@ -1017,9 +1017,10 @@ KINDS = {
     "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": "derived",
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": "derived",
     # Has data, but the fit is contested and the value is held.
-    "DRAFT_MODEL_COMPUTE_MIB": "review",
-    "MTP_HOST_BYTES_EMBEDDED": "review",
-    "MTP_HOST_BYTES_SEPARATE_DRAFT": "review",
+    "DRAFT_MODEL_COMPUTE_MIB": "reachable",
+    "MTP_HOST_BYTES_EMBEDDED": "derived",
+    "MTP_HOST_BYTES_SEPARATE_DRAFT": "derived",
+    "MTP_HOST_MIB_PER_1K": "derived",
 }
 
 def derive_mtp_compute_base(rows: list[dict]) -> tuple[int, str]:
@@ -1054,6 +1055,81 @@ def derive_mtp_kv_slot_factor(rows: list[dict]) -> tuple[int, str]:
         f"{fit['models']} models: {fit['detail']}. The larger is taken. "
         f"Expressed per thousand so the constant stays an integer."
     )
+
+
+def _mtp_host_fit(rows: list[dict], draft: bool) -> tuple[int, int, str]:
+    """Fit an MTP shape's *host* cost as `base + slope x (ctx / 1024)`.
+
+    Both host constants were held under review on one or two models at two
+    contexts. The slot sweep adds the axis they lacked, and the answer is that
+    slots are not it: the host cost is flat in slot count — 239, 243, and 240
+    MiB for Qwen3.6-27B at one, two, and four — and scales with context
+    instead, at about 1.1 MiB per 1024 on every model of both shapes.
+
+    Which makes both flat constants wrong in opposite directions: the embedded
+    figure under-reserves by 117 MiB at ctx 131072 and the separate-draft one
+    over-reserves by 128.
+    """
+    by_model: dict[str, dict[int, int]] = defaultdict(dict)
+    for model, ctx, _gpu, record in _mtp_pairs(rows, draft=draft):
+        host = record.get("_host_delta")
+        if host is None or host <= 0:
+            continue
+        # The worst at each (model, context): a pair taken across sittings
+        # reads high, and `_mtp_pairs` already drops the far-apart ones.
+        by_model[model][ctx] = max(by_model[model].get(ctx, 0), host)
+    slopes, points = [], []
+    for model, series in by_model.items():
+        contexts = sorted(series)
+        points += [(c, series[c]) for c in contexts]
+        if len(contexts) > 1:
+            lo, hi = contexts[0], contexts[-1]
+            slopes.append((series[hi] - series[lo]) / ((hi - lo) / 1024))
+    if not points:
+        raise ValueError("no MTP pairs with a host delta")
+    slope = math.ceil(max(slopes)) if slopes else 0
+    # Plus a margin, for the reason the GPU fit needs one: taking the worst
+    # residual reproduces some model's point exactly — the separate draft
+    # lands on 287 MiB against 287 measured — and an exact fit under-reserves
+    # on any variation at all.
+    base = math.ceil(max(n - slope * (c / 1024) for c, n in points) * 1.10)
+    return base, slope, (
+        f"{len(points)} paired with/without cells across {len(by_model)} model(s), "
+        f"host owned memory rather than driver VRAM. Flat in the slot count and "
+        f"linear in context at {max(slopes) if slopes else 0:.1f} MiB per 1024, "
+        f"so the flat constant this replaces was wrong in shape. Base covers the "
+        f"worst residual over every cell."
+    )
+
+
+def derive_mtp_host_embedded(rows: list[dict]) -> tuple[int, str]:
+    """Host cost of an embedded MTP head."""
+    base, slope, why = _mtp_host_fit(rows, draft=False)
+    _MTP_HOST_SLOPE["embedded"] = slope
+    return base * 1024 * 1024, why
+
+
+def derive_mtp_host_separate(rows: list[dict]) -> tuple[int, str]:
+    """Host cost of a separate MTP draft model."""
+    base, slope, why = _mtp_host_fit(rows, draft=True)
+    _MTP_HOST_SLOPE["separate"] = slope
+    return base * 1024 * 1024, why
+
+
+def derive_mtp_host_slope(rows: list[dict]) -> tuple[int, str]:
+    """The context slope both MTP shapes share, in MiB per 1024 tokens."""
+    embedded = _mtp_host_fit(rows, draft=False)[1]
+    separate = _mtp_host_fit(rows, draft=True)[1]
+    worst = max(embedded, separate)
+    return worst, (
+        f"the larger of the two MTP shapes' host context slopes — embedded "
+        f"{embedded}, separate draft {separate} MiB per 1024 tokens. One value "
+        f"for both, since they measure within a megabyte of each other and a "
+        f"second constant would claim a distinction the data does not show."
+    )
+
+
+_MTP_HOST_SLOPE: dict[str, int] = {}
 
 
 def derive_draft_compute_slope(rows: list[dict]) -> tuple[int, str]:
@@ -1240,9 +1316,14 @@ def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]
     """With/without MTP cells matched on every factor but the MTP flag."""
     def identity(record: dict) -> tuple:
         f = record["factors"]
+        # `served` belongs here. An idle process has not made the first-use
+        # allocations a served one has — the context checkpoint above all —
+        # so pairing across it reads that whole step as MTP overhead: one such
+        # pair showed 568 MiB of host delta where every same-sitting served
+        # pair of the same configuration shows 239 to 243.
         return (record["provenance"]["model_key"], f["ctx"], f["parallel"],
                 bool(f["kv_unified"]), f["split"] or "-", f["gpus"], f["ubatch"],
-                f["kv_type"])
+                f["kv_type"], bool(f["served"]))
 
     grouped: dict[tuple, dict[bool, dict]] = defaultdict(dict)
     for record in rows:
@@ -1269,6 +1350,9 @@ def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]
         delta = on["rss"]["gpu_used_mib"] - off["rss"]["gpu_used_mib"]
         if delta <= 0:
             continue
+        owned = lambda r: ((r["rss"].get("rss_anon_kb", 0)
+                            + r["rss"].get("rss_shmem_kb", 0)) // 1024)
+        on["_host_delta"] = owned(on) - owned(off)
         out.append((key[0], key[1], delta, on))
     return out
 
@@ -1487,6 +1571,9 @@ DERIVERS = {
     "MTP_KV_SLOT_FACTOR_PERMILLE": derive_mtp_kv_slot_factor,
     "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": derive_quantised_kv_compute,
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": derive_draft_compute_slope,
+    "MTP_HOST_BYTES_EMBEDDED": derive_mtp_host_embedded,
+    "MTP_HOST_BYTES_SEPARATE_DRAFT": derive_mtp_host_separate,
+    "MTP_HOST_MIB_PER_1K": derive_mtp_host_slope,
 }
 
 
