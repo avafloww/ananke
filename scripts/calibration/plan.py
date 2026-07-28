@@ -765,6 +765,41 @@ def single_card_curves() -> list[Cell]:
     ]
 
 
+def sparse_switches() -> list[Cell]:
+    """The three switches with one cell each, given a matched pair.
+
+    `--use-thp`, `-rtr`, and `--numa distribute` are recorded on every row and
+    modelled by nothing. That is defensible — `RollingBase::host_peak` reads
+    the measured `RssFile` precisely because `-rtr`'s effect cannot be
+    predicted from the flag — but "modelled by nothing" is a claim about the
+    data, and one cell cannot support it. A switch measured once has no
+    counterfactual: it might move host memory by 500 MiB and nothing here
+    would show it.
+
+    Each gets its off/on pair at otherwise identical settings, so the claim
+    becomes a measurement instead of an assumption. `-rtr` is ik-only and
+    forces `--no-mmap`, so its pair carries that on both sides to keep the
+    mapping mode from confounding it.
+    """
+    cells: list[Cell] = []
+    dense = MODELS["qwen3-4b"]
+    for value in (False, True):
+        cells.append(Cell(
+            label=f"switch-thp-{'on' if value else 'off'}", purpose=("switches",),
+            model=path_of(dense.path), gpus="0", split="layer", ctx=32768,
+            thp=value, **_model_flags(dense, "0")))
+        cells.append(Cell(
+            label=f"switch-numa-{'on' if value else 'off'}", purpose=("switches",),
+            model=path_of(dense.path), gpus="0", split="layer", ctx=32768,
+            numa="distribute" if value else None, **_model_flags(dense, "0")))
+        cells.append(Cell(
+            label=f"switch-rtr-{'on' if value else 'off'}", purpose=("switches",),
+            model=path_of(dense.path), gpus="0", split="layer", ctx=32768,
+            runtime="ik", rtr=value,
+            **{**_model_flags(dense, "0"), "no_mmap": True}))
+    return cells
+
+
 def device_scaling() -> list[Cell]:
     """Separate the per-device CUDA cost from everything that scales with model.
 
@@ -920,6 +955,7 @@ QUESTIONS = {
     "concurrency-models": concurrency_models,
     "loose-ends": loose_ends,
     "single-card": single_card_curves,
+    "sparse-switches": sparse_switches,
     "flash-attention": flash_attention_off,
     "holdout": phase5_holdout,
 }

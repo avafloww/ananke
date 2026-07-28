@@ -11,10 +11,14 @@ Three questions, three subcommands:
     python probe_host_growth.py maps    <model> [<model> ...]
     python probe_host_growth.py growth  <model> [<model> ...]
     python probe_host_growth.py prefill <model> [<model> ...]
+    python probe_host_growth.py step    <model> [<model> ...]
 
 `maps` aggregates /proc/<pid>/smaps anonymous pages by mapping, so a residual
 can be attributed to the heap, a library arena, or a pinned CUDA allocation
-rather than inferred from a total. `growth` repeats an identical request with
+rather than inferred from a total. `step` does the same against one process
+before and after the request that steps it, which is the sharper comparison:
+two models differ in everything at once, while a process differs from itself
+only in the allocation being hunted. `growth` repeats an identical request with
 the prompt cache disabled and enabled, which is what distinguishes an
 unbounded leak from the cache filling to its cap. `prefill` varies prompt
 length and generation length independently, which is what located the
@@ -186,7 +190,32 @@ def probe_prefill(models: list[str]) -> None:
                   f"{before} -> {after}  step={after - before}", flush=True)
 
 
-PROBES = {"maps": probe_maps, "growth": probe_growth, "prefill": probe_prefill}
+def probe_step(models: list[str]) -> None:
+    """Which mapping the first prefill's allocation lands in.
+
+    `maps` compares two models and so sees every difference between them at
+    once. This compares one process against *itself*, before and after the
+    request that steps it, which leaves only the allocation being hunted.
+    """
+    for model in models:
+        with Server(model) as server:
+            pid = server.proc.pid
+            before, before_rss = smaps_anon(pid), rss(pid)
+            server.complete(" ".join(["word"] * 64), 8)
+            time.sleep(2)
+            after, after_rss = smaps_anon(pid), rss(pid)
+            step = after_rss["RssAnon"] - before_rss["RssAnon"]
+            print(f"\n{model}: RssAnon {before_rss['RssAnon']} -> "
+                  f"{after_rss['RssAnon']} MiB (step {step})")
+            rows = sorted(((after.get(k, 0) - before.get(k, 0)) / 1024, k)
+                          for k in set(before) | set(after))
+            for delta, name in rows:
+                if abs(delta) > 1:
+                    print(f"  {delta:>+9.1f} MiB  {name}")
+
+
+PROBES = {"maps": probe_maps, "growth": probe_growth, "prefill": probe_prefill,
+          "step": probe_step}
 
 
 def main() -> int:
