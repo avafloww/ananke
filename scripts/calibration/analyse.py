@@ -1127,8 +1127,10 @@ KINDS = {
     "PINNED_EXTRA_BYTES": "reachable",
     "DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16": "reachable",
     # Fitted against the slot sweep the first campaign's design confounded.
-    "MTP_COMPUTE_MIB": "derived",
-    "MTP_KV_SLOT_FACTOR_PERMILLE": "derived",
+    "MTP_KV_INTERCEPT_MIB": "derived",
+    "MTP_KV_SLOPE_BYTES_PER_TOKEN": "derived",
+    "MTP_PER_SLOT_OVERHEAD_MIB": "derived",
+    "MTP_BASE_OVERHEAD_MIB": "derived",
     "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": "derived",
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": "derived",
     # Has data, but the fit is contested and the value is held.
@@ -1138,37 +1140,72 @@ KINDS = {
     "MTP_HOST_MIB_PER_1K": "derived",
 }
 
-def derive_mtp_compute_base(rows: list[dict]) -> tuple[int, str]:
-    """The slot-independent part of the embedded-MTP overhead."""
-    fit = _fit_mtp_slot_model(rows)
-    _MTP_FIT.clear()
-    _MTP_FIT.update({k: v for k, v in fit.items() if isinstance(v, int)})
-    return fit["base_mib"], (
-        f"intercept of a slot fit across {fit['models']} models at a fixed "
-        f"context: {fit['detail']}. The larger intercept is taken so neither "
-        f"is under-reserved. Replaces a value fitted against llama.cpp's "
-        f"[spec] line, which reports the MTP context per *context* and is flat "
-        f"across slot counts while the real cost scales with them — so it is "
-        f"wrong in shape, not only in magnitude, and wrong exactly where "
-        f"production runs."
+def derive_mtp_kv_intercept(rows: list[dict]) -> tuple[int, str]:
+    """The constant term of the affine MTP KV model.
+
+    llama.cpp's `[spec] estimated memory usage of MTP context` is an affine
+    function of context: `intercept + slope * ctx`. The intercept is the
+    per-context-size overhead that does not scale with context — a graph
+    setup cost the MTP draft context pays once regardless of how long the
+    sequence is. It is constant across slot counts.
+
+    The slope converges to the raw modelled KV (`nextn * heads * dims * 2`)
+    at large contexts, so the intercept is the only correction the raw
+    formula needs.
+    """
+    fit = _fit_mtp_kv_affine(rows)
+    return fit["intercept_mib"], (
+        f"affine fit of mtp_context_mib against context across "
+        f"{fit['models']} model(s): {fit['detail']}. The larger intercept "
+        f"is taken. The slope converges to the raw modelled KV at large "
+        f"contexts, so the intercept is the only correction needed."
     )
 
 
-def derive_mtp_kv_slot_factor(rows: list[dict]) -> tuple[int, str]:
-    """How much the MTP KV cache exceeds the modelled term, per thousand.
+def derive_mtp_kv_slope(rows: list[dict]) -> tuple[int, str]:
+    """The per-token slope of the affine MTP KV model, in bytes per token.
 
-    llama.cpp's breakdown puts the whole with/without difference in the KV
-    column and none in compute, and the measured KV is a fixed multiple of
-    `nextn x head_count_kv x (key_length + value_length) x 2 x context`:
-    1.75 for Qwen3.6-27B and 1.47 for Qwen3.6-35B-A3B, each constant across
-    slot counts to two decimals. The multiple itself is unexplained; the
-    proportionality is not.
+    This is the linear coefficient of `mtp_context = intercept + slope * ctx`.
+    It is close to but not identical to the raw modelled KV
+    (`nextn * heads * (key + value) * 2`): the measured slope is ~1.1x the
+    modelled value for the 27B and ~1.25x for the A3B. The larger is taken.
+    """
+    fit = _fit_mtp_kv_affine(rows)
+    return fit["slope_bytes_per_token"], (
+        f"per-token slope of the affine MTP KV fit across {fit['models']} "
+        f"model(s): {fit['detail']}. The larger is taken so neither model "
+        f"is under-reserved."
+    )
+
+
+def derive_mtp_per_slot_overhead(rows: list[dict]) -> tuple[int, str]:
+    """The constant per-slot overhead, beyond the per-slot KV.
+
+    The MTP driver delta decomposes as
+    `(per_slot_kv + per_slot_overhead) * np + base_overhead`.
+    The per-slot overhead is the non-KV cost each slot adds — graph
+    intermediates and sampler state — and is constant across slot counts
+    and (as far as the data reaches) across contexts.
     """
     fit = _fit_mtp_slot_model(rows)
-    return fit["kv_slot_factor_permille"], (
-        f"per-slot coefficient over the modelled KV term, across "
-        f"{fit['models']} models: {fit['detail']}. The larger is taken. "
-        f"Expressed per thousand so the constant stays an integer."
+    return fit["per_slot_overhead_mib"], (
+        f"per-slot overhead from the slot sweep: {fit['detail']}. "
+        f"The larger model's value is taken."
+    )
+
+
+def derive_mtp_base_overhead(rows: list[dict]) -> tuple[int, str]:
+    """The slot-independent base overhead of the MTP draft context.
+
+    The intercept of `total_delta = per_slot_coeff * np + base`, taken from
+    paired with/without-MTP cells at a fixed context with only the slot
+    count moving. Covers the one-time graph and CUDA-context cost the MTP
+    draft context adds regardless of how many slots share it.
+    """
+    fit = _fit_mtp_slot_model(rows)
+    return fit["base_overhead_mib"], (
+        f"intercept of the slot sweep: {fit['detail']}. "
+        f"The larger model's value is taken."
     )
 
 
@@ -1349,41 +1386,86 @@ def mtp_slot_scaling(rows: list[dict]) -> str:
 
 
 _MTP_FIT: dict[str, int] = {}
+_MTP_KV_FIT: dict[str, int] = {}
+
+
+def _fit_mtp_kv_affine(rows: list[dict]) -> dict[str, int]:
+    """Fit llama.cpp's `mtp_context_mib` as `intercept + slope * ctx`.
+
+    The `[spec] estimated memory usage of MTP context` line is an affine
+    function of context, constant across slot counts. The slope is close
+    to the raw modelled KV (`nextn * heads * dims * 2`) and the intercept
+    is a per-context-size graph setup cost. Both are taken as the larger
+    of the two models so neither is under-reserved.
+    """
+    by_model: dict[str, dict[int, float]] = defaultdict(dict)
+    for record in rows:
+        parsed = record.get("parsed", {})
+        mc = parsed.get("mtp_context_mib")
+        if not mc or mc <= 0:
+            continue
+        factors = record["factors"]
+        if factors.get("draft"):
+            continue
+        model = record["provenance"]["model_key"]
+        ctx = factors["ctx"]
+        by_model[model][ctx] = max(by_model[model].get(ctx, 0), mc)
+
+    intercepts, slopes, detail = [], [], []
+    for model, series in by_model.items():
+        ctxs = sorted(series)
+        if len(ctxs) < 2:
+            continue
+        # Linear regression (least squares).
+        n = len(ctxs)
+        sx = sum(ctxs)
+        sy = sum(series[c] for c in ctxs)
+        sxy = sum(c * series[c] for c in ctxs)
+        sxx = sum(c * c for c in ctxs)
+        slope = (n * sxy - sx * sy) / (n * sxx - sx * sx)
+        intercept = (sy - slope * sx) / n
+        slope_bytes = round(slope * 1024 * 1024)
+        intercepts.append(intercept)
+        slopes.append(slope_bytes)
+        detail.append(f"{model.split('/')[-1][:22]} "
+                      f"{intercept:.0f} + {slope_bytes} B/token")
+
+    if not intercepts:
+        raise ValueError("no model has two MTP context points")
+
+    # The larger of each, so neither model is under-reserved.
+    return {
+        "intercept_mib": round(max(intercepts) * 1.10),
+        "slope_bytes_per_token": max(slopes),
+        "models": len(intercepts),
+        "detail": "; ".join(detail),
+    }
 
 
 def _fit_mtp_slot_model(rows: list[dict]) -> dict[str, int]:
-    """Fit the embedded-MTP driver delta as `base + factor x kv_modelled x slots`.
+    """Fit the embedded-MTP driver delta as `per_slot * np + base`.
 
-    The overhead is entirely KV cache and it scales with the slot count, which
-    the first campaign could not see because every one-slot pair sat at one
-    context and the only four-slot pair at another. Held at a fixed context
-    with only `parallel` moving, Qwen3.6-27B measures 992, 1444, and 2376 MiB
-    of driver delta at one, two, and four slots, and Qwen3.6-35B-A3B 584, 812,
-    and 1224 — both straight lines in the slot count.
+    The driver delta (with-MTP minus without-MTP) is a straight line in the
+    slot count at a fixed context. The per-slot coefficient decomposes as
+    `per_slot_kv + per_slot_overhead`, where `per_slot_kv` is the affine KV
+    model's value at the sweep's context. The per-slot overhead is what
+    remains, and is constant across slot counts.
 
-    That the term is KV is not inferred from the fit. llama.cpp's own
-    breakdown puts the whole difference in the KV column (225, 449, 898 MiB
-    for the 27B, exactly proportional) and none of it in compute, and the
-    measured KV comes to a fixed multiple of what `mtp.rs` already models from
-    `nextn x head_count_kv x (key_length + value_length) x 2` — 1.75 for one
-    model and 1.47 for the other, constant across slots to two decimals. So
-    the shape is right and only the magnitude was missing.
-
-    Note the cells set `--kv-unified`, and the MTP cache scales with slots
-    anyway: it does not share the main context's pool.
+    The per-slot overhead and base are taken as the larger of the two
+    models, so neither is under-reserved.
     """
     by_model: dict[str, dict[int, tuple[int, float]]] = defaultdict(dict)
     for model, ctx, delta, record in _mtp_pairs(rows, draft=False):
-        parsed, factors = record["parsed"], record["factors"]
+        parsed = record["parsed"]
         nextn = parsed.get("nextn_predict_layers") or 0
         if not nextn or not parsed.get("n_head_kv"):
             continue
         kv_mib = (nextn * parsed["n_head_kv"]
                   * (parsed["n_embd_head_k"] + parsed["n_embd_head_v"])
                   * 2 * ctx / 1024**2)
-        by_model[model][factors["parallel"]] = (delta, kv_mib)
+        by_model[model][record["factors"]["parallel"]] = (delta, kv_mib)
 
-    bases, factors_seen, detail = [], [], []
+    per_slot_overheads, bases, detail = [], [], []
     for model, points in by_model.items():
         if len(points) < 2:
             continue
@@ -1391,27 +1473,29 @@ def _fit_mtp_slot_model(rows: list[dict]) -> dict[str, int]:
         (d1, kv), (d2, _) = points[slots[0]], points[slots[-1]]
         per_slot = (d2 - d1) / (slots[-1] - slots[0])
         base = d1 - per_slot * slots[0]
+        # The per-slot coefficient is per_slot_kv + per_slot_overhead.
+        # per_slot_kv = the affine KV model's value at this context.
+        # We approximate it with the raw modelled KV (the affine intercept
+        # is small relative to the slope at the sweep context, and the
+        # slope itself is close to the modelled value). The overhead is
+        # the residual.
+        per_slot_overhead = per_slot - kv
+        per_slot_overheads.append(per_slot_overhead)
         bases.append(base)
-        factors_seen.append(per_slot / kv)
-        detail.append(f"{model.split('/')[-1][:20]} {base:.0f} + "
-                      f"{per_slot:.0f}/slot ({per_slot / kv:.2f}x modelled KV)")
+        detail.append(f"{model.split('/')[-1][:20]} "
+                      f"{per_slot_overhead:.0f} oh/slot, {base:.0f} base")
+
     if not bases:
         raise ValueError("no embedded-MTP model measured at two slot counts")
-    # The largest of each, so neither model is under-reserved. They are taken
-    # independently rather than as one model's pair: the point is a bound that
-    # covers every measured configuration, not a fit to the worst one.
-    #
-    # Plus a margin, because taking the maxima reproduces the worst model's
-    # line *exactly* — 992 and 2376 MiB against 992 and 2376 measured — and an
-    # exact fit under-reserves on any variation at all. Under-reserving here
-    # OOMs the load, which no later observation recovers, while over-reserving
-    # costs VRAM the rolling correction can give back. The compute curves carry
-    # 60% for the same reason; this needs far less, since the shape is measured
-    # rather than assumed.
+
+    # The larger of each, so neither model is under-reserved.
     margin = 1.10
-    return {"base_mib": round(max(bases) * margin),
-            "kv_slot_factor_permille": round(max(factors_seen) * margin * 1000),
-            "models": len(bases), "detail": "; ".join(detail)}
+    return {
+        "per_slot_overhead_mib": round(max(per_slot_overheads) * margin),
+        "base_overhead_mib": round(max(bases) * margin),
+        "models": len(bases),
+        "detail": "; ".join(detail),
+    }
 
 
 _MTP_SLOTS: list[str] = []
@@ -1670,21 +1754,20 @@ CURVE_DERIVERS = {
     "default": derive_curve(("llama", "qwen3")),
 }
 
-# `derive_mtp_embedded_compute` is likewise held back. Its quantity — the
-# driver delta between paired cells — is the right one, and it says the
-# constant over-reserves by ~700 MiB at one slot. But the single `parallel = 4`
-# pair shows a delta of 2892 MiB against the ~1100 the one-slot fit predicts,
-# so there is a slot-count dependence the model does not carry. Lowering the
-# constant without that term would under-reserve exactly the production
-# configuration, which runs four slots.
+# The MTP overhead model carries both an affine KV term (intercept + slope × ctx,
+# constant across slots) and a per-slot overhead + base. This replaces the
+# held-back `derive_mtp_embedded_compute`, which could not model the slot-count
+# dependence and was kept high to compensate.
 DERIVERS = {
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": derive_mainline_tensor_moe,
     "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN": derive_gemma_e_per_layer_token,
     "PROCESS_BASE_BYTES_PER_DEVICE": derive_per_device_bytes,
     "MAINLINE_LAYER_SPLIT_MASK_COPIES": derive_layer_split_copies,
     "IK_OP_OFFLOAD_MIN_BATCH": derive_offload_min_batch,
-    "MTP_COMPUTE_MIB": derive_mtp_compute_base,
-    "MTP_KV_SLOT_FACTOR_PERMILLE": derive_mtp_kv_slot_factor,
+    "MTP_KV_INTERCEPT_MIB": derive_mtp_kv_intercept,
+    "MTP_KV_SLOPE_BYTES_PER_TOKEN": derive_mtp_kv_slope,
+    "MTP_PER_SLOT_OVERHEAD_MIB": derive_mtp_per_slot_overhead,
+    "MTP_BASE_OVERHEAD_MIB": derive_mtp_base_overhead,
     "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": derive_quantised_kv_compute,
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": derive_draft_compute_slope,
     "MTP_HOST_BYTES_EMBEDDED": derive_mtp_host_embedded,

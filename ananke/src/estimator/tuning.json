@@ -273,9 +273,9 @@
       "type": "u64",
       "value": 57
     },
-    "MTP_COMPUTE_MIB": {
-      "doc": "GPU compute buffer for a multi-token-prediction context, in MiB.",
-      "evidence": "intercept of a slot fit across 2 models at a fixed context: Qwen3.6-27B-UD-Q5_K_ 531 + 461/slot (3.60x modelled KV); Qwen3.6-35B-A3B-UD-Q 356 + 228/slot (3.56x modelled KV). The larger intercept is taken so neither is under-reserved. Replaces a value fitted against llama.cpp's [spec] line, which reports the MTP context per *context* and is flat across slot counts while the real cost scales with them \u2014 so it is wrong in shape, not only in magnitude, and wrong exactly where production runs.",
+    "MTP_BASE_OVERHEAD_MIB": {
+      "doc": "The slot-independent base overhead of the MTP draft context, in MiB.",
+      "evidence": "intercept of the slot sweep: Qwen3.6-27B-UD-Q5_K_ 333 oh/slot, 531 base; Qwen3.6-35B-A3B-UD-Q 164 oh/slot, 356 base. The larger model's value is taken.",
       "kind": "derived",
       "type": "u64",
       "value": 584
@@ -301,12 +301,26 @@
       "type": "u64",
       "value": 2
     },
-    "MTP_KV_SLOT_FACTOR_PERMILLE": {
-      "doc": "How much an MTP context's KV cache exceeds the modelled term, per thousand. The cache is allocated per slot and does not share a unified pool.",
-      "evidence": "per-slot coefficient over the modelled KV term, across 2 models: Qwen3.6-27B-UD-Q5_K_ 531 + 461/slot (3.60x modelled KV); Qwen3.6-35B-A3B-UD-Q 356 + 228/slot (3.56x modelled KV). The larger is taken. Expressed per thousand so the constant stays an integer.",
+    "MTP_KV_INTERCEPT_MIB": {
+      "doc": "The constant term of the affine MTP KV model, in MiB.",
+      "evidence": "affine fit of mtp_context_mib against context across 2 model(s): Qwen3.6-27B-UD-Q5_K_XL 123 + 4471 B/token; Qwen3.6-35B-A3B-UD-Q5_ 68 + 2504 B/token. The larger intercept is taken. The slope converges to the raw modelled KV at large contexts, so the intercept is the only correction needed.",
       "kind": "derived",
       "type": "u64",
-      "value": 3965
+      "value": 136
+    },
+    "MTP_KV_SLOPE_BYTES_PER_TOKEN": {
+      "doc": "The per-token slope of the affine MTP KV model, in bytes per token.",
+      "evidence": "per-token slope of the affine MTP KV fit across 2 model(s): Qwen3.6-27B-UD-Q5_K_XL 123 + 4471 B/token; Qwen3.6-35B-A3B-UD-Q5_ 68 + 2504 B/token. The larger is taken so neither model is under-reserved.",
+      "kind": "derived",
+      "type": "u64",
+      "value": 4471
+    },
+    "MTP_PER_SLOT_OVERHEAD_MIB": {
+      "doc": "The constant per-slot overhead beyond the per-slot KV, in MiB.",
+      "evidence": "per-slot overhead from the slot sweep: Qwen3.6-27B-UD-Q5_K_ 333 oh/slot, 531 base; Qwen3.6-35B-A3B-UD-Q 164 oh/slot, 356 base. The larger model's value is taken.",
+      "kind": "derived",
+      "type": "u64",
+      "value": 367
     },
     "NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR": {
       "doc": "Multiplier on the unfused attention score matrix when flash attention is off: the GPU compute buffer grows by this times `n_head * ctx * n_tokens * 4` bytes.",
