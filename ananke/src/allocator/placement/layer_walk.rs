@@ -187,6 +187,9 @@ impl<'a> Packer<'a> {
                 Charge::Slop,
             );
         }
+        if self.estimate.host_slot_bytes > 0 {
+            self.charge(DeviceSlot::Cpu, self.estimate.host_slot_bytes, Charge::Slop);
+        }
     }
 
     /// Step 5: one-layer fudge for tensor-split slop.
@@ -375,6 +378,7 @@ mod tests {
             mtp_weight_bytes: 0,
             host_overhead_bytes: 0,
             host_cache_bytes: 0,
+            host_slot_bytes: 0,
             per_layer_bytes: Some(per_layer_bytes),
             attention_layers: None,
             non_layer: NonLayer::default(),
@@ -421,6 +425,7 @@ mod tests {
             mtp_weight_bytes: 0,
             host_overhead_bytes: 0,
             host_cache_bytes: 0,
+            host_slot_bytes: 0,
             per_layer_bytes: Some(per_layer_bytes),
             attention_layers: None,
             non_layer: NonLayer::default(),

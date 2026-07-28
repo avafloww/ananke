@@ -1005,10 +1005,12 @@ reserving for four active slots makes every ordinary service read as a massive
 over-reservation and clamp unreachably — the same failure as gemma3's 0.78,
 in the other direction and forty times over.
 
-So the rate is recorded in `tuning.json` and not applied. Four stress cells
-sitting above the band is the better trade, and a worst-case allowance belongs
-in the packer's slop, beside the prompt cache, which is reserved that way for
-exactly this reason.
+So the rate is not charged to the correction. It *is* reserved: the packer
+takes it as `Charge::Slop` on the CPU slot, exactly as it already does for the
+prompt cache, and for the same reason — both are real memory a busy process
+will want and neither is something an observation of an idle one should be
+divided by. A service that does become busy is protected; a service that stays
+idle is not judged against memory it never allocated.
 
 Two conflations had to come out of the derivation first, both of the same kind
 that has bitten repeatedly. `soak` grows the prompt over six rounds and costs

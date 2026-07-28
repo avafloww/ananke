@@ -242,6 +242,28 @@ fn has_experts(summary: &GgufSummary) -> bool {
     summary.tensors.keys().any(|n| n.contains("_exps"))
 }
 
+/// Host memory the slots beyond the first cost when they are all busy.
+///
+/// Reserved, not predicted — the same treatment as the prompt cache and for
+/// the same reason. A concurrently active slot costs real host memory (163 MiB
+/// per slot on qwen35, 89 on gemma3, 4 on llama, measured across three
+/// architectures), but an idle one costs nothing, and most services are idle
+/// in most slots. Charging it in [`host_overhead_bytes`] would make every
+/// ordinary service read as a large over-reservation and clamp the rolling
+/// correction unreachably — measured at 44 of 259 cells outside the band
+/// against 4 when it is left out.
+///
+/// So the packer reserves it as slop, where it protects a service that does
+/// become busy, and the correction never divides by it.
+pub fn slot_host_bytes(arch: &str, inputs: &EstimatorInputs<'_>) -> u64 {
+    let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
+    lookup(
+        crate::estimator::tuning::PER_SLOT_HOST_BYTES,
+        arch,
+        crate::estimator::tuning::PER_SLOT_HOST_BYTES_DEFAULT,
+    ) * slots.saturating_sub(1)
+}
+
 /// The prompt-cache cap in bytes. Zero when the operator disables it.
 ///
 /// Reserved but not predicted. The cache fills with use rather than at load —

@@ -312,6 +312,11 @@ pub struct Estimate {
     /// predicted — it fills with use rather than at load — so the packer
     /// charges it as slop and the rolling correction never divides by it.
     pub host_cache_bytes: u64,
+    /// Host RAM the slots beyond the first need when they are all busy.
+    /// Reserved but not predicted, like [`Self::host_cache_bytes`]: an idle
+    /// slot costs nothing, so the packer charges this as slop and the rolling
+    /// correction never divides by it.
+    pub host_slot_bytes: u64,
     /// Per-layer weight bytes for index-ordered packing. `None` for
     /// architectures where layer-aware placement isn't applicable
     /// (currently SSM/Mamba; in that case `placement` uses single-device

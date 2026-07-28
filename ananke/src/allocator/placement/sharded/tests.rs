@@ -84,6 +84,7 @@ fn tensor_split_shards_output_head_and_mtp_across_gpus() {
         mtp_weight_bytes: 0,
         host_overhead_bytes: 0,
         host_cache_bytes: 0,
+        host_slot_bytes: 0,
         per_layer_bytes: Some(per_layer_bytes),
         attention_layers: None,
         non_layer: NonLayer {
@@ -322,6 +323,7 @@ fn a_sharded_separate_draft_models_weights_are_tallied_as_weights() {
         mtp_weight_bytes: draft_weights,
         host_overhead_bytes: 0,
         host_cache_bytes: 0,
+        host_slot_bytes: 0,
         per_layer_bytes: Some(per_layer_bytes),
         attention_layers: None,
         non_layer: NonLayer::default(),
