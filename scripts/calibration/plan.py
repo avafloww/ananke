@@ -709,6 +709,38 @@ def concurrency_models() -> list[Cell]:
     ]
 
 
+def loose_ends() -> list[Cell]:
+    """Two claims this campaign asserted on data outside the dataset.
+
+    The flash-attention term is divided by the stream count, on the strength
+    of hardcoded Qwen3-4B points in a unit test from an earlier sweep: every
+    such cell in `measurements.ndjson` runs one slot, so nothing here can
+    falsify it. If the division is right these cells show a quarter of the
+    one-slot rate; if it is wrong they show the whole of it.
+
+    And the per-slot host cost was measured at one context and one batch. It
+    is reserved as slop rather than charged to the correction, so an error is
+    less costly — but "measured at one point in the axis" is what made three
+    other constants wrong here, so it gets a second batch size.
+    """
+    cells: list[Cell] = []
+    for key in ("gemma3-27b", "qwen36-27b"):
+        model = MODELS[key]
+        cells.append(Cell(
+            label=f"faoff-slots-{model.key}-np4", purpose=("flash-attention",),
+            model=path_of(model.path), gpus="0,1", split="layer", ctx=32768,
+            ubatch=512, parallel=4, flash_attn="off",
+            **_model_flags(model, "0,1")))
+    model = MODELS["gemma3-27b"]
+    for conc in (1, 4):
+        cells.append(Cell(
+            label=f"conc-ub2048-{model.key}-c{conc}", purpose=("concurrency",),
+            model=path_of(model.path), gpus="0,1", split="layer", ctx=32768,
+            ubatch=2048, parallel=4, kv_unified=True, soak=6, concurrency=conc,
+            **_model_flags(model, "0,1")))
+    return cells
+
+
 def device_scaling() -> list[Cell]:
     """Separate the per-device CUDA cost from everything that scales with model.
 
@@ -862,6 +894,7 @@ QUESTIONS = {
     "mtp-slots": mtp_slots,
     "slot-batch": slot_batch,
     "concurrency-models": concurrency_models,
+    "loose-ends": loose_ends,
     "flash-attention": flash_attention_off,
     "holdout": phase5_holdout,
 }
