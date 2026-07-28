@@ -451,6 +451,12 @@ def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
         # being flat and break the group.
         no_fa = 0
         if factors["flash_attn"] != "on":
+            if not _NO_FA_RATES:
+                raise Disagreement(
+                    "baseline offset needs the flash-attention rates and they "
+                    "are empty, which means derive_no_flash_attn_rates has not "
+                    "run yet. Without them this silently subtracts zero and "
+                    "folds a per-token arena term into a flat baseline.")
             rate = _NO_FA_RATES.get(variant_key(record),
                                     max(_NO_FA_RATES.values(), default=0))
             # Times `copies`, matching `pinned_graph_bytes`: the term is
@@ -739,6 +745,8 @@ def derive_per_slot_bytes(rows: list[dict]) -> str:
             max((points[c] - points[lo]) / (c - lo) for c in points if c > lo))
     if not by_arch:
         raise ValueError("no architecture measured at two concurrency levels")
+    for arch, group in by_arch.items():
+        check_no_outlier_dominates(group, f"per-slot host bytes for {arch}")
     _PER_SLOT.clear()
     _PER_SLOT.update({a: max(0, round(max(g))) for a, g in by_arch.items()})
     return (
@@ -804,6 +812,9 @@ def derive_checkpoint_headroom(rows: list[dict]) -> str:
             by_arch[key[0]].append(max(0, pair[True] - pair[False]))
     if not by_arch:
         raise ValueError("no probe/steady-state pairs")
+    for arch, group in by_arch.items():
+        check_no_outlier_dominates([float(v) for v in group],
+                                   f"checkpoint headroom for {arch}")
     _CKPT_HEADROOM.clear()
     _CKPT_HEADROOM.update({a: max(v) * 1024 * 1024 for a, v in by_arch.items()})
     return (
@@ -1674,6 +1685,37 @@ DERIVERS = {
 SIGNED_TABLES = {"baseline_offset"}
 
 
+def check_no_outlier_dominates(values: list[float], name: str,
+                               tolerance: float = 4.0) -> None:
+    """Refuse a `max` reduction that one cell alone decides.
+
+    `consensus` protects constants reduced by median: it refuses to average
+    away a disagreement. Constants reduced by `max` bypass it by design, since
+    a maximum bounds a spread rather than hiding it — but that makes a single
+    bad cell able to set the value outright, which is not a bound, it is an
+    artifact.
+
+    It has happened: an MTP pair matched an idle cell against a served one and
+    drove a fitted base to 632 MiB where every honest pair of the same
+    configuration gives 239 to 243. The absurdity is what exposed it. This
+    catches the same shape before it needs to be absurd, by asking whether the
+    winner stands far apart from the rest rather than merely above them.
+    """
+    if len(values) < 3:
+        return
+    ordered = sorted(values)
+    top, runner_up = ordered[-1], ordered[-2]
+    if runner_up <= 0 or top <= 0:
+        return
+    if top / runner_up > tolerance:
+        raise Disagreement(
+            f"{name}: the largest of {len(values)} measurements is {top:.0f}, "
+            f"{top / runner_up:.1f}x the next largest at {runner_up:.0f}. A "
+            f"maximum is a bound when the values crowd it and an artifact when "
+            f"one stands alone — check that cell against its neighbours before "
+            f"letting it set the constant.")
+
+
 def check_table_signs(document: dict) -> None:
     """Refuse to write a negative into a table read as unsigned.
 
@@ -1709,6 +1751,14 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     constants = document["constants"]
     changed, failed = [], []
 
+    # Order matters here and is not incidental: `derive_baseline_offset`
+    # subtracts the flash-attention rate, so it must run after
+    # `derive_no_flash_attn_rates` populates it, or it silently subtracts
+    # zeros. The dependency runs through module state rather than arguments,
+    # so it is spelled out rather than left to the order of the lines.
+    #
+    #   no_flash_attn_rates -> baseline_offset
+    #
     # Runs for its side effect of recording the per-architecture rates, which
     # `emit` writes as a table rather than as one scalar.
     try:
