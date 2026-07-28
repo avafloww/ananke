@@ -804,9 +804,43 @@ and every real service prefills. The harness probe sends a four-token prompt,
 so every campaign cell crosses the threshold and the offset is measured at or
 above saturation.
 
-Two hypotheses for the mechanism are ruled out by measurement. It is not the
+### It is the server's prompt checkpoints
+
+Every parameter axis was ruled out by measurement, so the remaining question
+was which allocation it is — which black-box sweeps cannot answer. Running
+llama-server under `strace -k` and diffing the trace across the request that
+steps it catches one 149.6 MiB `malloc`, with the stack:
+
+    server_context_impl::create_checkpoint(server_slot&, long, int, int)
+      -> common_prompt_checkpoint::update_tgt(llama_context*, int, unsigned)
+        -> std::vector<unsigned char>::_M_default_append
+
+A **context checkpoint**: a serialised slot state the server keeps so a prompt
+can be rewound rather than reprocessed. `--ctx-checkpoints` caps how many per
+slot (default 32) and `--checkpoint-min-step` spaces them.
+
+That accounts for every observation at once, which is what makes it the
+explanation rather than another correlate:
+
+- **Triggered by prompt processing, not generation**, because a checkpoint is
+  taken while the prompt is decoded. Generation length does nothing.
+- **Saturating in prompt length**, because it is one checkpoint of the
+  processed prompt.
+- **Flat in context, batch, and micro-batch**, none of which size it.
+- **Per slot**, which is the concurrency cost measured separately above — each
+  slot keeps its own.
+- **Sized by the model's KV state**, which is why the sliding-window gemma3
+  steps 45 MiB where Qwen3.6-27B steps 273: gemma3's serialised state is far
+  smaller.
+
+Attaching with `strace -p` fails here — `kernel.yama.ptrace_scope = 1` forbids
+attaching to a running process — so the tracer has to be the parent, which
+needs no system change.
+
+Two earlier hypotheses are ruled out by measurement. It is not the
 output logits buffer: the estimator predicts 242 MiB for Qwen3.6-27B and 256
-for gemma-3-27B, and their steps are 273 and 12. It is not tied embeddings
+for gemma-3-27B, and their steps are 273 and 12; the step is also flat across
+`-b` 512, 1024, and 2048, where a logits buffer would scale. It is not tied embeddings
 routing the output head to the CPU backend: Qwen3.6-27B and Magidonia-24B both
 carry a separate `output.weight` and step 273 and 17, while gemma-3-27B and
 Qwen3-4B both tie and step 12 and 7. The mechanism is still unidentified; what
