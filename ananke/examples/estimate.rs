@@ -15,34 +15,43 @@
 //!     [--allow-fallback] \
 //!     [--parallel N] \
 //!     [--flash-attn on|off] \
-//!     [--kv-unified] \
+//!     [--kv-unified on|off] \
 //!     [--cache-ram-mb N] \
 //!     [--split-mode layer|row|tensor] \
 //!     [--visible-devices N] \
 //!     [--ik-llama] \
-//!     [--ik-dsa]
+//!     [--ik-dsa] \
+//!     [--host-resident-experts] \
+//!     [--pack --gpu 24000 --gpu 24000 --cpu 256000]
+//!
+//! `--pack` runs the packer against the supplied device capacities and
+//! reports the per-device allocation alongside the raw estimate. Without
+//! `--pack`, only the estimator output is printed.
 //!
 //! Unknown architectures now hard-reject by default; pass `--allow-fallback`
 //! to accept the coarse fallback (see `ananke::estimator::fallback`).
-//!
-//! The estimator is a pure function over the GGUF bytes plus a small set
-//! of service-level knobs (context, cache-type, override rules, mmproj,
-//! compute_buffer override). This example builds an
-//! [`EstimatorInputs`] from CLI args and prints the resulting `Estimate`
-//! as JSON — same code path the daemon uses at spawn time, without any
-//! packer / placement / NVML involvement.
-//!
-//! Used by `scripts/stress/calibrate.py` to record predicted VRAM at each
-//! (model, context) and compare against llama-server's real footprint.
 
-use std::{path::PathBuf, process};
+use std::{collections::BTreeMap, path::PathBuf, process};
 
 use ananke::{
-    config::validate::SplitMode,
+    allocator::placement::pack_demand,
+    config::{
+        parse::{EstimationConfig, SamplingConfig},
+        validate::{
+            AllocationMode, AutoRestartSettings, DeviceReserves, Filters, HealthSettings,
+            IkSettings, Lifecycle, OffloadMode, PlacementPolicy, Runtime, ServiceConfig, SplitMode,
+            TemplateConfig,
+        },
+    },
+    devices::{CpuSnapshot, DeviceSnapshot, GpuSnapshot},
     estimator::{self, EstimatorInputs},
     system::LocalFs,
+    tracking::rolling::Corrections,
 };
+use ananke_api::shared::Modality;
+use ananke_config::docs::DEFAULT_START_QUEUE_DEPTH;
 use serde_json::json;
+use smol_str::SmolStr;
 
 struct Args {
     model: PathBuf,
@@ -66,6 +75,9 @@ struct Args {
     ik_llama: bool,
     ik_dsa: bool,
     host_resident_experts: bool,
+    pack: bool,
+    gpu_capacities_mib: Vec<u64>,
+    cpu_capacity_mib: Option<u64>,
 }
 
 fn parse_args() -> Args {
@@ -91,6 +103,9 @@ fn parse_args() -> Args {
     let mut ik_llama = false;
     let mut ik_dsa = false;
     let mut host_resident_experts = false;
+    let mut pack = false;
+    let mut gpu_capacities_mib: Vec<u64> = Vec::new();
+    let mut cpu_capacity_mib: Option<u64> = None;
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--model" => model = it.next().map(PathBuf::from),
@@ -139,6 +154,13 @@ fn parse_args() -> Args {
             "--ik-llama" => ik_llama = true,
             "--ik-dsa" => ik_dsa = true,
             "--host-resident-experts" => host_resident_experts = true,
+            "--pack" => pack = true,
+            "--gpu" => {
+                if let Some(v) = it.next().and_then(|s| s.parse().ok()) {
+                    gpu_capacities_mib.push(v);
+                }
+            }
+            "--cpu" => cpu_capacity_mib = it.next().and_then(|s| s.parse().ok()),
             _ => {
                 eprintln!("unknown argument: {arg}");
                 process::exit(2);
@@ -164,8 +186,6 @@ fn parse_args() -> Args {
         compute_buffer_mb,
         active_devices,
         allow_fallback,
-        // A separate draft model only contributes overhead under MTP, so
-        // `--draft-model` implies `--mtp` for convenience.
         mtp: mtp || draft_model.is_some(),
         draft_model,
         parallel,
@@ -177,6 +197,133 @@ fn parse_args() -> Args {
         ik_llama,
         ik_dsa,
         host_resident_experts,
+        pack,
+        gpu_capacities_mib,
+        cpu_capacity_mib,
+    }
+}
+
+/// Build a minimal `ServiceConfig` for the packer, carrying only the fields
+/// the packer reads: name, placement policy, split mode, GPU allow list, and
+/// the llama-cpp config (model path, expert offload, etc.).
+fn build_service_config(args: &Args) -> ServiceConfig {
+    use ananke::config::validate::LlamaCppConfig;
+
+    let placement_policy = if args.host_resident_experts {
+        PlacementPolicy::Hybrid
+    } else {
+        PlacementPolicy::GpuOnly
+    };
+    let expert_offload = if args.host_resident_experts {
+        OffloadMode::Auto
+    } else {
+        OffloadMode::Off
+    };
+    let gpu_allow: Vec<u32> = (0..args.visible_devices).collect();
+    ServiceConfig {
+        name: SmolStr::new("estimate-example"),
+        port: 0,
+        private_port: 0,
+        lifecycle: Lifecycle::OnDemand,
+        priority: 50,
+        health: HealthSettings {
+            http_path: None,
+            timeout_ms: 5000,
+            probe_interval_ms: 200,
+        },
+        placement_override: BTreeMap::new(),
+        placement_policy,
+        gpu_allow,
+        split_mode: args.split_mode,
+        tensor_split_weights: None,
+        gpu_headroom_mb: 0,
+        reserves: std::sync::Arc::new(DeviceReserves::default()),
+        filters: Filters::default(),
+        idle_timeout_ms: 60000,
+        drain_timeout_ms: 1000,
+        extended_stream_drain_ms: 1000,
+        max_request_duration_ms: 5000,
+        auto_restart: AutoRestartSettings::disabled(),
+        allocation_mode: AllocationMode::None,
+        openai_compat: true,
+        description: None,
+        modality: Modality::Chat,
+        start_queue_depth: DEFAULT_START_QUEUE_DEPTH,
+        extra_args: Vec::new(),
+        env: BTreeMap::new(),
+        env_inherit: true,
+        tracking: ananke::config::TrackingSettings::default(),
+        metadata: ananke_api::shared::AnankeMetadata::new(),
+        template_config: TemplateConfig::LlamaCpp(Box::new(LlamaCppConfig {
+            runtime: if args.ik_llama {
+                Runtime::IkLlama(IkSettings {
+                    mla: None,
+                    dsa: args.ik_dsa,
+                    attn_max_batch: None,
+                    runtime_repack: false,
+                })
+            } else {
+                Runtime::default()
+            },
+            model: args.model.clone(),
+            mmproj: args.mmproj.clone(),
+            context: Some(args.context),
+            n_gpu_layers: None,
+            expert_offload,
+            flash_attn: args.flash_attn,
+            cache_type_k: args.cache_type_k.as_ref().map(SmolStr::new),
+            cache_type_v: args.cache_type_v.as_ref().map(SmolStr::new),
+            mmap: None,
+            mlock: None,
+            parallel: args.parallel,
+            spec_type: args.mtp.then(|| SmolStr::new("draft-mtp")),
+            spec_draft_n_max: None,
+            draft_model: args.draft_model.clone(),
+            kv_unified: args.kv_unified,
+            cache_idle_slots: None,
+            cache_ram_mb: args.cache_ram_mb,
+            metrics: None,
+            slots: None,
+            batch_size: None,
+            ubatch_size: args.ubatch,
+            threads: None,
+            threads_batch: None,
+            numa: None,
+            jinja: None,
+            chat_template_file: None,
+            override_tensor: args.override_tensor.clone(),
+            sampling: SamplingConfig::default(),
+            estimation: EstimationConfig {
+                compute_buffer_mb: args.compute_buffer_mb,
+                safety_factor: None,
+                allow_fallback: args.allow_fallback.then_some(true),
+            },
+            binary: PathBuf::from("llama-server"),
+            launcher: None,
+        })),
+    }
+}
+
+fn build_snapshot(args: &Args) -> DeviceSnapshot {
+    let gpus: Vec<GpuSnapshot> = args
+        .gpu_capacities_mib
+        .iter()
+        .enumerate()
+        .map(|(i, cap_mib)| GpuSnapshot {
+            id: i as u32,
+            name: format!("fake-{i}"),
+            total_bytes: cap_mib * 1024 * 1024,
+            free_bytes: cap_mib * 1024 * 1024,
+        })
+        .collect();
+    let cpu = args.cpu_capacity_mib.map(|cap_mib| CpuSnapshot {
+        total_bytes: cap_mib * 1024 * 1024,
+        available_bytes: cap_mib * 1024 * 1024,
+    });
+    DeviceSnapshot {
+        gpus,
+        cpu,
+        taken_at_ms: 0,
     }
 }
 
@@ -218,12 +365,6 @@ fn main() {
         .kv_per_token
         .saturating_mul(estimate.context as u64);
 
-    // The packer adds `compute_buffer_mb` to every device it lands the
-    // model on. Caller passes `--active-devices N` for the placement
-    // they're modelling (1 for a single-GPU-only fit, 2 for dual-GPU,
-    // 3 for dual-GPU + CPU embedding/offload). Default 3 matches the
-    // common "two GPUs plus CPU-resident embeddings" layout for large
-    // llama-family models.
     let active_devices = args.active_devices.unwrap_or(3);
     let cb_total_bytes = (estimate.compute_buffer_mb as u64)
         .saturating_mul(active_devices)
@@ -234,11 +375,6 @@ fn main() {
         .saturating_add(cb_total_bytes)
         .saturating_add(estimate.mtp_bytes);
 
-    // "GPU VRAM" estimate: subtract the tensors llama.cpp keeps on CPU
-    // by default (token embeddings — plus the per-layer token embeddings
-    // for gemma4 E-variants). Expert offload is a placement-time decision
-    // the packer makes from live VRAM, so this estimator-only view counts
-    // experts on the GPU; run the daemon to see the offloaded placement.
     let cpu_resident_bytes = estimate.non_layer.token_embd_bytes;
     let gpu_weights_bytes = estimate.weights_bytes.saturating_sub(cpu_resident_bytes);
     let gpu_total_bytes = gpu_weights_bytes
@@ -250,7 +386,7 @@ fn main() {
         )
         .saturating_add(estimate.mtp_bytes);
 
-    let out = json!({
+    let mut out = json!({
         "architecture": estimate.architecture.as_str(),
         "context": estimate.context,
         "weights_bytes": estimate.weights_bytes,
@@ -279,17 +415,45 @@ fn main() {
             .iter()
             .map(|(k, v)| (format!("{k:?}"), serde_json::Value::from(*v)))
             .collect::<serde_json::Map<_, _>>(),
-        // Rough "sum of accounted bytes" number — weights + kv(total) +
-        // compute buffer. Doesn't include the packer's tensor-split fudge
-        // or per-device compute-buffer doubling; treat as a lower bound.
         "total_accounted_bytes": total_bytes,
         "total_accounted_mib": total_bytes / (1024 * 1024),
-        // GPU-only estimate: what nvidia-smi will report summed across
-        // GPUs. Excludes llama.cpp's CPU-resident embedding tensors and
-        // caps cb device count at 2 (CPU doesn't contribute to GPU VRAM).
         "gpu_vram_bytes": gpu_total_bytes,
         "gpu_vram_mib": gpu_total_bytes / (1024 * 1024),
     });
+
+    if args.pack {
+        let svc = build_service_config(&args);
+        let snapshot = build_snapshot(&args);
+        match pack_demand(&estimate, &svc, &snapshot, Corrections::NEUTRAL) {
+            Ok(packed) => {
+                let allocation: serde_json::Map<_, _> = packed
+                    .allocation
+                    .bytes
+                    .iter()
+                    .map(|(id, bytes)| {
+                        let key = id.as_display().to_string();
+                        (
+                            key,
+                            json!({
+                                "bytes": bytes,
+                                "mib": bytes / (1024 * 1024),
+                                "gib": *bytes as f64 / 1024.0_f64.powi(3),
+                            }),
+                        )
+                    })
+                    .collect();
+                out["placement"] = json!({
+                    "allocation": allocation,
+                    "expert_offload_bytes": packed.expert_offload_bytes,
+                    "expert_offload_mib": packed.expert_offload_bytes / (1024 * 1024),
+                    "expert_offload_layers": packed.expert_offload_layers,
+                });
+            }
+            Err(e) => {
+                out["placement"] = json!({"error": e.to_string()});
+            }
+        }
+    }
 
     println!("{}", serde_json::to_string_pretty(&out).unwrap());
 }
