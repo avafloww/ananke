@@ -22,7 +22,9 @@ cache_type_v = "q8_0"
 flash_attn = true
 parallel = 2
 mtp = true
-split_mode = "tensor"
+# Layer split, not tensor: expert_offload and sharded split are mutually
+# exclusive (the validator rejects the combination), and production runs
+# with --n-cpu-moe 40.
 n_cpu_moe = 40
 
 [[model]]
