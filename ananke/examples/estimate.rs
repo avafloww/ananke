@@ -28,6 +28,11 @@
 //! reports the per-device allocation alongside the raw estimate. Without
 //! `--pack`, only the estimator output is printed.
 //!
+//! `--n-cpu-moe N` forces N expert layers to CPU (`expert_offload = N`),
+//! matching llama-server's `--n-cpu-moe` flag. `--host-resident-experts`
+//! is shorthand for `expert_offload = auto`, which spills only the surplus
+//! that does not fit on the GPUs.
+//!
 //! Unknown architectures now hard-reject by default; pass `--allow-fallback`
 //! to accept the coarse fallback (see `ananke::estimator::fallback`).
 
@@ -74,7 +79,7 @@ struct Args {
     visible_devices: u32,
     ik_llama: bool,
     ik_dsa: bool,
-    host_resident_experts: bool,
+    expert_offload: OffloadMode,
     pack: bool,
     gpu_capacities_mib: Vec<u64>,
     cpu_capacity_mib: Option<u64>,
@@ -102,7 +107,7 @@ fn parse_args() -> Args {
     let mut visible_devices: u32 = 1;
     let mut ik_llama = false;
     let mut ik_dsa = false;
-    let mut host_resident_experts = false;
+    let mut expert_offload = OffloadMode::Off;
     let mut pack = false;
     let mut gpu_capacities_mib: Vec<u64> = Vec::new();
     let mut cpu_capacity_mib: Option<u64> = None;
@@ -153,7 +158,12 @@ fn parse_args() -> Args {
             }
             "--ik-llama" => ik_llama = true,
             "--ik-dsa" => ik_dsa = true,
-            "--host-resident-experts" => host_resident_experts = true,
+            "--host-resident-experts" => expert_offload = OffloadMode::Auto,
+            "--n-cpu-moe" => {
+                if let Some(n) = it.next().and_then(|s| s.parse().ok()) {
+                    expert_offload = OffloadMode::Layers(n);
+                }
+            }
             "--pack" => pack = true,
             "--gpu" => {
                 if let Some(v) = it.next().and_then(|s| s.parse().ok()) {
@@ -196,7 +206,7 @@ fn parse_args() -> Args {
         visible_devices,
         ik_llama,
         ik_dsa,
-        host_resident_experts,
+        expert_offload,
         pack,
         gpu_capacities_mib,
         cpu_capacity_mib,
@@ -209,16 +219,12 @@ fn parse_args() -> Args {
 fn build_service_config(args: &Args) -> ServiceConfig {
     use ananke::config::validate::LlamaCppConfig;
 
-    let placement_policy = if args.host_resident_experts {
+    let placement_policy = if args.expert_offload.is_enabled() {
         PlacementPolicy::Hybrid
     } else {
         PlacementPolicy::GpuOnly
     };
-    let expert_offload = if args.host_resident_experts {
-        OffloadMode::Auto
-    } else {
-        OffloadMode::Off
-    };
+    let expert_offload = args.expert_offload;
     let gpu_allow: Vec<u32> = (0..args.visible_devices).collect();
     ServiceConfig {
         name: SmolStr::new("estimate-example"),
@@ -330,7 +336,7 @@ fn build_snapshot(args: &Args) -> DeviceSnapshot {
 fn main() {
     let args = parse_args();
     let inputs = EstimatorInputs {
-        host_resident_experts: args.host_resident_experts,
+        host_resident_experts: args.expert_offload.is_enabled(),
         visible_devices: args.visible_devices,
         split_mode: args.split_mode,
         name: "estimate-example",
