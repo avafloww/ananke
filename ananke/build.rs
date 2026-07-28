@@ -143,13 +143,6 @@ fn generate_tuning_constants() {
     ));
     out.push_str(&generate_rate_table(
         &parsed,
-        "per_slot_host_bytes",
-        "PER_SLOT_HOST_BYTES",
-        "PER_SLOT_HOST_BYTES_DEFAULT",
-        "Host memory each concurrently active slot costs beyond the first, by\n/// architecture.",
-    ));
-    out.push_str(&generate_rate_table(
-        &parsed,
         "no_flash_attn_rates",
         "NO_FLASH_ATTN_RATES",
         "NO_FLASH_ATTN_RATE_DEFAULT",

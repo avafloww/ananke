@@ -64,7 +64,7 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "91 mainline layer-split cells at 4.01, against 140 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "94 mainline layer-split cells at 4.01, against 140 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived"
     },
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
@@ -231,7 +231,7 @@
         ],
         "base_mib": 812,
         "slope_mib_per_1k": 12,
-        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 48 layer-split cells at ctx 8192-65536, peaking at 985 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer, which scales with both. Fitted across 54 layer-split cells at ctx 8192-65536, peaking at 985 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true
       },
       {
@@ -281,7 +281,7 @@
       }
     ]
   },
-  "measurements": 527,
+  "measurements": 530,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -377,11 +377,12 @@
     "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB, np4 2376 MiB; Qwen3.6-35B-A3B-UD-Q5_K_ ctx 32768: np1 584 MiB, np2 812 MiB, np4 1224 MiB; gemma-4-31B-it-qat-UD-Q4 ctx 32768: np1 724 MiB, np2 724 MiB, np4 728 MiB"
   },
   "per_slot_host_bytes": {
-    "$comment": "Host memory each concurrently active slot costs, by architecture. They disagree by two orders of magnitude, and idle slots cost nothing. `default` applies to an architecture not listed; the worst is used, since this is host memory rather than VRAM and over-reserving it is cheap.",
-    "default": 93220864,
+    "$comment": "Host memory each concurrently active slot costs, by architecture. Recorded, and deliberately not charged in `host_overhead_bytes`: that figure is what the rolling correction divides an observation by, so it must model what a process holds rather than the worst case, and charging all four slots took the cells outside the band from 2 to 44. A worst-case allowance belongs in the packer's slop, beside the prompt cache.",
+    "default": 170778624,
     "by_arch": {
       "gemma3": 93220864,
-      "llama": 3807915
+      "llama": 3807915,
+      "qwen35": 170778624
     }
   }
 }

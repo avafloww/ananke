@@ -992,6 +992,24 @@ unrelated to hidden size, KV-head count, or vocabulary. So it is charged per
 architecture, with the worst as the default — cheap here, because this is host
 memory rather than VRAM.
 
+### Measured, and deliberately not charged
+
+Charging it in `host_overhead_bytes` makes things worse, not better, and the
+dataset says so plainly: the cells outside the correction band go from 2 to
+**44**, with ratios down to 0.34.
+
+That figure is what the rolling correction divides an observation by, so it
+has to model what a process *actually holds*, not the worst case it might.
+Slots that stay idle cost nothing and most services are idle in most slots, so
+reserving for four active slots makes every ordinary service read as a massive
+over-reservation and clamp unreachably — the same failure as gemma3's 0.78,
+in the other direction and forty times over.
+
+So the rate is recorded in `tuning.json` and not applied. Four stress cells
+sitting above the band is the better trade, and a worst-case allowance belongs
+in the packer's slop, beside the prompt cache, which is reserved that way for
+exactly this reason.
+
 Two conflations had to come out of the derivation first, both of the same kind
 that has bitten repeatedly. `soak` grows the prompt over six rounds and costs
 memory of its own, so pooling a soak-free single-request cell with a soaked

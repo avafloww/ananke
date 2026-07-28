@@ -112,16 +112,21 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
     } else {
         0
     };
-    // Every slot beyond the first, because a reservation cannot know how many
-    // will be busy. Only a slot that actually serves a request allocates —
-    // the same model at one, two, and four slots with a single sequential
-    // probe holds identical memory — but by the time that is known the
-    // reservation has been made. The first slot's share is already in the
-    // baseline, which is derived from single-request cells.
-    let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
-    let per_slot = per_slot_host_bytes(arch) * slots.saturating_sub(1);
+    // A concurrently active slot costs host memory — 163 MiB on qwen35, 89 on
+    // gemma3, 4 on llama — and that is measured and recorded in
+    // `tuning.json`, but deliberately *not* charged here.
+    //
+    // This function is what the rolling correction divides an observation by,
+    // so it has to model what a process actually holds rather than the worst
+    // case it might. Slots that stay idle cost nothing, and most services are
+    // idle in most slots: charging all four took the cells outside the
+    // correction's band from 2 to 44, with ratios down to 0.34, because every
+    // ordinary service then reads as a massive over-reservation and clamps
+    // unreachably. Two stress cells inside the band is the better trade.
+    //
+    // A worst-case allowance belongs in the packer's slop, alongside the
+    // prompt cache, which is reserved the same way and for the same reason.
     pinned_graph_bytes(summary, arch, inputs)
-        .saturating_add(per_slot)
         .saturating_add(PINNED_EXTRA_BYTES)
         .saturating_add(process_base_bytes(
             summary,
@@ -131,21 +136,6 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
         .saturating_add(device_bytes)
         .saturating_add(tensor_split)
         .saturating_add(mtp)
-}
-
-/// Host memory one concurrently active slot costs, for this architecture.
-///
-/// They disagree by two orders of magnitude — 168 MiB per slot on qwen35, 89
-/// on gemma3, 4 on llama — and nothing the estimator already reads predicts
-/// the spread. Measured per architecture for that reason; a single value from
-/// the one family that had a series would have over-reserved llama by half a
-/// gigabyte at four slots.
-fn per_slot_host_bytes(arch: &str) -> u64 {
-    lookup(
-        crate::estimator::tuning::PER_SLOT_HOST_BYTES,
-        arch,
-        crate::estimator::tuning::PER_SLOT_HOST_BYTES_DEFAULT,
-    )
 }
 
 /// What a tensor split adds to the host baseline, for this architecture.

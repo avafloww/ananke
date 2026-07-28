@@ -1508,11 +1508,13 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     if _PER_SLOT:
         document["per_slot_host_bytes"] = {
             "$comment": "Host memory each concurrently active slot costs, by "
-                        "architecture. They disagree by two orders of "
-                        "magnitude, and idle slots cost nothing. `default` "
-                        "applies to an architecture not listed; the worst is "
-                        "used, since this is host memory rather than VRAM and "
-                        "over-reserving it is cheap.",
+                        "architecture. Recorded, and deliberately not charged "
+                        "in `host_overhead_bytes`: that figure is what the "
+                        "rolling correction divides an observation by, so it "
+                        "must model what a process holds rather than the worst "
+                        "case, and charging all four slots took the cells "
+                        "outside the band from 2 to 44. A worst-case allowance "
+                        "belongs in the packer's slop, beside the prompt cache.",
             "default": max(_PER_SLOT.values()),
             "by_arch": dict(sorted(_PER_SLOT.items())),
         }
