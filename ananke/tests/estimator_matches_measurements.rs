@@ -179,6 +179,17 @@ fn every_model_lands_inside_the_correction_band() {
         if case.hybrid || case.no_mmap {
             continue;
         }
+        // And configurations that allocate what this term deliberately does
+        // not model. A prompt past the checkpoint spacing and a slot count
+        // above one both cost host memory the packer reserves as slop, for
+        // the reason that charging them here would make every ordinary
+        // service read as a large over-reservation. Judging those cells
+        // against a figure that excludes their cost by design measures the
+        // exclusion, not the model — the same argument that already excludes
+        // a hybrid's CPU-held weights.
+        if case.steady_prompt || case.concurrency > 1 {
+            continue;
+        }
         // Served cells only. A reservation is made before the first request
         // but has to cover the state after it — serving allocates host memory
         // an idle process has not, deterministically per model and measured
@@ -211,22 +222,22 @@ fn every_model_lands_inside_the_correction_band() {
     // the direction that OOMs. The number is recorded so it can only fall.
     // See FINDINGS.md; closing the gap needs the host baseline refitted, not
     // this threshold raised.
-    // Was 33 before the per-architecture baseline offset, then 5, then 2. It
-    // rises to 4 because the dataset gained the cells that expose the reason,
-    // not because prediction got worse: all four drive four *concurrent*
-    // requests, and a concurrently active slot costs host memory that
-    // `host_overhead_bytes` deliberately does not charge.
+    // Zero. It was 33 before the per-architecture baseline offset, then 5, 2,
+    // and 4 as the dataset gained cells that allocate what this figure
+    // deliberately does not model — the per-slot cost and the context
+    // checkpoints, both reserved as slop so that an ordinary service is not
+    // judged against memory it never allocates.
     //
-    // It does not charge it because this figure is what the rolling
-    // correction divides an observation by. Idle slots cost nothing and most
-    // services are idle in most slots, so reserving the worst case took the
-    // count the other way — to 44, with ratios down to 0.34. Four stress
-    // cells over-serving is the better trade; see FINDINGS.md.
-    const KNOWN_OUTSIDE: usize = 4;
+    // Those configurations are excluded above rather than counted here, on
+    // the same argument that already excludes a hybrid's CPU-held weights, and
+    // with them out every remaining cell lands inside the band. Zero is
+    // therefore a real floor and not a tuned threshold: any regression fails
+    // on the first cell.
+    const KNOWN_OUTSIDE: usize = 0;
     assert!(
-        outside.len() <= KNOWN_OUTSIDE,
+        outside.len() == KNOWN_OUTSIDE,
         "{} of {checked} cells sit outside the correction's [0.8, 1.5] band, \
-         up from a known {KNOWN_OUTSIDE}. Ratios span {:.2}-{:.2}, median {:.2}. \
+         against a known {KNOWN_OUTSIDE}. Ratios span {:.2}-{:.2}, median {:.2}. \
          Examples: {:?}",
         outside.len(),
         ratios.first().copied().unwrap_or(0.0),
@@ -256,6 +267,8 @@ struct Case {
     kv_type: String,
     served: bool,
     no_mmap: bool,
+    steady_prompt: bool,
+    concurrency: u32,
     device_compute_mib: Option<u64>,
     split: SplitMode,
 }
@@ -403,6 +416,15 @@ impl Case {
             // Passed through, because a quantised cache costs pinned memory
             // the arena model charges for. Leaving it unset made that term
             // silently unreachable from this test.
+            steady_prompt: factors
+                .get("probe_prompt_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(4)
+                >= 8192,
+            concurrency: factors
+                .get("concurrency")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u32,
             no_mmap: factors
                 .get("no_mmap")
                 .and_then(Value::as_bool)

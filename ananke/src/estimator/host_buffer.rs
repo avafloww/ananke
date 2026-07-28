@@ -1021,10 +1021,18 @@ mod tests {
         i.draft_model = Some(&draft_path);
         let separate = host_overhead_bytes(&s, "gemma4", &i);
 
-        assert!(plain < embedded && embedded < separate);
+        // Both shapes cost more than none, and they cost *different* amounts —
+        // which is the point of the assertion. Which of the two is larger is
+        // not: it was the separate draft when both were flat constants, and
+        // is the embedded head now that each is a base plus a context slope.
+        // Subtracting one from the other in a fixed order overflowed the
+        // moment that order changed, and it overflowed at compile time, so
+        // `cargo test` never reported a test failure at all.
+        assert!(plain < embedded && plain < separate);
+        assert_ne!(embedded, separate);
         assert_eq!(
-            (separate - embedded) as f64 / MIB,
-            (MTP_HOST_BYTES_SEPARATE_DRAFT - MTP_HOST_BYTES_EMBEDDED) as f64 / MIB
+            embedded.abs_diff(separate),
+            MTP_HOST_BYTES_EMBEDDED.abs_diff(MTP_HOST_BYTES_SEPARATE_DRAFT)
         );
         // The measured gemma-4 pair, which is the separate-draft shape.
         for (predicted, measured) in [(plain as f64 / MIB, 770.0), (separate as f64 / MIB, 1274.0)]
