@@ -833,6 +833,36 @@ explanation rather than another correlate:
   steps 45 MiB where Qwen3.6-27B steps 273: gemma3's serialised state is far
   smaller.
 
+`--ctx-checkpoints` confirms it quantitatively. On Qwen3.6-27B the step is 114
+MiB with checkpoints disabled and 273 with them at 1, 4, or 32 — the cap does
+not multiply it, because a short prompt makes exactly one checkpoint. The 159
+MiB difference is the allocation strace caught, and the 114 that remains is the
+`[heap]` part, other first-use scratch.
+
+### It saturates at two, and the campaign only ever sees one
+
+Checkpoints are spaced by `--checkpoint-min-step`, 8192 tokens by default, so
+prompt length decides how many exist. Measured on Qwen3.6-27B at ctx 32768:
+
+| prompt tokens | 64 | 8192 | 16384 | 24576 |
+|---|---|---|---|---|
+| step MiB | 274 | 426 | 428 | 431 |
+
+A second checkpoint appears once the prompt passes the spacing, and then no
+more — it plateaus at two rather than climbing toward the cap of 32.
+
+**The campaign measures the one-checkpoint state.** `exercise` sends a
+four-token probe, so every baseline cell captures a single checkpoint, and the
+derived offset is short of the steady state by about 157 MiB on this model — a
+real service with real prompts holds two. That is inside what the rolling
+correction can travel (roughly 13% of this model's host total, against a band
+reaching 50%), so it is a known bias rather than an unreachable one, but it is
+a bias: the offsets are systematically one checkpoint low.
+
+Closing it properly means lengthening the harness probe past the checkpoint
+spacing and re-measuring every baseline cell, which is a campaign-scale rerun
+rather than a constant to edit.
+
 Attaching with `strace -p` fails here — `kernel.yama.ptrace_scope = 1` forbids
 attaching to a running process — so the tracer has to be the parent, which
 needs no system change.
@@ -1185,6 +1215,11 @@ under-reserves its own two-slot measurement by 26.
 ## Open
 
 Measurable here, and not done:
+
+- The baseline offsets are one context checkpoint low, because the harness
+  probe is four tokens and a second checkpoint appears past 8192. About 157
+  MiB on Qwen3.6-27B, inside the correction's reach but systematic. Fixing it
+  means lengthening the probe and re-measuring every baseline cell.
 
 - The four cells outside the correction band are all four-way *concurrent*
   ones. The per-slot cost they expose is measured and reserved as slop, but
