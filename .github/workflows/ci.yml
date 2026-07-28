@@ -61,6 +61,13 @@ jobs:
       - name: Tuning constants match the dataset
         run: python3 scripts/calibration/analyse.py emit --check
 
+      # A term measured at one point in some axis looks flat in that axis, and
+      # that has produced four wrong constants in this campaign. This fails
+      # when a regime feeding a constant varies in none of the axes its rule
+      # depends on.
+      - name: Calibration coverage
+        run: python3 scripts/calibration/coverage.py --check
+
       - name: Docs check (configuration)
         env:
           ANANKE_SKIP_FRONTEND_BUILD: "1"

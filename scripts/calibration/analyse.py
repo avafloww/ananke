@@ -654,8 +654,21 @@ def derive_no_flash_attn_rates(rows: list[dict]) -> str:
         hybrid = bool(factors["n_cpu_moe"])
         copies = 4 if cards > 1 and (factors["split"] or "layer") == "layer" \
             and not hybrid else 1
-        residual = parsed["arena_mib"] - (copies * (mask + swa) + hidden)
         tokens = min(factors["ctx"], factors["ubatch"])
+        # The other two terms that live in the arena beside the masks. Leaving
+        # them in the residual makes this rate absorb them, and then the model
+        # adds them again: an E-variant cell came out 21 MiB over, which is
+        # exactly its per-layer term counted twice.
+        constants = json.loads(TUNING_JSON.read_text())["constants"]
+        extra = 0.0
+        if parsed.get("per_layer_token_embd"):
+            extra += (constants["GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN"]["value"]
+                      * (parsed.get("n_layer") or 0) * tokens / 1024**2)
+        if factors["kv_type"] != "f16" and _QUANT_RATES:
+            extra += (_QUANT_RATES.get(str(parsed.get("arch")),
+                                       max(_QUANT_RATES.values(), default=0))
+                      * tokens / 1024**2)
+        residual = parsed["arena_mib"] - (copies * (mask + swa) + hidden) - extra
         # Per device copy: the term is replicated under a layer split the same
         # way the masks are. Single-card cells measure a quarter of what
         # two-card ones do, which is the copy factor and not the slot count —
@@ -1716,6 +1729,70 @@ def check_no_outlier_dominates(values: list[float], name: str,
             f"letting it set the constant.")
 
 
+def check_arena_model(rows: list[dict], tolerance_mib: float = 5.0) -> None:
+    """Hold this file's arena model to the same measurements the estimator is.
+
+    `arena_terms` here and `pinned_graph_bytes` in `host_buffer.rs` are two
+    implementations of one model, and they have drifted once already: this
+    file went on modelling a single window mask after the estimator moved to
+    three, which is what made `consensus` see a 5.27 multiple among cells that
+    are otherwise 4.00.
+
+    Neither can be checked against the other directly across languages, but
+    both can be checked against the measurement, and a model that reproduces
+    the hardware cannot have drifted from another model that also does. The
+    Rust side asserts this in `arena_reproduces_the_measured_pinned_buffer`;
+    this is the same assertion on this side, so drift fails on whichever side
+    introduces it rather than silently shifting a derived constant.
+    """
+    constants = json.loads(TUNING_JSON.read_text())["constants"]
+    worst: dict[str, tuple[float, str]] = {}
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if not parsed.get("arena_mib") or factors["spec_type"]:
+            continue
+        if (factors["split"] or "layer") == "tensor" or factors["n_cpu_moe"]:
+            continue
+        # Layers on the GPU only. With `-ngl 0` nothing is pinned and the CPU
+        # backend holds op intermediates a GPU run offloads, which is a
+        # different graph and not what this models.
+        if factors["ngl"] != 99:
+            continue
+        mask, swa, hidden = arena_terms(record)
+        cards = len((factors["gpus"] or "0").split(","))
+        copies = 4 if cards > 1 and factors["runtime"] != "ik" else 1
+        no_fa = 0.0
+        # Never on ik: `pinned_graph_bytes` returns before this term, so
+        # letting the table's default apply here would compare against a model
+        # the estimator does not use.
+        if factors["runtime"] != "ik" and factors["flash_attn"] != "on" and _NO_FA_RATES:
+            rate = _NO_FA_RATES.get(variant_key(record),
+                                    max(_NO_FA_RATES.values(), default=0))
+            no_fa = rate * min(factors["ctx"], factors["ubatch"]) / 1024**2
+        # The two remaining terms `arena_terms` leaves to its callers.
+        tokens = min(factors["ctx"], factors["ubatch"])
+        quantised = (_QUANT_RATES.get(str(parsed.get("arch")),
+                                      max(_QUANT_RATES.values(), default=0))
+                     * tokens / 1024**2) if factors["kv_type"] != "f16" else 0.0
+        e_variant = (constants["GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN"]["value"]
+                     * (parsed.get("n_layer") or 0) * tokens / 1024**2
+                     ) if parsed.get("per_layer_token_embd") else 0.0
+        modelled = copies * (mask + swa + no_fa) + hidden + quantised + e_variant
+        error = abs(parsed["arena_mib"] - modelled)
+        arch = str(parsed.get("arch"))
+        if error > worst.get(arch, (0.0, ""))[0]:
+            worst[arch] = (error, str(record.get("log") or ""))
+    bad = {a: v for a, v in worst.items() if v[0] > tolerance_mib}
+    if bad:
+        detail = "; ".join(f"{a} off by {e:.1f} MiB on {log[:40]}"
+                           for a, (e, log) in sorted(bad.items()))
+        raise Disagreement(
+            f"this file's arena model no longer reproduces the measurements: "
+            f"{detail}. It and `pinned_graph_bytes` are two implementations of "
+            f"one model; whichever has drifted, a derived constant is being "
+            f"fitted against the wrong residual.")
+
+
 def check_table_signs(document: dict) -> None:
     """Refuse to write a negative into a table read as unsigned.
 
@@ -1956,6 +2033,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             print("  evidence text differs; re-run without --check to refresh")
         return 1
 
+    check_arena_model(rows)
     check_table_signs(document)
     path.write_text(json.dumps(document, indent=2) + "\n")
     print(f"wrote {path} from {len(rows)} measurements")

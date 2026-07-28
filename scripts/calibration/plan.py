@@ -830,6 +830,37 @@ def checkpoint_steady_state() -> list[Cell]:
     ]
 
 
+def second_context() -> list[Cell]:
+    """A second context for the two regimes `coverage.py` reports as thin.
+
+    `checkpoint_headroom_bytes` and `per_slot_host_bytes` were both fitted
+    from cells at ctx 32768 alone, which is the shape that has produced a
+    wrong constant four times here. Neither is charged to the rolling
+    correction — both are reserved as slop — so an error costs capacity rather
+    than a failed load, but a context dependence would still be invisible.
+
+    Checkpoint headroom needs a steady/short pair at the new context; the
+    short halves already exist from the curve sweep, so only the steady halves
+    are measured. The per-slot cost needs its concurrency series repeated.
+    """
+    cells: list[Cell] = []
+    for key in ("gemma3-27b", "gemma4-31b-qat", "qwen36-27b"):
+        model = MODELS[key]
+        cells.append(Cell(
+            label=f"ckpt-steady-c65536-{model.key}", purpose=("switches",),
+            model=path_of(model.path), gpus="0,1", split="layer", ctx=65536,
+            probe_prompt_tokens=16384, **_model_flags(model, "0,1")))
+    for key in ("gemma3-27b", "qwen36-27b"):
+        model = MODELS[key]
+        for conc in (1, 4):
+            cells.append(Cell(
+                label=f"conc-c65536-{model.key}-c{conc}", purpose=("concurrency",),
+                model=path_of(model.path), gpus="0,1", split="layer", ctx=65536,
+                parallel=4, kv_unified=True, soak=6, concurrency=conc,
+                **_model_flags(model, "0,1")))
+    return cells
+
+
 def device_scaling() -> list[Cell]:
     """Separate the per-device CUDA cost from everything that scales with model.
 
@@ -987,6 +1018,7 @@ QUESTIONS = {
     "single-card": single_card_curves,
     "sparse-switches": sparse_switches,
     "checkpoint-steady": checkpoint_steady_state,
+    "second-context": second_context,
     "flash-attention": flash_attention_off,
     "holdout": phase5_holdout,
 }
