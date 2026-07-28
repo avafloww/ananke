@@ -218,6 +218,9 @@ impl<'a> EstimatorInputs<'a> {
         self.flash_attn.hash(&mut hasher);
         self.kv_unified.hash(&mut hasher);
         self.cache_ram_mb.hash(&mut hasher);
+        self.visible_devices.hash(&mut hasher);
+        self.host_resident_experts.hash(&mut hasher);
+        self.split_mode.hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -410,4 +413,92 @@ pub struct NonLayer {
     pub token_embd_bytes: u64,
     /// Small tensors (norms, rope tables) lumped together.
     pub other_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::EstimatorInputs;
+    use crate::config::validate::SplitMode;
+
+    /// A baseline `EstimatorInputs` with every field populated. Tests clone
+    /// this and flip a single field to prove the fingerprint is sensitive to
+    /// it.
+    fn baseline<'a>() -> EstimatorInputs<'a> {
+        EstimatorInputs {
+            name: "test",
+            model: Path::new("/fake/model.gguf"),
+            mmproj: None,
+            context: 4096,
+            ubatch: Some(512),
+            visible_devices: 1,
+            host_resident_experts: false,
+            split_mode: SplitMode::Layer,
+            cache_type_k: None,
+            cache_type_v: None,
+            override_tensor: &[],
+            compute_buffer_mb: None,
+            allow_fallback: false,
+            mtp: false,
+            draft_model: None,
+            parallel: None,
+            flash_attn: None,
+            kv_unified: None,
+            ik_llama: false,
+            ik_dsa: false,
+            cache_ram_mb: None,
+        }
+    }
+
+    #[test]
+    fn fingerprint_distinguishes_split_mode() {
+        let a = baseline();
+        let b = EstimatorInputs {
+            split_mode: SplitMode::Tensor,
+            ..baseline()
+        };
+        assert_ne!(
+            a.config_fingerprint(),
+            b.config_fingerprint(),
+            "split_mode must participate in the fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_distinguishes_visible_devices() {
+        let a = baseline();
+        let b = EstimatorInputs {
+            visible_devices: 2,
+            ..baseline()
+        };
+        assert_ne!(
+            a.config_fingerprint(),
+            b.config_fingerprint(),
+            "visible_devices must participate in the fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_distinguishes_host_resident_experts() {
+        let a = baseline();
+        let b = EstimatorInputs {
+            host_resident_experts: true,
+            ..baseline()
+        };
+        assert_ne!(
+            a.config_fingerprint(),
+            b.config_fingerprint(),
+            "host_resident_experts must participate in the fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_stable_for_identical_inputs() {
+        assert_eq!(
+            baseline().config_fingerprint(),
+            baseline().config_fingerprint(),
+            "identical inputs must produce identical fingerprints"
+        );
+    }
 }

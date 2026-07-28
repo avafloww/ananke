@@ -19,7 +19,7 @@ use crate::config::validate::{flag_variant, variant_flag};
 ///   `tensor` is llama.cpp's newer, faster implementation; `row` is the
 ///   older one, kept for parity. Both require [`PlacementPolicy::GpuOnly`]
 ///   (no CPU spill) and a llama-cpp service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SplitMode {
     #[default]
     Layer,

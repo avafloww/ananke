@@ -128,3 +128,89 @@ async fn spawn_warms_estimate_cache_for_detail_endpoint() {
 
     h.cleanup().await;
 }
+
+/// A 2-GPU snapshot exercises the `visible_devices` fingerprint path: the
+/// reservation handler sets `visible_devices = snap.gpus.len() = 2`, and the
+/// management handler must do the same or its cache lookup misses. With the
+/// 0-GPU test above, both paths clamp to 1 via `.max(1)` and the test passes
+/// regardless of the management fix — this test fails without it.
+#[tokio::test(flavor = "current_thread")]
+async fn estimate_cache_hit_with_multi_gpu_snapshot() {
+    let model_path = Path::new("/fake/warmth2.gguf");
+    let gguf_bytes = synth_gguf::Builder::new()
+        .kv_string("general.architecture", "qwen3")
+        .kv_string("general.name", "Warmth Test Model 2")
+        .kv_u32("qwen3.block_count", 2)
+        .kv_u32("qwen3.context_length", 8192)
+        .kv_u32("qwen3.attention.head_count_kv", 4)
+        .kv_u32("qwen3.attention.key_length", 128)
+        .kv_u32("qwen3.attention.value_length", 128)
+        .tensor_f16("blk.0.attn_q.weight", 512 * 1024)
+        .tensor_f16("blk.1.attn_q.weight", 512 * 1024)
+        .tensor_f16("output.weight", 512 * 1024)
+        .tensor_f16("token_embd.weight", 512 * 1024)
+        .build();
+
+    let gpu = |id| ananke::devices::GpuSnapshot {
+        id,
+        name: format!("fake-{id}"),
+        total_bytes: 8 * 1024 * 1024 * 1024,
+        free_bytes: 8 * 1024 * 1024 * 1024,
+    };
+    let snapshot = DeviceSnapshot {
+        gpus: vec![gpu(0), gpu(1)],
+        cpu: Some(CpuSnapshot {
+            total_bytes: 64 * 1024 * 1024 * 1024,
+            available_bytes: 64 * 1024 * 1024 * 1024,
+        }),
+        taken_at_ms: 0,
+    };
+
+    let h = build_harness_with_snapshot(vec![service(model_path.to_path_buf())], snapshot).await;
+    h.fs.write(model_path, &gguf_bytes).unwrap();
+
+    // Drive the supervisor through spawn, which warms the cache with
+    // visible_devices = 2 (snap.gpus.len()).
+    let openai = openai::router(h.state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            r#"{"model":"warmth","messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let resp = openai.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "service must start before we can assert anything about its cache entry"
+    );
+
+    // Remove the GGUF. If the management handler's fingerprint doesn't match
+    // (because it left visible_devices at the default 1), the cache misses and
+    // the handler tries to re-parse the now-missing file → model_info: null.
+    h.fs.remove_file(model_path).unwrap();
+
+    let mgmt = management::router(h.state.clone());
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/services/warmth")
+        .body(Body::empty())
+        .unwrap();
+    let resp = mgmt.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert!(
+        !parsed["model_info"].is_null(),
+        "model_info must be a cache hit despite the 2-GPU snapshot: {parsed}"
+    );
+    assert!(
+        !parsed["estimate"].is_null(),
+        "estimate must be a cache hit despite the 2-GPU snapshot: {parsed}"
+    );
+
+    h.cleanup().await;
+}

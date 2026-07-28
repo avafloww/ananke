@@ -55,7 +55,6 @@ impl RunLoop {
         // Estimator + placement path.
         let inputs = crate::estimator::EstimatorInputs::from_service(svc)
             .map(|i| i.with_visible_devices(snap.gpus.len() as u32))
-            .map(|i| i.with_visible_devices(snap.gpus.len() as u32))
             .ok_or(ReservationFailure::Misconfigured(
                 MisconfiguredKind::NoModelPath,
             ))?;

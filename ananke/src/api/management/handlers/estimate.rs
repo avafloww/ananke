@@ -24,7 +24,8 @@ pub(crate) fn model_estimate_entry(
     // Build the inputs once so the fingerprint we compare against is
     // identical to the one `compute_estimate_entry` would write into
     // the cache on miss.
-    let inputs = EstimatorInputs::from_service(svc_cfg)?;
+    let inputs = EstimatorInputs::from_service(svc_cfg)
+        .map(|i| i.with_visible_devices(state.snapshot.read().gpus.len() as u32))?;
     let fingerprint = inputs.config_fingerprint();
     let lc = svc_cfg.llama_cpp()?;
     let svc_name = svc_cfg.name.clone();
@@ -148,7 +149,8 @@ pub(crate) fn placement_preview(
 /// estimator refuses the architecture.
 fn compute_estimate_entry(state: &AppState, svc_cfg: &ServiceConfig) -> Option<CacheEntry> {
     let lc = svc_cfg.llama_cpp()?;
-    let inputs = EstimatorInputs::from_service(svc_cfg)?;
+    let inputs = EstimatorInputs::from_service(svc_cfg)
+        .map(|i| i.with_visible_devices(state.snapshot.read().gpus.len() as u32))?;
     let config_fingerprint = inputs.config_fingerprint();
     let model_path = lc.model.clone();
     let mmproj_path = lc.mmproj.clone();
