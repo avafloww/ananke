@@ -45,6 +45,7 @@ pub fn estimate_fallback(summary: &GgufSummary, context: u32) -> Estimate {
         host_overhead_bytes: 0,
         host_cache_bytes: 0,
         host_slot_bytes: 0,
+        host_checkpoint_bytes: 0,
         output_buffer_bytes: 0,
         per_layer_bytes: None,
         attention_layers: None,

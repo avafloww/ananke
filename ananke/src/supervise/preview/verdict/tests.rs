@@ -68,6 +68,7 @@ fn estimate_gib(n_layers: u32, per_gib: u64) -> Estimate {
         host_overhead_bytes: 0,
         host_cache_bytes: 0,
         host_slot_bytes: 0,
+        host_checkpoint_bytes: 0,
         per_layer_bytes: Some(vec![per; n_layers as usize]),
         attention_layers: None,
         non_layer: NonLayer::default(),

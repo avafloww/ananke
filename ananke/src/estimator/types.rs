@@ -330,6 +330,10 @@ pub struct Estimate {
     /// slot costs nothing, so the packer charges this as slop and the rolling
     /// correction never divides by it.
     pub host_slot_bytes: u64,
+    /// Host RAM the server's context checkpoints need once prompts are long
+    /// enough to be checkpointed. Reserved but not predicted, like
+    /// [`Self::host_cache_bytes`]: a short-prompt service never allocates it.
+    pub host_checkpoint_bytes: u64,
     /// Per-layer weight bytes for index-ordered packing. `None` for
     /// architectures where layer-aware placement isn't applicable
     /// (currently SSM/Mamba; in that case `placement` uses single-device

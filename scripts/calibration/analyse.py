@@ -151,7 +151,8 @@ def check_arena(rows: list[dict]) -> None:
         # every two-card run.
         placement = (factors["split"] or "layer") if cards > 1 else "single"
         key = (parsed.get("arch", "?"), factors["runtime"], placement,
-               factors["flash_attn"])
+               factors["flash_attn"],
+               (factors.get("probe_tokens") or 64) >= CHECKPOINT_MIN_STEP)
         groups[key].append((parsed["arena_mib"], mask, swa_mask, hidden, record))
 
     print(f"{'arch':12}{'runtime':9}{'placement':>10}{'fa':>4}{'n':>4}"
@@ -414,6 +415,14 @@ def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
         # over-predicted every other ik cell of that model to 0.57.
         if factors["no_mmap"]:
             continue
+        # Short-probe cells only. A prompt past the checkpoint spacing reaches
+        # a steady state up to 1.6 GiB higher on a sliding-window model, and
+        # folding that in here would charge it to every service of that
+        # architecture — including one that never sees a long prompt, which
+        # the correction could then never pull back. It is reserved as slop
+        # instead; see `derive_checkpoint_headroom`.
+        if (factors.get("probe_tokens") or 64) >= CHECKPOINT_MIN_STEP:
+            continue
         if (factors["split"] or "layer") != "layer" or not parsed.get("n_layer"):
             continue
         # Flash attention off is kept, under its own key. Pooling it with
@@ -512,6 +521,14 @@ def derive_tensor_split_baseline(rows: list[dict]) -> tuple[int, str]:
         # over-predicted every other ik cell of that model to 0.57.
         if factors["no_mmap"]:
             continue
+        # Short-probe cells only. A prompt past the checkpoint spacing reaches
+        # a steady state up to 1.6 GiB higher on a sliding-window model, and
+        # folding that in here would charge it to every service of that
+        # architecture — including one that never sees a long prompt, which
+        # the correction could then never pull back. It is reserved as slop
+        # instead; see `derive_checkpoint_headroom`.
+        if (factors.get("probe_tokens") or 64) >= CHECKPOINT_MIN_STEP:
+            continue
         owned = (record["rss"].get("rss_anon_kb", 0)
                  + record["rss"].get("rss_shmem_kb", 0)) * 1024
         mask, swa_mask, hidden = arena_terms(record)
@@ -543,6 +560,12 @@ def derive_tensor_split_baseline(rows: list[dict]) -> tuple[int, str]:
         "Per architecture, since the spread across all of them is wider than "
         "any one of them is internally."
     )
+
+
+# llama.cpp's `--checkpoint-min-step` default: the prompt length past which a
+# second context checkpoint is taken, and so the line between a cell that
+# measures the probe's state and one that measures a real service's.
+CHECKPOINT_MIN_STEP = 8192
 
 
 def variant_key(record: dict, with_environment: bool = False) -> str:
@@ -723,6 +746,71 @@ def derive_per_slot_bytes(rows: list[dict]) -> str:
         "with one sequential probe read the same — so it is the active slot "
         "that allocates. Charged for every slot, since a reservation cannot "
         "know how many will be busy."
+    )
+
+
+def derive_checkpoint_headroom(rows: list[dict]) -> str:
+    """What a real prompt adds over the campaign's probe, by architecture.
+
+    llama.cpp's server checkpoints a slot's state so a prompt can be rewound,
+    spaced by `--checkpoint-min-step` (8192 tokens). The campaign's probe is
+    four tokens, so every baseline cell holds one checkpoint at most; a
+    service serving real prompts holds more.
+
+    How many more depends on the attention. The flag's other name is
+    `--swa-checkpoints`, and a sliding-window model needs checkpoints to rewind
+    its window, so it keeps far more of them: gemma-4-31B-QAT measures 524 MiB
+    at the probe and 2138 at a 16384-token prompt, against Qwen3.6-27B's 778
+    and 928.
+
+    Reserved rather than charged, like the prompt cache and the per-slot cost.
+    `host_overhead_bytes` is what the rolling correction divides an
+    observation by, so it has to model what a process holds; a service that
+    never sees a long prompt would otherwise read as a 1.6 GiB
+    over-reservation and clamp unreachably.
+    """
+    from collections import defaultdict as _dd
+    matched: dict[tuple, dict[bool, int]] = _dd(dict)
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if record.get("status") != "ok" or not factors.get("served"):
+            continue
+        if factors["bench"] or factors["spec_type"] or factors["n_cpu_moe"]:
+            continue
+        if factors["ngl"] != 99:
+            continue
+        # Every factor that moves host memory belongs here. Omitting `soak`,
+        # `concurrency`, and `cram` pooled a soaked, cache-enabled cell at
+        # 3467 MiB with the plain ones and drove gemma3's difference negative.
+        key = (variant_key(record), factors["runtime"], factors["ctx"],
+               factors["ubatch"], factors["gpus"], factors["split"] or "layer",
+               factors["kv_type"], factors["parallel"], factors["flash_attn"],
+               factors.get("soak") or 0, factors.get("concurrency") or 0,
+               factors.get("cram") or 0, bool(factors.get("no_mmap")))
+        owned = ((record["rss"].get("rss_anon_kb", 0)
+                  + record["rss"].get("rss_shmem_kb", 0)) // 1024)
+        # The threshold is the checkpoint spacing, not any prompt longer than
+        # the default: a 256- or 1024-token prompt still makes one checkpoint.
+        steady = (factors.get("probe_tokens") or 64) >= CHECKPOINT_MIN_STEP
+        prev = matched[key].get(steady)
+        matched[key][steady] = owned if prev is None else max(prev, owned)
+
+    by_arch: dict[str, list[int]] = _dd(list)
+    for key, pair in matched.items():
+        if len(pair) == 2:
+            by_arch[key[0]].append(max(0, pair[True] - pair[False]))
+    if not by_arch:
+        raise ValueError("no probe/steady-state pairs")
+    _CKPT_HEADROOM.clear()
+    _CKPT_HEADROOM.update({a: max(v) * 1024 * 1024 for a, v in by_arch.items()})
+    return (
+        "measured as the difference between a cell with a prompt past the "
+        "8192-token checkpoint spacing and its short-probe twin, matched on "
+        "every other factor: "
+        + ", ".join(f"{a} {v // 1024 // 1024} MiB"
+                    for a, v in sorted(_CKPT_HEADROOM.items()))
+        + ". Sliding-window architectures dominate, the flag being named "
+        "--swa-checkpoints for that reason."
     )
 
 
@@ -1304,6 +1392,7 @@ _IK_RATES: dict[str, int] = {}
 _QUANT_RATES: dict[str, int] = {}
 _NO_FA_RATES: dict[str, int] = {}
 _PER_SLOT: dict[str, int] = {}
+_CKPT_HEADROOM: dict[str, int] = {}
 
 
 def _record_ik_rates(by_arch: dict[str, float]) -> None:
@@ -1629,6 +1718,10 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"MTP slot scaling: cannot report — {error}")
     try:
+        derive_checkpoint_headroom(rows)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+        failed.append(f"checkpoint headroom: cannot derive — {error}")
+    try:
         derive_per_slot_bytes(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"per-slot host bytes: cannot derive — {error}")
@@ -1735,6 +1828,17 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "separates a genuine slot term from the longer context "
                         "the first campaign confounded it with.",
             "observed": _MTP_SLOTS[0],
+        }
+    if _CKPT_HEADROOM:
+        document["checkpoint_headroom_bytes"] = {
+            "$comment": "What a real prompt adds over the campaign's probe, by "
+                        "architecture, from llama.cpp's context checkpoints. "
+                        "Reserved as slop rather than charged to the "
+                        "correction: a service that never sees a long prompt "
+                        "would otherwise read as a large over-reservation and "
+                        "clamp unreachably.",
+            "default": max(_CKPT_HEADROOM.values()),
+            "by_arch": dict(sorted(_CKPT_HEADROOM.items())),
         }
     if _PER_SLOT:
         document["per_slot_host_bytes"] = {

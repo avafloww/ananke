@@ -182,6 +182,7 @@ pub fn estimate_with_summary(
         host_buffer::host_overhead_bytes(&summary, summary.architecture.as_str(), inputs);
     est.host_cache_bytes = host_buffer::prompt_cache_bytes(inputs);
     est.host_slot_bytes = host_buffer::slot_host_bytes(summary.architecture.as_str(), inputs);
+    est.host_checkpoint_bytes = host_buffer::checkpoint_headroom_bytes(&summary, inputs);
 
     info!(
         service = %inputs.name,

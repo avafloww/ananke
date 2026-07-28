@@ -143,6 +143,13 @@ fn generate_tuning_constants() {
     ));
     out.push_str(&generate_rate_table(
         &parsed,
+        "checkpoint_headroom_bytes",
+        "CHECKPOINT_HEADROOM_BYTES",
+        "CHECKPOINT_HEADROOM_DEFAULT",
+        "Host memory a real prompt adds over a short one, by architecture,\n/// from llama.cpp's context checkpoints. Reserved as slop.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
         "per_slot_host_bytes",
         "PER_SLOT_HOST_BYTES",
         "PER_SLOT_HOST_BYTES_DEFAULT",

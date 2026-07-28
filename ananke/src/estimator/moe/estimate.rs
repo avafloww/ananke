@@ -100,6 +100,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         host_overhead_bytes: 0,
         host_cache_bytes: 0,
         host_slot_bytes: 0,
+        host_checkpoint_bytes: 0,
         output_buffer_bytes: 0,
         per_layer_bytes: Some(per_layer_total),
         attention_layers: None,

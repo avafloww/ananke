@@ -274,6 +274,29 @@ pub fn slot_host_bytes(arch: &str, inputs: &EstimatorInputs<'_>) -> u64 {
     ) * slots.saturating_sub(1)
 }
 
+/// Host memory a prompt long enough to be checkpointed adds, per slot.
+///
+/// llama.cpp's server checkpoints a slot's state so a prompt can be rewound
+/// rather than reprocessed, spaced by `--checkpoint-min-step` (8192 tokens).
+/// A service serving real prompts holds more of them than a short probe does,
+/// and how many more depends on the attention: the flag's other name is
+/// `--swa-checkpoints`, and a sliding-window model needs them to rewind its
+/// window. gemma-4-31B-QAT measures 524 MiB at a four-token prompt and 2138
+/// at 16384; Qwen3.6-27B, without a sliding window, 778 and 928.
+///
+/// Reserved, not predicted — the same treatment as the prompt cache and the
+/// per-slot cost, and for the same reason. Charging it in
+/// [`host_overhead_bytes`] would make a service that never sees a long prompt
+/// read as a 1.6 GiB over-reservation and clamp the correction unreachably.
+pub fn checkpoint_headroom_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u64 {
+    let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
+    lookup(
+        crate::estimator::tuning::CHECKPOINT_HEADROOM_BYTES,
+        &variant_key(summary, &summary.architecture),
+        crate::estimator::tuning::CHECKPOINT_HEADROOM_DEFAULT,
+    ) * slots
+}
+
 /// The prompt-cache cap in bytes. Zero when the operator disables it.
 ///
 /// Reserved but not predicted. The cache fills with use rather than at load —
