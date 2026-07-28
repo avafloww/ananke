@@ -24,10 +24,7 @@
 //! `estimation.compute_buffer_mb`, which short-circuits this table.
 
 use crate::{
-    estimator::tuning::{
-        CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR,
-        QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN,
-    },
+    estimator::tuning::{CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR},
     gguf::GgufSummary,
 };
 
@@ -137,21 +134,20 @@ pub fn default_for_streams(
     default_for_inputs(summary, context, ubatch, flash_attn, streams, false)
 }
 
-/// As [`default_for_streams`], plus the allowance a quantised KV cache needs.
-///
-/// A quantised cache costs the *compute* buffer as well as the pinned host
-/// one: paired cells differing in nothing else measure up to 394 MiB more per
-/// device at ctx 65536, 1.86x on gemma3 and 1.95x on qwen3. It used to be
-/// absorbed into the curves, which are fitted from the worst cell at each
-/// context and did not key on cache type — so one quantised cell set the
-/// slope and every f16 service paid it.
+/// As [`default_for_streams`], for callers that need to distinguish a quantised
+/// KV cache. The quantised-KV compute-buffer allowance was removed: the
+/// compute-buffer curves are fitted from the worst (quantised) cell at each
+/// context, so the allowance was already absorbed into the slope and charging
+/// it again double-counted. A quantised cache *reduces* total VRAM (the
+/// smaller KV outweighs the small compute-buffer increase), so an additional
+/// GPU charge was the wrong direction.
 pub fn default_for_inputs(
     summary: &GgufSummary,
     context: u32,
     ubatch: Option<u32>,
     flash_attn: bool,
     streams: u32,
-    quantised_kv: bool,
+    _quantised_kv: bool,
 ) -> u32 {
     let batch = ubatch.unwrap_or(DEFAULT_UBATCH);
     let t = tuning_for(summary, batch);
@@ -161,14 +157,6 @@ pub fn default_for_inputs(
     // because it does not grow with context.
     let batch_term =
         (u64::from(t.base_batch) * u64::from(batch.max(1)) / u64::from(DEFAULT_UBATCH)) as u32;
-    let quantised = if quantised_kv {
-        let bytes = QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN
-            * u64::from(context)
-            * u64::from(context.min(batch));
-        (bytes / (1024 * 1024)).min(u64::from(u32::MAX)) as u32
-    } else {
-        0
-    };
     t.base
         .saturating_add(batch_term)
         .saturating_add(t.slope.saturating_mul(context / 1024))
@@ -178,7 +166,6 @@ pub fn default_for_inputs(
             batch,
             flash_attn,
         ))
-        .saturating_add(quantised)
 }
 
 /// The score matrix an unfused attention pass materialises.
