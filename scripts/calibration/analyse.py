@@ -152,7 +152,7 @@ def check_arena(rows: list[dict]) -> None:
         placement = (factors["split"] or "layer") if cards > 1 else "single"
         key = (parsed.get("arch", "?"), factors["runtime"], placement,
                factors["flash_attn"],
-               (factors.get("probe_tokens") or 64) >= CHECKPOINT_MIN_STEP)
+               (factors.get("probe_prompt_tokens") or 4) >= CHECKPOINT_MIN_STEP)
         groups[key].append((parsed["arena_mib"], mask, swa_mask, hidden, record))
 
     print(f"{'arch':12}{'runtime':9}{'placement':>10}{'fa':>4}{'n':>4}"
@@ -421,7 +421,7 @@ def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
         # architecture — including one that never sees a long prompt, which
         # the correction could then never pull back. It is reserved as slop
         # instead; see `derive_checkpoint_headroom`.
-        if (factors.get("probe_tokens") or 64) >= CHECKPOINT_MIN_STEP:
+        if (factors.get("probe_prompt_tokens") or 4) >= CHECKPOINT_MIN_STEP:
             continue
         if (factors["split"] or "layer") != "layer" or not parsed.get("n_layer"):
             continue
@@ -527,7 +527,7 @@ def derive_tensor_split_baseline(rows: list[dict]) -> tuple[int, str]:
         # architecture — including one that never sees a long prompt, which
         # the correction could then never pull back. It is reserved as slop
         # instead; see `derive_checkpoint_headroom`.
-        if (factors.get("probe_tokens") or 64) >= CHECKPOINT_MIN_STEP:
+        if (factors.get("probe_prompt_tokens") or 4) >= CHECKPOINT_MIN_STEP:
             continue
         owned = (record["rss"].get("rss_anon_kb", 0)
                  + record["rss"].get("rss_shmem_kb", 0)) * 1024
@@ -791,7 +791,7 @@ def derive_checkpoint_headroom(rows: list[dict]) -> str:
                   + record["rss"].get("rss_shmem_kb", 0)) // 1024)
         # The threshold is the checkpoint spacing, not any prompt longer than
         # the default: a 256- or 1024-token prompt still makes one checkpoint.
-        steady = (factors.get("probe_tokens") or 64) >= CHECKPOINT_MIN_STEP
+        steady = (factors.get("probe_prompt_tokens") or 4) >= CHECKPOINT_MIN_STEP
         prev = matched[key].get(steady)
         matched[key][steady] = owned if prev is None else max(prev, owned)
 

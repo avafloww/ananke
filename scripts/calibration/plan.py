@@ -781,13 +781,11 @@ def sparse_switches() -> list[Cell]:
     forces `--no-mmap`, so its pair carries that on both sides to keep the
     mapping mode from confounding it.
 
-    `--use-thp` is deliberately absent. The `Cell.thp` field exists and is
-    recorded on every row, but this llama.cpp build rejects the flag outright
-    — `error: invalid argument: --use-thp` — so such a cell can only fail to
-    load, and it sat out the full load timeout doing it. The field is kept
-    rather than removed because `cell_id` is derived from the Cell's fields
-    and dropping one would change every existing cell's identity, making the
-    whole dataset look unmeasured.
+    `--use-thp` is absent because this llama.cpp build rejects the flag
+    outright — `error: invalid argument: --use-thp` — so such a cell can only
+    fail to load, and it sat out the full load timeout doing it. The `thp`
+    field has been dropped from `Cell` entirely, which identity-by-non-default
+    makes free.
     """
     cells: list[Cell] = []
     dense = MODELS["qwen3-4b"]
@@ -824,7 +822,8 @@ def checkpoint_steady_state() -> list[Cell]:
     return [
         Cell(label=f"ckpt-steady-{MODELS[key].key}", purpose=("switches",),
              model=path_of(MODELS[key].path), gpus="0,1", split="layer",
-             ctx=32768, probe_tokens=16384, **_model_flags(MODELS[key], "0,1"))
+             ctx=32768, probe_prompt_tokens=16384,
+             **_model_flags(MODELS[key], "0,1"))
         for key in ("qwen3-4b", "qwen36-27b", "gemma3-27b", "magidonia-24b",
                     "talkie-13b", "gemma4-31b-qat", "gemma4-26b-a4b",
                     "gemma4-e4b", "qwen36-35b-a3b")

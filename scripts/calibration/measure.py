@@ -97,22 +97,27 @@ class Cell:
     cram: int = 0
     no_mmap: bool = False
     rtr: bool = False
-    thp: bool = False
     embeddings: bool = False
     served: bool = True
     probe_tokens: int = 64
-    """How large the warm-up probe is, in tokens, on both sides.
+    """How many tokens the warm-up probe generates.
 
-    It caps the probe's generation and sizes its prompt. Prompt length is the
-    part that matters for memory: llama.cpp's server takes a context
+    Memory does not depend on this — the first-request step is identical at
+    `n_predict` 8, 4096, and 12288 — so it is a timing knob, not a factor.
+    `probe_prompt_tokens` is the one that matters.
+    """
+    probe_prompt_tokens: int = 4
+    """How long the warm-up probe's *prompt* is, in tokens.
+
+    This is what moves host memory. llama.cpp's server takes a context
     checkpoint while decoding a prompt, spaced by `--checkpoint-min-step`
-    (8192 tokens), so a probe shorter than that captures one checkpoint and a
-    probe shorter than ~64 tokens captures only part of one — the step
-    measures 11 MiB at a one-token prompt against 274 at sixty-four.
+    (8192 tokens), so a prompt below that captures one checkpoint and a prompt
+    of a few tokens captures only part of one: the step measures 11 MiB at one
+    token against 274 at sixty-four, and 431 once past the spacing.
 
-    Generation is capped at 64 whatever this says, because it costs minutes at
-    long settings and moves nothing: the step is identical at `n_predict` 8,
-    64, and 256.
+    The default is four, matching the "Count to twenty." probe the campaign
+    was measured with, so existing cells keep their identity and their
+    meaning.
     """
     """How many tokens the first request asks for.
 
@@ -165,10 +170,20 @@ class Cell:
         the cell and say why it was wanted, but two cells with the same flags
         are the same measurement whatever they are called, and measuring one
         configuration twice under two names is pure waste.
+
+        Fields still at their default are excluded too, and that is what makes
+        the schema extensible. Hashing every field means adding or removing
+        one changes the identity of *every* cell ever measured, so the harness
+        stops recognising its own dataset and re-measures all of it. That trap
+        is why a prompt-length knob was folded into `probe_tokens` rather than
+        given its own field, and why a dead `thp` field was kept: both were
+        cheaper than a full re-measure. Excluding defaults costs nothing —
+        two cells differing in a field still hash differently, since one of
+        them is not at the default — and a new defaulted field is free.
         """
-        fields = dataclasses.asdict(self)
-        fields.pop("label", None)
-        fields.pop("purpose", None)
+        defaults = {f.name: f.default for f in dataclasses.fields(self)}
+        fields = {k: v for k, v in dataclasses.asdict(self).items()
+                  if k not in ("label", "purpose") and v != defaults.get(k)}
         payload = json.dumps(fields, sort_keys=True, default=str)
         return hashlib.sha256(payload.encode()).hexdigest()[:12]
 
@@ -208,7 +223,6 @@ class Cell:
             ("-kvu", self.kv_unified),
             ("--no-mmap", self.no_mmap),
             ("-rtr", self.rtr),
-            ("--use-thp", self.thp),
             ("--embeddings", self.embeddings),
         ]:
             if on:
@@ -700,13 +714,13 @@ def exercise(cell: Cell, port: int, pid: int = 0) -> list[dict[str, object]]:
         return []
     if cell.embeddings:
         return _exercise_embeddings(cell, port, pid)
-    # One word per token, near enough: what matters is crossing the
-    # checkpoint spacing, not the exact count.
-    prompt = "Count to twenty." if cell.probe_tokens <= 64 else \
-        " ".join(["word"] * cell.probe_tokens)
+    # One word per token, near enough: what matters is which side of the
+    # checkpoint spacing the prompt falls on, not the exact count.
+    prompt = ("Count to twenty." if cell.probe_prompt_tokens <= 4
+              else " ".join(["word"] * cell.probe_prompt_tokens))
     _post(port, "/v1/chat/completions",
           {"model": "m", "messages": [{"role": "user", "content": prompt}],
-           "max_tokens": min(cell.probe_tokens, 64)}, 600)
+           "max_tokens": cell.probe_tokens}, 600)
 
 
     if cell.bench:
