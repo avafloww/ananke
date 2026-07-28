@@ -64,7 +64,7 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "104 mainline layer-split cells at 4.00, against 148 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "106 mainline layer-split cells at 4.00, against 149 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived"
     },
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
@@ -199,7 +199,7 @@
         ],
         "base_mib": 548,
         "slope_mib_per_1k": 7,
-        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer per unit of ctx x batch, which is what scales. Fitted across 72 layer-split cells at ctx 8192-65536, peaking at 820 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer per unit of ctx x batch, which is what scales. Fitted across 75 layer-split cells at ctx 8192-65536, peaking at 820 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true,
         "base_batch_mib": 345
       },
@@ -261,7 +261,7 @@
         ],
         "base_mib": 654,
         "slope_mib_per_1k": 6,
-        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer per unit of ctx x batch, which is what scales. Fitted across 48 layer-split cells at ctx 8192-65536, peaking at 779 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "base from the worst unaccounted remainder, which is flat in both context and batch; slope from the compute buffer per unit of ctx x batch, which is what scales. Fitted across 50 layer-split cells at ctx 8192-65536, peaking at 779 MiB, with 60% headroom. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_scales_with_ubatch": true,
         "base_batch_mib": 248
       },
@@ -315,7 +315,7 @@
       }
     ]
   },
-  "measurements": 557,
+  "measurements": 560,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,

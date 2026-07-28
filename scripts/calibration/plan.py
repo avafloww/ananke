@@ -858,6 +858,16 @@ def second_context() -> list[Cell]:
                 model=path_of(model.path), gpus="0,1", split="layer", ctx=65536,
                 parallel=4, kv_unified=True, soak=6, concurrency=conc,
                 **_model_flags(model, "0,1")))
+    # And on one card. Every steady-state cell above runs two, so the
+    # checkpoint headroom is fitted without ever varying the card count —
+    # which matters, since the term is charged per slot and the masks beside
+    # it replicate per device.
+    for key in ("gemma3-27b", "qwen3-4b"):
+        model = MODELS[key]
+        cells.append(Cell(
+            label=f"ckpt-steady-1card-{model.key}", purpose=("switches",),
+            model=path_of(model.path), gpus="0", split="layer", ctx=32768,
+            probe_prompt_tokens=16384, **_model_flags(model, "0")))
     return cells
 
 
