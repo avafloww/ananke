@@ -804,6 +804,33 @@ def sparse_switches() -> list[Cell]:
     return cells
 
 
+def checkpoint_steady_state() -> list[Cell]:
+    """The host cost a real prompt reaches, against the probe's.
+
+    llama.cpp's server takes a context checkpoint while decoding a prompt,
+    spaced by `--checkpoint-min-step` (8192 tokens) and capped by
+    `--ctx-checkpoints` (32). The campaign's probe is four tokens, so every
+    baseline cell captures at most one checkpoint — and, since the step
+    measures 11 MiB at a one-token prompt against 274 at sixty-four, possibly
+    only part of one. A prompt past the spacing reaches the steady state,
+    which is two checkpoints: measured 274, 426, 428, and 431 MiB at 64, 8192,
+    16384, and 24576 tokens.
+
+    Each cell here mirrors an existing baseline cell exactly but for
+    `probe_tokens`, so the difference between them is the whole correction —
+    the unmeasured part of the first checkpoint plus the second — without
+    re-measuring the 156 cells the offsets are fitted from.
+    """
+    return [
+        Cell(label=f"ckpt-steady-{MODELS[key].key}", purpose=("switches",),
+             model=path_of(MODELS[key].path), gpus="0,1", split="layer",
+             ctx=32768, probe_tokens=16384, **_model_flags(MODELS[key], "0,1"))
+        for key in ("qwen3-4b", "qwen36-27b", "gemma3-27b", "magidonia-24b",
+                    "talkie-13b", "gemma4-31b-qat", "gemma4-26b-a4b",
+                    "gemma4-e4b", "qwen36-35b-a3b")
+    ]
+
+
 def device_scaling() -> list[Cell]:
     """Separate the per-device CUDA cost from everything that scales with model.
 
@@ -960,6 +987,7 @@ QUESTIONS = {
     "loose-ends": loose_ends,
     "single-card": single_card_curves,
     "sparse-switches": sparse_switches,
+    "checkpoint-steady": checkpoint_steady_state,
     "flash-attention": flash_attention_off,
     "holdout": phase5_holdout,
 }

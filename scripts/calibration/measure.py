@@ -101,6 +101,19 @@ class Cell:
     embeddings: bool = False
     served: bool = True
     probe_tokens: int = 64
+    """How large the warm-up probe is, in tokens, on both sides.
+
+    It caps the probe's generation and sizes its prompt. Prompt length is the
+    part that matters for memory: llama.cpp's server takes a context
+    checkpoint while decoding a prompt, spaced by `--checkpoint-min-step`
+    (8192 tokens), so a probe shorter than that captures one checkpoint and a
+    probe shorter than ~64 tokens captures only part of one — the step
+    measures 11 MiB at a one-token prompt against 274 at sixty-four.
+
+    Generation is capped at 64 whatever this says, because it costs minutes at
+    long settings and moves nothing: the step is identical at `n_predict` 8,
+    64, and 256.
+    """
     """How many tokens the first request asks for.
 
     Serving a first request allocates host memory that an idle process has not
@@ -687,9 +700,13 @@ def exercise(cell: Cell, port: int, pid: int = 0) -> list[dict[str, object]]:
         return []
     if cell.embeddings:
         return _exercise_embeddings(cell, port, pid)
+    # One word per token, near enough: what matters is crossing the
+    # checkpoint spacing, not the exact count.
+    prompt = "Count to twenty." if cell.probe_tokens <= 64 else \
+        " ".join(["word"] * cell.probe_tokens)
     _post(port, "/v1/chat/completions",
-          {"model": "m", "messages": [{"role": "user", "content": "Count to twenty."}],
-           "max_tokens": cell.probe_tokens}, 300)
+          {"model": "m", "messages": [{"role": "user", "content": prompt}],
+           "max_tokens": min(cell.probe_tokens, 64)}, 600)
 
 
     if cell.bench:
