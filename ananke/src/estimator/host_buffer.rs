@@ -375,15 +375,18 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     };
 
     let hidden_inputs = 2 * n_embd * n_tokens * 4;
-    // Per token *per stream*. Qwen3-4B measures 4.01 MiB of it at four slots
-    // across ctx 16384, 32768, and 65536 alike, and 32 KiB per token at one
-    // slot — exactly four times, so the term follows the per-slot cache the
-    // same way the mask does. The rates are derived at one slot, which is why
-    // the division belongs here rather than in the table.
+    // Per token, per *device copy* — replicated under a layer split the same
+    // way the masks are, and independent of the slot count.
+    //
+    // An earlier reading had it divided by the stream count, from single-card
+    // points measuring 8 KiB per token against two-card cells measuring 32.
+    // That is the mask-copy factor of 4, not the slot count: cells run to
+    // settle it measure gemma3 at 128.1 KiB per token and qwen35 at 32.1 at
+    // both one slot and four, on two cards, identical to the decimal.
     let no_fa_extra = if flash_attn {
         0
     } else {
-        no_flash_attn_rate(summary, arch) * n_tokens / streams
+        no_flash_attn_rate(summary, arch) * n_tokens
     };
     // A quantised KV cache costs more pinned memory than an f16 one, measured
     // in every one of 117 pairs differing in nothing else. The per-copy rate
@@ -404,12 +407,11 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     // 4.00-4.16 on six architectures, flat across context, batch, slot count
     // and cache mode — so it multiplies a term that scales, and the flat
     // "+24 MiB for a second GPU" it replaces was this evaluated at ctx 8192.
-    let masks = base_mask + indexer_masks + swa_mask;
+    let masks = base_mask + indexer_masks + swa_mask + no_fa_extra;
     let masks = masks * mask_copies(inputs);
 
     masks
         + hidden_inputs
-        + no_fa_extra
         + quantised_cache
         + gemma_e_variant_bytes(summary, arch, n_tokens)
         + mainline_tensor_moe_bytes(summary, arch, inputs, n_tokens)

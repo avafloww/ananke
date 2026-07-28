@@ -905,6 +905,28 @@ worse than that: it reports the same 258.02 MiB at every slot count, so it is
 blind to the axis that dominates the cost. Nothing calibrated against it can
 be right at more than one slot.
 
+### The stream division was a card effect misread
+
+The flash-attention term was divided by the stream count, on single-card
+points measuring 8 KiB per token against two-card cells measuring 32. Cells
+run specifically to falsify that show gemma3 at 128.1 KiB per token and qwen35
+at 32.1 at **both one slot and four**, on two cards: the factor of four is the
+mask-copy count, not the slot count. The term is replicated per device under a
+layer split like the masks it sits beside, and every plain causal architecture
+then lands on exactly 8 KiB per token per copy — llama, qwen3, and qwen35
+alike, and matching the single-card measurement that started the confusion.
+
+The lesson is narrower than "measure two points": the original comparison
+varied *two* things at once, cards and slots, and attributed the difference to
+the wrong one. The cells that settled it hold the card count fixed.
+
+The GPU side of the same term does divide by streams, and that is measured
+rather than assumed: with the card count held at two, gemma-3-27B's unfused
+attention compute falls from 2459 to 731 MiB between one slot and four and
+Qwen3.6-27B's from 1904 to 560 — 3.36x and 3.40x, which decomposes into a
+score matrix built against one sequence's share of the cache plus a small flat
+remainder.
+
 ## The design hole flash attention exposed, audited everywhere else
 
 Flash-attention-off spent the first campaign recorded as an inconsistent

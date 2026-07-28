@@ -438,7 +438,11 @@ def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
         if factors["flash_attn"] != "on":
             rate = _NO_FA_RATES.get(variant_key(record),
                                     max(_NO_FA_RATES.values(), default=0))
-            no_fa = rate * min(factors["ctx"], factors["ubatch"])
+            # Times `copies`, matching `pinned_graph_bytes`: the term is
+            # replicated per device under a layer split like the masks it sits
+            # beside. Subtracting the unreplicated figure left every
+            # flash-attention-off cell over-predicted, at 0.71 to 0.78.
+            no_fa = rate * min(factors["ctx"], factors["ubatch"]) * copies
         modelled = (flat + parsed["n_layer"] * per_layer
                     + (moe if parsed.get("n_expert") else 0))
         residual = (owned - (copies * (mask + swa_mask) + hidden) * 1024**2
@@ -577,10 +581,10 @@ def derive_no_flash_attn_rates(rows: list[dict]) -> str:
     -token term, the same shape as the quantised-cache rate, at 128 KiB per
     token on the sliding-window models against 32 KiB on the rest.
 
-    The rate is per token *per stream*. Every cell here runs one slot, so the
-    figure derived is the per-slot one; Qwen3-4B at four slots measures a
-    quarter of it, flat across three contexts, which is why `pinned_graph_bytes`
-    divides by the stream count rather than the table carrying it.
+    The rate is per token and per *device copy*, replicated under a layer split
+    the same way the masks are. It does not depend on the slot count: cells run
+    to settle that measure gemma3 at 128.1 KiB per token and qwen35 at 32.1 at
+    both one slot and four, identical to the decimal.
 
     ik_llama is excluded and keeps the small default: its fa-off arena is
     already modelled to within a megabyte, since it sizes masks against the
@@ -594,9 +598,7 @@ def derive_no_flash_attn_rates(rows: list[dict]) -> str:
             continue
         if factors["ngl"] != 99 or not factors["gpus"] or factors["spec_type"]:
             continue
-        # One slot only: the term divides by the stream count, so pooling slot
-        # counts would fit a quarter-sized rate against a full-sized one.
-        if factors["runtime"] == "ik" or factors["parallel"] != 1:
+        if factors["runtime"] == "ik":
             continue
         mask, swa, hidden = arena_terms(record)
         cards = len((factors["gpus"] or "0").split(","))
@@ -610,10 +612,11 @@ def derive_no_flash_attn_rates(rows: list[dict]) -> str:
             and not hybrid else 1
         residual = parsed["arena_mib"] - (copies * (mask + swa) + hidden)
         tokens = min(factors["ctx"], factors["ubatch"])
-        # `arena_terms` models the mask at its widened four-byte element and
-        # nothing else, so the residual over it is the whole term rather than
-        # an excess over one already charged.
-        by_arch[variant_key(record)].append(residual * 1024**2 / tokens)
+        # Per device copy: the term is replicated under a layer split the same
+        # way the masks are. Single-card cells measure a quarter of what
+        # two-card ones do, which is the copy factor and not the slot count —
+        # gemma3 and qwen35 both measure the same rate at one slot and four.
+        by_arch[variant_key(record)].append(residual * 1024**2 / tokens / copies)
     if not by_arch:
         raise ValueError("no mainline cells with flash attention off")
     for arch, group in by_arch.items():

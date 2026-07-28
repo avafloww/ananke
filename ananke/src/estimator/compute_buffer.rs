@@ -111,17 +111,40 @@ pub fn default_for(
     ubatch: Option<u32>,
     flash_attn: bool,
 ) -> u32 {
+    default_for_streams(summary, context, ubatch, flash_attn, 1)
+}
+
+/// As [`default_for`], for a service whose KV cache is split across slots.
+///
+/// `streams` is the number of separate caches — the slot count unless they
+/// share a unified one. It affects only the unfused-attention term, whose
+/// score matrix is built against one sequence's share of the context:
+/// gemma-3-27B and Qwen3.6-27B both measure 3.4x less of it at four slots
+/// than at one, on two cards, with the card count and everything else held
+/// constant.
+pub fn default_for_streams(
+    summary: &GgufSummary,
+    context: u32,
+    ubatch: Option<u32>,
+    flash_attn: bool,
+    streams: u32,
+) -> u32 {
     let batch = ubatch.unwrap_or(DEFAULT_UBATCH);
     let t = tuning_for(summary, batch);
     t.base
         .saturating_add(t.slope.saturating_mul(context / 1024))
-        .saturating_add(no_flash_attn_mib(summary, context, batch, flash_attn))
+        .saturating_add(no_flash_attn_mib(
+            summary,
+            context / streams.max(1),
+            batch,
+            flash_attn,
+        ))
 }
 
 /// The score matrix an unfused attention pass materialises.
 ///
 /// With flash attention the scores are consumed tile by tile and never exist
-/// whole; without it the graph holds `n_head x ctx x n_tokens` f32 entries,
+/// whole; without it the graph holds `n_head x n_kv x n_tokens` f32 entries,
 /// which dwarfs everything else in the curve — measured at ten times the
 /// reserved figure at ub 2048, in the direction that OOMs a load.
 fn no_flash_attn_mib(summary: &GgufSummary, context: u32, ubatch: u32, flash_attn: bool) -> u32 {

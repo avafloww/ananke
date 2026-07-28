@@ -105,6 +105,19 @@ pub struct EstimatorInputs<'a> {
 }
 
 impl<'a> EstimatorInputs<'a> {
+    /// How many separate KV caches the service runs.
+    ///
+    /// One per slot, unless the slots share a unified cache. Several terms are
+    /// sized against one sequence's share of the context rather than the whole
+    /// of it, so they divide by this.
+    pub fn streams(&self) -> u32 {
+        if self.kv_unified.unwrap_or(false) {
+            1
+        } else {
+            self.parallel.unwrap_or(1).max(1)
+        }
+    }
+
     /// Distil the estimator-relevant fields out of a `ServiceConfig`.
     /// Returns `None` if `svc` is a command-template service — the
     /// estimator only applies to llama-cpp workloads.

@@ -64,7 +64,7 @@
       "value": 4,
       "type": "u64",
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "94 mainline layer-split cells at 4.01, against 140 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "96 mainline layer-split cells at 4.01, against 140 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived"
     },
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
@@ -281,7 +281,7 @@
       }
     ]
   },
-  "measurements": 530,
+  "measurements": 534,
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "default": 54,
@@ -328,48 +328,48 @@
     "by_arch": {
       "gemma3": -71707828,
       "gemma3@ik": -7093428,
-      "gemma3@ik@nofa": 17254220,
-      "gemma3@nofa": -47377588,
+      "gemma3@ik@nofa": 67624780,
+      "gemma3@nofa": -47381684,
       "gemma4": 26759192,
       "gemma4+e": 178705220,
-      "gemma4+e@nofa": 65603396,
+      "gemma4+e@nofa": 65602372,
       "gemma4+moe": -56385524,
-      "gemma4+moe@nofa": -94186484,
-      "gemma4@nofa": 35492888,
+      "gemma4+moe@nofa": -94187508,
+      "gemma4@nofa": 35491864,
       "lfm2": 41134496,
       "lfm2@nofa": 179978656,
       "llama": -6406128,
       "llama@ik": 36909072,
-      "llama@ik@nofa": 108771856,
-      "llama@nofa": 5249040,
+      "llama@ik@nofa": 121380368,
+      "llama@nofa": 5246992,
       "qwen3": 22231464,
       "qwen35": 328361600,
       "qwen35@ik": 345153562,
-      "qwen35@ik@nofa": 336485914,
-      "qwen35@nofa": 328429184,
+      "qwen35@ik@nofa": 349112346,
+      "qwen35@nofa": 328431232,
       "qwen35moe+moe": 45703184,
       "qwen3@ik": 134257064,
-      "qwen3@ik@nofa": 207668136,
-      "qwen3@nofa": 33001896,
+      "qwen3@ik@nofa": 220276648,
+      "qwen3@nofa": 32999848,
       "talkie": -33742832,
-      "talkie@nofa": -17336816
+      "talkie@nofa": -17336304
     }
   },
   "no_flash_attn_rates": {
     "$comment": "Extra pinned bytes per batch token when flash attention is off, by architecture. The residual is flat in context and proportional to batch, and the rates differ fourfold between sliding-window models and the rest. `default` applies to an architecture not listed.",
-    "default": 262246,
+    "default": 65562,
     "by_arch": {
       "deepseek4+moe": 0,
-      "gemma3": 131174,
-      "gemma4": 262246,
-      "gemma4+e": 108646,
-      "gemma4+moe": 131174,
+      "gemma3": 32794,
+      "gemma4": 65562,
+      "gemma4+e": 27162,
+      "gemma4+moe": 32794,
       "lfm2": 4116,
-      "llama": 32835,
-      "qwen3": 32835,
-      "qwen35": 32881,
+      "llama": 8209,
+      "qwen3": 8209,
+      "qwen35": 8220,
       "qwen35moe+moe": 4116,
-      "talkie": 163901
+      "talkie": 40975
     }
   },
   "mtp_slot_scaling": {

@@ -514,11 +514,12 @@ fn compute_buffer_covers_what_the_runtime_took() {
         if measured == 0 {
             continue;
         }
-        let reserved = compute_buffer::default_for(
+        let reserved = compute_buffer::default_for_streams(
             &case.summary,
             case.context,
             Some(case.ubatch),
             case.flash_attn,
+            case.inputs().streams(),
         ) as f64;
         checked += 1;
         let headroom = reserved / measured as f64;
