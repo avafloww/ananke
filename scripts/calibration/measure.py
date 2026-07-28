@@ -703,7 +703,6 @@ def exercise(cell: Cell, port: int, pid: int = 0) -> list[dict[str, object]]:
                    "max_tokens": 256}
         # Overlapping requests touch slots beyond the first, which a strictly
         # serial probe never reaches.
-        import threading
         threads = [threading.Thread(target=_post, args=(port, "/v1/chat/completions",
                                                         payload, 300))
                    for _ in range(cell.concurrency)]
