@@ -408,6 +408,12 @@ def derive_baseline_offset(rows: list[dict]) -> tuple[int, str]:
             continue
         if factors["parallel"] != 1 or not parsed.get("arena_mib"):
             continue
+        # `--no-mmap` reads the weights into anonymous memory instead of
+        # mapping them, and `host_overhead_bytes` models overhead rather than
+        # weights. One such cell put qwen3@ik's offset at 704 MiB and
+        # over-predicted every other ik cell of that model to 0.57.
+        if factors["no_mmap"]:
+            continue
         if (factors["split"] or "layer") != "layer" or not parsed.get("n_layer"):
             continue
         # Flash attention off is kept, under its own key. Pooling it with
@@ -499,6 +505,12 @@ def derive_tensor_split_baseline(rows: list[dict]) -> tuple[int, str]:
         if factors["n_cpu_moe"] or not factors["served"] or factors["bench"]:
             continue
         if factors["parallel"] != 1 or not parsed.get("arena_mib"):
+            continue
+        # `--no-mmap` reads the weights into anonymous memory instead of
+        # mapping them, and `host_overhead_bytes` models overhead rather than
+        # weights. One such cell put qwen3@ik's offset at 704 MiB and
+        # over-predicted every other ik cell of that model to 0.57.
+        if factors["no_mmap"]:
             continue
         owned = (record["rss"].get("rss_anon_kb", 0)
                  + record["rss"].get("rss_shmem_kb", 0)) * 1024
@@ -802,10 +814,15 @@ def derive_quantised_cache_bytes(rows: list[dict]) -> tuple[int, str]:
             continue
         if not parsed.get("arena_mib"):
             continue
+        # `no_mmap`, `rtr`, and `numa` belong in the key like everything else:
+        # without them a `--no-mmap` cell pairs with a mapped one and the
+        # difference in *weights* is read as a cache-type effect, which put
+        # qwen3's rate across a 6253% spread.
         key = (record["provenance"]["model_key"], factors["ctx"], factors["ubatch"],
                factors["parallel"], bool(factors["kv_unified"]),
                factors["split"] or "-", factors["gpus"], factors["flash_attn"],
-               bool(factors["served"]), bool(factors["n_cpu_moe"]))
+               bool(factors["served"]), bool(factors["n_cpu_moe"]),
+               bool(factors["no_mmap"]), bool(factors["rtr"]), factors["numa"] or "-")
         paired[key][factors["kv_type"]] = parsed["arena_mib"]
         archs[record["provenance"]["model_key"]] = parsed.get("arch", "?")
 

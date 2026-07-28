@@ -780,14 +780,18 @@ def sparse_switches() -> list[Cell]:
     becomes a measurement instead of an assumption. `-rtr` is ik-only and
     forces `--no-mmap`, so its pair carries that on both sides to keep the
     mapping mode from confounding it.
+
+    `--use-thp` is deliberately absent. The `Cell.thp` field exists and is
+    recorded on every row, but this llama.cpp build rejects the flag outright
+    — `error: invalid argument: --use-thp` — so such a cell can only fail to
+    load, and it sat out the full load timeout doing it. The field is kept
+    rather than removed because `cell_id` is derived from the Cell's fields
+    and dropping one would change every existing cell's identity, making the
+    whole dataset look unmeasured.
     """
     cells: list[Cell] = []
     dense = MODELS["qwen3-4b"]
     for value in (False, True):
-        cells.append(Cell(
-            label=f"switch-thp-{'on' if value else 'off'}", purpose=("switches",),
-            model=path_of(dense.path), gpus="0", split="layer", ctx=32768,
-            thp=value, **_model_flags(dense, "0")))
         cells.append(Cell(
             label=f"switch-numa-{'on' if value else 'off'}", purpose=("switches",),
             model=path_of(dense.path), gpus="0", split="layer", ctx=32768,

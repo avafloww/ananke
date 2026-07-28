@@ -1036,6 +1036,37 @@ The belief that the gemma family needs a steeper curve than the llama default
 was an artifact of the quantised cells. Fitted on f16 alone the slopes are
 equal and gemma's base is lower.
 
+## The three sparse switches, measured
+
+`--use-thp`, `-rtr`, and `--numa distribute` were recorded on every row and
+modelled by nothing. That is a defensible design — `RollingBase::host_peak`
+reads the measured `RssFile` precisely because `-rtr`'s effect cannot be
+predicted from the flag — but "modelled by nothing" is a claim about the data,
+and one cell each cannot support it. A switch measured once has no
+counterfactual: it could move host memory by 500 MiB and nothing would show it.
+
+Given off/on pairs at otherwise identical settings, on Qwen3-4B at ctx 32768:
+
+| switch | owned MiB | arena | RssFile |
+|---|---|---|---|
+| `--numa distribute` | 293 → 293 | unchanged | unchanged |
+| `-rtr` | 704 → 704 | unchanged | unchanged |
+
+Both are exactly zero, on every counter. The claim is now a measurement.
+
+The `-rtr` pair carries `--no-mmap` on *both* sides deliberately, since `-rtr`
+forces it. That separates the two: what the notes above attribute to `-rtr` —
+weights landing in the owned figure rather than the mapped one — is `--no-mmap`
+doing it, and `-rtr` on top of `--no-mmap` adds nothing.
+
+**`--use-thp` does not exist in this build.** It is rejected outright with
+`error: invalid argument: --use-thp`, so a cell carrying it can only fail to
+load, which is why it was never exercised — and it burned the entire load
+timeout failing. `Cell.thp` is kept rather than deleted because `cell_id` is
+derived from the Cell's fields, and dropping one would change every existing
+cell's identity and make the whole dataset read as unmeasured; the plan phase
+simply no longer emits it.
+
 ## The design hole flash attention exposed, audited everywhere else
 
 Flash-attention-off spent the first campaign recorded as an inconsistent
@@ -1159,11 +1190,7 @@ Measurable here, and not done:
   ones. The per-slot cost they expose is measured and reserved as slop, but
   deliberately not charged to the correction — see above for why charging it
   is worse — so those cells stay outside by design rather than by omission.
-- `thp` is a factor in the cell schema that has never been varied. Nothing is
-  modelled from it, so it is a gap in the record rather than in the estimator.
-- `-rtr` and `--numa` have one cell each. Neither feeds a modelled constant:
-  `RollingBase::host_peak` reads the measured `RssFile` precisely because
-  their effect cannot be predicted from the flags.
+- (closed — see "The three sparse switches, measured")
 - gemma3's compute curve over-reserves at long context on one card: measured
   compute is nearly flat (530 MiB at ctx 32768, 562 at 65536) while the curve
   charges about 17 MiB per 1024, giving 1918 reserved against 562 taken. The

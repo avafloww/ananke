@@ -169,10 +169,14 @@ fn every_model_lands_inside_the_correction_band() {
         if owned <= 0.0 {
             continue;
         }
-        // Only fully-resident models: a hybrid's owned memory is dominated by
-        // the CPU-held weights, which this term does not model at all, so the
-        // ratio would measure the weights rather than the overhead.
-        if case.hybrid {
+        // Only fully-resident, mapped models. A hybrid's owned memory is
+        // dominated by the CPU-held weights, which this term does not model at
+        // all, so the ratio would measure the weights rather than the
+        // overhead. `--no-mmap` has exactly the same property for a resident
+        // model: it reads the weights into anonymous memory instead of mapping
+        // them, which put an ik cell at 1.70 against a term that never claimed
+        // to cover weights.
+        if case.hybrid || case.no_mmap {
             continue;
         }
         // Served cells only. A reservation is made before the first request
@@ -251,6 +255,7 @@ struct Case {
     mtp: bool,
     kv_type: String,
     served: bool,
+    no_mmap: bool,
     device_compute_mib: Option<u64>,
     split: SplitMode,
 }
@@ -398,6 +403,10 @@ impl Case {
             // Passed through, because a quantised cache costs pinned memory
             // the arena model charges for. Leaving it unset made that term
             // silently unreachable from this test.
+            no_mmap: factors
+                .get("no_mmap")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             served: factors
                 .get("served")
                 .and_then(Value::as_bool)
