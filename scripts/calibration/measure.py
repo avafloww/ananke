@@ -293,6 +293,11 @@ _META_KEYS = ("n_layer", "n_embd", "n_expert", "n_expert_used", "n_swa", "n_voca
 # metadata key rather than one of llama.cpp's `n_* = ` summary lines, so it
 # needs its own pattern.
 _NEXTN = re.compile(r"\.nextn_predict_layers[^=]*= *(\d+)")
+# The tensor `compute_buffer::is_gemma_e_variant` keys on. Recorded so the
+# analysis can use the same discriminator the estimator does, rather than a
+# filename proxy that silently disagrees the moment an E-variant ships under
+# another name.
+_PER_LAYER_EMBD = re.compile(r"per_layer_token_embd\.weight")
 # llama.cpp's own figure for an MTP context. It was the stated calibration
 # source for the constants in estimator/mtp.rs, and it is reported *per
 # context* — flat across slot counts while the real cost scales with them —
@@ -346,6 +351,7 @@ def parse_log(text: str) -> dict[str, float | str]:
     parsed["mtp_context_mib"] = float(mtp.group(1)) if mtp else 0.0
     nextn = _NEXTN.search(text)
     parsed["nextn_predict_layers"] = int(nextn.group(1)) if nextn else 0
+    parsed["per_layer_token_embd"] = bool(_PER_LAYER_EMBD.search(text))
     arch = _ARCH.search(text)
     parsed["arch"] = arch.group(1) if arch else "?"
 

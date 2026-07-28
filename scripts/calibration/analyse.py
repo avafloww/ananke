@@ -581,9 +581,12 @@ def variant_key(record: dict, with_environment: bool = False) -> str:
     key = str(parsed.get("arch"))
     if parsed.get("n_expert"):
         key += "+moe"
-    if "E4B" in record["provenance"]["model_key"]:
-        # Stands in for the per-layer embedding tensor the records do not
-        # carry, which is what the estimator keys on.
+    if record["parsed"].get("per_layer_token_embd"):
+        # The same discriminator `compute_buffer::is_gemma_e_variant` uses,
+        # read from the load log rather than guessed from the filename. The
+        # proxy this replaces would have disagreed with the estimator the
+        # moment an E-variant shipped under another name: the analysis would
+        # fit one curve while the estimator selected a different one.
         key += "+e"
     # Only where the caller asks, which is the baseline offset alone. It
     # differs by runtime (ik sits 24 to 192 MiB above mainline on the same
@@ -1464,7 +1467,7 @@ CURVE_MARGIN = 1.6
 
 
 def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
-                 only_models: tuple[str, ...] = ()):
+                 e_variant: bool | None = None):
     """Fit one architecture's compute curve to what it actually needed.
 
     The target is llama.cpp's own `compute` column plus its `unaccounted`
@@ -1485,8 +1488,8 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
                 continue
             if any(m in record["provenance"]["model_key"] for m in exclude_models):
                 continue
-            if only_models and not any(m in record["provenance"]["model_key"]
-                                       for m in only_models):
+            if e_variant is not None and \
+                    bool(parsed.get("per_layer_token_embd")) != e_variant:
                 continue
             if factors["spec_type"] or factors["flash_attn"] != "on":
                 continue
@@ -1628,8 +1631,8 @@ CURVE_DERIVERS = {
     # the one curve nobody derived: a hand-set 1100/7 that stayed put while
     # every other curve moved, which is how it came to sit *above* the general
     # gemma curve after that one was corrected.
-    "gemma4@gemma_e": derive_curve(("gemma4",), only_models=("E4B",)),
-    "gemma3": derive_curve(("gemma2", "gemma3", "gemma4"), exclude_models=("E4B",)),
+    "gemma4@gemma_e": derive_curve(("gemma4",), e_variant=True),
+    "gemma3": derive_curve(("gemma2", "gemma3", "gemma4"), e_variant=False),
     "laguna": derive_curve(("laguna",)),
     "lfm2": derive_curve(("lfm2",)),
     "qwen35": derive_curve(("qwen35",)),
