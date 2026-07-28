@@ -927,6 +927,21 @@ Qwen3.6-27B's from 1904 to 560 — 3.36x and 3.40x, which decomposes into a
 score matrix built against one sequence's share of the cache plus a small flat
 remainder.
 
+## The single-card arena is exact
+
+The mask-copy rule was fitted entirely from two-card cells, and seven of
+eleven architectures had exactly one single-card point — at which any copy
+factor fits, since the factor multiplies terms scaling with both context and
+batch. Sweeping context and batch on one card, the model reproduces the
+measurement to **0.01-0.08 MiB** across ctx 8192, 32768, and 65536 and ubatch
+512 and 2048, on both an interleaved-SWA architecture and a plain causal one.
+
+A negative result, and the one this campaign wanted: the rule that has been
+wrong three times in the axis it was never swept is, here, right.
+
+(Magidonia at ctx 65536 on one card cannot load — `failed to allocate compute
+pp buffers` — which is a genuine limit of 24 GiB, not a harness fault.)
+
 ## The design hole flash attention exposed, audited everywhere else
 
 Flash-attention-off spent the first campaign recorded as an inconsistent
@@ -1055,8 +1070,11 @@ Measurable here, and not done:
 - `-rtr` and `--numa` have one cell each. Neither feeds a modelled constant:
   `RollingBase::host_peak` reads the measured `RssFile` precisely because
   their effect cannot be predicted from the flags.
-- Single-card context variation is thin for every model except qwen3-4b; the
-  baseline block fixes ctx at 32768 and the curve block runs two cards.
+- gemma3's compute curve over-reserves at long context on one card: measured
+  compute is nearly flat (530 MiB at ctx 32768, 562 at 65536) while the curve
+  charges about 17 MiB per 1024, giving 1918 reserved against 562 taken. The
+  same shape as deepseek4's retired slope, an order of magnitude smaller, and
+  in the wasteful rather than unsafe direction.
 
 Not measurable here:
 

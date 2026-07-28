@@ -741,6 +741,30 @@ def loose_ends() -> list[Cell]:
     return cells
 
 
+def single_card_curves() -> list[Cell]:
+    """Context and batch on one card, where the mask is not replicated.
+
+    Seven of eleven architectures have exactly one single-card point, at ctx
+    32768 and ubatch 512. Everything else about the arena — the mask copies
+    above all — is fitted from two-card cells, so a rule that is right at four
+    copies and wrong at one would show up nowhere: the copy factor multiplies
+    terms that scale with both context and batch, and at a single point any
+    factor can be made to fit.
+
+    That is the same hole that made the flash-attention rate, the shared-cache
+    window mask, and the separate-draft compute wrong here, and once more the
+    axis is the one the rule is about.
+    """
+    return [
+        Cell(label=f"onecard-{MODELS[key].key}-c{ctx}-ub{ubatch}",
+             purpose=("curves",), model=path_of(MODELS[key].path), gpus="0",
+             split="layer", ctx=ctx, ubatch=ubatch,
+             **_model_flags(MODELS[key], "0"))
+        for key in ("gemma3-27b", "magidonia-24b")
+        for ctx, ubatch in ((8192, 512), (65536, 512), (32768, 2048))
+    ]
+
+
 def device_scaling() -> list[Cell]:
     """Separate the per-device CUDA cost from everything that scales with model.
 
@@ -895,6 +919,7 @@ QUESTIONS = {
     "slot-batch": slot_batch,
     "concurrency-models": concurrency_models,
     "loose-ends": loose_ends,
+    "single-card": single_card_curves,
     "flash-attention": flash_attention_off,
     "holdout": phase5_holdout,
 }

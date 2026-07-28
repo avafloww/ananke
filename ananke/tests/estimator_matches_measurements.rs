@@ -576,7 +576,12 @@ fn compute_buffer_covers_what_the_runtime_took() {
         // remainder, so the base is larger on more evidence, not less.
         ("qwen35moe", 3.1),
         ("qwen35", 2.7),
-        ("gemma3", 2.9),
+        // 3.5 rather than 2.9 because the dataset gained a single-card cell at
+        // ctx 65536, not because the curve moved — its base and slope are
+        // unchanged. gemma3's measured compute is nearly flat in context (530
+        // MiB at ctx 32768, 562 at 65536) while the curve charges about 17 MiB
+        // per 1024, so it over-reserves at long context. Wasteful, not unsafe.
+        ("gemma3", 3.5),
         ("qwen3", 3.1),
         ("gemma4", 3.2),
         // Not a curve error any more. Its worst cell is the one flash-attention
