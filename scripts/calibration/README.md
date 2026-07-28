@@ -37,9 +37,21 @@ Each cell is tagged with the questions it answers:
 | `curves` | the slopes: three contexts, two batch sizes, flash attention on and off |
 | `fork` | the same on ik_llama, which sizes its graph by different rules |
 | `switches` | terms with a switch rather than a curve — MTP, mmproj, offload regimes, `-rtr`, huge pages, embeddings, and growth under an agent workload |
+| `mtp-slots` | the MTP overhead against slot count at a fixed context, which the first campaign confounded with context |
+| `flash-attention` | flash attention off across both context and batch, which one point could not distinguish from a baseline shift |
+| `slot-batch` | the slot rules at a second batch size, since both feed terms that scale with the batch |
+| `concurrency` | the per-slot cost, across architectures rather than the one that has a series |
 | `holdout` | the operator's real service configurations, **held out of every fit** |
 
 `holdout` is the honesty check. Everything else is in-sample.
+
+The last four tags exist because of a mistake worth not repeating. A term
+measured at a single point in some axis looks flat in that axis, and three
+constants were wrong for exactly that reason — the flash-attention cost read
+as an inconsistent baseline shift, the shared-cache window mask as a fixed
+three copies, and a separate MTP draft's compute as context-independent. Each
+was fitted from cells that all sat at one context, or one batch, or one slot
+count. When adding a phase, vary the axis the rule is *about*, and one more.
 
 These are tags, not passes. Running one pass per question would reload every
 model once per question, and reloading is the expensive move here — the 205
