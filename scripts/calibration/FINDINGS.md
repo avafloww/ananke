@@ -1044,10 +1044,28 @@ under-reserves its own two-slot measurement by 26.
 
 ## Open
 
-- The single-card gemma4 sample is one distinct configuration; the baseline
-  block fixes ctx at 32768 and the curve block runs two cards, so single-card
-  context variation is thin for every model except qwen3-4b.
+Measurable here, and not done:
+
+- The four cells outside the correction band are all four-way *concurrent*
+  ones. The per-slot cost they expose is measured and reserved as slop, but
+  deliberately not charged to the correction — see above for why charging it
+  is worse — so those cells stay outside by design rather than by omission.
+- `thp` is a factor in the cell schema that has never been varied. Nothing is
+  modelled from it, so it is a gap in the record rather than in the estimator.
+- `-rtr` and `--numa` have one cell each. Neither feeds a modelled constant:
+  `RollingBase::host_peak` reads the measured `RssFile` precisely because
+  their effect cannot be predicted from the flags.
+- Single-card context variation is thin for every model except qwen3-4b; the
+  baseline block fixes ctx at 32768 and the curve block runs two cards.
+
+Not measurable here:
+
 - Nothing here says anything about portability. Every row is one machine.
-- The baseline offset is charged, not understood. A machine with a different
-  CUDA runtime may well need different numbers, and nothing in the derivation
-  would notice.
+- The baseline offset is charged, not understood. Every mechanism that could
+  be tested was ruled out by measurement — request size, generation length,
+  thread count, offload level, CUDA presence, vocabulary, tokenizer merges,
+  model size, layer count, architecture family, tied embeddings, the output
+  logits buffer, and every logged buffer — and what remains is untracked heap
+  allocated on the first batched prefill. It is bounded and it saturates, so a
+  constant is the right shape; a machine with a different CUDA runtime may
+  still need different numbers, and nothing in the derivation would notice.
