@@ -12,7 +12,15 @@
 //!     [--active-devices N] \
 //!     [--mtp] \
 //!     [--draft-model /path/to/draft.gguf] \
-//!     [--allow-fallback]
+//!     [--allow-fallback] \
+//!     [--parallel N] \
+//!     [--flash-attn on|off] \
+//!     [--kv-unified] \
+//!     [--cache-ram-mb N] \
+//!     [--split-mode layer|row|tensor] \
+//!     [--visible-devices N] \
+//!     [--ik-llama] \
+//!     [--ik-dsa]
 //!
 //! Unknown architectures now hard-reject by default; pass `--allow-fallback`
 //! to accept the coarse fallback (see `ananke::estimator::fallback`).
@@ -30,6 +38,7 @@
 use std::{path::PathBuf, process};
 
 use ananke::{
+    config::validate::SplitMode,
     estimator::{self, EstimatorInputs},
     system::LocalFs,
 };
@@ -48,6 +57,15 @@ struct Args {
     allow_fallback: bool,
     mtp: bool,
     draft_model: Option<PathBuf>,
+    parallel: Option<u32>,
+    flash_attn: Option<bool>,
+    kv_unified: Option<bool>,
+    cache_ram_mb: Option<u32>,
+    split_mode: SplitMode,
+    visible_devices: u32,
+    ik_llama: bool,
+    ik_dsa: bool,
+    host_resident_experts: bool,
 }
 
 fn parse_args() -> Args {
@@ -64,6 +82,15 @@ fn parse_args() -> Args {
     let mut allow_fallback = false;
     let mut mtp = false;
     let mut draft_model: Option<PathBuf> = None;
+    let mut parallel: Option<u32> = None;
+    let mut flash_attn: Option<bool> = None;
+    let mut kv_unified: Option<bool> = None;
+    let mut cache_ram_mb: Option<u32> = None;
+    let mut split_mode = SplitMode::Layer;
+    let mut visible_devices: u32 = 1;
+    let mut ik_llama = false;
+    let mut ik_dsa = false;
+    let mut host_resident_experts = false;
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--model" => model = it.next().map(PathBuf::from),
@@ -84,6 +111,34 @@ fn parse_args() -> Args {
             "--allow-fallback" => allow_fallback = true,
             "--mtp" => mtp = true,
             "--draft-model" => draft_model = it.next().map(PathBuf::from),
+            "--parallel" => parallel = it.next().and_then(|s| s.parse().ok()),
+            "--flash-attn" => {
+                flash_attn = match it.next().as_deref() {
+                    Some("on") | Some("true") | Some("1") => Some(true),
+                    Some("off") | Some("false") | Some("0") => Some(false),
+                    _ => None,
+                };
+            }
+            "--kv-unified" => {
+                kv_unified = match it.next().as_deref() {
+                    Some("on") | Some("true") | Some("1") => Some(true),
+                    Some("off") | Some("false") | Some("0") => Some(false),
+                    _ => Some(true),
+                };
+            }
+            "--cache-ram-mb" => cache_ram_mb = it.next().and_then(|s| s.parse().ok()),
+            "--split-mode" => {
+                split_mode = it
+                    .next()
+                    .and_then(|s| SplitMode::from_flag(&s))
+                    .unwrap_or(SplitMode::Layer);
+            }
+            "--visible-devices" => {
+                visible_devices = it.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+            }
+            "--ik-llama" => ik_llama = true,
+            "--ik-dsa" => ik_dsa = true,
+            "--host-resident-experts" => host_resident_experts = true,
             _ => {
                 eprintln!("unknown argument: {arg}");
                 process::exit(2);
@@ -94,6 +149,10 @@ fn parse_args() -> Args {
         eprintln!("--model is required");
         process::exit(2);
     };
+    // A tensor or row split implies multiple visible devices.
+    if split_mode != SplitMode::Layer && visible_devices == 1 {
+        visible_devices = 2;
+    }
     Args {
         model,
         mmproj,
@@ -109,15 +168,24 @@ fn parse_args() -> Args {
         // `--draft-model` implies `--mtp` for convenience.
         mtp: mtp || draft_model.is_some(),
         draft_model,
+        parallel,
+        flash_attn,
+        kv_unified,
+        cache_ram_mb,
+        split_mode,
+        visible_devices,
+        ik_llama,
+        ik_dsa,
+        host_resident_experts,
     }
 }
 
 fn main() {
     let args = parse_args();
     let inputs = EstimatorInputs {
-        host_resident_experts: false,
-        visible_devices: 1,
-        split_mode: ananke::config::validate::SplitMode::Layer,
+        host_resident_experts: args.host_resident_experts,
+        visible_devices: args.visible_devices,
+        split_mode: args.split_mode,
         name: "estimate-example",
         model: args.model.as_path(),
         mmproj: args.mmproj.as_deref(),
@@ -130,12 +198,12 @@ fn main() {
         allow_fallback: args.allow_fallback,
         mtp: args.mtp,
         draft_model: args.draft_model.as_deref(),
-        ik_llama: false,
-        ik_dsa: false,
-        parallel: None,
-        flash_attn: None,
-        kv_unified: None,
-        cache_ram_mb: None,
+        ik_llama: args.ik_llama,
+        ik_dsa: args.ik_dsa,
+        parallel: args.parallel,
+        flash_attn: args.flash_attn,
+        kv_unified: args.kv_unified,
+        cache_ram_mb: args.cache_ram_mb,
     };
 
     let estimate = match estimator::estimate_from_path(&LocalFs, &inputs) {
