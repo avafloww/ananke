@@ -53,7 +53,7 @@ impl<'a> Packer<'a> {
     /// next observation's ratio comparable to this one's.
     ///
     /// A fit check must compare a *corrected* cost against `gpu_remaining`;
-    /// use [`Self::vram_cost`] or [`Self::host_cost`] to compute it before
+    /// use [`Self::vram_cost`] to compute it before
     /// deciding a destination, then charge the same raw bytes here.
     pub(crate) fn charge(&mut self, slot: DeviceSlot, raw_bytes: u64, kind: Charge) -> u64 {
         let scaled = self.corrections.scale(&slot, raw_bytes);
