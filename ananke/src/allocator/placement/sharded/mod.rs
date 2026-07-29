@@ -10,10 +10,75 @@ use crate::{
         packer::{Charge, Packer},
         types::{PackError, ShardedPlan},
     },
-    config::DeviceSlot,
+    config::{DeviceSlot, OffloadMode},
 };
 
 impl<'a> Packer<'a> {
+    /// Determine how many expert layers to offload to CPU in the sharded
+    /// path, charge them, and return the count and total bytes.
+    ///
+    /// Uses the same `OffloadMode` logic as `distribute_experts_ncmoe`:
+    /// `Layers(n)` offloads exactly `n`, `Auto` offloads the trailing
+    /// surplus that does not fit the combined GPU pool, `Off` offloads
+    /// nothing. The offloaded expert bytes are charged to CPU and removed
+    /// from the per-layer sum the sharded path distributes across GPUs.
+    fn sharded_expert_offload(&mut self) -> (u32, u64) {
+        let mut layers: Vec<u32> = self.expert_bytes_by_layer.keys().copied().collect();
+        layers.sort_unstable();
+        let total = layers.len() as u32;
+
+        let pool: u64 = self
+            .allowed_gpus
+            .iter()
+            .map(|g| self.gpu_available(*g))
+            .sum();
+
+        let n_cpu = match self.offload_mode {
+            OffloadMode::Layers(n) => n.min(total),
+            OffloadMode::Auto => {
+                // Estimate the non-expert + KV + compute pool to find what
+                // remains for experts, then keep as many leading expert
+                // layers as fit.
+                let per_layer_sum: u64 = self.per_layer.iter().sum();
+                let non_expert =
+                    per_layer_sum.saturating_sub(self.expert_bytes_by_layer.values().sum());
+                let kv_total = self
+                    .estimate
+                    .kv_per_token
+                    .saturating_mul(self.estimate.context as u64);
+                let compute_total = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
+                let non_expert_gpu = self.vram_cost(non_expert + kv_total + compute_total);
+                let expert_pool = pool.saturating_sub(non_expert_gpu);
+                let mut used = 0u64;
+                let mut keep = 0u32;
+                for &l in &layers {
+                    let cost = self.vram_cost(self.expert_bytes_by_layer[&l]);
+                    if used.saturating_add(cost) <= expert_pool {
+                        used += cost;
+                        keep += 1;
+                    } else {
+                        break;
+                    }
+                }
+                total - keep
+            }
+            OffloadMode::Off => 0,
+        };
+        let keep = total - n_cpu;
+
+        let mut offloaded = 0u64;
+        for (i, &l) in layers.iter().enumerate() {
+            if (i as u32) >= keep {
+                let b = self.expert_bytes_by_layer[&l];
+                self.charge(DeviceSlot::Cpu, b, Charge::Weights);
+                self.expert_offload_cpu_bytes += b;
+                self.expert_offload_cpu_layers.insert(l);
+                offloaded += b;
+            }
+        }
+        (n_cpu, offloaded)
+    }
+
     /// Tensor/row split: shard the whole model across every spanned GPU in
     /// parallel rather than assigning whole layers. Each GPU pledges a
     /// proportional share of the layer weights, the KV cache, the output head,
@@ -39,15 +104,42 @@ impl<'a> Packer<'a> {
         let main = gpus[0];
 
         let n_layers = self.per_layer.len() as u64;
-        let per_layer_sum: u64 = self.per_layer.iter().sum();
+
+        // When expert offload is enabled, move the offloaded expert layers'
+        // bytes to CPU before sharding the rest. This matches llama.cpp's
+        // behaviour: `--n-cpu-moe N` with `--split-mode tensor` shards the
+        // non-expert tensors across GPUs while moving expert tensors to the
+        // CUDA_Host buffer.
+        let (n_cpu, offloaded_expert_bytes) = if self.expert_aware {
+            self.sharded_expert_offload()
+        } else {
+            (0, 0u64)
+        };
+        if n_cpu > 0 {
+            self.n_cpu_moe = Some(n_cpu);
+            self.fallback_on_gpu = true;
+        }
+
+        let per_layer_sum: u64 = self
+            .per_layer
+            .iter()
+            .sum::<u64>()
+            .saturating_sub(offloaded_expert_bytes);
         let per_layer_avg = per_layer_sum / n_layers;
         let non_layer = &self.estimate.non_layer;
         // The vision projector ("other") stays on the main GPU; the output head
         // is sharded across all of them (see below).
         let main_only = non_layer.other_bytes;
         // `weights_bytes` covers per-layer + non-layer + mmproj/anything else;
-        // the leftover (vision projector, etc.) rides the main GPU.
-        let remainder = self.estimate.weights_bytes.saturating_sub(
+        // the leftover (vision projector, etc.) rides the main GPU. Subtract
+        // the offloaded expert bytes from both `per_layer_sum` and
+        // `weights_bytes` so the remainder does not re-charge them to the
+        // main GPU.
+        let gpu_weights = self
+            .estimate
+            .weights_bytes
+            .saturating_sub(offloaded_expert_bytes);
+        let remainder = gpu_weights.saturating_sub(
             per_layer_sum + non_layer.output_head_bytes + main_only + non_layer.token_embd_bytes,
         );
         let kv_total = self
