@@ -167,14 +167,20 @@ pub(crate) fn compute_kv_per_token(
     // cache bytes. SWA layers cap at the window size; full-attention
     // layers scale with the full context. We return `kv_per_token` so
     // the packer can multiply by context and recover the total.
+    //
+    // ik_llama does not cap SWA layers' KV at the window — it allocates
+    // full-context KV for every layer regardless of the attention type.
+    // Measured on laguna at ctx 131072: ik_llama uses 13056 MiB KV
+    // (full-context) while mainline uses 1680 MiB (window-capped).
     let context = inputs.context as u64;
     if context == 0 {
         return 0;
     }
+    let swa_capped = !inputs.ik_llama;
     let mut total_kv_bytes = 0u64;
     for i in 0..unique_kv_count as usize {
         let kv_heads = kv_heads_per_layer[i] as u64;
-        let (per_head, tokens) = if is_swa_layer[i] {
+        let (per_head, tokens) = if is_swa_layer[i] && swa_capped {
             let window = sliding_window.unwrap_or(context);
             (per_head_swa, context.min(window))
         } else {
