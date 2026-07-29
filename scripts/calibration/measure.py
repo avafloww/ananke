@@ -286,9 +286,30 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
 }
 _META = re.compile(
     r"(n_layer|n_embd|n_expert|n_expert_used|n_swa|n_vocab|n_head_kv|n_head"
-    r"|n_embd_head_k|n_embd_head_v|n_ctx_train) *= *(\d+)")
+    r"|n_embd_head_k|n_embd_head_v|n_ctx_train|n_ff"
+    # The recurrent state's whole shape. `n_embd_r` (the rolling convolution
+    # state) and `n_embd_s` (the SSM state) are computed by llama.cpp from
+    # these, and both are GGUF metadata — which is what makes the RS term
+    # predictable from the model file rather than something to measure.
+    r"|ssm_d_conv|ssm_d_inner|ssm_d_state|ssm_n_group|ssm_dt_rank"
+    # `n_layer` is the layer span the contexts cover, which already excludes
+    # the MTP head's trailing block — llama.cpp reports the full block count as
+    # `n_layer_all`, deliberately *not* captured here because this parser
+    # already spells a repeated key `<key>_all` and the two would collide.
+    # `nextn_predict_layers` carries the same difference.
+    r"|n_group_used) *= *(\d+)")
 _META_KEYS = ("n_layer", "n_embd", "n_expert", "n_expert_used", "n_swa", "n_vocab",
-              "n_head", "n_head_kv", "n_embd_head_k", "n_embd_head_v", "n_ctx_train")
+              "n_head", "n_head_kv", "n_embd_head_k", "n_embd_head_v", "n_ctx_train",
+              "n_ff", "ssm_d_conv", "ssm_d_inner", "ssm_d_state", "ssm_n_group",
+              "ssm_dt_rank", "n_group_used")
+# Every numeric GGUF metadata key the loader echoes. The `print_info:` block
+# above covers only the hyperparameters llama.cpp keeps in `hparams`; keys it
+# reads straight into an architecture-specific path — `lfm2.shortconv.l_cache`
+# sizes LFM2's rolling state and is printed nowhere else — are only recoverable
+# from the key/value dump.
+_GGUF_KV = re.compile(
+    r"llama_model_loader: - kv +\d+: +([A-Za-z0-9_.]+) +[a-z0-9]+ += +(-?\d+)\s*$",
+    re.MULTILINE)
 # The embedded MTP head's depth, which sizes the modelled KV term. It is a
 # metadata key rather than one of llama.cpp's `n_* = ` summary lines, so it
 # needs its own pattern.
@@ -320,6 +341,44 @@ _BREAKDOWN_HOST = re.compile(
 MAX_GPUS = 4
 _ARCH = re.compile(r"arch *= *([A-Za-z0-9_.-]+)")
 
+# A server creates more than one context: the main one, a sliding-window
+# sibling on an interleaved-SWA model, and an MTP draft context under
+# `--spec-type draft-mtp`. Each prints its own memory pools and its own
+# compute reserve, and a whole-log `findall` collapses them — which is how the
+# MTP context's compute buffer stayed invisible while its cost was being
+# fitted as an opaque constant. So the log is segmented into contexts first
+# (each ends with its `graph nodes` line) and every figure is attributed to
+# the context that allocated it.
+_CONTEXT_END = re.compile(
+    r"^.*(?:sched_reserve|llama_init_from_model): graph nodes.*$"
+    # `graph splits` follows `graph nodes` on the next line, so a boundary that
+    # stopped at the latter attributed every split count to the *following*
+    # context.
+    r"(?:\n^.*: graph splits.*$)?", re.MULTILINE)
+# The attention cache's own summary line: the physical total across devices,
+# the cell count (per sequence), the layer count that actually allocates, the
+# sequence count, and the K/V split with the cache types in play. Together
+# these say exactly what llama.cpp sized, so a modelled KV can be checked
+# term by term instead of only in aggregate.
+_KV_POOL = re.compile(
+    r"llama_kv_cache: size = *([0-9.]+) MiB *\( *(\d+) cells, *(\d+) layers, "
+    r"*(\d+)/(\d+) seqs\), K \(([a-z0-9_]+)\): *([0-9.]+) MiB, "
+    r"V \(([a-z0-9_]+)\): *([0-9.]+) MiB")
+# The recurrent module's equivalent. `rs_seq` is the speculative rollback
+# depth: the state is replicated `n_seq × (rs_seq + 1)` times, and `rs_seq` is
+# non-zero only under speculative decoding.
+_RS_POOL = re.compile(
+    r"llama_memory_recurrent: size = *([0-9.]+) MiB *\( *(\d+) cells, *(\d+) layers, "
+    r"*(\d+) seqs *(\d+) rs_seq\), R \([a-z0-9_]+\): *([0-9.]+) MiB, "
+    r"S \([a-z0-9_]+\): *([0-9.]+) MiB")
+# Per-device buffer lines, whatever the loader called the stage. `Meta()` is
+# the fused device a tensor split reports, and its figure is ONE card's share.
+_DEV_BUFFER = re.compile(
+    r"(?:load_tensors|llama_kv_cache(?:_init)?|llama_memory_recurrent|sched_reserve"
+    r"|llama_init_from_model|llama_context): +([A-Za-z0-9_()]+) +"
+    r"(model|KV|RS|compute|output) buffer size *= *([0-9.]+)")
+_GRAPH_SHAPE = re.compile(r"graph (nodes|splits) += *(\d+)")
+
 
 def parse_log(text: str) -> dict[str, float | str]:
     """Pull the model's shape and its logged buffer sizes out of a load log."""
@@ -347,6 +406,11 @@ def parse_log(text: str) -> dict[str, float | str]:
         parsed[key] = found[0] if found else 0
         if len(set(found)) > 1:
             parsed[f"{key}_all"] = found
+    gguf_kv: dict[str, int] = {}
+    for key, value in _GGUF_KV.findall(text):
+        gguf_kv.setdefault(key, int(value))
+    parsed["gguf_kv"] = gguf_kv
+    parsed["contexts"] = _parse_contexts(text)
     mtp = _MTP.search(text)
     parsed["mtp_context_mib"] = float(mtp.group(1)) if mtp else 0.0
     nextn = _NEXTN.search(text)
@@ -379,6 +443,46 @@ def parse_log(text: str) -> dict[str, float | str]:
         for column in ("model", "kv", "compute", "unaccounted", "self"):
             parsed[f"gpu{index}_{column}_mib"] = entry.get(f"{column}_mib", 0)
     return parsed
+
+
+def _parse_contexts(text: str) -> list[dict[str, object]]:
+    """One entry per context the server created, in creation order.
+
+    A context is everything the loader printed up to and including its
+    `graph nodes` line. The first segment of a run belongs to llama.cpp's
+    parameter-fitting dry run — it reports the same shape with no weights
+    loaded — so segments are kept whole rather than merged, and a reader picks
+    the one it wants by the pools it holds.
+    """
+    contexts: list[dict[str, object]] = []
+    start = 0
+    for boundary in _CONTEXT_END.finditer(text):
+        segment = text[start:boundary.end()]
+        start = boundary.end()
+        buffers: dict[str, dict[str, float]] = {}
+        for device, kind, mib in _DEV_BUFFER.findall(segment):
+            buffers.setdefault(device, {})[kind.lower()] = float(mib)
+        entry: dict[str, object] = {"buffers": buffers}
+        kv_pools = []
+        for (total, cells, layers, seqs, seqs_max, k_type, k_mib,
+             v_type, v_mib) in _KV_POOL.findall(segment):
+            kv_pools.append({"total_mib": float(total), "cells": int(cells),
+                             "layers": int(layers), "seqs": int(seqs),
+                             "seqs_max": int(seqs_max), "k_type": k_type,
+                             "k_mib": float(k_mib), "v_type": v_type,
+                             "v_mib": float(v_mib)})
+        entry["kv_pools"] = kv_pools
+        rs = _RS_POOL.search(segment)
+        if rs:
+            entry["rs_pool"] = {
+                "total_mib": float(rs.group(1)), "cells": int(rs.group(2)),
+                "layers": int(rs.group(3)), "seqs": int(rs.group(4)),
+                "rs_seq": int(rs.group(5)), "r_mib": float(rs.group(6)),
+                "s_mib": float(rs.group(7))}
+        for name, value in _GRAPH_SHAPE.findall(segment):
+            entry[f"graph_{name}"] = int(value)
+        contexts.append(entry)
+    return contexts
 
 
 class RssSampler:
@@ -1120,6 +1224,51 @@ def run_cells(cells: list[Cell], out: Path, log_dir: Path, port: int,
         )
 
 
+def reparse(out: Path, archive_dir: Path) -> int:
+    """Rebuild every record's `parsed` block from its archived log.
+
+    The logs are kept precisely so that a question the parser could not answer
+    when a cell ran can still be answered later. Re-running the campaign to
+    add a field would cost days of GPU time and would measure a different
+    llama.cpp build; re-reading the logs costs seconds and changes nothing
+    about what was observed.
+
+    A record whose log is missing keeps the `parsed` block it already has,
+    with `reparsed` left absent so an analysis can tell which rows carry the
+    newer fields.
+    """
+    if not out.exists():
+        print(f"{out}: no measurements to reparse", file=sys.stderr)
+        return 1
+    rewritten, skipped = 0, 0
+    lines: list[str] = []
+    for line in out.read_text().splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        archived = archive_dir / record.get("log", "")
+        # A cell that never loaded carries an empty `parsed` by construction,
+        # and its log holds only the failure. Parsing it anyway replaces that
+        # emptiness with a full block of zeros, which reads as a measurement
+        # that found nothing rather than as no measurement at all.
+        if record.get("status") != "ok":
+            skipped += 1
+            lines.append(json.dumps(record, default=str))
+            continue
+        if not record.get("log") or not archived.exists():
+            skipped += 1
+            lines.append(json.dumps(record, default=str))
+            continue
+        with gzip.open(archived, "rt", errors="replace") as handle:
+            record["parsed"] = parse_log(handle.read())
+        record["reparsed"] = True
+        rewritten += 1
+        lines.append(json.dumps(record, default=str))
+    out.write_text("\n".join(lines) + "\n")
+    print(f"reparsed {rewritten} records, {skipped} without an archived log")
+    return 0
+
+
 def load_plan(path: Path) -> list[Cell]:
     """Read a campaign plan: a JSON list of objects, each a `Cell`'s fields."""
     raw = json.loads(path.read_text())
@@ -1130,6 +1279,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--plan", type=Path, help="JSON list of cells to run")
+    parser.add_argument("--reparse", action="store_true",
+                        help="re-derive every record's parsed block from its "
+                             "archived log instead of measuring anything")
     parser.add_argument("--log-dir", type=Path,
                         default=Path(os.environ.get("TMPDIR", "/tmp")) / "ananke-calibration")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -1145,6 +1297,8 @@ def main(argv: list[str] | None = None) -> int:
                              "--no-mmap load takes minutes")
     args = parser.parse_args(argv)
 
+    if args.reparse:
+        return reparse(args.out, args.archive_dir)
     if not args.plan:
         parser.error("--plan is required")
     run_cells(load_plan(args.plan), args.out, args.log_dir, args.port,

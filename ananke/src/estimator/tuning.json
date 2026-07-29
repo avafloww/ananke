@@ -275,7 +275,7 @@
     },
     "MTP_BASE_OVERHEAD_MIB": {
       "doc": "The slot-independent base overhead of the MTP draft context, in MiB.",
-      "evidence": "intercept of the slot sweep: Qwen3.6-27B-UD-Q5_K_ 333 oh/slot, 531 base; Qwen3.6-35B-A3B-UD-Q 164 oh/slot, 356 base. The larger model's value is taken.",
+      "evidence": "intercept of the slot sweep: Qwen3.6-27B-UD-Q5_K_ 333 oh/slot, 531 base; Qwen3.6-35B-A3B-UD-Q 149 oh/slot, 371 base. The larger model's value is taken.",
       "kind": "derived",
       "type": "u64",
       "value": 584
@@ -317,7 +317,7 @@
     },
     "MTP_PER_SLOT_OVERHEAD_MIB": {
       "doc": "The constant per-slot overhead beyond the per-slot KV, in MiB.",
-      "evidence": "per-slot overhead from the slot sweep: Qwen3.6-27B-UD-Q5_K_ 333 oh/slot, 531 base; Qwen3.6-35B-A3B-UD-Q 164 oh/slot, 356 base. The larger model's value is taken.",
+      "evidence": "per-slot overhead from the slot sweep: Qwen3.6-27B-UD-Q5_K_ 333 oh/slot, 531 base; Qwen3.6-35B-A3B-UD-Q 149 oh/slot, 371 base. The larger model's value is taken.",
       "kind": "derived",
       "type": "u64",
       "value": 367
