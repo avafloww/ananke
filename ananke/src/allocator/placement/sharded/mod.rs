@@ -27,42 +27,16 @@ impl<'a> Packer<'a> {
         layers.sort_unstable();
         let total = layers.len() as u32;
 
-        let pool: u64 = self
-            .allowed_gpus
-            .iter()
-            .map(|g| self.gpu_available(*g))
-            .sum();
-
+        // In the sharded (tensor-split) path, llama.cpp moves ALL expert
+        // tensors to the CUDA_Host buffer regardless of the --n-cpu-moe
+        // count — the layer-count semantics of --n-cpu-moe apply to the
+        // layer-split path, not the tensor-split path where every tensor
+        // is sharded individually. So offload all expert layers here and
+        // emit --n-cpu-moe equal to the total, matching what the runtime
+        // actually does.
         let n_cpu = match self.offload_mode {
-            OffloadMode::Layers(n) => n.min(total),
-            OffloadMode::Auto => {
-                // Estimate the non-expert + KV + compute pool to find what
-                // remains for experts, then keep as many leading expert
-                // layers as fit.
-                let per_layer_sum: u64 = self.per_layer.iter().sum();
-                let non_expert =
-                    per_layer_sum.saturating_sub(self.expert_bytes_by_layer.values().sum());
-                let kv_total = self
-                    .estimate
-                    .kv_per_token
-                    .saturating_mul(self.estimate.context as u64);
-                let compute_total = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
-                let non_expert_gpu = self.vram_cost(non_expert + kv_total + compute_total);
-                let expert_pool = pool.saturating_sub(non_expert_gpu);
-                let mut used = 0u64;
-                let mut keep = 0u32;
-                for &l in &layers {
-                    let cost = self.vram_cost(self.expert_bytes_by_layer[&l]);
-                    if used.saturating_add(cost) <= expert_pool {
-                        used += cost;
-                        keep += 1;
-                    } else {
-                        break;
-                    }
-                }
-                total - keep
-            }
             OffloadMode::Off => 0,
+            OffloadMode::Layers(_) | OffloadMode::Auto => total,
         };
         let keep = total - n_cpu;
 
