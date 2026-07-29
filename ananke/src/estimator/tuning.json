@@ -49,9 +49,9 @@
   "compute_buffer_curves": {
     "$comment": "Ordered: the first entry whose arch list contains the model's architecture wins, so a variant-guarded entry must precede the general one for the same arch. `slope_scales_with_ubatch` is true throughout: the context term is calibrated at ubatch 512 and the measured compute buffer is proportional to batch \u2014 Magidonia takes 388 MiB at ub 512 and 1552 at 2048, exactly four times, and Qwen3.6-27B 290 and 1160 \u2014 so a flat slope under-reserves at any larger batch. At the default batch this changes nothing.",
     "default": {
-      "base_batch_mib": 86,
-      "base_mib": 311,
-      "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 48 layer-split cells at ctx 8192-65536 (ub 512, f16). Base_batch from 6 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+      "base_batch_mib": 230,
+      "base_mib": 345,
+      "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 69 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 6 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
       "slope_mib_per_1k": 5,
       "slope_scales_with_ubatch": true
     },
@@ -60,10 +60,10 @@
         "archs": [
           "qwen3"
         ],
-        "base_batch_mib": 61,
-        "base_mib": 307,
-        "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 37 layer-split cells at ctx 8192-65536 (ub 512, f16). Base_batch from 4 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "slope_mib_per_1k": 4,
+        "base_batch_mib": 0,
+        "base_mib": 386,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 54 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 4 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "slope_mib_per_1k": 8,
         "slope_scales_with_ubatch": true,
         "variant": null
       },
@@ -71,9 +71,9 @@
         "archs": [
           "gemma4"
         ],
-        "base_batch_mib": 185,
-        "base_mib": 288,
-        "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 7 layer-split cells at ctx 8192-65536 (ub 512, f16). Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_batch_mib": 154,
+        "base_mib": 443,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 11 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_mib_per_1k": 4,
         "slope_scales_with_ubatch": true,
         "variant": "gemma_e"
@@ -84,10 +84,10 @@
           "gemma3",
           "gemma4"
         ],
-        "base_batch_mib": 182,
-        "base_mib": 318,
-        "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 43 layer-split cells at ctx 8192-65536 (ub 512, f16). Base_batch from 9 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "slope_mib_per_1k": 4,
+        "base_batch_mib": 0,
+        "base_mib": 505,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 57 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 9 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "slope_mib_per_1k": 11,
         "slope_scales_with_ubatch": true
       },
       {
@@ -126,9 +126,9 @@
         "archs": [
           "laguna"
         ],
-        "base_batch_mib": 65,
-        "base_mib": 1012,
-        "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 6 layer-split cells at ctx 8192-65536 (ub 512, f16). Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_batch_mib": 58,
+        "base_mib": 1065,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 10 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_mib_per_1k": 1,
         "slope_scales_with_ubatch": true
       },
@@ -136,9 +136,9 @@
         "archs": [
           "qwen35moe"
         ],
-        "base_batch_mib": 10,
-        "base_mib": 586,
-        "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 12 layer-split cells at ctx 8192-65536 (ub 512, f16). Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_batch_mib": 0,
+        "base_mib": 858,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 18 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_mib_per_1k": 1,
         "slope_scales_with_ubatch": true
       },
@@ -146,19 +146,19 @@
         "archs": [
           "qwen35"
         ],
-        "base_batch_mib": 151,
-        "base_mib": 321,
-        "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 26 layer-split cells at ctx 8192-65536 (ub 512, f16). Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "slope_mib_per_1k": 4,
+        "base_batch_mib": 9,
+        "base_mib": 462,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 32 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "slope_mib_per_1k": 8,
         "slope_scales_with_ubatch": true
       },
       {
         "archs": [
           "talkie"
         ],
-        "base_batch_mib": 66,
-        "base_mib": 438,
-        "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 8 layer-split cells at ctx 512-32768 (ub 512, f16). Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_batch_mib": 62,
+        "base_mib": 456,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 12 layer-split cells at ctx 512-32768 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_mib_per_1k": 4,
         "slope_scales_with_ubatch": true
       },
@@ -184,9 +184,9 @@
         "archs": [
           "lfm2"
         ],
-        "base_batch_mib": 31,
-        "base_mib": 337,
-        "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 5 layer-split cells at ctx 2048-65536 (ub 512, f16). Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_batch_mib": 17,
+        "base_mib": 395,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 7 layer-split cells at ctx 2048-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_mib_per_1k": 1,
         "slope_scales_with_ubatch": true
       },
@@ -194,9 +194,9 @@
         "archs": [
           "deepseek4"
         ],
-        "base_batch_mib": 91,
-        "base_mib": 1426,
-        "evidence": "least-squares fit of per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 8 layer-split cells at ctx 8192-131072 (ub 512, f16). Base_batch from 2 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_batch_mib": 55,
+        "base_mib": 1654,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 12 layer-split cells at ctx 8192-131072 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 2 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_mib_per_1k": 1,
         "slope_scales_with_ubatch": true
       }

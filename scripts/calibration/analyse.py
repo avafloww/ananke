@@ -1679,11 +1679,12 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
                 continue
             if (factors["split"] or "layer") != "layer":
                 continue
-            # f16 only. A quantised cache costs the GPU compute buffer up to
-            # 394 MiB more at the same context — measured across four
-            # architectures — and is charged as its own term instead.
-            if factors["kv_type"] != "f16":
-                continue
+            # All kv_types are included: the curve must cover the worst-case
+            # cell at each context, which is often a quantised-cache run.
+            # The quantised-KV compute term was removed from the estimator
+            # because it was absorbed into the curves this way — a quantised
+            # cache *reduces* total VRAM (smaller KV outweighs the compute
+            # increase), so a separate charge double-counted.
             devs = [d for d in parsed["devices"]
                     if d["compute_mib"] and not d["device"].startswith("Meta")]
             if not devs:
@@ -1692,13 +1693,16 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
             per_dev = total / len(devs)
             by_ctx_ub[(factors["ctx"], factors["ubatch"])].append(per_dev)
         # Group by context at the calibration batch (ub=512) for the main fit.
+        # Use the max per-run average at each context: the packer charges the
+        # same compute_buffer_mb to every GPU, so the curve must cover the
+        # worst-case per-device need, not the average — under-reserving OOMs.
         by_ctx: dict[int, list[float]] = defaultdict(list)
         for (ctx, ub), vals in by_ctx_ub.items():
             if ub == 512:
                 by_ctx[ctx].extend(vals)
         if len(by_ctx) < 2:
             raise ValueError(f"{'/'.join(archs)}: fewer than two contexts")
-        # Least-squares fit of y = a + b*(ctx/1024) to the mean per-run
+        # Least-squares fit of y = a + b*(ctx/1024) to the max per-run
         # average at each context. This is the curve the packer uses at
         # ub=512: compute_buffer_mb = base + base_batch + slope*(ctx/1024).
         # The batch-scaling term (base_batch) is fitted separately from
@@ -1706,16 +1710,29 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
         from statistics import mean
         ctx_points = sorted(by_ctx)
         xs = [c / 1024 for c in ctx_points]
-        ys = [mean(by_ctx[c]) for c in ctx_points]
+        ys = [max(by_ctx[c]) for c in ctx_points]
         n = len(xs)
         sx, sy = sum(xs), sum(ys)
         sxy = sum(x * y for x, y in zip(xs, ys))
         sxx = sum(x * x for x in xs)
         slope_raw = (n * sxy - sx * sy) / (n * sxx - sx * sx) if n * sxx != sx * sx else 0.0
         intercept = (sy - slope_raw * sx) / n  # base + base_batch at ub=512
-        # Fit base_batch from larger ubatch points: at ub=k*512, the curve
-        # is base + base_batch*k + slope*(ctx/1024)*k. Subtracting the k=1
-        # line leaves (k-1)*base_batch + slope*(ctx/1024)*(k-1).
+        # Raise the intercept so the fitted line covers the worst point at
+        # every context. Least-squares to max values does not guarantee
+        # coverage — the line is pulled below the max at short contexts by
+        # the long ones — so this correction is necessary: under-reserving
+        # OOMs a load.
+        for c in ctx_points:
+            fitted = intercept + slope_raw * (c / 1024)
+            deficit = max(by_ctx[c]) - fitted
+            if deficit > 0:
+                intercept += deficit
+        # Fit base_batch from larger ubatch points. The Rust formula with
+        # `slope_scales_with_ubatch=true` is:
+        # `base + base_batch*k + slope*k*(ctx/1024)` where `k = ub/512`.
+        # At k=1: `intercept + slope*(ctx/1024)` where `intercept = base +
+        # base_batch`. The residual at k>1 from the k=1 line is
+        # `(k-1) * base_batch`, so `base_batch = residual / (k-1)`.
         batch_only = []
         for (ctx, ub), vals in by_ctx_ub.items():
             if ub <= 512:
@@ -1724,20 +1741,49 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
             for v in vals:
                 residual = v - intercept - slope_raw * (ctx / 1024) * k
                 batch_only.append(residual / (k - 1))
-        base_batch = mean(batch_only) if batch_only else 0.0
+        base_batch = max(batch_only) if batch_only else 0.0
         base_batch = max(0.0, base_batch)
+        # Raise base_batch so the formula covers the worst point at every
+        # (ctx, ub>512) combination, using the rounded base and slope.
+        # The Rust formula at k=ub/512 is:
+        # `base + base_batch*k + slope*k*(ctx/1024)`.
+        base_pre = max(0, round(intercept - base_batch))
+        slope_pre = max(1, round(slope_raw))
+        for (ctx, ub), vals in by_ctx_ub.items():
+            if ub <= 512:
+                continue
+            k = ub / 512
+            for v in vals:
+                fitted = base_pre + base_batch * k + slope_pre * k * (ctx / 1024)
+                while fitted < v:
+                    base_batch += 1 / k
+                    fitted = base_pre + base_batch * k + slope_pre * k * (ctx / 1024)
         base = max(0, round(intercept - base_batch))
         base_batch_mib = max(0, round(base_batch))
         slope = max(1, round(slope_raw))
-        worst = max(max(v) for v in by_ctx.values())
+        # Verify coverage with the rounded integer values the Rust code will
+        # use, and raise base until every ub=512 point is covered — the
+        # float fit and slope rounding can leave the integer curve below
+        # the measured integer.
+        for c in ctx_points:
+            fitted = base + base_batch_mib + slope * (c / 1024)
+            while fitted < max(by_ctx[c]):
+                base += 1
+                fitted += 1
+        # Add one MiB of headroom for the integer arithmetic mismatch: the
+        # Rust code uses `context / 1024` (integer division) and saturating
+        # addition, which can lose up to 1 MiB per term versus the float
+        # fit. This is a rounding correction, not a fudge factor.
+        base += 1
         evidence = (
-            f"least-squares fit of per-run average (compute + unaccounted) / "
-            f"n_gpus to base + base_batch + slope*(ctx/1024), across "
+            f"least-squares fit of max per-run average (compute + unaccounted) "
+            f"/ n_gpus to base + base_batch + slope*(ctx/1024), across "
             f"{sum(len(v) for v in by_ctx.values())} layer-split cells at ctx "
-            f"{ctx_points[0]}-{ctx_points[-1]} (ub 512, f16). Base_batch from "
-            f"{len(batch_only)} larger-ubatch cells. Tensor-split cells are "
-            f"excluded: they report one fused device whose unaccounted remainder "
-            f"is an artifact of that representation.")
+            f"{ctx_points[0]}-{ctx_points[-1]} (ub 512, all kv_types). "
+            f"Intercept raised to cover the worst point at every context. "
+            f"Base_batch from {len(batch_only)} larger-ubatch cells. "
+            f"Tensor-split cells are excluded: they report one fused device "
+            f"whose unaccounted remainder is an artifact of that representation.")
         return base, evidence, slope, base_batch_mib
     return deriver
 
