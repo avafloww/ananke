@@ -193,6 +193,18 @@ mod tests {
             SmolStr::new("qwen35moe.full_attention_interval"),
             GgufValue::U32(4),
         );
+        // Qwen3.6-35B-A3B's recurrent block, as its GGUF declares it.
+        for (key, value) in [
+            ("ssm.conv_kernel", 4u32),
+            ("ssm.inner_size", 4096),
+            ("ssm.state_size", 128),
+            ("ssm.group_count", 16),
+        ] {
+            metadata.insert(
+                SmolStr::new(format!("qwen35moe.{key}")),
+                GgufValue::U32(value),
+            );
+        }
 
         let summary = GgufSummary {
             path: "/fake".into(),
@@ -232,11 +244,13 @@ mod tests {
         let e = estimate(&summary, &inputs);
         // Attention KV: 4 heads × (128+128) × 2 bytes (f16) = 2048 bytes/token.
         // With interval=4, only 2 of 8 layers are attention → 2 × 2048 = 4096.
-        // SSM state per slot: 32768000 bytes (from tuning.json, measured
-        //   from the mtpslot-none slot sweep).
-        //   Folded into per-token at ctx 4096: 32768000 / 4096 = 8000.
-        // kv_per_token = 4096 + 8000 = 12096.
-        assert_eq!(e.kv_per_token, 12096);
+        // Recurrent state over the other 6 layers, one slot, no speculation:
+        //   R = (4-1) × (4096 + 2×16×128) = 24576 elements
+        //   S = 128 × 4096 = 524288 elements
+        //   6 × 548864 × 4 bytes = 13_172_736, folded into per-token at
+        //   ctx 4096 → 3216.
+        // kv_per_token = 4096 + 3216 = 7312.
+        assert_eq!(e.kv_per_token, 7312);
     }
 
     #[test]

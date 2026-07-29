@@ -2,7 +2,7 @@
 //! variants (Gemma 2/3/4, LFM2).
 
 use crate::{
-    estimator::{kv, types::EstimatorInputs},
+    estimator::{kv, recurrent, types::EstimatorInputs},
     gguf::GgufSummary,
 };
 
@@ -204,7 +204,20 @@ pub(crate) fn compute_kv_per_token(
         };
         total_kv_bytes += kv_heads * per_head * tokens;
     }
-    total_kv_bytes / context
+
+    // A layer declaring zero KV heads has no cache because it is not an
+    // attention layer: LFM2 interleaves short-convolution blocks, which carry
+    // recurrent state instead. llama.cpp allocates that in a separate module
+    // and reports it in the same "context" bucket, so it is folded in here the
+    // way `kv_for_hybrid` does for the `ssm.*` families.
+    let recurrent_layers = kv_heads_per_layer
+        .iter()
+        .take(unique_kv_count as usize)
+        .filter(|&&heads| heads == 0)
+        .count() as u64;
+    let state = recurrent::state_bytes(summary, arch, recurrent_layers, inputs);
+
+    (total_kv_bytes + state) / context
 }
 
 #[cfg(test)]

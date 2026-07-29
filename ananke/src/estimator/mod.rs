@@ -10,6 +10,7 @@ pub mod mamba;
 pub mod moe;
 pub mod mtp;
 pub mod override_tensor;
+pub mod recurrent;
 pub mod tuning;
 pub mod types;
 

@@ -773,74 +773,125 @@ def derive_per_slot_bytes(rows: list[dict]) -> str:
     )
 
 
-def derive_ssm_state(rows: list[dict]) -> str:
-    """Per-slot SSM state bytes for hybrid architectures, by architecture.
+def recurrent_pools(rows: list[dict]) -> list[tuple[dict, dict]]:
+    """Every measured `llama_memory_recurrent` pool, with its record's shape.
 
-    Hybrid architectures (qwen35, qwen35moe) interleave attention layers with
-    SSM layers. The SSM layers carry constant per-slot state — independent of
-    context — that llama.cpp allocates alongside the KV cache and reports in the
-    same "context" memory bucket.
-
-    The `mtpslot-*-none-np{1,2,4}` cells run the same model and context with
-    `kv_unified=True` and varying `parallel`. With unified KV, the attention
-    cache is shared across slots, so the only per-slot growth is the SSM state.
-    Differencing total KV between slot counts isolates it:
-
-        ssm_per_slot = (kv(np_hi) - kv(np_lo)) / (np_hi - np_lo)
-
-    The GGUF does not expose the SSM dimensions (`d_inner`, `d_conv`,
-    `d_state`), so the per-slot value cannot be predicted from metadata — it is
-    measured. The Rust code divides by `ssm_layer_count` (derived from
-    `block_count` and `full_attention_interval`) to get the per-layer figure.
-    The table may contain non-hybrid architectures (e.g. gemma4) whose
-    per-slot KV growth is attention KV, not SSM state — these are harmless, as
-    the Rust lookup only happens inside `kv_for_hybrid`, which is called
-    exclusively for architectures with `full_attention_interval`.
+    Yields `(pool, parsed)` pairs. A record creates at most one recurrent
+    module, but it appears once per context the server built — including
+    llama.cpp's parameter-fitting dry run — so the pools are taken from
+    whichever contexts hold one and deduplicated by the reader.
     """
-    from collections import defaultdict as _dd
-
-    series: dict[tuple, dict[int, float]] = _dd(dict)
+    out = []
     for record in rows:
-        parsed, factors = record["parsed"], record["factors"]
-        label = factors.get("label", "")
-        if "mtpslot" not in label or "none" not in label:
+        parsed = record["parsed"]
+        for context in parsed.get("contexts", []):
+            pool = context.get("rs_pool")
+            if pool:
+                out.append((pool, parsed))
+    return out
+
+
+def modelled_recurrent_mib(pool: dict, parsed: dict) -> tuple[float, float] | None:
+    """The R and S halves of a recurrent pool, from GGUF metadata alone.
+
+    This is `estimator/recurrent.rs` transcribed. It exists so the formula is
+    held to every measurement rather than checked once by hand: a divergence
+    fails `emit` on whichever side introduced it.
+
+    Returns `None` for a model whose metadata does not describe a recurrent
+    block, which is how a pool of zero size reads.
+    """
+    arch = parsed.get("arch", "")
+    kv = parsed.get("gguf_kv", {})
+    d_conv = kv.get(f"{arch}.ssm.conv_kernel", 0)
+    if d_conv:
+        d_inner = kv.get(f"{arch}.ssm.inner_size", 0)
+        d_state = kv.get(f"{arch}.ssm.state_size", 0)
+        n_group = kv.get(f"{arch}.ssm.group_count", 0)
+        n_embd_r = (d_conv - 1) * (d_inner + 2 * n_group * d_state)
+        n_embd_s = d_state * d_inner
+    else:
+        l_cache = kv.get(f"{arch}.shortconv.l_cache", 0)
+        if l_cache <= 1:
+            return None
+        n_embd_r = kv.get(f"{arch}.embedding_length", 0) * (l_cache - 1)
+        n_embd_s = 0
+
+    # The layer count the pool itself reports is the span, not the number of
+    # allocating layers; the attention layers within it are subtracted the way
+    # the estimator does.
+    span = pool["layers"]
+    interval = kv.get(f"{arch}.full_attention_interval", 0)
+    if not interval:
+        # Without an interval the pattern is a per-layer property the log does
+        # not carry (LFM2's is a fixed list inside llama.cpp), so the layer
+        # count cannot be checked from the record — only the per-layer size.
+        return None
+    recurrent = span - span // interval
+    copies = pool["seqs"] * (pool["rs_seq"] + 1)
+    scale = recurrent * copies * 4 / 1024 ** 2
+    return n_embd_r * scale, n_embd_s * scale
+
+
+def check_recurrent_model(rows: list[dict], tolerance_mib: float = 0.02) -> None:
+    """Hold the recurrent-state formula to every pool the dataset recorded.
+
+    The R and S halves are checked separately, because a formula that is wrong
+    in both directions can still land on the right total: an earlier per-slot
+    constant reproduced Qwen3.6-27B's 149.62 MiB exactly while being a factor
+    of two out on the same model's two-slot reading.
+
+    The tolerance is the log's own rounding — these figures are printed to two
+    decimals — not a fitting margin. The formula reproduces every pool.
+    """
+    worst: dict[str, tuple[float, str]] = {}
+    for pool, parsed in recurrent_pools(rows):
+        modelled = modelled_recurrent_mib(pool, parsed)
+        if modelled is None:
             continue
-        if not factors.get("kv_unified"):
-            continue
-        arch = parsed.get("arch", "")
-        parallel = factors.get("parallel", 1)
-        devices = parsed.get("devices", [])
-        total_kv = sum(d.get("kv_mib", 0) for d in devices)
-        key = (arch, factors.get("model"), factors.get("ctx"))
-        series[key][parallel] = total_kv
+        arch = parsed.get("arch", "?")
+        for half, got, want in (("R", modelled[0], pool["r_mib"]),
+                                ("S", modelled[1], pool["s_mib"])):
+            error = abs(got - want)
+            key = f"{arch} {half}"
+            if error > worst.get(key, (0.0, ""))[0]:
+                worst[key] = (error, f"modelled {got:.2f} vs {want:.2f} MiB at "
+                                     f"{pool['seqs']} seqs, {pool['rs_seq']} rs_seq")
+    bad = {k: v for k, v in worst.items() if v[0] > tolerance_mib}
+    if bad:
+        raise Disagreement(
+            "the recurrent-state formula no longer reproduces the measurements: "
+            + "; ".join(f"{k} off by {e:.2f} MiB ({why})" for k, (e, why) in bad.items())
+            + ". Either llama.cpp changed how it sizes the module or "
+              "estimator/recurrent.rs and this file have drifted apart.")
 
-    by_arch: dict[str, list[float]] = _dd(list)
-    for (arch, _model, _ctx), points in series.items():
-        if len(points) < 2:
-            continue
-        parallels = sorted(points)
-        for i in range(1, len(parallels)):
-            lo, hi = parallels[i - 1], parallels[i]
-            per_slot_mib = (points[hi] - points[lo]) / (hi - lo)
-            by_arch[arch].append(per_slot_mib * 1024 * 1024)
 
-    if not by_arch:
-        raise ValueError("no mtpslot-none cells with varying parallel found")
+def derive_spec_rollback_depth(rows: list[dict]) -> tuple[int, str]:
+    """How many extra copies of the recurrent state speculative decoding holds.
 
-    _SSM_STATE.clear()
-    for arch in sorted(by_arch):
-        _SSM_STATE[arch] = round(st.mean(by_arch[arch]))
-
-    return (
-        "per-slot SSM state from the mtpslot-none slot sweep (kv_unified, "
-        "varying parallel): "
-        + ", ".join(
-            f"{a} {v / 1024 / 1024:.0f} MiB/slot"
-            for a, v in sorted(_SSM_STATE.items())
-        )
-        + ". The attention KV is shared under kv_unified, so the delta is "
-        "purely the SSM state. The Rust code divides by ssm_layer_count "
-        "(block_count minus attention layers) for the per-layer figure."
+    llama.cpp calls it `n_rs_seq` and prints it in the recurrent module's own
+    summary line, so it is read rather than fitted. It is a property of the
+    runtime's speculative depth — not of the model — which is why it belongs
+    here instead of being derived from GGUF metadata.
+    """
+    check_recurrent_model(rows)
+    depths = {pool["rs_seq"] for pool, _ in recurrent_pools(rows)}
+    speculative = sorted(d for d in depths if d > 0)
+    if not speculative:
+        raise ValueError("no recurrent pool measured under speculative decoding")
+    if len(speculative) > 1:
+        raise Disagreement(
+            f"recurrent rollback depth is not one value across the dataset: "
+            f"{speculative}. It was a runtime constant; if a flag now moves it, "
+            f"the estimator has to read that flag rather than a constant.")
+    depth = speculative[0]
+    return depth, (
+        f"llama.cpp's own `rs_seq` field, {depth} on every speculative cell and "
+        f"0 on every other, across "
+        f"{len({p['seqs'] for p, _ in recurrent_pools(rows)})} slot counts. The "
+        f"recurrent module is replicated `parallel x (depth + 1)`: production "
+        f"Qwen3.6-27B measures 1197.00 MiB against 149.62 at one slot without "
+        f"speculation, exactly 2 x 4."
     )
 
 
@@ -1209,6 +1260,8 @@ KINDS = {
     "MTP_HOST_BYTES_EMBEDDED": "derived",
     "MTP_HOST_BYTES_SEPARATE_DRAFT": "derived",
     "MTP_HOST_MIB_PER_1K": "derived",
+    # Read straight out of llama.cpp's own `rs_seq` field.
+    "SPEC_RECURRENT_ROLLBACK_DEPTH": "derived",
 }
 
 def derive_mtp_kv_intercept(rows: list[dict]) -> tuple[int, str]:
@@ -1575,7 +1628,6 @@ _QUANT_RATES: dict[str, int] = {}
 _NO_FA_RATES: dict[str, int] = {}
 _PER_SLOT: dict[str, int] = {}
 _CKPT_HEADROOM: dict[str, int] = {}
-_SSM_STATE: dict[str, int] = {}
 
 
 def _record_ik_rates(by_arch: dict[str, float]) -> None:
@@ -1881,6 +1933,7 @@ DERIVERS = {
     "MTP_HOST_BYTES_EMBEDDED": derive_mtp_host_embedded,
     "MTP_HOST_BYTES_SEPARATE_DRAFT": derive_mtp_host_separate,
     "MTP_HOST_MIB_PER_1K": derive_mtp_host_slope,
+    "SPEC_RECURRENT_ROLLBACK_DEPTH": derive_spec_rollback_depth,
 }
 
 
@@ -2047,10 +2100,6 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"per-slot host bytes: cannot derive — {error}")
     try:
-        derive_ssm_state(rows)
-    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
-        failed.append(f"SSM state: cannot derive — {error}")
-    try:
         derive_no_flash_attn_rates(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError, Disagreement) as error:
         failed.append(f"no-flash-attention rates: cannot derive — {error}")
@@ -2177,16 +2226,6 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "belongs in the packer's slop, beside the prompt cache.",
             "default": max(_PER_SLOT.values()),
             "by_arch": dict(sorted(_PER_SLOT.items())),
-        }
-    if _SSM_STATE:
-        document["ssm_state_per_slot_bytes"] = {
-            "$comment": "Per-slot SSM state bytes for hybrid architectures, "
-                        "measured from the mtpslot-none slot sweep. With "
-                        "kv_unified, the attention KV is shared and only the "
-                        "SSM state grows per slot. The Rust estimator divides "
-                        "by ssm_layer_count for the per-layer figure.",
-            "default": 0,
-            "by_arch": dict(sorted(_SSM_STATE.items())),
         }
     if _NO_FA_RATES:
         document["no_flash_attn_rates"] = {

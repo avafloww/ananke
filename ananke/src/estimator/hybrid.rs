@@ -18,7 +18,7 @@ use crate::{
     estimator::{
         compute_buffer, kv,
         llama::{collect_non_layer, collect_per_layer},
-        tuning::{SSM_STATE_PER_SLOT_BYTES, SSM_STATE_PER_SLOT_BYTES_DEFAULT},
+        recurrent,
         types::{Estimate, EstimatorInputs},
     },
     gguf::GgufSummary,
@@ -33,14 +33,19 @@ pub fn is_hybrid(arch: &str) -> bool {
 
 /// Compute the KV cost per token for a hybrid model, scaling by
 /// `full_attention_interval`. Only every N-th layer has a KV cache;
-/// the rest use SSM with constant per-layer state.
+/// the rest carry recurrent state instead.
 ///
-/// Returns `kv_per_token` so the caller can multiply by context to
-/// recover total KV bytes. The SSM layers' constant per-slot state is
-/// folded in as a per-token equivalent (`ssm_state / context`) so the
-/// downstream `kv_per_token × context` recovers
-/// `attention_kv + ssm_state_per_slot`, matching what llama.cpp allocates
-/// and reports in its memory breakdown.
+/// Returns `kv_per_token` so the caller can multiply by context to recover
+/// total context bytes. The recurrent layers' context-independent state is
+/// folded in as a per-token equivalent (`state / context`) so the downstream
+/// `kv_per_token × context` recovers `attention_kv + recurrent_state`, which
+/// is what llama.cpp allocates and reports as one "context" bucket in its
+/// memory breakdown — and is distributed across devices the same way, since
+/// both scale with how many of the model's layers a device holds.
+///
+/// `n_layers` is the model's full block count; the layer counting below uses
+/// [`recurrent::context_layer_span`] to drop an MTP head's trailing block,
+/// which belongs to the separate draft context rather than to this one.
 pub fn kv_for_hybrid(
     summary: &GgufSummary,
     arch: &str,
@@ -77,7 +82,8 @@ pub fn kv_for_hybrid(
         .and_then(|v| v.as_u32())
         .unwrap_or(1)
         .max(1);
-    let kv_layer_count = (n_layers / full_attention_interval) as u64;
+    let span = recurrent::context_layer_span(summary, arch).min(n_layers);
+    let kv_layer_count = (span / full_attention_interval) as u64;
 
     let attention_kv = if kv_layer_count > 0 && n_kv_heads > 0 {
         let per_layer_bytes_kv =
@@ -87,29 +93,17 @@ pub fn kv_for_hybrid(
         0
     };
 
-    // SSM layers carry constant per-slot state that llama.cpp allocates
-    // alongside the KV cache and reports in the same "context" memory
-    // bucket. The GGUF does not expose the SSM dimensions (`d_inner`,
-    // `d_conv`, `d_state`), so the per-slot value is measured from the
-    // `mtpslot-*-none` slot sweep (where kv_unified isolates the SSM
-    // state from the attention KV) and stored in `tuning.json` as a
-    // per-architecture rate. The per-layer figure is derived here by
-    // dividing by the SSM layer count.
-    let ssm_layer_count = n_layers as u64 - kv_layer_count;
-    let ssm_state_per_slot = if ssm_layer_count > 0 {
-        SSM_STATE_PER_SLOT_BYTES
-            .iter()
-            .find(|(a, _)| *a == arch)
-            .map(|(_, v)| *v)
-            .unwrap_or(SSM_STATE_PER_SLOT_BYTES_DEFAULT)
-    } else {
-        0
-    };
+    // The remaining layers carry recurrent state, which llama.cpp allocates
+    // alongside the KV cache and reports in the same "context" bucket. Its
+    // size follows from the model's `ssm.*` metadata — see
+    // [`crate::estimator::recurrent`].
+    let recurrent_layers = span as u64 - kv_layer_count;
+    let state = recurrent::state_bytes(summary, arch, recurrent_layers, inputs);
 
-    // Fold the per-slot SSM state into the per-token figure so
-    // `kv_per_token × context` recovers `attention_kv + ssm_state_per_slot`.
+    // Fold the state into the per-token figure so `kv_per_token × context`
+    // recovers `attention_kv + state`.
     let context = inputs.context as u64;
-    attention_kv + ssm_state_per_slot.checked_div(context).unwrap_or(0)
+    attention_kv + state.checked_div(context).unwrap_or(0)
 }
 
 pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
@@ -229,6 +223,15 @@ mod tests {
                 GgufValue::U32(interval),
             );
         }
+        // Qwen3.6-27B's recurrent block, as its GGUF declares it.
+        for (key, value) in [
+            ("ssm.conv_kernel", 4u32),
+            ("ssm.inner_size", 6144),
+            ("ssm.state_size", 128),
+            ("ssm.group_count", 16),
+        ] {
+            metadata.insert(SmolStr::new(format!("{arch}.{key}")), GgufValue::U32(value));
+        }
 
         GgufSummary {
             path: "/fake".into(),
@@ -269,17 +272,20 @@ mod tests {
 
     #[test]
     fn qwen35_kv_scales_with_full_attention_interval() {
-        // 64 layers, interval=4 → 16 attention layers, 48 SSM layers.
+        // 64 layers, interval=4 → 16 attention layers, 48 recurrent.
         // Attention KV: 16 × 4 heads × (128+128) × 2 bytes (f16) = 32768
         //   bytes/token.
-        // SSM state per slot: 78643200 bytes (from tuning.json, measured
-        //   from the mtpslot-none slot sweep).
-        //   Folded into per-token at ctx 4096: 78643200 / 4096 = 19200.
-        // kv_per_token = 32768 + 19200 = 51968.
+        // Recurrent state, one slot, no speculation:
+        //   R = (4-1) × (6144 + 2×16×128) = 30720 elements
+        //   S = 128 × 6144 = 786432 elements
+        //   48 layers × 817152 × 4 bytes = 156_893_184 bytes, which is the
+        //   5.62 + 144.00 MiB llama.cpp reports for this model.
+        //   Folded into per-token at ctx 4096: 156_893_184 / 4096 = 38304.
+        // kv_per_token = 32768 + 38304 = 71072.
         let s = fake_hybrid_summary("qwen35", 64, Some(4));
         let empty: Vec<String> = Vec::new();
         let e = estimate(&s, &inputs(4096, &empty));
-        assert_eq!(e.kv_per_token, 51968);
+        assert_eq!(e.kv_per_token, 71072);
     }
 
     #[test]

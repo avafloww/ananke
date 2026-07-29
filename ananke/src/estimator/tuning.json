@@ -370,6 +370,13 @@
       "kind": "derived",
       "type": "u64",
       "value": 13
+    },
+    "SPEC_RECURRENT_ROLLBACK_DEPTH": {
+      "doc": "Extra copies of the recurrent state a speculative-decoding service holds,\n/// beyond the live one: llama.cpp's `n_rs_seq`.",
+      "evidence": "llama.cpp's own `rs_seq` field, 3 on every speculative cell and 0 on every other, across 3 slot counts. The recurrent module is replicated `parallel x (depth + 1)`: production Qwen3.6-27B measures 1197.00 MiB against 149.62 at one slot without speculation, exactly 2 x 4.",
+      "kind": "derived",
+      "type": "u64",
+      "value": 3
     }
   },
   "dataset": "scripts/calibration/data/measurements.ndjson",
@@ -433,15 +440,6 @@
       "talkie": 164
     },
     "default": 6144
-  },
-  "ssm_state_per_slot_bytes": {
-    "$comment": "Per-slot SSM state bytes for hybrid architectures, measured from the mtpslot-none slot sweep. With kv_unified, the attention KV is shared and only the SSM state grows per slot. The Rust estimator divides by ssm_layer_count for the per-layer figure.",
-    "by_arch": {
-      "gemma4": 419430400,
-      "qwen35": 78643200,
-      "qwen35moe": 32768000
-    },
-    "default": 0
   },
   "tensor_split_baseline": {
     "$comment": "Extra host baseline bytes a tensor split costs beyond a layer split, by architecture. `default` applies to an architecture not listed.",
