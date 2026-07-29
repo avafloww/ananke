@@ -27,16 +27,18 @@ impl<'a> Packer<'a> {
         layers.sort_unstable();
         let total = layers.len() as u32;
 
-        // In the sharded (tensor-split) path, llama.cpp moves ALL expert
-        // tensors to the CUDA_Host buffer regardless of the --n-cpu-moe
-        // count — the layer-count semantics of --n-cpu-moe apply to the
-        // layer-split path, not the tensor-split path where every tensor
-        // is sharded individually. So offload all expert layers here and
-        // emit --n-cpu-moe equal to the total, matching what the runtime
-        // actually does.
+        // `--n-cpu-moe N` offloads the expert tensors of the N tail-most
+        // expert layers to a CPU-mapped buffer; the corresponding attention
+        // tensors stay on GPU for every layer — confirmed by production
+        // measurements on Qwen3.6-35B-A3B (n_cpu_moe=40, 41 expert layers):
+        // physical GPU model = 2 × 1431 = 2862 MiB ≈ all attention (1837) +
+        // 1 expert layer (568) + output head (242) + nextn tensors (~215).
+        // `Layers(n)` honours the layer count; `Auto` offloads the trailing
+        // surplus that does not fit the combined GPU pool.
         let n_cpu = match self.offload_mode {
             OffloadMode::Off => 0,
-            OffloadMode::Layers(_) | OffloadMode::Auto => total,
+            OffloadMode::Layers(n) => n.min(total),
+            OffloadMode::Auto => total,
         };
         let keep = total - n_cpu;
 
@@ -84,7 +86,7 @@ impl<'a> Packer<'a> {
         // behaviour: `--n-cpu-moe N` with `--split-mode tensor` shards the
         // non-expert tensors across GPUs while moving expert tensors to the
         // CUDA_Host buffer.
-        let (n_cpu, offloaded_expert_bytes) = if self.expert_aware {
+        let (n_cpu, offloaded_total_bytes) = if self.expert_aware {
             self.sharded_expert_offload()
         } else {
             (0, 0u64)
@@ -94,11 +96,14 @@ impl<'a> Packer<'a> {
             self.fallback_on_gpu = true;
         }
 
+        // `offloaded_total_bytes` includes both expert and non-expert (attention)
+        // per-layer weights moved to CPU. Subtract from the per-layer sum so the
+        // sharded distribution only covers GPU-resident layers.
         let per_layer_sum: u64 = self
             .per_layer
             .iter()
             .sum::<u64>()
-            .saturating_sub(offloaded_expert_bytes);
+            .saturating_sub(offloaded_total_bytes);
         let per_layer_avg = per_layer_sum / n_layers;
         let non_layer = &self.estimate.non_layer;
         // The vision projector ("other") stays on the main GPU; the output head
@@ -106,13 +111,12 @@ impl<'a> Packer<'a> {
         let main_only = non_layer.other_bytes;
         // `weights_bytes` covers per-layer + non-layer + mmproj/anything else;
         // the leftover (vision projector, etc.) rides the main GPU. Subtract
-        // the offloaded expert bytes from both `per_layer_sum` and
-        // `weights_bytes` so the remainder does not re-charge them to the
-        // main GPU.
+        // the offloaded bytes from both `per_layer_sum` and `weights_bytes` so
+        // the remainder does not re-charge them to the main GPU.
         let gpu_weights = self
             .estimate
             .weights_bytes
-            .saturating_sub(offloaded_expert_bytes);
+            .saturating_sub(offloaded_total_bytes);
         let remainder = gpu_weights.saturating_sub(
             per_layer_sum + non_layer.output_head_bytes + main_only + non_layer.token_embd_bytes,
         );
