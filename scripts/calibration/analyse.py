@@ -866,6 +866,190 @@ def check_recurrent_model(rows: list[dict], tolerance_mib: float = 0.02) -> None
               "estimator/recurrent.rs and this file have drifted apart.")
 
 
+def tensor_compute_cells(rows: list[dict]) -> list[dict]:
+    """Every tensor-split cell's measured per-device compute buffer.
+
+    A tensor split reports one fused `Meta()` device whose `compute` column is
+    already one card's figure — and reads the same on one card as on two at
+    every context in the set, because llama.cpp builds the same graph on each
+    device rather than dividing one between them. That is the quantity the
+    packer must charge to each spanned GPU.
+    """
+    # `-md` loads the draft model *first*, so a drafted cell's `arch` and
+    # `n_embd` describe the four-block MTP head rather than the model whose
+    # graph was measured — which read as 92 hidden-width intermediates per
+    # token against the target's 21. The shape is taken from an undrafted cell
+    # of the same file instead.
+    shape_of: dict[str, tuple[str, int]] = {}
+    for record in rows:
+        parsed = record["parsed"]
+        if record["factors"]["draft"] or not parsed.get("n_embd"):
+            continue
+        shape_of.setdefault(record["factors"]["model"],
+                            (parsed["arch"], parsed["n_embd"]))
+
+    out = []
+    for record in rows:
+        factors, parsed = record["factors"], record["parsed"]
+        if (factors["split"] or "layer") != "tensor":
+            continue
+        if factors["flash_attn"] != "on":
+            continue
+        fused = [d for d in parsed.get("devices", [])
+                 if d["compute_mib"] and d["device"].startswith("Meta")]
+        if not fused:
+            continue
+        arch, n_embd = shape_of.get(
+            factors["model"], (parsed.get("arch", ""), parsed.get("n_embd", 0)))
+        if not n_embd:
+            continue
+        # The mask spans one stream's share of the cache: `--kv-unified`
+        # collapses the slots onto one, otherwise each slot holds its own.
+        streams = 1 if factors["kv_unified"] else max(1, factors["parallel"] or 1)
+        out.append({
+            "arch": arch,
+            "n_embd": n_embd,
+            "ubatch": factors["ubatch"] or 512,
+            "context": factors["ctx"],
+            "n_kv": factors["ctx"] // streams,
+            "quantised": factors["kv_type"] != "f16",
+            "measured_mib": max(d["compute_mib"] for d in fused),
+            "label": factors["label"],
+        })
+    return out
+
+
+# The KQ mask llama.cpp materialises per batch token, one f16 entry per cache
+# token. Read from the graph rather than fitted, and it is what makes the
+# context term of the tensor-split compute buffer exact: every architecture in
+# the set grows by 1.00 MiB per 1024 cache tokens at ubatch 512, from talkie's
+# 13B up to gemma4's 31B, which is 2 bytes and nothing else.
+MASK_BYTES_PER_TOKEN_PAIR = 2
+
+
+def _tensor_intermediates(cells: list[dict]) -> dict[str, list[tuple[float, str]]]:
+    """`K` per architecture: n_embd-wide f32 graph intermediates per batch token.
+
+    With the mask term known, what remains of a tensor-split compute buffer is
+    flat in context and exactly proportional to the batch — laguna measures
+    67, 134, 270, and 544 MiB of it at ubatch 256, 512, 1024, and 2048. Divided
+    by `n_embd x 4` it comes out dimensionless and near-integral: 12 on talkie,
+    15 on qwen3, 17 on gemma4, 22 on llama and laguna. It is a count of hidden-
+    width f32 buffers the graph holds live, so it is a property of the graph's
+    shape and transfers across model sizes within a family rather than being a
+    curve to extrapolate.
+    """
+    per_arch: dict[str, list[tuple[float, str]]] = defaultdict(list)
+    for cell in cells:
+        if cell["quantised"]:
+            continue
+        residual = (cell["measured_mib"] * 1024 ** 2 / cell["ubatch"]
+                    - MASK_BYTES_PER_TOKEN_PAIR * cell["n_kv"])
+        per_arch[cell["arch"]].append(
+            (residual / (cell["n_embd"] * 4), cell["label"]))
+    return per_arch
+
+
+def derive_tensor_intermediates(rows: list[dict]) -> str:
+    """The `K` table, plus the fallback for an architecture with no cells."""
+    per_arch = _tensor_intermediates(tensor_compute_cells(rows))
+    if not per_arch:
+        raise ValueError("no flash-attention tensor-split cells with an f16 cache")
+    _TENSOR_INTERMEDIATES.clear()
+    for arch, values in per_arch.items():
+        # Rounded up, and the worst cell within the architecture: the packer
+        # charges this to every spanned GPU and under-reserving a card OOMs.
+        _TENSOR_INTERMEDIATES[arch] = math.ceil(max(v for v, _ in values))
+    fallback = max(_TENSOR_INTERMEDIATES.values())
+    return (
+        "n_embd-wide f32 graph intermediates per batch token, from the "
+        "tensor-split compute column net of the f16 KQ mask: "
+        + ", ".join(f"{a} {v}" for a, v in sorted(_TENSOR_INTERMEDIATES.items()))
+        + f". Worst cell per architecture, rounded up. The fallback {fallback} "
+        f"is the largest, since an unmeasured architecture must not "
+        f"under-reserve."
+    )
+
+
+def derive_tensor_quantised(rows: list[dict]) -> str:
+    """Extra tensor-split compute a quantised KV cache costs, per context token.
+
+    A quantised cache is dequantised into the compute buffer, and the buffer
+    grows with the **full** context rather than with one stream's share of it:
+    Qwen3-4B at ctx 32768 shows the same absolute increase at one slot and at
+    four, where a term following the mask would have quartered. Some
+    architectures show none at all (llama, talkie), so it is a per-architecture
+    rate with a zero default rather than one number.
+    """
+    cells = tensor_compute_cells(rows)
+    intermediates = {a: math.ceil(max(v for v, _ in vs))
+                     for a, vs in _tensor_intermediates(cells).items()}
+    per_arch: dict[str, list[float]] = defaultdict(list)
+    for cell in cells:
+        if not cell["quantised"] or cell["arch"] not in intermediates:
+            continue
+        modelled = (intermediates[cell["arch"]] * cell["n_embd"] * 4
+                    + MASK_BYTES_PER_TOKEN_PAIR * cell["n_kv"])
+        residual = cell["measured_mib"] * 1024 ** 2 / cell["ubatch"] - modelled
+        per_arch[cell["arch"]].append(max(0.0, residual) / cell["context"])
+    if not per_arch:
+        raise ValueError("no tensor-split cells with a quantised cache")
+    _TENSOR_QUANTISED.clear()
+    for arch, values in per_arch.items():
+        _TENSOR_QUANTISED[arch] = math.ceil(max(values))
+    return (
+        "extra bytes per (batch token x context token) with a quantised cache: "
+        + ", ".join(f"{a} {v}" for a, v in sorted(_TENSOR_QUANTISED.items()))
+        + ". Worst cell per architecture. The default is 0: llama and talkie "
+        "measure no increase at all, so an unmeasured architecture is charged "
+        "nothing here rather than inheriting a rate that may not apply to its "
+        "graph."
+    )
+
+
+def derive_tensor_shadow(rows: list[dict]) -> str:
+    """VRAM each device holds that llama.cpp cannot attribute, by architecture.
+
+    The CUDA context, cuBLAS workspaces, and the driver's own per-process
+    bookkeeping. It shows up as the `unaccounted` column, which is only a
+    per-device figure on a **single-device** run: with two cards a tensor split
+    reports one fused device whose total is summed across both, so the same
+    column reads 23 GiB there and means something else entirely.
+
+    So it is derived from single-device cells only, and taken as the worst
+    within each architecture rather than the typical one — the packer charges
+    it to every spanned GPU and under-reserving a card OOMs the load. The
+    spread across architectures is real (deepseek4 holds 468 MiB against
+    qwen3's 345), which is why it is a table and not a constant.
+
+    The layer-split curves fold the same quantity into their own fit; this
+    table exists because the tensor-split model deliberately does not, the
+    compute column being the only part of that fused row that survives.
+    """
+    per_arch: dict[str, list[int]] = defaultdict(list)
+    for record in rows:
+        factors, parsed = record["factors"], record["parsed"]
+        if len(factors["gpus"].split(",")) != 1:
+            continue
+        for device in parsed.get("devices", []):
+            if device["unaccounted_mib"]:
+                per_arch[parsed["arch"]].append(device["unaccounted_mib"])
+    if not per_arch:
+        raise ValueError("no single-device cell reports an unaccounted remainder")
+    _TENSOR_SHADOW.clear()
+    for arch, values in per_arch.items():
+        _TENSOR_SHADOW[arch] = max(values) * 1024 * 1024
+    return (
+        "worst `unaccounted` column per architecture across single-device rows: "
+        + ", ".join(f"{a} {v // 1024 // 1024} MiB"
+                    for a, v in sorted(_TENSOR_SHADOW.items()))
+        + ". Single-device only: a fused tensor-split row sums the column "
+        "across cards and reads in the thousands. Reconciles the production "
+        "Qwen3.6-35B-A3B cell, whose driver total exceeds its accounted terms "
+        "by 356 MiB per card against the 355 its architecture measures here."
+    )
+
+
 def derive_spec_rollback_depth(rows: list[dict]) -> tuple[int, str]:
     """How many extra copies of the recurrent state speculative decoding holds.
 
@@ -1235,6 +1419,7 @@ def derive_offload_min_batch(rows: list[dict]) -> tuple[int, str]:
 KINDS = {
     # Read from llama.cpp's source or arithmetic over the graph; not fitted.
     "KV_CACHE_PAD": "structural",
+    "TENSOR_MASK_BYTES_PER_TOKEN_PAIR": "structural",
     # A runtime's documented default, mirrored so the reservation and the
     # runtime's own cap are the same number.
     "DEFAULT_CACHE_RAM_MB": "policy",
@@ -1681,6 +1866,10 @@ def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]
     return out
 
 
+_TENSOR_INTERMEDIATES: dict[str, int] = {}
+_TENSOR_QUANTISED: dict[str, int] = {}
+_TENSOR_SHADOW: dict[str, int] = {}
+
 _SAME_SITTING_SECONDS = 3600
 
 
@@ -1700,17 +1889,31 @@ CURVE_MARGIN = 1.0
 
 
 def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
-                 e_variant: bool | None = None):
+                 e_variant: bool | None = None, split: str = "layer"):
     """Fit one architecture's compute curve to what it actually needed.
 
-    The target is llama.cpp's own `compute` column plus its `unaccounted`
-    remainder — the CUDA context and whatever else sits outside its books —
-    since that is what the packer must cover beyond weights and KV.
+    Under a layer split the target is llama.cpp's own `compute` column plus its
+    `unaccounted` remainder — the CUDA context and whatever else sits outside
+    its books — since that is what the packer must cover beyond weights and KV.
 
-    Two exclusions matter. Tensor-split cells report a single fused `Meta()`
-    device whose unaccounted remainder is an artifact of that representation,
-    14 GiB of it, and would dominate any fit. And only the calibration batch
-    is used, because the slope is scaled by batch at the point of use.
+    Under a **tensor** split the target is the `compute` column alone. That
+    split reports one fused `Meta()` device whose `total`, `free`, and `self`
+    are summed across cards while `model`, `kv`, and `compute` are one card's
+    share, so its `unaccounted` remainder is not a per-device figure at all —
+    23 GiB of it on the gemma4 production cell. The genuine per-device
+    remainder is derived separately as
+    `TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB` and charged beside the curve, which
+    keeps two quantities that were measured differently from being fitted as
+    one.
+
+    The compute column itself, unlike the remainder, is directly comparable:
+    it reads the same on one card as on two at every context measured, because
+    llama.cpp builds the same graph on each device rather than dividing one.
+    That is also why the sharded packer charges this curve *per* spanned GPU
+    instead of splitting it between them.
+
+    Only the calibration batch feeds the main fit, because the slope is scaled
+    by batch at the point of use.
     """
     def deriver(rows: list[dict]) -> tuple[int, str]:
         # Collect per-run average (compute + unaccounted) / n_gpus at each
@@ -1729,7 +1932,7 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
                 continue
             if factors["spec_type"] or factors["flash_attn"] != "on":
                 continue
-            if (factors["split"] or "layer") != "layer":
+            if (factors["split"] or "layer") != split:
                 continue
             # All kv_types are included: the curve must cover the worst-case
             # cell at each context, which is often a quantised-cache run.
@@ -1737,12 +1940,22 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
             # because it was absorbed into the curves this way — a quantised
             # cache *reduces* total VRAM (smaller KV outweighs the compute
             # increase), so a separate charge double-counted.
-            devs = [d for d in parsed["devices"]
-                    if d["compute_mib"] and not d["device"].startswith("Meta")]
-            if not devs:
-                continue
-            total = sum(d["compute_mib"] + d["unaccounted_mib"] for d in devs)
-            per_dev = total / len(devs)
+            if split == "tensor":
+                # One fused `Meta()` row, whose compute column is already a
+                # per-device figure. Its own `unaccounted` is not, so it is
+                # left out and carried by the shadow constant instead.
+                devs = [d for d in parsed["devices"]
+                        if d["compute_mib"] and d["device"].startswith("Meta")]
+                if not devs:
+                    continue
+                per_dev = max(d["compute_mib"] for d in devs)
+            else:
+                devs = [d for d in parsed["devices"]
+                        if d["compute_mib"] and not d["device"].startswith("Meta")]
+                if not devs:
+                    continue
+                total = sum(d["compute_mib"] + d["unaccounted_mib"] for d in devs)
+                per_dev = total / len(devs)
             by_ctx_ub[(factors["ctx"], factors["ubatch"])].append(per_dev)
         # Group by context at the calibration batch (ub=512) for the main fit.
         # Use the max per-run average at each context: the packer charges the
@@ -1825,15 +2038,22 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
         # addition, which can lose up to 1 MiB per term versus the float
         # fit. This is a rounding correction, not a fudge factor.
         base += 1
+        target = ("max per-device compute column" if split == "tensor"
+                  else "max per-run average (compute + unaccounted) / n_gpus")
+        tail = ("The unaccounted remainder is excluded and derived separately as "
+                "TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it "
+                "across cards, so it is not a per-device figure."
+                if split == "tensor" else
+                "Tensor-split cells are excluded: they report one fused device "
+                "whose unaccounted remainder is an artifact of that "
+                "representation.")
         evidence = (
-            f"least-squares fit of max per-run average (compute + unaccounted) "
-            f"/ n_gpus to base + base_batch + slope*(ctx/1024), across "
-            f"{sum(len(v) for v in by_ctx.values())} layer-split cells at ctx "
+            f"least-squares fit of {target} to base + base_batch + "
+            f"slope*(ctx/1024), across "
+            f"{sum(len(v) for v in by_ctx.values())} {split}-split cells at ctx "
             f"{ctx_points[0]}-{ctx_points[-1]} (ub 512, all kv_types). "
             f"Intercept raised to cover the worst point at every context. "
-            f"Base_batch from {len(batch_only)} larger-ubatch cells. "
-            f"Tensor-split cells are excluded: they report one fused device "
-            f"whose unaccounted remainder is an artifact of that representation.")
+            f"Base_batch from {len(batch_only)} larger-ubatch cells. {tail}")
         return base, evidence, slope, base_batch_mib
     return deriver
 
@@ -1913,6 +2133,7 @@ CURVE_DERIVERS = {
     "qwen3": derive_curve(("qwen3",)),
     "default": derive_curve(("llama", "qwen3")),
 }
+
 
 # The MTP overhead model carries both an affine KV term (intercept + slope × ctx,
 # constant across slots) and a per-slot overhead + base. This replaces the
@@ -2059,6 +2280,23 @@ def check_table_signs(document: dict) -> None:
             )
 
 
+def curve_entry(section: dict, key: str) -> dict | None:
+    """The curve-table entry a deriver key names, or `None` if absent.
+
+    `default` is the fallback entry; `arch@variant` is the variant-guarded one;
+    a bare architecture name is the *unguarded* entry, since a variant-guarded
+    one describes a different graph and is fitted separately.
+    """
+    if key == "default":
+        return section["default"]
+    if "@" in key:
+        name, variant = key.split("@", 1)
+        return next((e for e in section["entries"]
+                     if name in e["archs"] and e.get("variant") == variant), None)
+    return next((e for e in section["entries"]
+                 if key in e["archs"] and not e.get("variant")), None)
+
+
 def emit(rows: list[dict], path: Path, check: bool) -> int:
     """Regenerate `tuning.json`, or verify the committed one against the data.
 
@@ -2099,6 +2337,13 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         derive_per_slot_bytes(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"per-slot host bytes: cannot derive — {error}")
+    for name, table_deriver in (("tensor compute intermediates", derive_tensor_intermediates),
+                                ("tensor quantised-cache rates", derive_tensor_quantised),
+                                ("tensor per-device shadow", derive_tensor_shadow)):
+        try:
+            table_deriver(rows)
+        except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+            failed.append(f"{name}: cannot derive — {error}")
     try:
         derive_no_flash_attn_rates(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError, Disagreement) as error:
@@ -2136,17 +2381,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         entry["kind"] = "derived"
 
     for arch, deriver in CURVE_DERIVERS.items():
-        if arch == "default":
-            entry = document["compute_buffer_curves"]["default"]
-        elif "@" in arch:
-            name, variant = arch.split("@", 1)
-            entry = next((e for e in document["compute_buffer_curves"]["entries"]
-                          if name in e["archs"] and e.get("variant") == variant), None)
-        else:
-            # The *unguarded* entry for this architecture: a variant-guarded
-            # one describes a different graph and is fitted separately.
-            entry = next((e for e in document["compute_buffer_curves"]["entries"]
-                          if arch in e["archs"] and not e.get("variant")), None)
+        entry = curve_entry(document["compute_buffer_curves"], arch)
         if entry is None:
             failed.append(f"{arch}: curve deriver has no matching entry")
             continue
@@ -2167,6 +2402,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         entry["slope_mib_per_1k"] = slope
         entry["slope_scales_with_ubatch"] = True
         entry["evidence"] = evidence
+
 
     for name, entry in constants.items():
         if name in DERIVERS:
@@ -2226,6 +2462,41 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "belongs in the packer's slop, beside the prompt cache.",
             "default": max(_PER_SLOT.values()),
             "by_arch": dict(sorted(_PER_SLOT.items())),
+        }
+    if _TENSOR_INTERMEDIATES:
+        document["tensor_compute_intermediates"] = {
+            "$comment": "n_embd-wide f32 graph intermediates a tensor split "
+                        "holds live per batch token, by architecture. The "
+                        "whole per-device compute buffer is `ubatch x (this x "
+                        "n_embd x 4 + 2 x n_kv + quantised_rate x context)`; "
+                        "the 2-byte term is the f16 KQ mask, read from the "
+                        "graph rather than fitted. `default` is the largest, "
+                        "so an unmeasured architecture over-reserves rather "
+                        "than OOMs.",
+            "default": max(_TENSOR_INTERMEDIATES.values()),
+            "by_arch": dict(sorted(_TENSOR_INTERMEDIATES.items())),
+        }
+    if _TENSOR_QUANTISED:
+        document["tensor_compute_quantised_rates"] = {
+            "$comment": "Extra tensor-split compute bytes per (batch token x "
+                        "context token) when the KV cache is quantised, by "
+                        "architecture. It follows the full context, not one "
+                        "stream's share: Qwen3-4B shows the same absolute "
+                        "increase at one slot and at four. `default` is 0 "
+                        "because llama and talkie measure no increase at all.",
+            "default": 0,
+            "by_arch": dict(sorted(_TENSOR_QUANTISED.items())),
+        }
+    if _TENSOR_SHADOW:
+        document["tensor_compute_shadow_bytes"] = {
+            "$comment": "Per-device VRAM llama.cpp cannot attribute — CUDA "
+                        "context, cuBLAS workspaces, driver bookkeeping — by "
+                        "architecture, from single-device cells where the "
+                        "`unaccounted` column is still a per-device figure. "
+                        "Charged beside the tensor-split compute model, which "
+                        "excludes it.",
+            "default": max(_TENSOR_SHADOW.values()),
+            "by_arch": dict(sorted(_TENSOR_SHADOW.items())),
         }
     if _NO_FA_RATES:
         document["no_flash_attn_rates"] = {

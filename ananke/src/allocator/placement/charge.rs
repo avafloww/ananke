@@ -344,14 +344,21 @@ mod tests {
         // Absolute, for the reason given in the layer-path test above: the
         // five terms are rounded and charged separately, and a difference
         // assertion cannot tell a doubled term from a correct one.
+        //
+        // The compute buffer appears once *per card*, unlike the weights and
+        // the KV: llama.cpp builds the same graph on every device under a
+        // tensor split rather than dividing one between them, so a two-card
+        // span pays it twice. That is the whole point of
+        // [`crate::estimator::compute_buffer::tensor_split_per_device`] being a
+        // per-device figure.
         let weights = 20 * 200 * MIB;
-        let compute = est.compute_buffer_mb as u64 * MIB;
+        let compute = est.compute_buffer_mb as u64 * MIB * 2;
         let fudge = 200 * MIB;
         assert_eq!(
             packed.rolling.uncorrected_vram_bytes,
             weights + compute,
-            "the prediction is the weights and the compute buffer, summed \
-             back across both shards"
+            "the prediction is the weights and both cards' compute buffers, \
+             summed back across the shards"
         );
         assert_eq!(
             gpu_total(&packed),

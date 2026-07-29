@@ -24,7 +24,17 @@
 //! `estimation.compute_buffer_mb`, which short-circuits this table.
 
 use crate::{
-    estimator::tuning::{CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR},
+    config::validate::SplitMode,
+    estimator::{
+        tuning::{
+            CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR,
+            TENSOR_COMPUTE_INTERMEDIATES, TENSOR_COMPUTE_INTERMEDIATES_DEFAULT,
+            TENSOR_COMPUTE_QUANTISED_RATE_DEFAULT, TENSOR_COMPUTE_QUANTISED_RATES,
+            TENSOR_COMPUTE_SHADOW_BYTES, TENSOR_COMPUTE_SHADOW_BYTES_DEFAULT,
+            TENSOR_MASK_BYTES_PER_TOKEN_PAIR,
+        },
+        types::EstimatorInputs,
+    },
     gguf::GgufSummary,
 };
 
@@ -145,6 +155,137 @@ pub fn default_for_inputs(
     flash_attn: bool,
     streams: u32,
     _quantised_kv: bool,
+) -> u32 {
+    layer_split_per_device(summary, context, ubatch, flash_attn, streams)
+}
+
+/// Per-device compute buffer, choosing the model that matches how llama.cpp
+/// will split the model across devices.
+///
+/// The two splits build genuinely different graphs and the gap is not a scale
+/// factor: at ctx 32768 gemma4 needs 212 MiB per device sharded against 337
+/// layer-split, while laguna needs 166 against 558. Neither figure predicts the
+/// other, so each split has its own model — and the sharded packer charges the
+/// result to *every* spanned GPU rather than dividing it, because llama.cpp
+/// builds the same graph on each device. The measured compute column reads
+/// identically on one card and on two at every context in the dataset.
+pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u32 {
+    if let Some(mb) = inputs.compute_buffer_mb {
+        return mb;
+    }
+    let flash_attn = inputs.flash_attn.unwrap_or(true);
+    match inputs.split_mode {
+        SplitMode::Tensor | SplitMode::Row => tensor_split_per_device(
+            summary,
+            inputs.context,
+            inputs.ubatch,
+            flash_attn,
+            inputs.streams(),
+            crate::estimator::host_buffer::quantised_kv(inputs),
+        ),
+        SplitMode::Layer => layer_split_per_device(
+            summary,
+            inputs.context,
+            inputs.ubatch,
+            flash_attn,
+            inputs.streams(),
+        ),
+    }
+}
+
+/// Per-device compute buffer under `--split-mode tensor`, from the model's own
+/// hyperparameters rather than from a fitted curve.
+///
+/// Three terms, each measured to be exactly what it claims:
+///
+/// - **Graph intermediates.** `K × n_embd × 4` bytes per batch token, where `K`
+///   counts the hidden-width f32 buffers the graph holds live. Flat in context
+///   and exactly proportional to the batch — laguna measures 67, 134, 270, and
+///   544 MiB of it at ubatch 256, 512, 1024, and 2048. `K` is the one fitted
+///   quantity, dimensionless and near-integral (12 on talkie, 15 on qwen3, 21
+///   on gemma4, 22 on llama), so it transfers across model sizes within a
+///   family instead of being a curve to extrapolate.
+/// - **The KQ mask.** Two bytes — one f16 entry — per (batch token, cache
+///   token). Read from the graph, not fitted, and it is why every architecture
+///   in the set grows by exactly 1.00 MiB per 1024 cache tokens at ubatch 512.
+///   The cache in question is one *stream's*, so `--kv-unified` widens it and
+///   `--parallel` without unification divides it.
+/// - **Quantised-cache dequantisation.** Zero on an f16 cache. It follows the
+///   **full** context rather than one stream's share: Qwen3-4B at ctx 32768
+///   shows the same absolute increase at one slot as at four, where a term
+///   following the mask would have quartered.
+///
+/// Reproduces all three production tensor-split cells within 37 to 60 MiB per
+/// device, over-reserving in every case.
+pub fn tensor_split_per_device(
+    summary: &GgufSummary,
+    context: u32,
+    ubatch: Option<u32>,
+    flash_attn: bool,
+    streams: u32,
+    quantised_kv: bool,
+) -> u32 {
+    let arch = summary.architecture.as_str();
+    let batch = u64::from(ubatch.unwrap_or(DEFAULT_UBATCH).max(1));
+    let n_embd = summary
+        .metadata
+        .get(&smol_str::SmolStr::new(format!("{arch}.embedding_length")))
+        .and_then(|v| v.as_u32())
+        .map(u64::from)
+        .unwrap_or(0);
+    let intermediates = rate(
+        TENSOR_COMPUTE_INTERMEDIATES,
+        arch,
+        TENSOR_COMPUTE_INTERMEDIATES_DEFAULT,
+    );
+    let quantised_rate = if quantised_kv {
+        rate(
+            TENSOR_COMPUTE_QUANTISED_RATES,
+            arch,
+            TENSOR_COMPUTE_QUANTISED_RATE_DEFAULT,
+        )
+    } else {
+        0
+    };
+    let n_kv = u64::from(context / streams.max(1));
+    let per_token = intermediates * n_embd * F32_BYTES
+        + TENSOR_MASK_BYTES_PER_TOKEN_PAIR * n_kv
+        + quantised_rate * u64::from(context);
+    let shadow = rate(
+        TENSOR_COMPUTE_SHADOW_BYTES,
+        arch,
+        TENSOR_COMPUTE_SHADOW_BYTES_DEFAULT,
+    );
+    let bytes = batch * per_token + shadow;
+    let mib = (bytes / (1024 * 1024)).min(u64::from(u32::MAX)) as u32;
+    // The unfused-attention score matrix is the same quantity under either
+    // split and dwarfs everything above when it exists at all.
+    mib.saturating_add(no_flash_attn_mib(
+        summary,
+        context / streams.max(1),
+        batch as u32,
+        flash_attn,
+    ))
+}
+
+/// The per-architecture rate for `arch`, or the fallback.
+fn rate(table: &[(&str, u64)], arch: &str, fallback: u64) -> u64 {
+    table
+        .iter()
+        .find(|(a, _)| *a == arch)
+        .map(|(_, v)| *v)
+        .unwrap_or(fallback)
+}
+
+const F32_BYTES: u64 = 4;
+
+/// Per-device compute buffer under a layer split, from the fitted curves.
+fn layer_split_per_device(
+    summary: &GgufSummary,
+    context: u32,
+    ubatch: Option<u32>,
+    flash_attn: bool,
+    streams: u32,
 ) -> u32 {
     let batch = ubatch.unwrap_or(DEFAULT_UBATCH);
     let t = tuning_for(summary, batch);
@@ -322,6 +463,104 @@ mod tests {
             "E-variant cb should be strictly lower than regular gemma4 \
              (e={e_variant} regular={regular})"
         );
+    }
+
+    /// A summary carrying just the hidden size, which is all the tensor-split
+    /// compute model reads from the file.
+    fn sized_summary(arch: &str, n_embd: u32) -> GgufSummary {
+        let mut summary = summary_for(arch);
+        summary.metadata.insert(
+            SmolStr::new(format!("{arch}.embedding_length")),
+            crate::gguf::types::GgufValue::U32(n_embd),
+        );
+        summary
+    }
+
+    /// Every production tensor-split cell, against the figure llama.cpp
+    /// actually reserved on each card.
+    ///
+    /// These are the three configurations the model has to get right, and none
+    /// of them resembles a calibration cell: two run a quantised cache at a
+    /// context an order of magnitude past the sweep, one runs four slots
+    /// against a unified cache. Covering them by 37 to 60 MiB is the whole
+    /// claim, so it is pinned rather than left to the campaign scripts.
+    #[test]
+    fn tensor_model_covers_every_production_cell() {
+        // (arch, n_embd, context, streams, quantised, measured per-device MiB)
+        let cells = [
+            // prod-qwen36-35b-a3b: ctx 524288, 2 slots, no unification, q8_0.
+            ("qwen35moe", 2048, 524288u32, 2u32, true, 1332u32),
+            // prod-qwen36-27b: ctx 360448 after rounding, 2 slots, q8_0.
+            ("qwen35", 5120, 360448, 2, true, 1664),
+            // prod-gemma4-31b-qat: ctx 240000, 4 slots sharing a unified
+            // cache, f16.
+            ("gemma4", 5376, 240000, 1, false, 418),
+        ];
+        for (arch, n_embd, context, streams, quantised, measured) in cells {
+            let got = tensor_split_per_device(
+                &sized_summary(arch, n_embd),
+                context,
+                None,
+                true,
+                streams,
+                quantised,
+            );
+            assert!(
+                got >= measured,
+                "{arch} at ctx {context} must cover the measured {measured} MiB, got {got}"
+            );
+            // The shadow term alone is ~360-400 MiB, so a bound much tighter
+            // than this would be pinning the shadow rather than the model.
+            assert!(
+                got <= measured + 512,
+                "{arch} at ctx {context} over-reserves: {got} against {measured} MiB"
+            );
+        }
+    }
+
+    /// The context term is the f16 KQ mask and nothing else: two bytes per
+    /// (batch token, cache token), which is 1.00 MiB per 1024 cache tokens at
+    /// the calibration batch. Every architecture measured grows at exactly
+    /// that rate, from talkie's 13B to gemma4's 31B, which is why the term is
+    /// read from the graph instead of fitted per architecture.
+    #[test]
+    fn the_tensor_context_slope_is_one_mib_per_1k_at_the_default_batch() {
+        for arch in ["talkie", "qwen3", "qwen35", "gemma4", "llama"] {
+            let at = |context: u32| {
+                tensor_split_per_device(&sized_summary(arch, 4096), context, None, true, 1, false)
+            };
+            assert_eq!(
+                at(65536) - at(32768),
+                32,
+                "{arch}: 32768 more cache tokens must cost 32 MiB"
+            );
+        }
+    }
+
+    /// Flat in context and exactly proportional to the batch — laguna measures
+    /// 67, 134, 270, and 544 MiB of graph intermediates at ubatch 256, 512,
+    /// 1024, and 2048. The mask scales with the batch too, so the whole
+    /// per-device figure does, net of the flat shadow.
+    #[test]
+    fn the_tensor_model_scales_with_the_batch() {
+        let s = sized_summary("laguna", 3072);
+        let net = |ubatch: u32| {
+            let shadow = rate(
+                TENSOR_COMPUTE_SHADOW_BYTES,
+                "laguna",
+                TENSOR_COMPUTE_SHADOW_BYTES_DEFAULT,
+            ) / (1024 * 1024);
+            u64::from(tensor_split_per_device(
+                &s,
+                32768,
+                Some(ubatch),
+                true,
+                1,
+                false,
+            )) - shadow
+        };
+        assert_eq!(net(1024), net(512) * 2);
+        assert_eq!(net(2048), net(512) * 4);
     }
 
     #[test]

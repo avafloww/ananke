@@ -157,6 +157,27 @@ fn generate_tuning_constants() {
     ));
     out.push_str(&generate_rate_table(
         &parsed,
+        "tensor_compute_intermediates",
+        "TENSOR_COMPUTE_INTERMEDIATES",
+        "TENSOR_COMPUTE_INTERMEDIATES_DEFAULT",
+        "n_embd-wide f32 graph intermediates a tensor split holds live per batch\n/// token, by architecture.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
+        "tensor_compute_quantised_rates",
+        "TENSOR_COMPUTE_QUANTISED_RATES",
+        "TENSOR_COMPUTE_QUANTISED_RATE_DEFAULT",
+        "Extra tensor-split compute bytes per (batch token x context token) when\n/// the KV cache is quantised, by architecture.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
+        "tensor_compute_shadow_bytes",
+        "TENSOR_COMPUTE_SHADOW_BYTES",
+        "TENSOR_COMPUTE_SHADOW_BYTES_DEFAULT",
+        "Per-device VRAM llama.cpp cannot attribute — CUDA context, cuBLAS\n/// workspaces, driver bookkeeping — by architecture.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
         "no_flash_attn_rates",
         "NO_FLASH_ATTN_RATES",
         "NO_FLASH_ATTN_RATE_DEFAULT",

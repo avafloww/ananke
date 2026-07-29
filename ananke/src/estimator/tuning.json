@@ -377,6 +377,13 @@
       "kind": "derived",
       "type": "u64",
       "value": 3
+    },
+    "TENSOR_MASK_BYTES_PER_TOKEN_PAIR": {
+      "doc": "Bytes of KQ mask llama.cpp materialises per (batch token, cache token):\n/// one f16 entry. Read from the graph, not fitted.",
+      "evidence": "every architecture measured grows by 1.00 MiB per 1024 cache tokens at ubatch 512, from talkie's 13B to gemma4's 31B, which is 2 bytes and nothing else.",
+      "kind": "structural",
+      "type": "u64",
+      "value": 2
     }
   },
   "dataset": "scripts/calibration/data/measurements.ndjson",
@@ -440,6 +447,108 @@
       "talkie": 164
     },
     "default": 6144
+  },
+  "tensor_compute_curves": {
+    "$comment": "Per-device compute buffer under `--split-mode tensor`, charged to every spanned GPU rather than divided between them: llama.cpp builds the same graph on each device, and the measured compute column reads identically on one card and on two at every context in the set. Same shape and same architecture grouping as `compute_buffer_curves`, fitted against tensor cells. An architecture absent here uses `default`.",
+    "default": {
+      "base_batch_mib": 0,
+      "base_mib": 229,
+      "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 41 tensor-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 0 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
+      "slope_mib_per_1k": 1,
+      "slope_scales_with_ubatch": true
+    },
+    "entries": [
+      {
+        "archs": [
+          "gemma2",
+          "gemma3",
+          "gemma4"
+        ],
+        "base_batch_mib": 0,
+        "base_mib": 355,
+        "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 38 tensor-split cells at ctx 8192-131072 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 0 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
+        "slope_mib_per_1k": 1,
+        "slope_scales_with_ubatch": true,
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen3"
+        ],
+        "base_batch_mib": 0,
+        "base_mib": 159,
+        "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 33 tensor-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 0 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
+        "slope_mib_per_1k": 1,
+        "slope_scales_with_ubatch": true,
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen35"
+        ],
+        "base_batch_mib": 0,
+        "base_mib": 218,
+        "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 14 tensor-split cells at ctx 8192-131072 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 0 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
+        "slope_mib_per_1k": 1,
+        "slope_scales_with_ubatch": true,
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen35moe"
+        ],
+        "base_batch_mib": 67,
+        "base_mib": 58,
+        "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 13 tensor-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 2 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
+        "slope_mib_per_1k": 1,
+        "slope_scales_with_ubatch": true,
+        "variant": null
+      }
+    ]
+  },
+  "tensor_compute_intermediates": {
+    "$comment": "n_embd-wide f32 graph intermediates a tensor split holds live per batch token, by architecture. The whole per-device compute buffer is `ubatch x (this x n_embd x 4 + 2 x n_kv + quantised_rate x context)`; the 2-byte term is the f16 KQ mask, read from the graph rather than fitted. `default` is the largest, so an unmeasured architecture over-reserves rather than OOMs.",
+    "by_arch": {
+      "gemma3": 15,
+      "gemma4": 21,
+      "laguna": 23,
+      "llama": 22,
+      "qwen3": 15,
+      "qwen35": 14,
+      "qwen35moe": 25,
+      "talkie": 12
+    },
+    "default": 25
+  },
+  "tensor_compute_quantised_rates": {
+    "$comment": "Extra tensor-split compute bytes per (batch token x context token) when the KV cache is quantised, by architecture. It follows the full context, not one stream's share: Qwen3-4B shows the same absolute increase at one slot and at four. `default` is 0 because llama and talkie measure no increase at all.",
+    "by_arch": {
+      "gemma3": 9,
+      "gemma4": 8,
+      "laguna": 6,
+      "llama": 0,
+      "qwen3": 5,
+      "qwen35": 8,
+      "qwen35moe": 4,
+      "talkie": 0
+    },
+    "default": 0
+  },
+  "tensor_compute_shadow_bytes": {
+    "$comment": "Per-device VRAM llama.cpp cannot attribute \u2014 CUDA context, cuBLAS workspaces, driver bookkeeping \u2014 by architecture, from single-device cells where the `unaccounted` column is still a per-device figure. Charged beside the tensor-split compute model, which excludes it.",
+    "by_arch": {
+      "deepseek4": 490733568,
+      "gemma3": 375390208,
+      "gemma4": 402653184,
+      "laguna": 379584512,
+      "lfm2": 365953024,
+      "llama": 363855872,
+      "qwen3": 361758720,
+      "qwen35": 416284672,
+      "qwen35moe": 375390208,
+      "talkie": 367001600
+    },
+    "default": 490733568
   },
   "tensor_split_baseline": {
     "$comment": "Extra host baseline bytes a tensor split costs beyond a layer split, by architecture. `default` applies to an architecture not listed.",

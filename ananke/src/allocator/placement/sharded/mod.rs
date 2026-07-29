@@ -124,7 +124,15 @@ impl<'a> Packer<'a> {
             .estimate
             .kv_per_token
             .saturating_mul(self.estimate.context as u64);
-        let compute_total = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
+        // Charged to every spanned GPU, not divided between them: llama.cpp
+        // builds the same graph on each device under a tensor split rather than
+        // splitting one, and its reported compute buffer reads identically on
+        // one card and on two at every context measured. Dividing it under-
+        // reserved every card by a factor of the GPU count —
+        // Qwen3.6-35B-A3B needs 1332 MiB *per* card where the estimate pledged
+        // 685 across both. See
+        // [`crate::estimator::compute_buffer::tensor_split_per_device`].
+        let compute_per_gpu = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
         let fudge_total = ONE_LAYER_FUDGE_MULTIPLIER * (per_layer_avg + kv_total / n_layers);
 
         // Default weights give the historical equal split; explicit weights are
@@ -168,7 +176,6 @@ impl<'a> Packer<'a> {
             &tensor_split,
             ratio_sum,
         );
-        let compute_shares = integer_shares(compute_total, &tensor_split, ratio_sum);
         let fudge_shares = integer_shares(fudge_total, &tensor_split, ratio_sum);
 
         if non_layer.token_embd_bytes > 0 {
@@ -181,7 +188,7 @@ impl<'a> Packer<'a> {
         for (idx, &gpu) in gpus.iter().enumerate() {
             let mut weight_bytes =
                 weights_shares[idx] + output_head_shares[idx] + mtp_weight_shares[idx];
-            let runtime_bytes = kv_shares[idx] + mtp_runtime_shares[idx] + compute_shares[idx];
+            let runtime_bytes = kv_shares[idx] + mtp_runtime_shares[idx] + compute_per_gpu;
             if gpu == main {
                 weight_bytes += main_only + remainder;
             }
