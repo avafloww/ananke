@@ -18,6 +18,11 @@ use crate::{
 pub fn hardcoded_swa_group_size(arch: &str) -> Option<u32> {
     match arch {
         "gemma2" | "gemma3" => Some(6),
+        // Laguna-S: 1:3 global:SWA pattern across all layers (every 4th is
+        // global), confirmed by measured KV at ctx 32768: 12 full-attention
+        // layers + 36 SWA layers (window 512) reproduces the 1680 MiB
+        // reading within 4%.
+        "laguna" => Some(4),
         _ => None,
     }
 }

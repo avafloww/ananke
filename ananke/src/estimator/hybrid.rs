@@ -35,7 +35,11 @@ pub fn is_hybrid(arch: &str) -> bool {
 /// the rest use SSM with constant per-layer state.
 ///
 /// Returns `kv_per_token` so the caller can multiply by context to
-/// recover total KV bytes.
+/// recover total KV bytes. The SSM layers' constant per-slot state is
+/// folded in as a per-token equivalent (`ssm_state / context`) so the
+/// downstream `kv_per_token × context` recovers
+/// `attention_kv + ssm_state_per_slot`, matching what llama.cpp allocates
+/// and reports in its memory breakdown.
 pub fn kv_for_hybrid(
     summary: &GgufSummary,
     arch: &str,
@@ -74,12 +78,58 @@ pub fn kv_for_hybrid(
         .max(1);
     let kv_layer_count = (n_layers / full_attention_interval) as u64;
 
-    if kv_layer_count > 0 && n_kv_heads > 0 {
+    let attention_kv = if kv_layer_count > 0 && n_kv_heads > 0 {
         let per_layer_bytes_kv =
             n_kv_heads * ((key_length as f64 * bytes_k) + (value_length as f64 * bytes_v)) as u64;
         kv_layer_count * per_layer_bytes_kv
     } else {
         0
+    };
+
+    // SSM layers carry constant per-slot state that llama.cpp allocates
+    // alongside the KV cache and reports in the same "context" memory
+    // bucket. The state is `d_inner × (d_conv + d_state)` f32 bytes per
+    // SSM layer per slot, but the GGUF does not expose `d_inner`, `d_conv`,
+    // or `d_state` — they are baked into llama.cpp's code. The measured
+    // per-slot overhead is 208 MiB on qwen35 (49 SSM layers, n_embd 5120)
+    // and 62 MiB on qwen35moe (31 SSM layers, n_embd 2048), both constant
+    // across contexts and cache types. Modelled here as a per-architecture
+    // constant per SSM layer, scaled by `n_embd` relative to the
+    // calibration point.
+    let ssm_layer_count = n_layers as u64 - kv_layer_count;
+    let ssm_state_per_slot = if ssm_layer_count > 0 {
+        ssm_state_per_layer_bytes(arch) * ssm_layer_count
+    } else {
+        0
+    };
+
+    // Fold the per-slot SSM state into the per-token figure so
+    // `kv_per_token × context` recovers `attention_kv + ssm_state_per_slot`.
+    let context = inputs.context as u64;
+    attention_kv + ssm_state_per_slot.checked_div(context).unwrap_or(0)
+}
+
+/// Per-slot SSM state for a hybrid architecture, in bytes.
+///
+/// The GGUF does not expose the SSM state dimensions (`d_inner`, `d_conv`,
+/// `d_state`); they are baked into llama.cpp's model code. The measured
+/// per-slot overhead is constant across contexts and cache types:
+///
+/// - qwen35 (Qwen3.6-27B): 208 MiB for 49 SSM layers (n_embd 5120).
+/// - qwen35moe (Qwen3.6-35B-A3B): 62 MiB for 31 SSM layers (n_embd 2048).
+///
+/// The per-layer state (`d_inner × (d_conv + d_state) × sizeof(f32)`) is not
+/// cleanly proportional to `n_embd` across the two architectures (4347 vs
+/// 2048 KiB/layer), so a per-architecture constant is used rather than a
+/// formula. An unknown hybrid architecture returns zero — the SSM state will
+/// be under-predicted, but the rolling correction can absorb it.
+fn ssm_state_per_layer_bytes(arch: &str) -> u64 {
+    match arch {
+        // 208 MiB / 49 SSM layers = 4347 KiB/layer.
+        "qwen35" => 4347 * 1024,
+        // 62 MiB / 31 SSM layers = 2048 KiB/layer.
+        "qwen35moe" => 2048 * 1024,
+        _ => 0,
     }
 }
 
@@ -240,13 +290,16 @@ mod tests {
 
     #[test]
     fn qwen35_kv_scales_with_full_attention_interval() {
-        // 64 layers, interval=4 → 16 attention layers.
-        // Per-layer KV: 4 heads × (128+128) × 2 bytes (f16) = 2048 bytes.
-        // kv_per_token = 16 × 2048 = 32768.
+        // 64 layers, interval=4 → 16 attention layers, 48 SSM layers.
+        // Attention KV: 16 × 4 heads × (128+128) × 2 bytes (f16) = 32768
+        //   bytes/token.
+        // SSM state: 4347 KiB/layer × 48 layers = 213663744 bytes per slot.
+        //   Folded into per-token at ctx 4096: 213663744 / 4096 = 52164.
+        // kv_per_token = 32768 + 52164 = 84932.
         let s = fake_hybrid_summary("qwen35", 64, Some(4));
         let empty: Vec<String> = Vec::new();
         let e = estimate(&s, &inputs(4096, &empty));
-        assert_eq!(e.kv_per_token, 32768);
+        assert_eq!(e.kv_per_token, 84932);
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub(crate) mod test_support;
 
 pub use estimate::estimate;
 pub(crate) use estimate::{collect_non_layer, collect_per_layer, layer_index};
+pub(crate) use kv_per_token::compute_kv_per_token;
 
 pub const LLAMA_FAMILY: &[&str] = &[
     "llama", "qwen2", "qwen3", "mistral", "gemma", "gemma2", "gemma3", "phi3", "glm4",

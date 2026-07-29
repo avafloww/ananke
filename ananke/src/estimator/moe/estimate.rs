@@ -61,15 +61,23 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         + non_layer.other_bytes;
 
     // KV cost per token. deepseek4's compressed caches need bespoke
-    // handling (see `deepseek4_kv_per_token`); every other MoE arch either
-    // has plain per-layer KV or the qwen35moe `full_attention_interval`
-    // pattern, both covered by the shared hybrid logic.
+    // handling (see `deepseek4_kv_per_token`); glm-dsa uses MLA. Architectures
+    // with `full_attention_interval` (qwen35moe's SSM hybrid) use the shared
+    // hybrid logic. Everything else — including MoE architectures with
+    // sliding-window attention like laguna — uses the llama-family KV
+    // function, which handles SWA capping, per-layer head_count_kv arrays,
+    // and shared-KV layers.
+    let has_full_attention_interval = summary
+        .metadata
+        .contains_key(&*format!("{arch}.full_attention_interval"));
     let kv_per_token = if arch == "deepseek4" {
         deepseek4_kv_per_token(summary, arch, n_layers, inputs)
     } else if arch == "glm-dsa" {
         mla_kv_per_token(summary, arch, n_layers, inputs)
-    } else {
+    } else if has_full_attention_interval {
         crate::estimator::hybrid::kv_for_hybrid(summary, arch, n_layers, inputs)
+    } else {
+        crate::estimator::llama::compute_kv_per_token(summary, arch, n_layers, inputs)
     };
 
     let expert_layers: Vec<u32> = per_layer_exp
@@ -222,10 +230,12 @@ mod tests {
         };
 
         let e = estimate(&summary, &inputs);
-        // Per-layer KV: 4 heads × (128 + 128) × 2 bytes (f16) = 2048 bytes/token.
-        // With interval=4 we only count 2 layers → kv_per_token = 4096.
-        // Without the interval handling we'd naively multiply by 8 → 16384.
-        assert_eq!(e.kv_per_token, 4096);
+        // Attention KV: 4 heads × (128+128) × 2 bytes (f16) = 2048 bytes/token.
+        // With interval=4, only 2 of 8 layers are attention → 2 × 2048 = 4096.
+        // SSM state: 2048 KiB/layer × 6 SSM layers = 12582912 bytes per slot.
+        //   Folded into per-token at ctx 4096: 12582912 / 4096 = 3072.
+        // kv_per_token = 4096 + 3072 = 7168.
+        assert_eq!(e.kv_per_token, 7168);
     }
 
     #[test]
@@ -483,9 +493,12 @@ mod tests {
         let e = estimate(&summary, &inputs);
 
         // KV must use the scalar head_count_kv (8), not the variable
-        // head_count array (48/72). 48 layers × 8 heads × (128+128) × 2
-        // bytes (f16) = 196_608 bytes/token.
-        assert_eq!(e.kv_per_token, 196_608);
+        // head_count array (48/72). Laguna uses a 1:3 global:SWA pattern
+        // (every 4th layer is global, the rest cap at sliding_window=512).
+        // 12 global layers × 8 × (128+128) × 2 × 32768 +
+        // 36 SWA layers × 8 × (128+128) × 2 × 512 = 1_686_110_208 bytes.
+        // kv_per_token = 1_686_110_208 / 32768 = 51_456 bytes/token.
+        assert_eq!(e.kv_per_token, 51_456);
 
         // 47 MoE layers × 3 fused expert projections (gate/up/down) =
         // 141 itemised expert tensors. The dense layer 0 has none, and
@@ -507,7 +520,9 @@ mod tests {
             ..inputs
         };
         let e_q8 = estimate(&summary, &inputs_q8);
-        assert_eq!(e_q8.kv_per_token, 104_448);
+        // q8_0: 1.0625 bytes/element (block overhead). 12 global + 36 SWA
+        // layers × 8 heads × 272 bytes/head. SWA layers cap at window 512.
+        assert_eq!(e_q8.kv_per_token, 27_336);
         assert!(e_q8.kv_per_token < e.kv_per_token);
     }
 }
