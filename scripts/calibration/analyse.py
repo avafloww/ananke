@@ -773,6 +773,77 @@ def derive_per_slot_bytes(rows: list[dict]) -> str:
     )
 
 
+def derive_ssm_state(rows: list[dict]) -> str:
+    """Per-slot SSM state bytes for hybrid architectures, by architecture.
+
+    Hybrid architectures (qwen35, qwen35moe) interleave attention layers with
+    SSM layers. The SSM layers carry constant per-slot state — independent of
+    context — that llama.cpp allocates alongside the KV cache and reports in the
+    same "context" memory bucket.
+
+    The `mtpslot-*-none-np{1,2,4}` cells run the same model and context with
+    `kv_unified=True` and varying `parallel`. With unified KV, the attention
+    cache is shared across slots, so the only per-slot growth is the SSM state.
+    Differencing total KV between slot counts isolates it:
+
+        ssm_per_slot = (kv(np_hi) - kv(np_lo)) / (np_hi - np_lo)
+
+    The GGUF does not expose the SSM dimensions (`d_inner`, `d_conv`,
+    `d_state`), so the per-slot value cannot be predicted from metadata — it is
+    measured. The Rust code divides by `ssm_layer_count` (derived from
+    `block_count` and `full_attention_interval`) to get the per-layer figure.
+    The table may contain non-hybrid architectures (e.g. gemma4) whose
+    per-slot KV growth is attention KV, not SSM state — these are harmless, as
+    the Rust lookup only happens inside `kv_for_hybrid`, which is called
+    exclusively for architectures with `full_attention_interval`.
+    """
+    from collections import defaultdict as _dd
+
+    series: dict[tuple, dict[int, float]] = _dd(dict)
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        label = factors.get("label", "")
+        if "mtpslot" not in label or "none" not in label:
+            continue
+        if not factors.get("kv_unified"):
+            continue
+        arch = parsed.get("arch", "")
+        parallel = factors.get("parallel", 1)
+        devices = parsed.get("devices", [])
+        total_kv = sum(d.get("kv_mib", 0) for d in devices)
+        key = (arch, factors.get("model"), factors.get("ctx"))
+        series[key][parallel] = total_kv
+
+    by_arch: dict[str, list[float]] = _dd(list)
+    for (arch, _model, _ctx), points in series.items():
+        if len(points) < 2:
+            continue
+        parallels = sorted(points)
+        for i in range(1, len(parallels)):
+            lo, hi = parallels[i - 1], parallels[i]
+            per_slot_mib = (points[hi] - points[lo]) / (hi - lo)
+            by_arch[arch].append(per_slot_mib * 1024 * 1024)
+
+    if not by_arch:
+        raise ValueError("no mtpslot-none cells with varying parallel found")
+
+    _SSM_STATE.clear()
+    for arch in sorted(by_arch):
+        _SSM_STATE[arch] = round(st.mean(by_arch[arch]))
+
+    return (
+        "per-slot SSM state from the mtpslot-none slot sweep (kv_unified, "
+        "varying parallel): "
+        + ", ".join(
+            f"{a} {v / 1024 / 1024:.0f} MiB/slot"
+            for a, v in sorted(_SSM_STATE.items())
+        )
+        + ". The attention KV is shared under kv_unified, so the delta is "
+        "purely the SSM state. The Rust code divides by ssm_layer_count "
+        "(block_count minus attention layers) for the per-layer figure."
+    )
+
+
 def derive_checkpoint_headroom(rows: list[dict]) -> str:
     """What a real prompt adds over the campaign's probe, by architecture.
 
@@ -1504,6 +1575,7 @@ _QUANT_RATES: dict[str, int] = {}
 _NO_FA_RATES: dict[str, int] = {}
 _PER_SLOT: dict[str, int] = {}
 _CKPT_HEADROOM: dict[str, int] = {}
+_SSM_STATE: dict[str, int] = {}
 
 
 def _record_ik_rates(by_arch: dict[str, float]) -> None:
@@ -1931,6 +2003,10 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"per-slot host bytes: cannot derive — {error}")
     try:
+        derive_ssm_state(rows)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+        failed.append(f"SSM state: cannot derive — {error}")
+    try:
         derive_no_flash_attn_rates(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError, Disagreement) as error:
         failed.append(f"no-flash-attention rates: cannot derive — {error}")
@@ -2057,6 +2133,16 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "belongs in the packer's slop, beside the prompt cache.",
             "default": max(_PER_SLOT.values()),
             "by_arch": dict(sorted(_PER_SLOT.items())),
+        }
+    if _SSM_STATE:
+        document["ssm_state_per_slot_bytes"] = {
+            "$comment": "Per-slot SSM state bytes for hybrid architectures, "
+                        "measured from the mtpslot-none slot sweep. With "
+                        "kv_unified, the attention KV is shared and only the "
+                        "SSM state grows per slot. The Rust estimator divides "
+                        "by ssm_layer_count for the per-layer figure.",
+            "default": 0,
+            "by_arch": dict(sorted(_SSM_STATE.items())),
         }
     if _NO_FA_RATES:
         document["no_flash_attn_rates"] = {

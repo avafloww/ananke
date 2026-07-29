@@ -232,10 +232,11 @@ mod tests {
         let e = estimate(&summary, &inputs);
         // Attention KV: 4 heads × (128+128) × 2 bytes (f16) = 2048 bytes/token.
         // With interval=4, only 2 of 8 layers are attention → 2 × 2048 = 4096.
-        // SSM state: 2048 KiB/layer × 6 SSM layers = 12582912 bytes per slot.
-        //   Folded into per-token at ctx 4096: 12582912 / 4096 = 3072.
-        // kv_per_token = 4096 + 3072 = 7168.
-        assert_eq!(e.kv_per_token, 7168);
+        // SSM state per slot: 32768000 bytes (from tuning.json, measured
+        //   from the mtpslot-none slot sweep).
+        //   Folded into per-token at ctx 4096: 32768000 / 4096 = 8000.
+        // kv_per_token = 4096 + 8000 = 12096.
+        assert_eq!(e.kv_per_token, 12096);
     }
 
     #[test]

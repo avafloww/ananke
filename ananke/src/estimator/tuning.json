@@ -434,6 +434,15 @@
     },
     "default": 6144
   },
+  "ssm_state_per_slot_bytes": {
+    "$comment": "Per-slot SSM state bytes for hybrid architectures, measured from the mtpslot-none slot sweep. With kv_unified, the attention KV is shared and only the SSM state grows per slot. The Rust estimator divides by ssm_layer_count for the per-layer figure.",
+    "by_arch": {
+      "gemma4": 419430400,
+      "qwen35": 78643200,
+      "qwen35moe": 32768000
+    },
+    "default": 0
+  },
   "tensor_split_baseline": {
     "$comment": "Extra host baseline bytes a tensor split costs beyond a layer split, by architecture. `default` applies to an architecture not listed.",
     "by_arch": {

@@ -157,6 +157,13 @@ fn generate_tuning_constants() {
     ));
     out.push_str(&generate_rate_table(
         &parsed,
+        "ssm_state_per_slot_bytes",
+        "SSM_STATE_PER_SLOT_BYTES",
+        "SSM_STATE_PER_SLOT_BYTES_DEFAULT",
+        "Per-slot SSM state bytes for hybrid architectures, measured from the\n/// mtpslot-none slot sweep. The estimator divides by ssm_layer_count for the\n/// per-layer figure.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
         "no_flash_attn_rates",
         "NO_FLASH_ATTN_RATES",
         "NO_FLASH_ATTN_RATE_DEFAULT",
