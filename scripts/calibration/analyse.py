@@ -1727,26 +1727,24 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
             deficit = max(by_ctx[c]) - fitted
             if deficit > 0:
                 intercept += deficit
-        # Fit base_batch from larger ubatch points. The Rust formula with
-        # `slope_scales_with_ubatch=true` is:
-        # `base + base_batch*k + slope*k*(ctx/1024)` where `k = ub/512`.
-        # At k=1: `intercept + slope*(ctx/1024)` where `intercept = base +
-        # base_batch`. The residual at k>1 from the k=1 line is
-        # `(k-1) * base_batch`, so `base_batch = residual / (k-1)`.
+        # Fit base_batch from larger ubatch points. The Rust formula is:
+        # `base + base_batch*(ub/512) + slope*(ctx/1024)` — the slope does
+        # not scale with batch, only base_batch does.
+        # At k=1: `base + base_batch + slope*(ctx/1024)` = intercept + slope*(ctx/1024).
+        # The residual at k>1 from the k=1 line is `(k-1) * base_batch`.
         batch_only = []
         for (ctx, ub), vals in by_ctx_ub.items():
             if ub <= 512:
                 continue
             k = ub / 512
             for v in vals:
-                residual = v - intercept - slope_raw * (ctx / 1024) * k
+                residual = v - intercept - slope_raw * (ctx / 1024)
                 batch_only.append(residual / (k - 1))
         base_batch = max(batch_only) if batch_only else 0.0
         base_batch = max(0.0, base_batch)
         # Raise base_batch so the formula covers the worst point at every
         # (ctx, ub>512) combination, using the rounded base and slope.
-        # The Rust formula at k=ub/512 is:
-        # `base + base_batch*k + slope*k*(ctx/1024)`.
+        # The Rust formula is: `base + base_batch*k + slope*(ctx/1024)`.
         base_pre = max(0, round(intercept - base_batch))
         slope_pre = max(1, round(slope_raw))
         for (ctx, ub), vals in by_ctx_ub.items():
@@ -1754,10 +1752,10 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
                 continue
             k = ub / 512
             for v in vals:
-                fitted = base_pre + base_batch * k + slope_pre * k * (ctx / 1024)
+                fitted = base_pre + base_batch * k + slope_pre * (ctx / 1024)
                 while fitted < v:
                     base_batch += 1 / k
-                    fitted = base_pre + base_batch * k + slope_pre * k * (ctx / 1024)
+                    fitted = base_pre + base_batch * k + slope_pre * (ctx / 1024)
         base = max(0, round(intercept - base_batch))
         base_batch_mib = max(0, round(base_batch))
         slope = max(1, round(slope_raw))

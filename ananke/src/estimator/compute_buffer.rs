@@ -43,7 +43,7 @@ struct Tuning {
 /// arrives with its evidence attached, and an architecture nobody has
 /// measured says so in its own comment instead of looking like every other
 /// row.
-fn tuning_for(summary: &GgufSummary, ubatch: u32) -> Tuning {
+fn tuning_for(summary: &GgufSummary, _ubatch: u32) -> Tuning {
     let arch = summary.architecture.as_str();
     let variant = variant_of(summary);
     let curve = CURVES
@@ -51,15 +51,12 @@ fn tuning_for(summary: &GgufSummary, ubatch: u32) -> Tuning {
         .find(|c| c.archs.contains(&arch) && c.variant == variant)
         .unwrap_or(&DEFAULT_CURVE);
 
-    // A slope that scales with ubatch is calibrated at 512 and taken linear
-    // off that point, floored at 1 so a tiny batch still reserves a non-zero
-    // context term.
-    let slope = if curve.slope_scales_with_ubatch {
-        let scaled = (curve.slope_mib_per_1k as u64 * ubatch.max(1) as u64) / DEFAULT_UBATCH as u64;
-        scaled.max(1) as u32
-    } else {
-        curve.slope_mib_per_1k
-    };
+    // The slope does not scale with ubatch. The data confirms this: at
+    // ub=2048 (k=4), no architecture's compute buffer grows 4× — the
+    // highest ratio is 2.58× (llama) and most are under 2×. The
+    // batch-dependent growth is carried entirely by `base_batch`, which
+    // scales linearly with `ub/512`.
+    let slope = curve.slope_mib_per_1k;
     Tuning {
         base: curve.base_mib,
         base_batch: curve.base_batch_mib,
@@ -421,14 +418,12 @@ mod tests {
             "must cover the measured 4578 MiB -dsa compute at 131072 (got {})",
             default_for(&glm, 131072, None, true)
         );
-        // The context term scales with batch here as everywhere else. It did
-        // not until the campaign measured the compute buffer proportional to
-        // ubatch on every architecture it could compare — Magidonia at 388 MiB
-        // and 1552 for ub 512 and 2048, Qwen3.6-27B at 290 and 1160 — which a
-        // flat slope under-reserves fourfold.
+        // The context term does not scale with batch — the data shows the
+        // compute buffer grows at most 2.58× at ub=2048, not 4×. The
+        // batch-dependent growth is carried by `base_batch`.
         assert_eq!(
             default_for(&glm, 131072, Some(2048), true) - glm_base,
-            (default_for(&glm, 131072, Some(512), true) - glm_base) * 4
+            default_for(&glm, 131072, Some(512), true) - glm_base
         );
     }
 
@@ -463,7 +458,7 @@ mod tests {
     }
 
     #[test]
-    fn deepseek4_compute_buffer_scales_with_ubatch() {
+    fn deepseek4_compute_buffer_does_not_scale_slope_with_ubatch() {
         let ds4 = summary_for("deepseek4");
         // Unset ubatch (None) resolves to llama.cpp's default of 512.
         assert_eq!(
@@ -475,22 +470,20 @@ mod tests {
             .find(|c| c.archs.contains(&"deepseek4"))
             .expect("deepseek4 has a curve entry")
             .base_mib;
-        let slope_at = |ub| default_for(&ds4, 131072, Some(ub), true) - base;
-        // The context-scaling term is linear in ubatch off the 512 baseline.
-        // Checked at 131072 because the fitted slope is 1 MiB per 1k: at a
-        // shorter context the halving case lands inside integer rounding.
-        assert_eq!(slope_at(1024), slope_at(512) * 2);
-        assert_eq!(slope_at(2048), slope_at(512) * 4);
-        // And so does every other architecture, for the same reason.
-        let qwen = summary_for("qwen3");
-        let qwen_base = CURVES
+        // The slope does not scale with ubatch — the data shows no
+        // architecture's compute buffer grows 4× at ub=2048. The
+        // batch-dependent growth is carried by `base_batch`.
+        let base_batch = CURVES
             .iter()
-            .find(|c| c.archs.contains(&"qwen3"))
-            .map_or(DEFAULT_CURVE.base_mib, |c| c.base_mib);
-        assert_eq!(
-            default_for(&qwen, 131072, Some(2048), true) - qwen_base,
-            (default_for(&qwen, 131072, None, true) - qwen_base) * 4
-        );
+            .find(|c| c.archs.contains(&"deepseek4"))
+            .expect("deepseek4 has a curve entry")
+            .base_batch_mib;
+        let slope_at = |ub| {
+            let k = ub / 512;
+            default_for(&ds4, 131072, Some(ub), true) - base - base_batch * k
+        };
+        assert_eq!(slope_at(1024), slope_at(512));
+        assert_eq!(slope_at(2048), slope_at(512));
     }
 
     #[test]
