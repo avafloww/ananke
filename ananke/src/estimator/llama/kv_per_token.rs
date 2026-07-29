@@ -177,12 +177,28 @@ pub(crate) fn compute_kv_per_token(
         return 0;
     }
     let swa_capped = !inputs.ik_llama;
+    // With `kv_unified=true`, the non-SWA (full-attention) layers share a
+    // unified cache of `context` cells across all slots. However, the SWA
+    // layers are NOT unified — each slot gets its own window-sized cache, so
+    // the total SWA cells are `parallel × window`. Without `kv_unified`,
+    // both caches are per-slot, and the totals are the same because
+    // `parallel × (context/parallel) = context` for full-attention and
+    // `parallel × window` for SWA. The only case that differs is
+    // `kv_unified=true` with `parallel>1`, where the SWA cache uses
+    // `parallel × window` instead of `window`.
+    //
+    // Measured on gemma-4-31b-qat at ctx=240000, np=4, kvu=true: the non-SWA
+    // cache has 240128 cells (unified context), while the SWA cache has 4608
+    // cells (4 slots × 1152 padded window of 1024).
+    let parallel = inputs.parallel.unwrap_or(1).max(1) as u64;
+    let kv_unified = inputs.kv_unified.unwrap_or(false);
+    let swa_multiplier = if kv_unified { parallel } else { 1 };
     let mut total_kv_bytes = 0u64;
     for i in 0..unique_kv_count as usize {
         let kv_heads = kv_heads_per_layer[i] as u64;
         let (per_head, tokens) = if is_swa_layer[i] && swa_capped {
             let window = sliding_window.unwrap_or(context);
-            (per_head_swa, context.min(window))
+            (per_head_swa, context.min(window) * swa_multiplier)
         } else {
             (per_head_full, context)
         };
@@ -196,9 +212,12 @@ mod tests {
     use smol_str::SmolStr;
 
     use crate::{
-        estimator::llama::{
-            estimate::estimate,
-            test_support::{fake_summary, inputs, tensor},
+        estimator::{
+            llama::{
+                estimate::estimate,
+                test_support::{fake_summary, inputs, tensor},
+            },
+            types::EstimatorInputs,
         },
         gguf::types::{GgufSummary, GgufValue},
     };
@@ -411,5 +430,53 @@ mod tests {
         // Total must drop by one SWA layer's worth (8_388_608 bytes).
         let total_kv = e.kv_per_token * e.context as u64;
         assert_eq!(total_kv, 92_274_688 - 8_388_608);
+    }
+
+    #[test]
+    fn gemma4_swa_kv_unified_multiplies_window_by_parallel() {
+        // With kv_unified=true and parallel>1, llama.cpp does NOT unify the
+        // SWA cache — each slot gets its own window-sized cache. The
+        // full-attention layers share a unified cache of `context` cells.
+        //
+        // Measured on gemma-4-31b-qat (ctx=240000, np=4, kvu=true): the
+        // non-SWA cache has 240128 cells (unified context) while the SWA
+        // cache has 4608 cells (4 slots × padded window of 1024).
+        //
+        // Model: 4 layers, 3 SWA + 1 full, 8 kv-heads each.
+        // key_length=512, key_length_swa=256, f16, window=1024, ctx=65536.
+        //
+        // Without kv_unified (parallel=1, the default):
+        //   Full layer (1): 8 * 2048 * 65536 = 1_073_741_824 bytes
+        //   SWA layers (3): 3 * 8 * 1024 * 1024 = 25_165_824 bytes (1x window)
+        //   Total: 1_098_907_648
+        //
+        // With kv_unified=true, parallel=4:
+        //   Full layer (1): 8 * 2048 * 65536 = 1_073_741_824 (unified, same)
+        //   SWA layers (3): 3 * 8 * 1024 * (4*1024) = 100_663_296 (4x window)
+        //   Total: 1_174_405_120
+        let mask = [true, true, false, true];
+        let heads = [8u32, 8, 8, 8];
+        let s = gemma4_summary(&mask, &heads, 1024);
+        let empty: Vec<String> = Vec::new();
+
+        let no_kvu = inputs("f16", "f16", 65536, &empty);
+        let e_no_kvu = estimate(&s, &no_kvu);
+        assert_eq!(
+            e_no_kvu.kv_per_token * 65536,
+            1_098_907_648,
+            "without kv_unified, SWA uses 1x window"
+        );
+
+        let with_kvu = EstimatorInputs {
+            parallel: Some(4),
+            kv_unified: Some(true),
+            ..inputs("f16", "f16", 65536, &empty)
+        };
+        let e_with_kvu = estimate(&s, &with_kvu);
+        assert_eq!(
+            e_with_kvu.kv_per_token * 65536,
+            1_174_405_120,
+            "with kv_unified+parallel=4, SWA uses 4x window"
+        );
     }
 }
