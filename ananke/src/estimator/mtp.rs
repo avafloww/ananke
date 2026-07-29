@@ -31,7 +31,7 @@ use crate::{
     estimator::{
         tuning::{
             DRAFT_MODEL_COMPUTE_MIB, DRAFT_MODEL_COMPUTE_MIB_PER_1K, MTP_BASE_OVERHEAD_MIB,
-            MTP_KV_INTERCEPT_MIB, MTP_KV_SLOPE_BYTES_PER_TOKEN, MTP_PER_SLOT_OVERHEAD_MIB,
+            MTP_KV_INTERCEPT_MIB, MTP_PER_SLOT_OVERHEAD_MIB,
         },
         types::EstimatorInputs,
     },
@@ -127,30 +127,34 @@ pub fn mtp_overhead_bytes(
     }
     let context = inputs.context as u64;
 
-    // The MTP overhead decomposes into three terms, all auto-derived from the
-    // measurement dataset:
+    // The MTP overhead decomposes into three terms:
     //
-    // 1. Per-slot KV: `intercept + slope × ctx`, constant across slot counts
-    //    (llama.cpp's `mtp_context_mib` is 258 MiB for Qwen3.6-27B at np 1, 2,
-    //    and 4). The slope is close to the raw modelled KV and the intercept
-    //    is a graph setup cost. The measured slope is taken rather than the
-    //    raw product because it is ~1.1–1.25× the modelled value.
+    // 1. KV: the raw modelled KV (`nextn × kv_heads × (kl+vl) × 2 × context`)
+    //    plus a constant intercept (graph setup cost). This is a single
+    //    unified draft context — llama.cpp creates one MTP context, not one
+    //    per slot. The slope is read from the GGUF metadata so each
+    //    architecture gets its own KV size (qwen35 has 4 KV heads, qwen35moe
+    //    has 2, so their MTP KV differs by 2×).
     //
     // 2. Per-slot overhead: a constant non-KV cost each slot adds (graph
-    //    intermediates and sampler state), measured at 227 MiB for the 27B.
+    //    intermediates and sampler state), measured at 367 MiB for the 27B.
     //
     // 3. Base overhead: a slot-independent cost (graph and CUDA context),
-    //    measured at 540 MiB for the 27B.
+    //    measured at 584 MiB for the 27B.
     //
-    // Total: `(per_slot_kv + per_slot_overhead) × slots + base_overhead`.
-    // At production (ctx=360000, np=2): ~(1659 + 250) × 2 + 586 = 4404 MiB,
-    // over-estimating the measured 39072 MiB total by ~4.4%.
+    // Total: `per_slot_kv + per_slot_overhead × slots + base_overhead`.
     let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
-    let per_slot_kv_bytes =
-        MTP_KV_INTERCEPT_MIB * 1024 * 1024 + MTP_KV_SLOPE_BYTES_PER_TOKEN * context;
+    let key_length = meta_attn_u32(summary, arch, "key_length").unwrap_or(0) as u64;
+    let value_length = meta_attn_u32(summary, arch, "value_length").unwrap_or(0) as u64;
+    // The MTP draft context always uses f16 for its KV cache, independent of
+    // the main cache type.
+    let bytes_per_element = crate::estimator::kv::kv_bytes_per_element("f16");
+    let raw_kv_per_token =
+        nextn * n_kv_heads * (((key_length + value_length) as f64) * bytes_per_element) as u64;
+    let per_slot_kv_bytes = MTP_KV_INTERCEPT_MIB * 1024 * 1024 + raw_kv_per_token * context;
     let per_slot_overhead_bytes = MTP_PER_SLOT_OVERHEAD_MIB * 1024 * 1024;
     let base_overhead_bytes = MTP_BASE_OVERHEAD_MIB * 1024 * 1024;
-    (per_slot_kv_bytes + per_slot_overhead_bytes) * slots + base_overhead_bytes
+    per_slot_kv_bytes + per_slot_overhead_bytes * slots + base_overhead_bytes
 }
 
 fn meta_u32(summary: &GgufSummary, arch: &str, key: &str) -> Option<u32> {
@@ -262,7 +266,7 @@ mod tests {
         let s = qwen35_summary("qwen35", 1, 4);
         let empty: Vec<String> = Vec::new();
         let got = mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty));
-        assert_eq!(got / (1024 * 1024), expected_total_mib(262144, 1));
+        assert_eq!(got / (1024 * 1024), expected_total_mib(&s, 262144, 1));
     }
 
     #[test]
@@ -272,7 +276,7 @@ mod tests {
         let s = qwen35_summary("qwen35", 1, 4);
         let empty: Vec<String> = Vec::new();
         let mib = mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty)) / (1024 * 1024);
-        assert_eq!(mib, expected_total_mib(262144, 1));
+        assert_eq!(mib, expected_total_mib(&s, 262144, 1));
     }
 
     #[test]
@@ -281,19 +285,25 @@ mod tests {
         let s = qwen35_summary("qwen35moe", 1, 2);
         let empty: Vec<String> = Vec::new();
         let mib = mtp_overhead_bytes(&s, None, &inputs(524288, true, &empty)) / (1024 * 1024);
-        assert_eq!(mib, expected_total_mib(524288, 1));
+        assert_eq!(mib, expected_total_mib(&s, 524288, 1));
     }
 
     /// The total MTP overhead the formula should produce, in MiB.
     ///
-    /// `(per_slot_kv + per_slot_overhead) × slots + base_overhead`, where
-    /// `per_slot_kv = intercept + slope × ctx`. Written against the
-    /// constants so a recalibration does not break the test while checking
-    /// nothing about the magnitude.
-    fn expected_total_mib(context: u64, slots: u64) -> u64 {
-        let per_slot_kv =
-            MTP_KV_INTERCEPT_MIB + MTP_KV_SLOPE_BYTES_PER_TOKEN * context / (1024 * 1024);
-        (per_slot_kv + MTP_PER_SLOT_OVERHEAD_MIB) * slots + MTP_BASE_OVERHEAD_MIB
+    /// `per_slot_kv + per_slot_overhead × slots + base_overhead`, where
+    /// `per_slot_kv = intercept + raw_kv_per_token × ctx`. The raw KV is
+    /// `nextn × kv_heads × (kl + vl) × 2` (f16).
+    fn expected_total_mib(summary: &GgufSummary, context: u64, slots: u64) -> u64 {
+        let arch = summary.architecture.as_str();
+        let nextn = meta_u32(summary, arch, "nextn_predict_layers").unwrap_or(0) as u64;
+        let n_kv_heads = meta_attn_u32(summary, arch, "head_count_kv").unwrap_or(0) as u64;
+        let key_length = meta_attn_u32(summary, arch, "key_length").unwrap_or(0) as u64;
+        let value_length = meta_attn_u32(summary, arch, "value_length").unwrap_or(0) as u64;
+        let bytes_per_element = crate::estimator::kv::kv_bytes_per_element("f16");
+        let raw_kv_per_token =
+            nextn * n_kv_heads * (((key_length + value_length) as f64) * bytes_per_element) as u64;
+        let per_slot_kv = MTP_KV_INTERCEPT_MIB + raw_kv_per_token * context / (1024 * 1024);
+        per_slot_kv + MTP_PER_SLOT_OVERHEAD_MIB * slots + MTP_BASE_OVERHEAD_MIB
     }
 
     #[test]
