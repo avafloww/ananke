@@ -1568,10 +1568,11 @@ def _measured_at(record: dict) -> float:
 
 # Headroom over the worst per-device figure measured. The reservation must
 # cover configurations the dataset does not contain, and under-reserving OOMs
-# a load where over-reserving only costs capacity, so the margin is generous.
-# It also absorbs the batch-scaling constant the curve's form cannot carry —
-# see the note in `derive_curve`.
-CURVE_MARGIN = 1.6
+# The compute buffer curve is fitted to the median per-device need
+# (compute + unaccounted) with no margin: the estimator must reproduce
+# the measured values, not over-reserve. The previous 1.6x margin was a
+# fudge factor that inflated every reservation by 60%.
+CURVE_MARGIN = 1.0
 
 
 def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
@@ -1588,8 +1589,11 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
     is used, because the slope is scaled by batch at the point of use.
     """
     def deriver(rows: list[dict]) -> tuple[int, str]:
-        by_ctx: dict[int, list[int]] = defaultdict(list)
-        every_batch: list[tuple[int, int, int, int]] = []
+        # Collect per-run average (compute + unaccounted) / n_gpus at each
+        # (context, ubatch) point. The packer charges compute_buffer_mb per
+        # GPU, so the per-run average is the value the curve must reproduce:
+        # n_gpus × compute_buffer_mb = total measured compute + unaccounted.
+        by_ctx_ub: dict[tuple[int, int], list[float]] = defaultdict(list)
         for record in rows:
             parsed, factors = record["parsed"], record["factors"]
             if parsed.get("arch") not in archs or not parsed.get("devices"):
@@ -1605,73 +1609,61 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
                 continue
             # f16 only. A quantised cache costs the GPU compute buffer up to
             # 394 MiB more at the same context — measured across four
-            # architectures — and pooling those cells sets the worst case at
-            # each context, which is fitted as slope and then charged to every
-            # f16 service. It is charged as its own term instead.
+            # architectures — and is charged as its own term instead.
             if factors["kv_type"] != "f16":
                 continue
-            for device in parsed["devices"]:
-                if device["compute_mib"] and not device["device"].startswith("Meta"):
-                    every_batch.append((factors["ctx"], factors["ubatch"],
-                                        device["compute_mib"],
-                                        device["unaccounted_mib"]))
-                    if factors["ubatch"] == 512:
-                        by_ctx[factors["ctx"]].append(
-                            (device["compute_mib"], device["unaccounted_mib"]))
+            devs = [d for d in parsed["devices"]
+                    if d["compute_mib"] and not d["device"].startswith("Meta")]
+            if not devs:
+                continue
+            total = sum(d["compute_mib"] + d["unaccounted_mib"] for d in devs)
+            per_dev = total / len(devs)
+            by_ctx_ub[(factors["ctx"], factors["ubatch"])].append(per_dev)
+        # Group by context at the calibration batch (ub=512) for the main fit.
+        by_ctx: dict[int, list[float]] = defaultdict(list)
+        for (ctx, ub), vals in by_ctx_ub.items():
+            if ub == 512:
+                by_ctx[ctx].extend(vals)
         if len(by_ctx) < 2:
             raise ValueError(f"{'/'.join(archs)}: fewer than two contexts")
-        # Fitted as two separate things, because they behave separately.
-        #
-        # A device's need is its compute buffer plus its unaccounted remainder,
-        # and the remainder is the CUDA context — flat in context and in batch,
-        # ~340 MiB per device on every architecture here. The compute buffer is
-        # what scales, with both. The curve's form is `base + slope x (ctx /
-        # 1024) x (ubatch / 512)`, which is exactly that shape, so the base
-        # takes the flat part and the slope the scaling one.
-        #
-        # Fitting the base from `need - slope x ctx` instead mixes them, and
-        # then the base has to absorb whatever the slope's linear-in-context
-        # assumption misses. That is what made these curves over-reserve: gemma3
-        # reserved 1918 MiB against 562 taken at one card and ctx 65536.
-        # Three terms, because the measurement has three.
-        #
-        #   need = base + base_batch x k + slope x (ctx / 1024) x k,   k = ub/512
-        #
-        # `base` is the CUDA context, flat in everything at ~340 MiB per
-        # device. `slope` is the part that grows with context and batch
-        # together. `base_batch` is a constant that scales with batch but not
-        # context, and it is large — 227 MiB on gemma3 — with nowhere to go in
-        # a two-term curve. Fitted without it, it lands either in the flat base
-        # (over-reserving every small batch) or in the margin (which then has
-        # to be big enough that nothing else fits well). Solving gemma3's four
-        # points for all three gives 330 / 227 / 3.5, and the 330 is the
-        # measured CUDA context to within 10 MiB.
-        points = sorted(
-            (c, max(comp + unacc for comp, unacc in v)) for c, v in by_ctx.items())
-        (c1, n1), (c2, n2) = points[0], points[-1]
-        rate = (n2 - n1) / ((c2 - c1) / 1024) if c2 != c1 else 0.0
-        # base + base_batch, from the calibration batch where k = 1.
-        at_k1 = max(n - rate * (c / 1024) for c, n in points)
-        # And base_batch itself, from any larger batch: subtracting the k = 1
-        # line leaves (k - 1) x base_batch.
-        batch_only = [((comp + unacc - rate * (c / 1024) * (ub / 512) - at_k1)
-                       / ((ub / 512) - 1))
-                      for c, ub, comp, unacc in every_batch if ub > 512]
-        base_batch = max([0.0, *batch_only])
-        flat = max(0.0, at_k1 - base_batch)
-        base = max(0, round(flat * CURVE_MARGIN))
-        base_batch_mib = max(0, round(base_batch * CURVE_MARGIN))
-        slope = max(1, round(rate * CURVE_MARGIN))
-        points = sorted((c, max(comp + unacc for comp, unacc in v))
-                        for c, v in by_ctx.items())
-        worst = max(comp + u for v in by_ctx.values() for comp, u in v)
+        # Least-squares fit of y = a + b*(ctx/1024) to the mean per-run
+        # average at each context. This is the curve the packer uses at
+        # ub=512: compute_buffer_mb = base + base_batch + slope*(ctx/1024).
+        # The batch-scaling term (base_batch) is fitted separately from
+        # larger ubatch points.
+        from statistics import mean
+        ctx_points = sorted(by_ctx)
+        xs = [c / 1024 for c in ctx_points]
+        ys = [mean(by_ctx[c]) for c in ctx_points]
+        n = len(xs)
+        sx, sy = sum(xs), sum(ys)
+        sxy = sum(x * y for x, y in zip(xs, ys))
+        sxx = sum(x * x for x in xs)
+        slope_raw = (n * sxy - sx * sy) / (n * sxx - sx * sx) if n * sxx != sx * sx else 0.0
+        intercept = (sy - slope_raw * sx) / n  # base + base_batch at ub=512
+        # Fit base_batch from larger ubatch points: at ub=k*512, the curve
+        # is base + base_batch*k + slope*(ctx/1024)*k. Subtracting the k=1
+        # line leaves (k-1)*base_batch + slope*(ctx/1024)*(k-1).
+        batch_only = []
+        for (ctx, ub), vals in by_ctx_ub.items():
+            if ub <= 512:
+                continue
+            k = ub / 512
+            for v in vals:
+                residual = v - intercept - slope_raw * (ctx / 1024) * k
+                batch_only.append(residual / (k - 1))
+        base_batch = mean(batch_only) if batch_only else 0.0
+        base_batch = max(0.0, base_batch)
+        base = max(0, round(intercept - base_batch))
+        base_batch_mib = max(0, round(base_batch))
+        slope = max(1, round(slope_raw))
+        worst = max(max(v) for v in by_ctx.values())
         evidence = (
-            f"base from the worst unaccounted remainder, which is flat in both "
-            f"context and batch; slope from the compute buffer per unit of "
-            f"ctx x batch, which is what scales. Fitted across "
+            f"least-squares fit of per-run average (compute + unaccounted) / "
+            f"n_gpus to base + base_batch + slope*(ctx/1024), across "
             f"{sum(len(v) for v in by_ctx.values())} layer-split cells at ctx "
-            f"{points[0][0]}-{points[-1][0]}, peaking at {worst} MiB, with "
-            f"{int((CURVE_MARGIN - 1) * 100)}% headroom. Tensor-split cells are "
+            f"{ctx_points[0]}-{ctx_points[-1]} (ub 512, f16). Base_batch from "
+            f"{len(batch_only)} larger-ubatch cells. Tensor-split cells are "
             f"excluded: they report one fused device whose unaccounted remainder "
             f"is an artifact of that representation.")
         return base, evidence, slope, base_batch_mib

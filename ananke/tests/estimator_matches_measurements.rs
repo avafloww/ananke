@@ -438,30 +438,39 @@ impl Case {
                 .and_then(Value::as_str)
                 .unwrap_or("f16")
                 .to_string(),
-            // Compute *plus* what llama.cpp cannot attribute, which is what a
-            // reservation has to cover, and only from a real device: under
-            // tensor split it reports one fused `Meta()` whose columns are not
-            // comparable to a per-device reservation. Comparing against them
-            // made the headroom read as 27x when it is nearer 1.5.
-            device_compute_mib: parsed
-                .get("devices")
-                .and_then(Value::as_array)
-                .and_then(|devices| {
-                    devices.iter().find(|d| {
-                        !d.get("device")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .starts_with("Meta")
-                    })
-                })
-                .and_then(|d| {
-                    Some(
-                        d.get("compute_mib")?.as_u64()?
-                            + d.get("unaccounted_mib")
-                                .and_then(Value::as_u64)
-                                .unwrap_or(0),
-                    )
-                }),
+            // Compute *plus* what llama.cpp cannot attribute, averaged across
+            // all real (non-Meta) devices. The packer charges the same
+            // compute_buffer_mb to every GPU, so the fair comparison is the
+            // per-device average, not the first device's value (which for MoE
+            // architectures is the primary GPU and much higher than the
+            // secondary). Under tensor split the fused `Meta()` device's
+            // columns are not comparable to a per-device reservation.
+            device_compute_mib: parsed.get("devices").and_then(Value::as_array).and_then(
+                |devices| {
+                    let real: Vec<_> = devices
+                        .iter()
+                        .filter(|d| {
+                            !d.get("device")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .starts_with("Meta")
+                        })
+                        .collect();
+                    if real.is_empty() {
+                        return None;
+                    }
+                    let total: u64 = real
+                        .iter()
+                        .map(|d| {
+                            d.get("compute_mib").and_then(Value::as_u64).unwrap_or(0)
+                                + d.get("unaccounted_mib")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0)
+                        })
+                        .sum();
+                    Some(total / real.len() as u64)
+                },
+            ),
             split: match factors.get("split").and_then(Value::as_str) {
                 Some("tensor") => SplitMode::Tensor,
                 Some("row") => SplitMode::Row,
