@@ -1,6 +1,7 @@
 //! VRAM estimator — architecture-aware dispatch.
 
 pub mod compute_buffer;
+pub(crate) mod compute_model;
 pub mod fallback;
 pub mod host_buffer;
 pub mod hybrid;
@@ -170,10 +171,13 @@ pub fn estimate_with_summary(
     est.mtp_bytes = mtp::mtp_overhead_bytes(&summary, draft_summary.as_ref(), inputs);
     est.mtp_weight_bytes = mtp::mtp_weight_bytes(draft_summary.as_ref(), inputs);
 
-    // Output logits buffer: a head-GPU-only cost the packer subtracts from
-    // secondary GPUs. Architecture-independent (reads n_vocab + ubatch), so
-    // it's computed once here rather than in each family estimate.
-    est.output_buffer_bytes = compute_buffer::output_logits_bytes(&summary, inputs.ubatch);
+    // What the head GPU holds beyond every other card, which the packer trims
+    // off the secondaries. The compute model derives it — the logits buffer, the
+    // head card's flat graph cost, and the expert-staging buffers a hybrid
+    // places on the primary — so it is no longer the deliberate under-estimate
+    // a bare `n_vocab x ubatch` term had to be.
+    est.output_buffer_bytes =
+        u64::from(compute_model::head_extra_mib(&summary, inputs)).saturating_mul(1024 * 1024);
 
     // Host-side overhead: the pinned graph arena and the server's prompt
     // cache. Architecture-independent apart from the sliding-window lookup,

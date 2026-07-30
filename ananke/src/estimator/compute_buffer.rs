@@ -32,8 +32,8 @@
 //! `estimation.compute_buffer_mb`.
 
 use crate::{
-    config::validate::SplitMode,
     estimator::{
+        compute_model,
         tuning::{
             CURVES, Curve, DEFAULT_CURVE, DEFAULT_UBATCH, IK_COMPUTE_FLAT_BYTES,
             IK_COMPUTE_FLAT_BYTES_DEFAULT, IK_COMPUTE_PER_BATCH_TOKEN_BYTES,
@@ -192,30 +192,19 @@ pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u3
     if let Some(mb) = inputs.compute_buffer_mb {
         return mb;
     }
+    // The *head* card's total, which is the contract this field has always had:
+    // the packer trims `output_buffer_bytes` back off every secondary. See
+    // [`crate::estimator::compute_model`] for the model itself, and
+    // [`crate::estimator::compute_model::head_extra_mib`] for the term trimmed.
     let flash_attn = inputs.flash_attn.unwrap_or(true);
-    match inputs.split_mode {
-        // Note that the tensor model is fitted entirely on mainline cells: the
-        // dataset holds 160 mainline tensor-split cells and *no* ik ones, so a
-        // fork service configured with `--split-mode tensor` is estimated from
-        // the other runtime's graph. Nothing in the data says whether that is
-        // close; measuring one fork tensor cell would say.
-        SplitMode::Tensor | SplitMode::Row => tensor_split_per_device(
+    compute_model::per_device_mib(summary, inputs)
+        .saturating_add(compute_model::head_extra_mib(summary, inputs))
+        .saturating_add(no_flash_attn_mib(
             summary,
             inputs.context,
-            inputs.ubatch,
+            inputs.ubatch.unwrap_or(DEFAULT_UBATCH),
             flash_attn,
-            inputs.streams(),
-            crate::estimator::host_buffer::quantised_kv(inputs),
-        ),
-        SplitMode::Layer => layer_split_per_device(
-            summary,
-            inputs.context,
-            inputs.ubatch,
-            flash_attn,
-            inputs.streams(),
-            inputs.ik_llama,
-        ),
-    }
+        ))
 }
 
 /// Per-device compute buffer under `--split-mode tensor`, from the model's own

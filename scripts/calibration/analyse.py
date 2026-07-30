@@ -20,8 +20,15 @@ import json
 import math
 import statistics as st
 from statistics import StatisticsError
+import sys
 from collections import defaultdict
 from pathlib import Path
+
+# The sibling modules are imported by name, which needs this directory on the
+# path when `analyse` is itself loaded by path rather than run as a script.
+sys.path.insert(0, str(Path(__file__).parent))
+
+import compute_model  # noqa: E402  (needs the path insertion above)
 
 DATA = Path(__file__).parent / "data" / "measurements.ndjson"
 TUNING_JSON = Path(__file__).parents[2] / "ananke/src/estimator/tuning.json"
@@ -2552,6 +2559,21 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
     return deriver
 
 
+def derive_compute_model(rows: list[dict]) -> tuple[dict, list[str]]:
+    """The unified per-device compute model, and one coverage note per group.
+
+    Every axis the dataset varies enters as a column rather than as a filter, so
+    a cell no longer has to fall inside one mechanism's assumptions to be used:
+    all of it is fitted, ik's table-less cells included.
+    """
+    copies = _constant("MAINLINE_LAYER_SPLIT_MASK_COPIES", 4)
+    groups = compute_model.collect(
+        rows, split_mask_copies=copies, table_less_target=table_less_compute)
+    if not groups:
+        raise ValueError("no usable per-device observations")
+    return compute_model.document_section(groups)
+
+
 def derive_deepseek4_curve(rows: list[dict]) -> tuple[int, str]:
     """deepseek4's compute-buffer base, over the regime this hardware reaches.
 
@@ -2931,6 +2953,13 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             failed.append(f"{name}: no declared kind — add it to KINDS")
             continue
         entry["kind"] = kind
+
+    try:
+        section, coverage = derive_compute_model(rows)
+        document["compute_model"] = section
+        notes.extend(f"compute model {line}" for line in coverage)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
+        failed.append(f"compute model: cannot derive — {error}")
 
     if _BASE_OFFSET:
         document["baseline_offset"] = {

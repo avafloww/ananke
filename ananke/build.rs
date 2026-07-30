@@ -125,6 +125,7 @@ fn generate_tuning_constants() {
         out.push_str(&format!("pub const {name}: {ty} = {value};\n\n"));
     }
 
+    out.push_str(&generate_compute_model(&parsed));
     out.push_str(&generate_curves(&parsed));
     out.push_str(&generate_ik_rates(&parsed));
     out.push_str(&generate_rate_table(
@@ -244,6 +245,165 @@ fn generate_tuning_constants() {
 /// significant and preserved — the first entry whose arch list contains the
 /// model's architecture wins, so a variant-guarded entry has to precede the
 /// general one for the same arch.
+/// The column names of the unified per-device compute model, in the order the
+/// generated struct declares its fields.
+///
+/// The list is checked against the `columns` array in `tuning.json` rather than
+/// trusted: the fitter and the evaluator have to agree on what each coefficient
+/// multiplies, and a column silently added on one side is exactly the drift the
+/// generated-constant scheme exists to prevent.
+const COMPUTE_MODEL_COLUMNS: &[&str] = &[
+    "flat",
+    "head_flat",
+    "hidden",
+    "doubling",
+    "mask",
+    "quant",
+    "logits",
+    "offload_head",
+];
+
+/// Turn the `compute_model` section into coefficient tables.
+///
+/// One entry per (runtime, split, architecture, variant), each holding the
+/// coefficient of every column the fit could identify for that group. A column
+/// the group did not identify is absent from the JSON and generated as zero,
+/// which is the same thing: a term the data gave no evidence for contributes
+/// nothing.
+fn generate_compute_model(parsed: &serde_json::Value) -> String {
+    let model = match parsed.get("compute_model") {
+        Some(m) => m,
+        None => return String::new(),
+    };
+
+    let declared: Vec<&str> = model
+        .get("columns")
+        .and_then(|c| c.as_array())
+        .unwrap_or_else(|| panic!("compute_model has no `columns` array"))
+        .iter()
+        .map(|c| {
+            c.as_str()
+                .unwrap_or_else(|| panic!("compute_model column is not a string"))
+        })
+        .collect();
+    assert_eq!(
+        declared, COMPUTE_MODEL_COLUMNS,
+        "compute_model columns in tuning.json do not match the generated struct; \
+         update COMPUTE_MODEL_COLUMNS in build.rs and the evaluator together"
+    );
+
+    let mut out = String::from(
+        "\n/// Coefficients of the unified per-device compute model, one set per\n\
+         /// (runtime, split, architecture, variant). Each multiplies the like-named\n\
+         /// column built by [`crate::estimator::compute_model::Columns`]; the total is\n\
+         /// that card's compute reservation in MiB.\n\
+         ///\n\
+         /// `flat`, `head_flat`, and `doubling` are MiB outright. The rest are bytes\n\
+         /// per element, their columns having been divided by 2^20 when built, so the\n\
+         /// dot product comes out in MiB throughout.\n\
+         #[derive(Debug, Clone, Copy, PartialEq)]\n\
+         pub struct ComputeCoefficients {\n",
+    );
+    for column in COMPUTE_MODEL_COLUMNS {
+        out.push_str(&format!("    pub {column}: f64,\n"));
+    }
+    out.push_str(
+        "}\n\n\
+         /// One fitted group of the compute model.\n\
+         #[derive(Debug, Clone, Copy)]\n\
+         pub struct ComputeEntry {\n\
+         \x20   /// Architectures this entry applies to.\n\
+         \x20   pub archs: &'static [&'static str],\n\
+         \x20   /// A variant discriminator the caller must also match, where one\n\
+         \x20   /// architecture string covers models with different graphs.\n\
+         \x20   pub variant: Option<&'static str>,\n\
+         \x20   /// The serving runtime this group was fitted against, or `None` for\n\
+         \x20   /// one that applies to either fork.\n\
+         \x20   pub runtime: Option<&'static str>,\n\
+         \x20   /// `\"layer\"` or `\"tensor\"`.\n\
+         \x20   pub split: &'static str,\n\
+         \x20   pub coefficients: ComputeCoefficients,\n\
+         }\n\n",
+    );
+
+    let entries = model
+        .get("entries")
+        .and_then(|e| e.as_array())
+        .unwrap_or_else(|| panic!("compute_model has no `entries` array"));
+    out.push_str(
+        "/// Ordered; first match wins.\npub static COMPUTE_MODEL: &[ComputeEntry] = &[\n",
+    );
+    for entry in entries {
+        let archs = entry
+            .get("archs")
+            .and_then(|a| a.as_array())
+            .unwrap_or_else(|| panic!("compute_model entry has no `archs`"))
+            .iter()
+            .map(|a| format!("{:?}", a.as_str().expect("arch is not a string")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let optional = |key: &str| match entry.get(key).and_then(|v| v.as_str()) {
+            Some(value) => format!("Some({value:?})"),
+            None => "None".to_string(),
+        };
+        let split = entry
+            .get("split")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| panic!("compute_model entry has no `split`"));
+        out.push_str(&format!(
+            "    ComputeEntry {{\n\
+             \x20       archs: &[{archs}],\n\
+             \x20       variant: {},\n\
+             \x20       runtime: {},\n\
+             \x20       split: {split:?},\n\
+             \x20       coefficients: {},\n\
+             \x20   }},\n",
+            optional("variant"),
+            optional("runtime"),
+            coefficients_literal(entry),
+        ));
+    }
+    out.push_str("];\n\n");
+
+    let default = model
+        .get("default")
+        .unwrap_or_else(|| panic!("compute_model has no `default`"));
+    out.push_str(
+        "/// Used by any (runtime, split, architecture) without its own entry.\n\
+         pub static COMPUTE_MODEL_DEFAULT: ComputeCoefficients = ",
+    );
+    out.push_str(&coefficients_literal(default));
+    out.push_str(";\n");
+    out
+}
+
+/// A `ComputeCoefficients` literal from an entry's `coefficients` object,
+/// filling every column the fit left out with zero.
+fn coefficients_literal(entry: &serde_json::Value) -> String {
+    let coefficients = entry
+        .get("coefficients")
+        .and_then(|c| c.as_object())
+        .unwrap_or_else(|| panic!("compute_model entry has no `coefficients` object"));
+    for name in coefficients.keys() {
+        assert!(
+            COMPUTE_MODEL_COLUMNS.contains(&name.as_str()),
+            "compute_model entry has unknown coefficient `{name}`"
+        );
+    }
+    let fields = COMPUTE_MODEL_COLUMNS
+        .iter()
+        .map(|column| {
+            let value = coefficients
+                .get(*column)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            format!("{column}: {value:?}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("ComputeCoefficients {{ {fields} }}")
+}
+
 fn generate_curves(parsed: &serde_json::Value) -> String {
     let curves = match parsed.get("compute_buffer_curves") {
         Some(c) => c,

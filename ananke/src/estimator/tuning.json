@@ -9,7 +9,7 @@
       "gemma3@nofa": -47381684,
       "gemma4": 26759192,
       "gemma4+e": 178705220,
-      "gemma4+e@nofa": 87688004,
+      "gemma4+e@nofa": 87708484,
       "gemma4+moe": -56385524,
       "gemma4+moe@nofa": -94187508,
       "gemma4@nofa": 35491864,
@@ -49,9 +49,9 @@
   "compute_buffer_curves": {
     "$comment": "Ordered: the first entry whose arch list contains the model's architecture wins, so a variant-guarded entry must precede the general one for the same arch. `slope_scales_with_ubatch` is true throughout: the context term is calibrated at ubatch 512 and the measured compute buffer is proportional to batch \u2014 Magidonia takes 388 MiB at ub 512 and 1552 at 2048, exactly four times, and Qwen3.6-27B 290 and 1160 \u2014 so a flat slope under-reserves at any larger batch. At the default batch this changes nothing.",
     "default": {
-      "base_batch_mib": 382,
-      "base_mib": 193,
-      "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 63 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 5 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+      "base_batch_mib": 459,
+      "base_mib": 116,
+      "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 63 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 9 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
       "runtime": null,
       "slope_mib_per_1k": 5,
       "slope_scales_with_ubatch": true
@@ -63,7 +63,7 @@
         ],
         "base_batch_mib": 193,
         "base_mib": 193,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 48 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 3 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 48 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 5 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "runtime": null,
         "slope_mib_per_1k": 8,
         "slope_scales_with_ubatch": true,
@@ -73,9 +73,9 @@
         "archs": [
           "gemma4"
         ],
-        "base_batch_mib": 277,
-        "base_mib": 321,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 11 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_batch_mib": 342,
+        "base_mib": 255,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 11 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 3 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "runtime": null,
         "slope_mib_per_1k": 4,
         "slope_scales_with_ubatch": true,
@@ -100,7 +100,7 @@
         ],
         "base_batch_mib": 298,
         "base_mib": 184,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 33 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 6 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 33 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 8 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "runtime": null,
         "slope_mib_per_1k": 11,
         "slope_scales_with_ubatch": true
@@ -157,7 +157,7 @@
         ],
         "base_batch_mib": 0,
         "base_mib": 858,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 18 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 18 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 3 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "runtime": null,
         "slope_mib_per_1k": 1,
         "slope_scales_with_ubatch": true
@@ -168,7 +168,7 @@
         ],
         "base_batch_mib": 259,
         "base_mib": 211,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 30 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 30 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 3 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "runtime": null,
         "slope_mib_per_1k": 8,
         "slope_scales_with_ubatch": true
@@ -177,9 +177,9 @@
         "archs": [
           "talkie"
         ],
-        "base_batch_mib": 66,
-        "base_mib": 452,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 12 layer-split cells at ctx 512-32768 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_batch_mib": 227,
+        "base_mib": 291,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 12 layer-split cells at ctx 512-32768 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 2 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "runtime": null,
         "slope_mib_per_1k": 4,
         "slope_scales_with_ubatch": true
@@ -228,6 +228,437 @@
       }
     ]
   },
+  "compute_model": {
+    "$comment": "One per-device compute model per (runtime, split, architecture), replacing `compute_buffer_curves`, `tensor_compute_curves` and its companion tables, and the `ik_compute_*` rates. Columns are dimensionally normalised so architectures of different width share coefficients; see scripts/calibration/compute_model.py for what each one counts and why. Coefficients are constrained non-negative because every column counts bytes of a buffer that either exists or does not. Ordered variant-guarded first.",
+    "columns": [
+      "flat",
+      "head_flat",
+      "hidden",
+      "doubling",
+      "mask",
+      "quant",
+      "logits",
+      "offload_head"
+    ],
+    "default": {
+      "coefficients": {
+        "flat": 294.309229,
+        "hidden": 72.4015,
+        "mask": 2.482115,
+        "offload_head": 612.313508,
+        "quant": 4.62686
+      },
+      "evidence": "pooled over 407 mainline layer-split observations across every measured architecture; worst residual 65.8%"
+    },
+    "entries": [
+      {
+        "archs": [
+          "gemma4"
+        ],
+        "coefficients": {
+          "doubling": 49.428103,
+          "flat": 306.171523,
+          "hidden": 81.763503,
+          "logits": 0.452356,
+          "mask": 2.292426,
+          "quant": 4.937764
+        },
+        "evidence": "non-negative weighted least squares over 28 per-device observation(s); worst residual 15.4%, 9 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": "gemma_e"
+      },
+      {
+        "archs": [
+          "gemma4"
+        ],
+        "coefficients": {
+          "flat": 464.809352,
+          "quant": 6.28541
+        },
+        "evidence": "non-negative weighted least squares over 8 per-device observation(s); worst residual 5.2%, 1 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": "gemma_e"
+      },
+      {
+        "archs": [
+          "deepseek4"
+        ],
+        "coefficients": {
+          "doubling": 209.455328,
+          "flat": 542.856769,
+          "head_flat": 1406.956443,
+          "mask": 3.40384
+        },
+        "evidence": "non-negative weighted least squares over 24 per-device observation(s); worst residual 27.7%, 18 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "gemma3"
+        ],
+        "coefficients": {
+          "flat": 282.211064,
+          "hidden": 73.343641,
+          "mask": 2.427766,
+          "quant": 9.622005
+        },
+        "evidence": "non-negative weighted least squares over 66 per-device observation(s); worst residual 13.6%, 8 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "gemma3"
+        ],
+        "coefficients": {
+          "flat": 404.526948,
+          "mask": 4.373011
+        },
+        "evidence": "non-negative weighted least squares over 6 per-device observation(s); worst residual 23.5%, 6 outside +/-5%",
+        "runtime": "ik",
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "gemma3"
+        ],
+        "coefficients": {
+          "flat": 495.815391,
+          "mask": 2.059775,
+          "quant": 8.266578
+        },
+        "evidence": "non-negative weighted least squares over 12 per-device observation(s); worst residual 5.1%, 2 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": null
+      },
+      {
+        "archs": [
+          "gemma4"
+        ],
+        "coefficients": {
+          "flat": 288.365261,
+          "hidden": 82.239965,
+          "mask": 2.178162,
+          "quant": 7.968522
+        },
+        "evidence": "non-negative weighted least squares over 42 per-device observation(s); worst residual 8.0%, 6 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "gemma4"
+        ],
+        "coefficients": {
+          "flat": 43.29602,
+          "head_flat": 79.126637,
+          "hidden": 169.884724,
+          "mask": 2.511639,
+          "quant": 7.218413
+        },
+        "evidence": "non-negative weighted least squares over 25 per-device observation(s); worst residual 15.9%, 10 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": null
+      },
+      {
+        "archs": [
+          "glm-dsa"
+        ],
+        "coefficients": {
+          "doubling": 684.992023,
+          "flat": 869.744025,
+          "mask": 9.113046
+        },
+        "evidence": "non-negative weighted least squares over 11 per-device observation(s); worst residual 19.2%, 6 outside +/-5%",
+        "runtime": "ik",
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "laguna"
+        ],
+        "coefficients": {
+          "doubling": 292.982472,
+          "flat": 376.897007,
+          "head_flat": 76.590901,
+          "hidden": 40.568719,
+          "mask": 3.187199,
+          "quant": 0.087411
+        },
+        "evidence": "non-negative weighted least squares over 23 per-device observation(s); worst residual 7.6%, 2 outside +/-5%",
+        "runtime": "ik",
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "laguna"
+        ],
+        "coefficients": {
+          "flat": 893.032182,
+          "hidden": 50.317211,
+          "mask": 0.969759
+        },
+        "evidence": "non-negative weighted least squares over 11 per-device observation(s); worst residual 14.0%, 10 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "laguna"
+        ],
+        "coefficients": {
+          "doubling": 87.96797,
+          "flat": 374.902569,
+          "mask": 7.378431,
+          "quant": 5.371351
+        },
+        "evidence": "non-negative weighted least squares over 11 per-device observation(s); worst residual 7.9%, 4 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": null
+      },
+      {
+        "archs": [
+          "lfm2"
+        ],
+        "coefficients": {
+          "flat": 297.102613,
+          "hidden": 63.258269,
+          "mask": 1.990326,
+          "quant": 2.588785
+        },
+        "evidence": "non-negative weighted least squares over 8 per-device observation(s); worst residual 0.4%, 0 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "llama"
+        ],
+        "coefficients": {
+          "doubling": 149.421129,
+          "flat": 364.604969,
+          "head_flat": 0.655663,
+          "hidden": 45.365574,
+          "logits": 0.192566,
+          "mask": 3.119632,
+          "quant": 0.340365
+        },
+        "evidence": "non-negative weighted least squares over 35 per-device observation(s); worst residual 23.4%, 8 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "llama"
+        ],
+        "coefficients": {
+          "flat": 228.327807,
+          "head_flat": 170.344379,
+          "hidden": 75.596913,
+          "mask": 0.26014,
+          "quant": 0.148286
+        },
+        "evidence": "non-negative weighted least squares over 11 per-device observation(s); worst residual 2.2%, 0 outside +/-5%",
+        "runtime": "ik",
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "llama"
+        ],
+        "coefficients": {
+          "flat": 573.966928,
+          "quant": 0.125116
+        },
+        "evidence": "non-negative weighted least squares over 8 per-device observation(s); worst residual 3.0%, 0 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen3"
+        ],
+        "coefficients": {
+          "flat": 286.920524,
+          "hidden": 71.94788,
+          "mask": 2.162499,
+          "quant": 5.304628
+        },
+        "evidence": "non-negative weighted least squares over 74 per-device observation(s); worst residual 23.7%, 5 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen3"
+        ],
+        "coefficients": {
+          "flat": 188.322784,
+          "head_flat": 274.158883,
+          "hidden": 139.538342,
+          "mask": 0.274574
+        },
+        "evidence": "non-negative weighted least squares over 13 per-device observation(s); worst residual 5.3%, 1 outside +/-5%",
+        "runtime": "ik",
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen3"
+        ],
+        "coefficients": {
+          "flat": 385.469355,
+          "mask": 2.68433,
+          "quant": 5.00775
+        },
+        "evidence": "non-negative weighted least squares over 33 per-device observation(s); worst residual 7.6%, 12 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen35"
+        ],
+        "coefficients": {
+          "flat": 315.027719,
+          "hidden": 61.711357,
+          "mask": 2.1266,
+          "quant": 5.211789
+        },
+        "evidence": "non-negative weighted least squares over 64 per-device observation(s); worst residual 15.2%, 8 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen35"
+        ],
+        "coefficients": {
+          "flat": 135.416414,
+          "head_flat": 446.441846,
+          "hidden": 116.560311,
+          "mask": 0.261717
+        },
+        "evidence": "non-negative weighted least squares over 11 per-device observation(s); worst residual 1.6%, 0 outside +/-5%",
+        "runtime": "ik",
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen35"
+        ],
+        "coefficients": {
+          "flat": 488.382963,
+          "mask": 2.280184,
+          "quant": 4.285
+        },
+        "evidence": "non-negative weighted least squares over 14 per-device observation(s); worst residual 11.2%, 3 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen35moe"
+        ],
+        "coefficients": {
+          "flat": 350.801527,
+          "head_flat": 17.950085,
+          "hidden": 34.788575,
+          "mask": 1.528738,
+          "offload_head": 367.611093,
+          "quant": 2.075093
+        },
+        "evidence": "non-negative weighted least squares over 30 per-device observation(s); worst residual 9.9%, 8 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen35moe"
+        ],
+        "coefficients": {
+          "doubling": 421.043624,
+          "flat": 402.633628,
+          "head_flat": 421.41817,
+          "hidden": 70.423377,
+          "mask": 1.055343
+        },
+        "evidence": "non-negative weighted least squares over 20 per-device observation(s); worst residual 12.1%, 3 outside +/-5%",
+        "runtime": "ik",
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "qwen35moe"
+        ],
+        "coefficients": {
+          "doubling": 45.742757,
+          "flat": 366.920845,
+          "hidden": 28.062157,
+          "mask": 2.083874,
+          "quant": 2.876407
+        },
+        "evidence": "non-negative weighted least squares over 16 per-device observation(s); worst residual 12.4%, 4 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": null
+      },
+      {
+        "archs": [
+          "talkie"
+        ],
+        "coefficients": {
+          "doubling": 56.803053,
+          "flat": 412.700373,
+          "hidden": 17.96805,
+          "mask": 3.001284,
+          "quant": 5.343112
+        },
+        "evidence": "non-negative weighted least squares over 25 per-device observation(s); worst residual 20.2%, 16 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "talkie"
+        ],
+        "coefficients": {
+          "flat": 445.890258,
+          "quant": 2.46609
+        },
+        "evidence": "non-negative weighted least squares over 8 per-device observation(s); worst residual 3.8%, 0 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": null
+      }
+    ]
+  },
   "constants": {
     "DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16": {
       "doc": "deepseek4 compressed-sparse-attention KV bytes per token per layer at f16.",
@@ -266,10 +697,17 @@
     },
     "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN": {
       "doc": "The Gemma 4 E-variant's per-layer embedding input, charged per layer per batch token.",
-      "evidence": "12 E-variant cells at 1027 B/layer/token, against 35 same-architecture control cells at 1. 1027 is 257 f32 elements.",
+      "evidence": "16 E-variant cells at 1028 B/layer/token, against 35 same-architecture control cells at 1. 1028 is 257 f32 elements.",
       "kind": "derived",
       "type": "u64",
-      "value": 1027
+      "value": 1028
+    },
+    "IK_ATTENTION_CHUNK": {
+      "doc": "ik_llama's attention chunk (`-amb`), in tokens. Above it the fork\n/// grows its attention scratch by a constant per doubling of the batch\n/// rather than proportionally.",
+      "evidence": "the fork's default for `-amb`; read from the runtime, not fitted. Every cell in the dataset leaves it unset.",
+      "kind": "structural",
+      "type": "u64",
+      "value": 512
     },
     "IK_OP_OFFLOAD_MIN_BATCH": {
       "doc": "Batch threshold below which ik keeps the MoE ops on the CPU: the term applies while `n_tokens * n_used < this * n_expert`.",
@@ -287,7 +725,7 @@
     },
     "MAINLINE_LAYER_SPLIT_MASK_COPIES": {
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "99 mainline layer-split cells at 4.00, against 147 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "109 mainline layer-split cells at 4.00, against 147 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived",
       "type": "u64",
       "value": 4
@@ -430,7 +868,7 @@
     },
     "default": 54
   },
-  "measurements": 548,
+  "measurements": 574,
   "mtp_compute_intermediates": {
     "$comment": "n_embd-wide f32 graph intermediates the MTP draft context holds live per batch token, by architecture. Its whole per-device compute share is `ubatch x (this x n_embd x 4 + 2 x n_kv)`, the same shape as the main context's, and the total MTP cost is the draft cache's physical size plus this share on every spanned device.",
     "by_arch": {
@@ -449,7 +887,7 @@
       "deepseek4+moe": 0,
       "gemma3": 32794,
       "gemma4": 65562,
-      "gemma4+e": 16378,
+      "gemma4+e": 16368,
       "gemma4+moe": 32794,
       "lfm2": 4116,
       "llama": 8209,
