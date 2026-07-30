@@ -450,6 +450,15 @@ fn main() {
                     .collect();
                 out["placement"] = json!({
                     "allocation": allocation,
+                    // The reservation above carries deliberate slop — one
+                    // layer's worth of headroom, the prompt cache's cap — that
+                    // the process is not expected to use. The prediction is
+                    // what the rolling correction divides an observation by, so
+                    // it is the figure to compare against a measurement.
+                    "predicted_vram_bytes": packed.rolling.uncorrected_vram_bytes,
+                    "predicted_vram_mib": packed.rolling.uncorrected_vram_bytes / (1024 * 1024),
+                    "predicted_host_bytes": packed.rolling.uncorrected_host_bytes,
+                    "gpu_weight_bytes": packed.rolling.gpu_weight_bytes,
                     "expert_offload_bytes": packed.expert_offload_bytes,
                     "expert_offload_mib": packed.expert_offload_bytes / (1024 * 1024),
                     "expert_offload_layers": packed.expert_offload_layers,
