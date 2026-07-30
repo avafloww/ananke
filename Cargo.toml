@@ -1,6 +1,6 @@
 [workspace]
-members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-placement", "ananke-tuning", "scripts/xtask"]
-default-members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-placement", "ananke-tuning"]
+members = ["ananke", "anankectl", "ananke-api", "ananke-calibrate", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-placement", "ananke-tuning", "scripts/xtask"]
+default-members = ["ananke", "anankectl", "ananke-api", "ananke-calibrate", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-placement", "ananke-tuning"]
 resolver = "2"
 
 [workspace.package]
@@ -10,6 +10,7 @@ version = "0.2.0"
 [workspace.dependencies]
 # Internal crates
 ananke-api = { path = "ananke-api" }
+ananke-calibrate = { path = "ananke-calibrate" }
 ananke-config = { path = "ananke-config" }
 ananke-estimate = { path = "ananke-estimate" }
 ananke-fs = { path = "ananke-fs" }

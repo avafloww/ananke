@@ -1,0 +1,14 @@
+[package]
+name = "ananke-calibrate"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+ananke-config.workspace = true
+ananke-estimate.workspace = true
+ananke-fs.workspace = true
+ananke-gguf.workspace = true
+ananke-placement.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smol_str.workspace = true

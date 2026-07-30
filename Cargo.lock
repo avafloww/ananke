@@ -81,6 +81,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ananke-calibrate"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "ananke-estimate",
+ "ananke-fs",
+ "ananke-gguf",
+ "ananke-placement",
+ "serde",
+ "serde_json",
+ "smol_str",
+]
+
+[[package]]
 name = "ananke-config"
 version = "0.2.0"
 dependencies = [
