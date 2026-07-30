@@ -1,6 +1,7 @@
 //! Measured tuning constants, generated from `tuning.json` at build time.
 //!
-//! The JSON beside this file is the source of truth. It is produced by
+//! The constants live in `ananke-tuning`, whose `tuning.json` is the source
+//! of truth. It is produced by
 //! `scripts/calibration/analyse.py` from the measurement dataset, and
 //! `build.rs` turns it into the constants below — so a value the estimator
 //! uses cannot drift from the data that justifies it without that showing up
@@ -16,4 +17,4 @@
 //! To change one, re-run the campaign and regenerate the JSON. Editing the
 //! generated constants directly is not possible, which is the point.
 
-include!(concat!(env!("OUT_DIR"), "/tuning_constants.rs"));
+pub use ananke_tuning::*;

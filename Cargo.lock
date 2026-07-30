@@ -23,6 +23,7 @@ version = "0.2.0"
 dependencies = [
  "ananke-api",
  "ananke-config",
+ "ananke-tuning",
  "arc-swap",
  "async-trait",
  "axum 0.7.9",
@@ -80,6 +81,13 @@ name = "ananke-config"
 version = "0.2.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "ananke-tuning"
+version = "0.2.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

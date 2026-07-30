@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import compute_model  # noqa: E402  (needs the path insertion above)
 
 DATA = Path(__file__).parent / "data" / "measurements.ndjson"
-TUNING_JSON = Path(__file__).parents[2] / "ananke/src/estimator/tuning.json"
+TUNING_JSON = Path(__file__).parents[2] / "ananke-tuning/tuning.json"
 
 
 def load(path: Path) -> list[dict]:
