@@ -553,6 +553,10 @@ List all services
         }[]
       } | null
     footprint_bytes?: number | null
+    footprint_devices?: {
+      bytes: number
+      device: string
+    }[]
     has_mmproj?: boolean | null
     inflight_count?: number
     last_used_ms?: number | null

@@ -4,8 +4,13 @@ use ananke_api::{
     internal::{event::Event, log_line::LogLine},
     oneshot::create::{OneshotAllocation, OneshotDevices, OneshotRequest, OneshotResponse},
     services::{
-        detail::ServiceDetail, disable::DisableResponse, enable::EnableResponse,
-        list::ServiceSummary, logs::LogsResponse, start::StartResponse, stop::StopResponse,
+        detail::ServiceDetail,
+        disable::DisableResponse,
+        enable::EnableResponse,
+        list::{DeviceFootprint, ServiceSummary},
+        logs::LogsResponse,
+        start::StartResponse,
+        stop::StopResponse,
     },
     shared::errors::{ApiErrorBody, ApiErrorCodeSlug, ApiErrorKind},
 };
@@ -39,7 +44,20 @@ fn service_summary_roundtrips() {
         modality: ananke_api::shared::modality::Modality::Chat,
         ananke_metadata,
         fit_verdict: None,
-        footprint_bytes: None,
+        footprint_bytes: Some(7_516_192_768),
+        // Populated rather than empty: the field is elided from JSON when it is,
+        // so an empty vec would round-trip through a document that never carried
+        // it and prove nothing about the shape.
+        footprint_devices: vec![
+            DeviceFootprint {
+                device: "gpu:0".into(),
+                bytes: 4_294_967_296,
+            },
+            DeviceFootprint {
+                device: "cpu".into(),
+                bytes: 3_221_225_472,
+            },
+        ],
         last_used_ms: None,
     };
     assert_eq!(v.clone(), roundtrip(v));

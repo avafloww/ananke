@@ -108,5 +108,31 @@ async fn unplaceable_service_reports_its_demand_and_names_the_short_device() {
         "the fallback reports the model's aggregate demand, got {footprint}"
     );
 
+    // The row shows the total and the breakdown together, so they have to be the
+    // same figure. They are computed once and summed rather than derived twice —
+    // this is the assertion that keeps it that way, and it runs on the fallback
+    // path because that is the one where the total does not come from a
+    // placement and so could most easily drift from the parts.
+    let devices = svc["footprint_devices"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected a per-device breakdown, got {svc}"));
+    assert!(!devices.is_empty(), "the demand names its devices");
+    let summed: u64 = devices
+        .iter()
+        .map(|d| {
+            d["bytes"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("a device's share is a byte count, got {d}"))
+        })
+        .sum();
+    assert_eq!(
+        summed, footprint,
+        "the breakdown sums to the total, got {devices:?}"
+    );
+    assert!(
+        devices.iter().any(|d| d["device"] == "cpu"),
+        "with no GPUs the demand lands on the host, got {devices:?}"
+    );
+
     h.cleanup().await;
 }

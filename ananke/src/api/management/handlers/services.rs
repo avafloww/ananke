@@ -5,7 +5,7 @@ use ananke_api::{
     services::{
         command::{EnvVar, LaunchCommand, LaunchCommandResponse, LaunchCommandSource},
         detail::{PlacementPreview, RestartEvent, ServiceDetail},
-        list::{ServiceSummary, ServicesResponse},
+        list::{DeviceFootprint, ServiceSummary, ServicesResponse},
     },
     shared::errors::ApiError,
 };
@@ -54,7 +54,11 @@ pub async fn list_services(State(state): State<AppState>) -> Response {
             running,
         );
         let fit_verdict = placement.as_ref().map(|p| p.verdict.clone());
-        let footprint_bytes = summary_footprint_bytes(&state, svc_cfg, placement.as_ref(), &entry);
+        // One computation, two fields: the total is the breakdown's sum, so a row
+        // showing both cannot show two figures that disagree.
+        let footprint_devices = summary_footprint(&state, svc_cfg, placement.as_ref(), &entry);
+        let footprint_bytes = (!footprint_devices.is_empty())
+            .then(|| footprint_devices.iter().map(|d| d.bytes).sum());
         let last_used_ms = state.activity.last_ms(&svc_cfg.name);
 
         services.push(ServiceSummary {
@@ -75,6 +79,7 @@ pub async fn list_services(State(state): State<AppState>) -> Response {
             ananke_metadata: svc_cfg.metadata.clone(),
             fit_verdict,
             footprint_bytes,
+            footprint_devices,
             last_used_ms,
         });
     }
@@ -406,23 +411,35 @@ fn serving_config(svc_cfg: &ServiceConfig) -> Option<ananke_api::services::detai
 /// simply couldn't be placed. Fall back to the estimator's aggregate demand so
 /// the row still conveys the model's scale; `fit_verdict` tells the reader it
 /// is a requirement rather than a reservation.
-fn summary_footprint_bytes(
+fn summary_footprint(
     state: &AppState,
     svc_cfg: &ServiceConfig,
     placement: Option<&PlacementPreview>,
     entry: &Option<CacheEntry>,
-) -> Option<u64> {
-    let placement = placement?;
+) -> Vec<DeviceFootprint> {
+    let Some(placement) = placement else {
+        return Vec::new();
+    };
     if !placement.devices.is_empty() {
-        return Some(placement.devices.iter().map(|d| d.bytes).sum());
+        return placement
+            .devices
+            .iter()
+            .map(|d| DeviceFootprint {
+                device: d.device.clone(),
+                bytes: d.bytes,
+            })
+            .collect();
     }
     // Only a `does_not_fit` verdict gets the demand fallback. The frontend
     // keys its "needed" qualifier on that verdict, so reporting a requirement
     // under any other one renders it as memory the service is holding.
     if !matches!(placement.verdict, FitVerdict::DoesNotFit { .. }) {
-        return None;
+        return Vec::new();
     }
-    let est = &entry.as_ref()?.estimate_full;
+    let Some(entry) = entry.as_ref() else {
+        return Vec::new();
+    };
+    let est = &entry.estimate_full;
     let snapshot = state.snapshot.read();
     // Apply the same rolling corrections `placement_preview` applies, so both
     // figures describe the same model.
@@ -431,7 +448,18 @@ fn summary_footprint_bytes(
     // — the head-vs-secondary logits trim, the CPU-side compute buffer, the
     // one-layer fudge, MTP, expert offload — falls out of the same code that
     // computes a real placement, so the two cannot disagree.
-    let packed =
-        placement::pack_demand(est, &placement_inputs(svc_cfg), &snapshot, corrections).ok()?;
-    Some(packed.allocation.bytes.values().sum())
+    let Ok(packed) =
+        placement::pack_demand(est, &placement_inputs(svc_cfg), &snapshot, corrections)
+    else {
+        return Vec::new();
+    };
+    packed
+        .allocation
+        .bytes
+        .iter()
+        .map(|(&device, &bytes)| DeviceFootprint {
+            device: device.as_display(),
+            bytes,
+        })
+        .collect()
 }

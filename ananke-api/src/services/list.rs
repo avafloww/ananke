@@ -79,9 +79,31 @@ pub struct ServiceSummary {
     /// reserves nothing, or a llama-cpp service whose GGUF hasn't been read).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub footprint_bytes: Option<u64>,
+    /// Where [`Self::footprint_bytes`] would land, per device, sorted by device.
+    ///
+    /// The same figure broken out rather than a second one: the total is this
+    /// list's sum, so a row can show both without the two disagreeing. Empty when
+    /// there is no placement to describe, which is the same condition that leaves
+    /// `footprint_bytes` `None`.
+    ///
+    /// Deliberately slimmer than the detail view's `DevicePlacement`, which also
+    /// carries each device's capacity and what else is using it. Those support a
+    /// utilisation bar; a list row only names where the memory goes, and this
+    /// endpoint is polled every two seconds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprint_devices: Vec<DeviceFootprint>,
     /// Wall-clock timestamp (ms since epoch) of the last time the
     /// service was provisioned or received a request. `None` if the
     /// service has never been started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used_ms: Option<i64>,
+}
+
+/// One device's share of a [`ServiceSummary`]'s footprint.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct DeviceFootprint {
+    /// Slot string: `"cpu"` or `"gpu:N"`, as the placement engine names it.
+    pub device: String,
+    /// Memory bytes the service would occupy on that device.
+    pub bytes: u64,
 }
