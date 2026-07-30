@@ -24,7 +24,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use ananke_measure::{
-    harness::{Completed, Options, Summary, measure_cells},
+    harness::{Completed, Options, Summary, measure_cells_with, sys::Deps},
     record::Factors,
 };
 
@@ -89,6 +89,21 @@ pub fn schedule_path(campaign: &Campaign) -> PathBuf {
 
 /// Measure the schedule, committing the dataset as it fills.
 pub fn run(campaign: &Campaign, cells: &[Factors], vcs: &dyn Vcs) -> Result<Summary, String> {
+    run_with(campaign, cells, vcs, &Deps::local())
+}
+
+/// As [`run`], against a given set of outside-world implementations.
+///
+/// The commit cadence is the thing worth testing here and it only exists in
+/// relation to the harness's per-cell notifications, so testing the two apart
+/// leaves the seam between them — which is where the Python's torn-line hazard
+/// lived — checked by nobody.
+pub fn run_with(
+    campaign: &Campaign,
+    cells: &[Factors],
+    vcs: &dyn Vcs,
+    deps: &Deps,
+) -> Result<Summary, String> {
     let options = Options {
         out: campaign.out.clone(),
         log_dir: campaign.log_dir.clone(),
@@ -102,7 +117,9 @@ pub fn run(campaign: &Campaign, cells: &[Factors], vcs: &dyn Vcs) -> Result<Summ
     };
 
     let mut ledger = Ledger::new(vcs, &campaign.data_paths, COMMIT_EVERY, cells.len());
-    let result = measure_cells(cells, &options, &mut |_, completed| ledger.cell(completed));
+    let result = measure_cells_with(deps, cells, &options, &mut |_, completed| {
+        ledger.cell(completed)
+    });
 
     // The final commit happens on the error path too. The rows the run did measure
     // are on disk either way, but leaving them uncommitted after an I/O failure is
@@ -265,6 +282,8 @@ fn report(outcome: Outcome) {
 
 #[cfg(test)]
 mod tests {
+    use ananke_measure::harness::sys::{FakeGpu, FakeHttp, FakeProcFs, FakeSpawner, Fakes};
+
     use super::*;
     use crate::campaign::git::FakeGit;
 
@@ -335,6 +354,93 @@ mod tests {
         assert!(git.commits().is_empty(), "the interval has not elapsed");
         ledger.commit(Standing::Complete);
         assert_eq!(git.commits().len(), 1);
+    }
+
+    /// The driver commits what the harness measured, and says how it ended.
+    ///
+    /// This is the seam the whole module exists to hold: the harness notifies at a
+    /// cell boundary, and the driver commits from inside that notification. Neither
+    /// half means anything alone — a cadence with nothing to count, a notification
+    /// nobody acts on — so the test runs them together against the harness's
+    /// in-memory world, which is what the Python arrangement could not have been
+    /// tested as at all, its two halves being separate processes.
+    #[test]
+    fn a_run_commits_at_cell_boundaries_and_reports_how_it_ended() {
+        let git = FakeGit::dirty();
+        let fakes = Fakes::new(
+            FakeSpawner::new(),
+            // Clears the pre-flight gate, so every cell is actually measured.
+            FakeProcFs::new().with_available_gib(1024.0),
+            FakeGpu::new(),
+            FakeHttp::new(),
+        );
+        let campaign = Campaign {
+            headroom_gib: 1.0,
+            ..fixture()
+        };
+        let cells = [measurable("a"), measurable("b")];
+
+        let summary = run_with(&campaign, &cells, &git, &fakes.deps()).expect("the fakes hold");
+
+        assert_eq!(summary.measured, 2);
+        let rows = fakes.files.lines(&campaign.out);
+        assert_eq!(rows.len(), 2, "one row per cell");
+
+        // One commit, at the end: the interval has not elapsed during a run this
+        // short, and the final commit is unconditional.
+        let commits = git.commits();
+        assert_eq!(commits.len(), 1, "{commits:?}");
+        assert!(commits[0].contains("2 measurements, campaign complete"));
+        assert!(commits[0].contains("2 of 2 planned cells measured"));
+        assert_eq!(git.committed_paths(), vec![campaign.data_paths.clone()]);
+    }
+
+    /// A run the swap watchdog stops commits what it got, and does not claim the
+    /// schedule was finished.
+    ///
+    /// The regression this pins: `measure_cells_with` returns `Ok` on an abort, so
+    /// the driver saw the same value a completed run returns.
+    #[test]
+    fn a_swap_abort_commits_what_it_measured_without_claiming_completion() {
+        let git = FakeGit::dirty();
+        let fakes = Fakes::new(
+            FakeSpawner::new(),
+            FakeProcFs::new()
+                .with_available_gib(1024.0)
+                .with_swap_growth_gib(8.0),
+            FakeGpu::new(),
+            // Still loading, so the watchdog gets a reading before /health answers.
+            FakeHttp::new().loading_for(4),
+        );
+        let campaign = Campaign {
+            headroom_gib: 1.0,
+            ..fixture()
+        };
+
+        let summary = run_with(
+            &campaign,
+            &[measurable("a"), measurable("b")],
+            &git,
+            &fakes.deps(),
+        )
+        .expect("an abort is a summary, not an error");
+
+        assert!(summary.aborted_on_swap.is_some());
+        let commits = git.commits();
+        assert_eq!(commits.len(), 1, "the final commit still happens");
+        assert!(!commits[0].contains("campaign complete"), "{}", commits[0]);
+        assert!(commits[0].contains("stopped on swap"), "{}", commits[0]);
+        assert!(commits[0].contains("0 of 2"), "{}", commits[0]);
+    }
+
+    /// A cell the harness can measure under the fakes.
+    fn measurable(label: &str) -> Factors {
+        Factors {
+            label: label.to_owned(),
+            model: format!("/models/{label}.gguf"),
+            ctx: 32768,
+            ..Default::default()
+        }
     }
 
     /// A filtered run does not write the tracked schedule.

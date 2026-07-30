@@ -143,7 +143,18 @@ That trait is async and coupled to the supervisor's `SpawnConfig` — built for
 long-lived supervised children with pdeathsig and log capture. The harness spawns
 one process, waits for it to load, samples, and kills it. Its own small synchronous
 traits with in-memory fakes fit that shape; borrowing the supervisor's would be
-over-fitting, and would drag tokio into a crate that has no other use for it.
+over-fitting, and would drag tokio into a crate that has no other use for it. The
+filesystem is one of those seams — three primitives, read/write/append — because the
+measurement loop appends a row per cell and notifies its driver, and that ordering
+cannot be checked against a scratch directory without also being a test of the disk.
+
+Those seams are public, and `measure_cells_with` takes them. The campaign commits
+from inside the harness's per-cell notification, so what the two agree on is an
+ordering — a cell is reported once, after its row is on disk — and an ordering is
+only worth stating if something checks it. `campaign::run_with` runs the whole
+driver against the in-memory world for that reason. The Python could not have been
+tested this way at all: its two halves were separate processes, which is exactly why
+its commits could land mid-append.
 
 One rule for anything added here. Where a derivation pairs two cells, or reads a
 config, the key must pin **every** factor that could differ, and the reader should
