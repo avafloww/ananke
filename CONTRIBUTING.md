@@ -2,10 +2,30 @@
 
 The repository contains two main components:
 
-- The Rust backend at the crate root (`src/`, `Cargo.toml`), which produces two binaries: `ananke` (the daemon) and `anankectl` (the CLI).
+- The Rust backend, a workspace producing two binaries: `ananke` (the daemon) and `anankectl` (the CLI).
 - The frontend at `frontend/`, which is the web UI for this project. It is a Vite-based React 19 application written in TypeScript, styled with Tailwind CSS 4, and built with the React Compiler enabled.
 
 Both components share the general conventions below. The Rust- and TypeScript-specific sections that follow apply to their respective trees.
+
+The backend's crates, leaves first:
+
+| crate | holds | depends on |
+|---|---|---|
+| `ananke-fs` | the `Fs` trait with its local and in-memory implementations | `parking_lot` |
+| `ananke-gguf` | the GGUF reader, including sharded models | `ananke-fs` |
+| `ananke-tuning` | `tuning.json` and the build script that turns it into constants | — |
+| `ananke-config` | config defaults and the descriptor table the docs are generated from | — |
+| `ananke-api` | the DTOs that cross the wire to the frontend | — |
+| `ananke` | the daemon: estimator, packer, supervision, HTTP surface | all of the above |
+| `anankectl` | the CLI | `ananke-api` |
+
+The split is for compile times as much as for structure. `ananke`'s build script
+runs the frontend's `npm run build`, so anything sharing that script pays for a
+UI rebuild on every change — which is why `tuning.json` lives in its own crate:
+regenerating the estimator's constants during a calibration campaign is the
+inner loop of that work, and it now costs a few seconds instead of a UI build.
+Extending the same seam to the estimator and packer themselves is a natural
+continuation.
 
 ### Platform scope
 

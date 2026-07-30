@@ -11,12 +11,10 @@ use std::{
     path::Path,
 };
 
+use ananke_fs::Fs;
 use smol_str::SmolStr;
 
-use crate::{
-    gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue},
-    system::Fs,
-};
+use crate::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
 
 const MAGIC: &[u8; 4] = b"GGUF";
 
@@ -311,7 +309,7 @@ mod tests {
 
     #[test]
     fn parses_synthetic_header() {
-        let fs = crate::system::InMemoryFs::new().with("/fake.gguf", synth_gguf());
+        let fs = ananke_fs::InMemoryFs::new().with("/fake.gguf", synth_gguf());
         let summary = read_single(&fs, Path::new("/fake.gguf")).unwrap();
         assert_eq!(summary.architecture, "qwen3");
         assert_eq!(summary.block_count, Some(36));
@@ -323,7 +321,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_magic() {
-        let fs = crate::system::InMemoryFs::new().with("/bad.gguf", b"XXXXdata".to_vec());
+        let fs = ananke_fs::InMemoryFs::new().with("/bad.gguf", b"XXXXdata".to_vec());
         let err = read_single(&fs, Path::new("/bad.gguf")).unwrap_err();
         assert!(err.0.contains("bad magic"));
     }
@@ -347,7 +345,7 @@ mod tests {
         v.extend_from_slice(&9999u32.to_le_bytes());
         v.extend_from_slice(&0u64.to_le_bytes());
 
-        let fs = crate::system::InMemoryFs::new().with("/u.gguf", v);
+        let fs = ananke_fs::InMemoryFs::new().with("/u.gguf", v);
         let err = read_single(&fs, Path::new("/u.gguf")).unwrap_err();
         assert!(
             err.0.contains("unsupported GGUF dtype id 9999"),

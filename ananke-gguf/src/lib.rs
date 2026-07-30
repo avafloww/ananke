@@ -1,8 +1,8 @@
 //! GGUF reader — single-file and sharded.
 //!
-//! All filesystem interaction flows through a [`crate::system::Fs`] handle,
-//! so tests can substitute [`crate::system::InMemoryFs`] preloaded with
-//! synthetic bytes. Production calls pass [`crate::system::LocalFs`].
+//! All filesystem interaction flows through a [`ananke_fs::Fs`] handle,
+//! so tests can substitute [`ananke_fs::InMemoryFs`] preloaded with
+//! synthetic bytes. Production calls pass [`ananke_fs::LocalFs`].
 
 pub mod reader;
 pub mod shards;

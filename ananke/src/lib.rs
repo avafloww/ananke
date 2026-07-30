@@ -8,7 +8,8 @@ pub mod db;
 pub mod devices;
 pub mod errors;
 pub mod estimator;
-pub mod gguf;
+/// The GGUF reader, re-exported so `crate::gguf::…` paths are unchanged.
+pub use ananke_gguf as gguf;
 pub mod oneshot;
 pub mod supervise;
 pub mod system;

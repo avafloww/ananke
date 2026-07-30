@@ -1,6 +1,6 @@
 [workspace]
-members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-tuning", "scripts/xtask"]
-default-members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-tuning"]
+members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-fs", "ananke-gguf", "ananke-tuning", "scripts/xtask"]
+default-members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-fs", "ananke-gguf", "ananke-tuning"]
 resolver = "2"
 
 [workspace.package]
@@ -11,6 +11,8 @@ version = "0.2.0"
 # Internal crates
 ananke-api = { path = "ananke-api" }
 ananke-config = { path = "ananke-config" }
+ananke-fs = { path = "ananke-fs" }
+ananke-gguf = { path = "ananke-gguf" }
 ananke-tuning = { path = "ananke-tuning" }
 
 # Async + HTTP

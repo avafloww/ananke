@@ -23,6 +23,8 @@ version = "0.2.0"
 dependencies = [
  "ananke-api",
  "ananke-config",
+ "ananke-fs",
+ "ananke-gguf",
  "ananke-tuning",
  "arc-swap",
  "async-trait",
@@ -81,6 +83,21 @@ name = "ananke-config"
 version = "0.2.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "ananke-fs"
+version = "0.2.0"
+dependencies = [
+ "parking_lot",
+]
+
+[[package]]
+name = "ananke-gguf"
+version = "0.2.0"
+dependencies = [
+ "ananke-fs",
+ "smol_str",
 ]
 
 [[package]]

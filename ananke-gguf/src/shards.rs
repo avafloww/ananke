@@ -2,12 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
+use ananke_fs::Fs;
+
 use crate::{
-    gguf::{
-        reader::{ReadError, read_single},
-        types::GgufSummary,
-    },
-    system::Fs,
+    reader::{ReadError, read_single},
+    types::GgufSummary,
 };
 
 /// Read a GGUF model. If the file is shard 0 of a multi-shard set
