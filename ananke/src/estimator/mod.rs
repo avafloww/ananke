@@ -262,7 +262,12 @@ fn drop_mtp_head_blocks(est: &mut Estimate, summary: &GgufSummary) {
         est.weights_bytes = est.weights_bytes.saturating_sub(*bytes);
         *bytes = 0;
     }
+    let before = est.expert_layers.len();
     est.expert_layers.retain(|&l| l < span);
+    // How many expert layers the head accounted for. ik's `-ncmoe` window is
+    // taken over the *full* block range, so a trailing window swallows these —
+    // it logs an override for them and then never loads them, wasting the slot.
+    est.mtp_head_expert_layers = (before - est.expert_layers.len()) as u32;
     if let Some(tensors) = est.expert_tensors.as_mut() {
         tensors.retain(|t| t.layer < span);
     }

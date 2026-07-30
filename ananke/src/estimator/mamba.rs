@@ -82,6 +82,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
         mmproj_graph_bytes: 0,
+        mtp_head_expert_layers: 0,
         tensor_split_replicated_bytes: 0,
         host_overhead_bytes: 0,
         host_cache_bytes: 0,

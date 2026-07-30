@@ -613,8 +613,13 @@ fn compute_buffer_covers_what_the_runtime_took() {
     // Safety comes instead from the downstream safety factor and the rolling
     // correction, whose [0.8, 1.5] clamp absorbs a shortfall of this size on the
     // first observation. What this test is for is stopping the worst case
-    // getting *worse*: tighten the bound whenever the model improves.
-    let worst_allowed_shortfall = 0.15;
+    // getting *worse*: tighten the bound whenever the model improves. The worst
+    // shortfall on the compute term is currently 12.6%, on
+    // `batchaxis-talkie-c8192-ub1024`; whole-*estimate* accuracy is far tighter
+    // than that, every one of the 229 comparable cells landing inside +/-5%,
+    // because the compute term is a few hundred MiB of a total in the tens of
+    // GiB.
+    let worst_allowed_shortfall = 0.13;
     let under: Vec<String> = under
         .into_iter()
         .filter(|(shortfall, _)| *shortfall > worst_allowed_shortfall)

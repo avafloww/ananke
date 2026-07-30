@@ -48,9 +48,15 @@ impl<'a> Packer<'a> {
         // `Layers(n)` honours the runtime's argument; `Auto` offloads every
         // expert layer, since this path has no per-card budget to fit a suffix
         // against.
+        // ik picks a different end depending on how many devices the model spans,
+        // and a trailing window wastes the MTP head's slots.
+        let gpu_count = self.allowed_gpus.len();
+        let head_layers = self.estimate.mtp_head_expert_layers;
         let plan = match self.offload_mode {
-            OffloadMode::Off => Ncmoe::for_runtime(self.svc, 0, &layers),
-            OffloadMode::Layers(n) => Ncmoe::for_runtime(self.svc, n, &layers),
+            OffloadMode::Off => Ncmoe::for_runtime(self.svc, 0, &layers, gpu_count, head_layers),
+            OffloadMode::Layers(n) => {
+                Ncmoe::for_runtime(self.svc, n, &layers, gpu_count, head_layers)
+            }
             OffloadMode::Auto => Ncmoe::keeping(self.svc, 0, &layers),
         };
 

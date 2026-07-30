@@ -310,6 +310,12 @@ pub struct Estimate {
     /// the true value keeps the secondaries safe, subtracting more would
     /// under-reserve and OOM them.
     pub output_buffer_bytes: u64,
+    /// Expert layers the MTP head accounted for, dropped from
+    /// [`Self::expert_layers`] because ik does not load them. Non-zero only for
+    /// an ik service on a model with an embedded head. See
+    /// [`crate::allocator::placement::experts_ncmoe::Ncmoe`] for why the count
+    /// matters to `-ncmoe`.
+    pub mtp_head_expert_layers: u32,
     /// Weights `--split-mode tensor` holds on *every* spanned card instead of
     /// dividing: the narrow gating and shared-expert paths every shard consumes.
     /// Zero for an architecture that ships none, which is every dense model

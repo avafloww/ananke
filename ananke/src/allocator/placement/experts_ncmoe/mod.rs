@@ -25,14 +25,24 @@ use crate::{
 /// `blk.38` (block 0 being dense), summing to the 41496 MiB its host buffer
 /// reports.
 ///
-/// **ik_llama** moves the trailing `N` expert *layers*. The same model at
-/// `-ncmoe 30` on the fork puts 33672 MiB in its host buffer — the trailing 30
-/// layers' 33360 plus the 312 MiB embedding table — and its GPU buffers hold the
-/// complement to the byte.
+/// **ik_llama** depends on the device count, which its own source spells out
+/// (`llama-load-tensors.cpp`): with `split_mode` attn or graph, or `ncmoe >=
+/// n_layer`, or **fewer than two devices**, it overrides the leading blocks like
+/// mainline. Only a layer split across two or more devices takes the other
+/// branch, where it distributes the count per device in proportion to each one's
+/// layer share and then walks *backwards* from the last block — "it is better to
+/// go backwards to avoid issues when there are layers without MoE tensors" — so
+/// the window is trailing.
 ///
-/// The difference only shows when a quant widens later blocks' experts, as
-/// laguna's does: its leading 38 and trailing 39 differ by 1692 MiB. That is why
-/// one rule appeared to serve both.
+/// The distinction is worth 1692 MiB on laguna, whose quant widens later blocks:
+/// its leading 38 and trailing 39 differ by exactly that, which is what the
+/// one-card cells were short by while this modelled every ik service as trailing.
+///
+/// A trailing window also swallows the MTP head. ik overrides those blocks and
+/// then never loads them, so the slots are wasted: Qwen3.6-35B-A3B at `-ncmoe 40`
+/// on two cards logs 22734 MiB of overrides and puts 22172 in its host buffer,
+/// short by exactly block 40's 562 MiB. Verified to 0.00 MiB across five cells
+/// spanning one and two cards and `-ncmoe` 20, 30, and 40.
 pub(crate) enum Ncmoe {
     /// Mainline: offload blocks below this index.
     LeadingBlocksBelow(u32),
@@ -46,10 +56,24 @@ impl Ncmoe {
         svc.llama_cpp().is_some_and(|lc| lc.runtime.ik().is_some())
     }
 
-    /// The plan for an explicit `-ncmoe n` under this service's runtime.
-    pub(crate) fn for_runtime(svc: &ServiceConfig, n: u32, layers: &[u32]) -> Self {
-        if Self::is_ik(svc) {
-            Self::TrailingLayers(n.min(layers.len() as u32))
+    /// The plan for an explicit `-ncmoe n` under this service's runtime and
+    /// placement.
+    ///
+    /// `gpus` is how many devices the model spans and `mtp_head_layers` how many
+    /// expert layers the MTP head accounted for — both of which change which
+    /// blocks ik picks. See the type's own documentation.
+    pub(crate) fn for_runtime(
+        svc: &ServiceConfig,
+        n: u32,
+        layers: &[u32],
+        gpus: usize,
+        mtp_head_layers: u32,
+    ) -> Self {
+        if Self::is_ik(svc) && gpus >= 2 && n < layers.len() as u32 + mtp_head_layers {
+            // The window is taken over the full block range, so the head blocks
+            // it reaches are overridden and then never loaded.
+            let real = n.saturating_sub(mtp_head_layers);
+            Self::TrailingLayers(real.min(layers.len() as u32))
         } else {
             Self::LeadingBlocksBelow(n)
         }
@@ -140,8 +164,12 @@ impl<'a> Packer<'a> {
 
         // Which end this runtime takes, and how it counts (see [`Ncmoe`]). The
         // greedy `Auto` walk starts from whichever end stays on the GPU.
+        let gpu_count = self.allowed_gpus.len();
+        let head_layers = self.estimate.mtp_head_expert_layers;
         let plan = match self.offload_mode {
-            OffloadMode::Layers(n) => Ncmoe::for_runtime(self.svc, n, &layers),
+            OffloadMode::Layers(n) => {
+                Ncmoe::for_runtime(self.svc, n, &layers, gpu_count, head_layers)
+            }
             OffloadMode::Auto => {
                 let mut used = 0u64;
                 let mut kept = 0u32;
@@ -161,7 +189,7 @@ impl<'a> Packer<'a> {
                 }
                 Ncmoe::keeping(self.svc, kept, &layers)
             }
-            OffloadMode::Off => Ncmoe::for_runtime(self.svc, 0, &layers),
+            OffloadMode::Off => Ncmoe::for_runtime(self.svc, 0, &layers, gpu_count, head_layers),
         };
 
         let mut gpu_expert_bytes = 0u64;
