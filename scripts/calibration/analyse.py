@@ -1007,6 +1007,71 @@ def derive_tensor_quantised(rows: list[dict]) -> str:
     )
 
 
+def derive_no_flash_attn_score(rows: list[dict]) -> str:
+    """What an unfused attention pass costs per head, per cache token, per batch
+    token, by architecture.
+
+    With flash attention off the graph materialises the score matrix instead of
+    consuming it tile by tile. Paired against each cell's own flash-attention-on
+    sibling — same model, context, batch, split, cards, and slot count — the
+    extra comes to one f32 per (head, cache token, batch token) for every dense
+    and MoE architecture measured: 3.8 to 4.9 bytes across gemma3, gemma4,
+    lfm2, llama, qwen3, qwen35, qwen35moe, and talkie.
+
+    deepseek4 measures 0.04. MLA shares one latent across heads, so there is no
+    per-head score row to materialise, and the near-zero is the real answer
+    rather than an outlier — which is why this is a table. The constant it
+    replaces charged every architecture 8 bytes per head and halved that for
+    MLA, over-reserving dense models twofold and deepseek4 a hundredfold.
+
+    Pairing is what makes the rate come out at an f32. Reading the
+    flash-attention-off figure whole instead attributes the compute buffer the
+    run would have had anyway to this term, which inflates it most at the short
+    contexts where that baseline is the larger share.
+    """
+    paired: dict[tuple, tuple[float, int, str]] = {}
+    for record in rows:
+        factors, parsed = record["factors"], record["parsed"]
+        devices = [d for d in parsed.get("devices", []) if d["compute_mib"]]
+        if not devices or not parsed.get("n_head"):
+            continue
+        key = (parsed["arch"], factors["model"], factors["ctx"],
+               factors["ubatch"] or 512, factors["kv_type"],
+               factors["split"] or "layer", factors["gpus"],
+               factors["parallel"], bool(factors["kv_unified"]),
+               factors["flash_attn"])
+        paired.setdefault(key, (max(d["compute_mib"] for d in devices),
+                                parsed["n_head"], factors["label"]))
+    per_arch: dict[str, list[float]] = defaultdict(list)
+    for key, (compute, heads, _label) in paired.items():
+        if key[-1] != "off":
+            continue
+        sibling = paired.get(key[:-1] + ("on",))
+        if sibling is None:
+            continue
+        arch, _model, ctx, batch = key[0], key[1], key[2], key[3]
+        streams = 1 if key[8] else max(1, key[7] or 1)
+        n_kv = ctx // streams
+        per_arch[arch].append(
+            (compute - sibling[0]) * 1024 ** 2 / (heads * n_kv * batch))
+    if not per_arch:
+        raise ValueError("no flash-attention-off cell has an on sibling")
+    _NO_FA_SCORE.clear()
+    for arch, values in per_arch.items():
+        _NO_FA_SCORE[arch] = max(1, math.ceil(max(values)))
+    return (
+        "paired against each cell's own flash-attention-on sibling: "
+        + ", ".join(f"{a} {v}" for a, v in sorted(_NO_FA_SCORE.items()))
+        + " bytes per (head x cache token x batch token). An f32 score for "
+        "every dense and MoE architecture; deepseek4's MLA shares one latent "
+        "across heads and measures 0.04, rounded up to the 1-byte floor. "
+        "Proportionality in batch is exact — gemma3 measures 2459 MiB at ub 512 "
+        "and 9884 at 2048 — and in context, and it follows one stream's share "
+        "of the cache, not the whole budget: gemma3 at four slots measures what "
+        "one slot measures at a quarter the context."
+    )
+
+
 def derive_mmproj_graph(rows: list[dict]) -> tuple[int, str]:
     """The CLIP graph buffer a vision projector needs beyond its weights.
 
@@ -1535,7 +1600,6 @@ KINDS = {
     # Measured, but with a spread wide enough that the value is chosen so
     # every model lands inside the rolling correction's [0.8, 1.5] clamp
     # rather than to minimise error against any one of them.
-    "NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR": "reachable",
     "PROCESS_BASE_BYTES": "reachable",
     "PROCESS_BASE_BYTES_PER_LAYER": "reachable",
     "PROCESS_BASE_BYTES_MOE": "reachable",
@@ -1972,6 +2036,7 @@ def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]
     return out
 
 
+_NO_FA_SCORE: dict[str, int] = {}
 _MTP_INTERMEDIATES: dict[str, int] = {}
 _TENSOR_INTERMEDIATES: dict[str, int] = {}
 _TENSOR_QUANTISED: dict[str, int] = {}
@@ -2447,7 +2512,8 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         derive_per_slot_bytes(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"per-slot host bytes: cannot derive — {error}")
-    for name, table_deriver in (("MTP compute intermediates", derive_mtp_compute_intermediates),
+    for name, table_deriver in (("unfused-attention score rates", derive_no_flash_attn_score),
+                                ("MTP compute intermediates", derive_mtp_compute_intermediates),
                                 ("tensor compute intermediates", derive_tensor_intermediates),
                                 ("tensor quantised-cache rates", derive_tensor_quantised),
                                 ("tensor per-device shadow", derive_tensor_shadow)):
@@ -2573,6 +2639,19 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "belongs in the packer's slop, beside the prompt cache.",
             "default": max(_PER_SLOT.values()),
             "by_arch": dict(sorted(_PER_SLOT.items())),
+        }
+    if _NO_FA_SCORE:
+        document["no_flash_attn_score_bytes"] = {
+            "$comment": "Bytes of unfused attention score matrix per (head x "
+                        "cache token x batch token), by architecture. One f32 "
+                        "for every dense and MoE architecture measured; "
+                        "deepseek4's MLA shares one latent across heads and "
+                        "needs essentially none. `default` is the largest, so "
+                        "an unmeasured architecture over-reserves rather than "
+                        "OOMs. Distinct from `no_flash_attn_rates`, which is "
+                        "the *host* pinned buffer's rate.",
+            "default": max(_NO_FA_SCORE.values()),
+            "by_arch": dict(sorted(_NO_FA_SCORE.items())),
         }
     if _MTP_INTERMEDIATES:
         document["mtp_compute_intermediates"] = {

@@ -185,6 +185,13 @@ fn generate_tuning_constants() {
     ));
     out.push_str(&generate_rate_table(
         &parsed,
+        "no_flash_attn_score_bytes",
+        "NO_FLASH_ATTN_SCORE_BYTES",
+        "NO_FLASH_ATTN_SCORE_BYTES_DEFAULT",
+        "Bytes of unfused attention score matrix per (head x cache token x batch\n/// token), by architecture.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
         "no_flash_attn_rates",
         "NO_FLASH_ATTN_RATES",
         "NO_FLASH_ATTN_RATE_DEFAULT",

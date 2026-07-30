@@ -27,11 +27,11 @@ use crate::{
     config::validate::SplitMode,
     estimator::{
         tuning::{
-            CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR,
-            TENSOR_COMPUTE_INTERMEDIATES, TENSOR_COMPUTE_INTERMEDIATES_DEFAULT,
-            TENSOR_COMPUTE_QUANTISED_RATE_DEFAULT, TENSOR_COMPUTE_QUANTISED_RATES,
-            TENSOR_COMPUTE_SHADOW_BYTES, TENSOR_COMPUTE_SHADOW_BYTES_DEFAULT,
-            TENSOR_MASK_BYTES_PER_TOKEN_PAIR,
+            CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_SCORE_BYTES,
+            NO_FLASH_ATTN_SCORE_BYTES_DEFAULT, TENSOR_COMPUTE_INTERMEDIATES,
+            TENSOR_COMPUTE_INTERMEDIATES_DEFAULT, TENSOR_COMPUTE_QUANTISED_RATE_DEFAULT,
+            TENSOR_COMPUTE_QUANTISED_RATES, TENSOR_COMPUTE_SHADOW_BYTES,
+            TENSOR_COMPUTE_SHADOW_BYTES_DEFAULT, TENSOR_MASK_BYTES_PER_TOKEN_PAIR,
         },
         types::EstimatorInputs,
     },
@@ -309,9 +309,19 @@ fn layer_split_per_device(
 /// The score matrix an unfused attention pass materialises.
 ///
 /// With flash attention the scores are consumed tile by tile and never exist
-/// whole; without it the graph holds `n_head x n_kv x n_tokens` f32 entries,
-/// which dwarfs everything else in the curve — measured at ten times the
-/// reserved figure at ub 2048, in the direction that OOMs a load.
+/// whole; without it the graph holds one entry per (head, cache token, batch
+/// token), which dwarfs everything else in the curve.
+///
+/// The per-entry width is a derived table rather than one number, because the
+/// answer genuinely differs by architecture: paired against each cell's own
+/// flash-attention-on sibling it is an f32 for every dense and MoE model
+/// measured, and effectively nothing for MLA, which shares one latent across
+/// heads and so has no per-head score row to materialise. The scalar this
+/// replaces charged 8 bytes everywhere and halved that for MLA, which
+/// over-reserved dense models twofold and deepseek4 a hundredfold.
+///
+/// `context` is one stream's share of the cache, not the whole budget: gemma3
+/// at four slots measures what one slot measures at a quarter of the context.
 fn no_flash_attn_mib(summary: &GgufSummary, context: u32, ubatch: u32, flash_attn: bool) -> u32 {
     if flash_attn {
         return 0;
@@ -328,18 +338,12 @@ fn no_flash_attn_mib(summary: &GgufSummary, context: u32, ubatch: u32, flash_att
         return 0;
     }
     let tokens = u64::from(context.min(ubatch));
-    // Halved for MLA, which shares one latent across heads rather than
-    // materialising a score row per head: normalised by `n_head x ctx x
-    // n_tokens x 4`, every dense and MoE architecture measures 1.07-1.88 while
-    // deepseek4 measures 0.49. Charging it the same factor as the rest is what
-    // made its flash-attention-off cell reserve 12066 MiB against the 2435 the
-    // runtime took — the largest over-reservation left in the table.
-    let per_head = if crate::estimator::host_buffer::is_mla(arch) {
-        u64::from(NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR) / 2
-    } else {
-        u64::from(NO_FLASH_ATTN_COMPUTE_HEAD_FACTOR)
-    };
-    let bytes = per_head * heads * u64::from(context) * tokens * 4;
+    let per_entry = rate(
+        NO_FLASH_ATTN_SCORE_BYTES,
+        arch,
+        NO_FLASH_ATTN_SCORE_BYTES_DEFAULT,
+    );
+    let bytes = per_entry * heads * u64::from(context) * tokens;
     (bytes / (1024 * 1024)).min(u64::from(u32::MAX)) as u32
 }
 
