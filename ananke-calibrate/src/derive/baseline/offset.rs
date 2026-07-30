@@ -335,7 +335,7 @@ pub fn per_device_bytes(rows: &[Record]) -> Result<Scalar> {
             continue;
         }
         let cards = factors.cards_or(0);
-        let owned = record.rss_kb("rss_anon_kb") + record.rss_kb("rss_shmem_kb");
+        let owned = record.rss.rss_anon_kb + record.rss.rss_shmem_kb;
         by_model
             .or_insert_with(record.provenance.model_key.clone(), BTreeMap::new)
             .insert(cards, owned);

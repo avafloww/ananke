@@ -25,7 +25,7 @@ pub struct Record {
     #[serde(default)]
     pub parsed: Parsed,
     #[serde(default)]
-    pub rss: BTreeMap<String, serde_json::Value>,
+    pub rss: Rss,
     #[serde(default)]
     pub hardware: Hardware,
     #[serde(default)]
@@ -287,29 +287,106 @@ pub struct Provenance {
     pub runtime_sha256: String,
 }
 
-impl Record {
-    /// One `rss` sample, in KiB, absent reading as zero the way the Python does.
-    pub fn rss_kb(&self, key: &str) -> i64 {
-        self.rss.get(key).and_then(|v| v.as_i64()).unwrap_or(0)
-    }
+/// The resident-memory and driver readings for one cell.
+///
+/// The fixed keys are named fields. The per-card driver readings are not: the
+/// sampler writes them as `gpu{physical id}_used_mib`, so the id genuinely lives
+/// in the key, and they are collected into [`Self::per_card`] keyed by that id
+/// rather than string-matched at each use.
+#[derive(Debug, Clone, Default)]
+pub struct Rss {
+    /// `VmRSS`, in KiB. Not what the host model compares against — see
+    /// [`Record::owned_bytes`].
+    pub rss_total_kb: i64,
+    /// `RssAnon`, in KiB.
+    pub rss_anon_kb: i64,
+    /// `RssFile`, in KiB: the mapped GGUF, which llama.cpp populates and then
+    /// leaves resident as clean reclaimable pages.
+    pub rss_file_kb: i64,
+    /// `RssShmem`, in KiB. `cudaMallocHost` is accounted here, not in anon.
+    pub rss_shmem_kb: i64,
+    /// The same four at the end of the run.
+    pub final_rss_total_kb: i64,
+    pub final_rss_anon_kb: i64,
+    pub final_rss_file_kb: i64,
+    pub final_rss_shmem_kb: i64,
+    /// The growth from load to steady state.
+    pub growth_rss_total_kb: i64,
+    pub growth_rss_anon_kb: i64,
+    pub growth_rss_file_kb: i64,
+    pub growth_rss_shmem_kb: i64,
+    /// The driver's total for the whole process, in MiB.
+    pub gpu_used_mib: Option<f64>,
+    /// Per-card driver readings in MiB, keyed by physical GPU id.
+    pub per_card: BTreeMap<u32, f64>,
+}
 
+impl<'de> Deserialize<'de> for Rss {
+    /// Hand-written because the per-card keys carry data in their names.
+    ///
+    /// `serde(flatten)` cannot express "every `gpu{n}_used_mib`", and leaving the
+    /// whole block as a `Value` map meant every reader re-parsed a key by hand —
+    /// which is how a physical-versus-visible index mix-up hid here once.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw: BTreeMap<String, serde_json::Value> = BTreeMap::deserialize(deserializer)?;
+        let kb = |key: &str| {
+            raw.get(key)
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0)
+        };
+        let mut per_card = BTreeMap::new();
+        for (key, value) in &raw {
+            let Some(rest) = key.strip_prefix("gpu") else {
+                continue;
+            };
+            let Some(id) = rest.strip_suffix("_used_mib") else {
+                continue;
+            };
+            // `gpu_used_mib` is the process total, not a card; its "id" is empty.
+            if let Ok(id) = id.parse::<u32>()
+                && let Some(mib) = value.as_f64()
+                && mib > 0.0
+            {
+                per_card.insert(id, mib);
+            }
+        }
+        Ok(Self {
+            rss_total_kb: kb("rss_total_kb"),
+            rss_anon_kb: kb("rss_anon_kb"),
+            rss_file_kb: kb("rss_file_kb"),
+            rss_shmem_kb: kb("rss_shmem_kb"),
+            final_rss_total_kb: kb("final_rss_total_kb"),
+            final_rss_anon_kb: kb("final_rss_anon_kb"),
+            final_rss_file_kb: kb("final_rss_file_kb"),
+            final_rss_shmem_kb: kb("final_rss_shmem_kb"),
+            growth_rss_total_kb: kb("growth_rss_total_kb"),
+            growth_rss_anon_kb: kb("growth_rss_anon_kb"),
+            growth_rss_file_kb: kb("growth_rss_file_kb"),
+            growth_rss_shmem_kb: kb("growth_rss_shmem_kb"),
+            gpu_used_mib: raw.get("gpu_used_mib").and_then(serde_json::Value::as_f64),
+            per_card,
+        })
+    }
+}
+
+impl Record {
     /// Host memory the process *owns*, in bytes.
     ///
     /// `RssAnon + RssShmem`, not `VmRSS`: `cudaMallocHost` is accounted as
     /// shmem, and `RssFile` is the mapped GGUF, which llama.cpp populates and
     /// then leaves resident as clean reclaimable pages.
     pub fn owned_bytes(&self) -> i64 {
-        (self.rss_kb("rss_anon_kb") + self.rss_kb("rss_shmem_kb")) * 1024
+        (self.rss.rss_anon_kb + self.rss.rss_shmem_kb) * 1024
     }
 
     /// The same figure in whole MiB, truncated.
     pub fn owned_mib(&self) -> i64 {
-        (self.rss_kb("rss_anon_kb") + self.rss_kb("rss_shmem_kb")) / 1024
+        (self.rss.rss_anon_kb + self.rss.rss_shmem_kb) / 1024
     }
 
     /// The driver's total for the whole process, in MiB.
     pub fn gpu_used_mib(&self) -> Option<u64> {
-        self.rss.get("gpu_used_mib").and_then(|v| v.as_u64())
+        self.rss.gpu_used_mib.map(|v| v as u64)
     }
 
     /// One card's driver reading, in MiB.
@@ -318,11 +395,8 @@ impl Record {
     /// the loader's breakdown rows are in visible order, so a cell pinned to
     /// GPU 1 has its usage under `gpu1_used_mib` and its breakdown row under
     /// `CUDA0`. A zero reads as absent, as it does on the Python side.
-    pub fn gpu_card_used_mib(&self, card: &str) -> Option<f64> {
-        self.rss
-            .get(&format!("gpu{card}_used_mib"))
-            .and_then(|v| v.as_f64())
-            .filter(|v| *v != 0.0)
+    pub fn gpu_card_used_mib(&self, card: u32) -> Option<f64> {
+        self.rss.per_card.get(&card).copied()
     }
 
     /// How many cards the driver reported usage on.
@@ -330,15 +404,7 @@ impl Record {
     /// `gpu_used_mib` is the process total and is deliberately excluded; the
     /// per-card keys are `gpu{physical id}_used_mib`.
     pub fn cards_measured(&self) -> usize {
-        self.rss
-            .iter()
-            .filter(|(key, value)| {
-                key.starts_with("gpu")
-                    && key.ends_with("_used_mib")
-                    && *key != "gpu_used_mib"
-                    && value.as_u64().is_some_and(|v| v > 0)
-            })
-            .count()
+        self.rss.per_card.len()
     }
 
     /// The physical GPU ids this cell was pinned to.
@@ -418,15 +484,13 @@ impl Factors {
 }
 
 impl Parsed {
-    /// One card's share of the weights, from the breakdown table's own columns.
-    pub fn gpu_model_mib(&self, index: usize) -> f64 {
-        self.other
-            .get(&format!("gpu{index}_model_mib"))
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0)
-    }
-
     /// A GGUF metadata integer, absent reading as zero.
+    ///
+    /// Dynamic on purpose, and the only place in this reader that still is: the
+    /// keys are architecture-templated (`{arch}.attention.key_length`), so no
+    /// fixed struct can name them. The key really is data here, unlike the flat
+    /// `gpu{n}_*` mirrors of the breakdown table, which duplicated
+    /// [`Self::devices`] and are now read from it.
     pub fn gguf_int(&self, key: &str) -> i64 {
         self.gguf_kv.get(key).and_then(|v| v.as_i64()).unwrap_or(0)
     }

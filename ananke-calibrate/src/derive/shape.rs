@@ -85,9 +85,14 @@ pub fn query_head_count(parsed: &Parsed) -> u64 {
 pub fn resident_weight_mib(record: &Record) -> f64 {
     let parsed = &record.parsed;
     let mut total = parsed.cpu_model_mib.unwrap_or(0.0);
-    for index in 0..8 {
-        total += parsed.gpu_model_mib(index);
-    }
+    // The typed breakdown rows, not the flat `gpu{n}_model_mib` mirrors of them:
+    // one list, read once, rather than probing eight string keys that may or may
+    // not be present.
+    total += parsed
+        .devices
+        .iter()
+        .map(|device| device.model_mib)
+        .sum::<f64>();
     for context in &parsed.contexts {
         for buffers in context.buffers.values() {
             total += buffers.get("model").copied().unwrap_or(0.0);

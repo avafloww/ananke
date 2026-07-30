@@ -307,7 +307,12 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
         let readings: Vec<(usize, f64)> = cards
             .iter()
             .enumerate()
-            .filter_map(|(index, card)| record.gpu_card_used_mib(card).map(|used| (index, used)))
+            .filter_map(|(index, card)| {
+                card.parse::<u32>()
+                    .ok()
+                    .and_then(|id| record.gpu_card_used_mib(id))
+                    .map(|used| (index, used))
+            })
             .collect();
         if readings.is_empty() {
             continue;

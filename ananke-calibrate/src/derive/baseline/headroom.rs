@@ -70,7 +70,7 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
             factors.kv_unified,
             factors.soak.unwrap_or(0),
         );
-        let owned = record.rss_kb("rss_anon_kb") * 1024;
+        let owned = record.rss.rss_anon_kb * 1024;
         let concurrency = factors.concurrency.unwrap_or(1).max(1);
         // The lowest reading at each point: a higher one means the process had done
         // more, and the difference being measured is the slot count.
