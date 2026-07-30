@@ -34,6 +34,17 @@ impl LocalGit {
     }
 
     fn git(&self, args: &[&str], paths: &[PathBuf]) -> Result<std::process::Output, String> {
+        // `git commit -m msg --` with nothing after the separator is not a no-op: it
+        // is a bare commit, which takes the whole index. An empty list reaching here
+        // is the one input that turns this module into the hazard it exists to
+        // prevent, so it fails rather than running.
+        if paths.is_empty() {
+            return Err(format!(
+                "refusing to run `git {}` against no paths: an empty pathspec commits \
+                 the whole index",
+                args.join(" ")
+            ));
+        }
         let mut command = Command::new("git");
         command.current_dir(&self.root).args(args).arg("--");
         for path in paths {
@@ -80,6 +91,9 @@ impl Vcs for LocalGit {
 /// an uncommitted dataset: the rows are on disk either way, and the next commit
 /// picks them up.
 pub fn commit_data(vcs: &dyn Vcs, paths: &[PathBuf], message: &str) -> Outcome {
+    if paths.is_empty() {
+        return Outcome::Failed("no paths to commit".to_string());
+    }
     if let Err(error) = vcs.stage(paths) {
         return Outcome::Failed(error);
     }
@@ -210,6 +224,39 @@ mod tests {
         );
         assert_eq!(git.commits(), vec!["data: 1 measurement".to_string()]);
         assert_eq!(git.committed_paths(), vec![paths()]);
+    }
+
+    /// An empty path list commits nothing rather than everything.
+    ///
+    /// This is the module's whole purpose stated as a test. `git commit -m msg --`
+    /// with no pathspec after the separator is a *bare* commit: it takes the entire
+    /// index, including whatever the operator was staging while the campaign ran.
+    /// `data_paths` is a public field with no validation, so the check has to be
+    /// here rather than at the one call site that happens to fill it correctly.
+    #[test]
+    fn no_paths_commits_nothing() {
+        let git = FakeGit::dirty();
+        assert!(matches!(
+            commit_data(&git, &[], "data: 1 measurement"),
+            Outcome::Failed(_)
+        ));
+        assert!(git.commits().is_empty());
+    }
+
+    /// The real git refuses an empty pathspec too, before reaching the process.
+    ///
+    /// `FakeGit` cannot show this: it does not run git, so it would accept an empty
+    /// list and report the same `Committed` as any other. Checking `LocalGit`
+    /// directly is what pins the behaviour that matters.
+    #[test]
+    fn local_git_refuses_an_empty_pathspec() {
+        let git = LocalGit::at(".");
+        let error = git
+            .commit("data: 1 measurement", &[])
+            .expect_err("an empty pathspec is refused");
+        assert!(error.contains("whole index"), "{error}");
+        assert!(git.stage(&[]).is_err());
+        assert!(!git.has_staged(&[]), "an empty pathspec has nothing staged");
     }
 
     /// A campaign outlives a commit failure.
