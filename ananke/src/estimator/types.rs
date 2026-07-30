@@ -416,7 +416,13 @@ impl ExpertKind {
 pub struct NonLayer {
     /// Output head — attributed to GPU 0 if any GPU used, else CPU.
     pub output_head_bytes: u64,
-    /// Token embeddings — always on CPU.
+    /// Token embeddings. llama.cpp keeps them on the CPU backend — with one
+    /// exception, which [`Self::output_head_bytes`] being zero identifies: a
+    /// tied-embedding model has no separate output head, so this table *is* the
+    /// head. Under a tensor split spanning more than one device that matmul is
+    /// sharded, and a CPU-resident weight cannot be, so llama.cpp keeps a
+    /// second, GPU-resident copy split across the cards. The CPU copy stays
+    /// too. See [`crate::allocator::placement::Packer::distribute_sharded`].
     pub token_embd_bytes: u64,
     /// Small tensors (norms, rope tables) lumped together.
     pub other_bytes: u64,

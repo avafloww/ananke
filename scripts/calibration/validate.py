@@ -183,6 +183,23 @@ def main() -> int:
         allocation = placement.get("allocation") or {}
         reserved = sum(v["mib"] for k, v in allocation.items()
                        if k.startswith("gpu:"))
+        # llama.cpp's layer split spreads across every visible card; ananke
+        # packs a model that fits onto one, deliberately. When the two land on
+        # different numbers of cards the totals are not comparable — a second
+        # card is a second CUDA context and a second compute buffer, ~450 MiB
+        # of real cost that belongs to the placement rather than to the
+        # estimate. Comparing them anyway is what made small models on two
+        # cards read as a systematic 7-8% under-reservation.
+        cards_placed = sum(1 for k, v in allocation.items()
+                           if k.startswith("gpu:") and v["mib"])
+        cards_measured = sum(
+            1 for key, value in record["rss"].items()
+            if key.startswith("gpu") and key.endswith("_used_mib")
+            and key != "gpu_used_mib" and value)
+        if cards_measured and cards_placed != cards_measured:
+            skipped[f"placed on {cards_placed} card(s), measured on "
+                    f"{cards_measured}"] += 1
+            continue
         measured = record["rss"]["gpu_used_mib"]
         if not predicted:
             skipped["nothing placed on a GPU"] += 1

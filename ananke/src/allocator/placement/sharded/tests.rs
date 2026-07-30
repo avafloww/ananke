@@ -142,6 +142,80 @@ fn tensor_split_shards_output_head_and_mtp_across_gpus() {
     assert_eq!(cpu, token_embd, "token embeddings must ride the CPU");
 }
 
+/// A tied-embedding model — no separate `output.weight` — keeps a second,
+/// GPU-resident copy of its embedding table under a tensor split spanning more
+/// than one card, because the head's matmul is sharded and a CPU-resident
+/// weight cannot be. The CPU copy stays too.
+///
+/// Measured against the same model on one card, where nothing is sharded and no
+/// copy appears: gemma-4-31B-QAT's two-card tensor split holds 761 MiB more than
+/// its layer split against a 756 MiB table, Qwen3-4B 305 against 304, and
+/// gemma-3-27B 1108 against 1103.
+#[test]
+fn a_tied_head_is_copied_onto_the_cards_only_when_sharded() {
+    let gib = 1024 * 1024 * 1024u64;
+    let token_embd = gib;
+    let build = |output_head: u64| Estimate {
+        weights_bytes: 20 * gib + output_head + token_embd,
+        kv_per_token: 0,
+        compute_buffer_mb: 400,
+        output_buffer_bytes: 0,
+        mtp_bytes: 0,
+        mtp_weight_bytes: 0,
+        mmproj_graph_bytes: 0,
+        host_overhead_bytes: 0,
+        host_cache_bytes: 0,
+        host_slot_bytes: 0,
+        host_checkpoint_bytes: 0,
+        per_layer_bytes: Some((0..20).map(|_| gib).collect()),
+        attention_layers: None,
+        non_layer: NonLayer {
+            output_head_bytes: output_head,
+            token_embd_bytes: token_embd,
+            other_bytes: 0,
+        },
+        override_tensor_bytes: BTreeMap::new(),
+        expert_layers: Vec::new(),
+        expert_tensors: None,
+        context: 4096,
+        architecture: SmolStr::new("gemma4"),
+    };
+    let gpu_total = |cards: &[u64], estimate: &Estimate| -> u64 {
+        let mut s = svc(PlacementPolicy::GpuOnly, None);
+        s.split_mode = SplitMode::Tensor;
+        pack(estimate, &s, &snapshot(cards), &AllocationTable::new())
+            .expect("fit")
+            .allocation
+            .bytes
+            .iter()
+            .filter(|(id, _)| matches!(id, DeviceId::Gpu(_)))
+            .map(|(_, b)| *b)
+            .sum()
+    };
+
+    // Tied (`output_head_bytes == 0`) across two cards: the table is charged
+    // once more, split between them.
+    let tied = build(0);
+    let untied = build(gib);
+    assert_eq!(
+        gpu_total(&[24, 24], &tied) - gpu_total(&[24, 24], &untied) + gib,
+        token_embd,
+        "a tied head must add exactly one copy of the table across the cards"
+    );
+    // One card shards nothing, so no copy appears — which is what the
+    // single-GPU measurements show for every model in the set. Going from one
+    // card to two adds the copy *and* a second compute buffer, since llama.cpp
+    // builds the graph on each device; both are named so neither can hide the
+    // other.
+    let compute = 400 * 1024 * 1024;
+    assert_eq!(
+        gpu_total(&[24, 24], &tied) - gpu_total(&[48], &tied),
+        token_embd + compute,
+        "the copy must appear only once the split actually spans cards, \
+         alongside the second card's own compute buffer"
+    );
+}
+
 /// In a sharded split every spanned GPU must hold its shard — there is no
 /// CPU spill. A GPU too small for its equal share fails the pack with
 /// `ShardDoesNotFit`, naming the offending GPU.

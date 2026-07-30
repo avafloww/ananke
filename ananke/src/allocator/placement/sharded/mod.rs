@@ -68,7 +68,8 @@ impl<'a> Packer<'a> {
     /// the real footprint. Only the vision projector (the residual "other"
     /// weights, which llama.cpp keeps on the main device) and any weight bytes
     /// not in the per-layer breakdown ride the main GPU. Token embeddings ride
-    /// the CPU, as on the layer path.
+    /// the CPU as on the layer path, except that a tied-embedding model spanning
+    /// more than one card also keeps a sharded GPU copy of them — see below.
     ///
     /// There is no CPU spill: a share that overruns a spanned GPU's capacity
     /// is a hard [`PackError::ShardDoesNotFit`], since tensor parallelism ties
@@ -157,6 +158,24 @@ impl<'a> Packer<'a> {
         let tensor_split = weighted_tensor_split(&weights);
         let ratio_sum: u64 = tensor_split.iter().map(|&v| v as u64).sum();
 
+        // A tied-embedding model has no separate output head, so the embedding
+        // table *is* the head — and under a tensor split across more than one
+        // card that matmul is sharded, which a CPU-resident weight cannot be.
+        // llama.cpp keeps a second, GPU-resident copy split across the cards,
+        // and keeps the CPU-mapped one as well.
+        //
+        // Measured against the same model loaded on one card, where nothing is
+        // sharded and no copy appears: gemma-4-31B-QAT's two-card tensor split
+        // holds 761 MiB more than its layer split against a 756 MiB table,
+        // Qwen3-4B 305 against 304, gemma-3-27B 1108 against 1103. Every model
+        // that ships its own `output.weight` — magidonia, talkie, Qwen3.6-27B —
+        // holds no more under one split than the other.
+        let tied_head_copy = if non_layer.output_head_bytes == 0 && gpus.len() > 1 {
+            non_layer.token_embd_bytes
+        } else {
+            0
+        };
+        let tied_head_shares = integer_shares(tied_head_copy, &tensor_split, ratio_sum);
         let weights_shares = integer_shares(per_layer_sum, &tensor_split, ratio_sum);
         let kv_shares = integer_shares(kv_total, &tensor_split, ratio_sum);
         // The output head is model weight; the MTP draft context is a runtime
@@ -186,8 +205,10 @@ impl<'a> Packer<'a> {
         self.add_host_overhead();
 
         for (idx, &gpu) in gpus.iter().enumerate() {
-            let mut weight_bytes =
-                weights_shares[idx] + output_head_shares[idx] + mtp_weight_shares[idx];
+            let mut weight_bytes = weights_shares[idx]
+                + output_head_shares[idx]
+                + mtp_weight_shares[idx]
+                + tied_head_shares[idx];
             let runtime_bytes = kv_shares[idx] + mtp_runtime_shares[idx] + compute_per_gpu;
             let mut runtime_bytes = runtime_bytes;
             if gpu == main {
