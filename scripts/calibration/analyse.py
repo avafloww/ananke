@@ -1258,7 +1258,7 @@ def derive_quantised_cache_bytes(rows: list[dict]) -> tuple[int, str]:
         key = (record["provenance"]["model_key"], factors["ctx"], factors["ubatch"],
                factors["parallel"], bool(factors["kv_unified"]),
                factors["split"] or "-", factors["gpus"], factors["flash_attn"],
-               bool(factors["served"]), bool(factors["n_cpu_moe"]),
+               bool(factors["served"]), factors["n_cpu_moe"] or 0,
                bool(factors["no_mmap"]), bool(factors["rtr"]), factors["numa"] or "-")
         paired[key][factors["kv_type"]] = parsed["arena_mib"]
         archs[record["provenance"]["model_key"]] = parsed.get("arch", "?")
@@ -1273,7 +1273,12 @@ def derive_quantised_cache_bytes(rows: list[dict]) -> tuple[int, str]:
         # Divide out the layer-split replication, so the rate is per copy — but
         # a hybrid does not replicate, and treating one as though it did put
         # qwen35moe's rate at both 133 and 532.
-        hybrid = key[9]
+        #
+        # The key carries the offload *count*, not merely whether there is one.
+        # Coarsened to a boolean it paired a `--n-cpu-moe 20` cell with a
+        # `--n-cpu-moe 40` one and read the difference in resident weights as a
+        # cache-type effect, spreading qwen35moe's rate across 13935%.
+        hybrid = bool(key[9])
         copies = 4 if cards > 1 and key[5] == "layer" and not hybrid else 1
         rate = (pair["q8_0"] - pair["f16"]) * 1024**2 / tokens / copies
         rates.append(rate)
