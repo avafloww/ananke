@@ -17,8 +17,8 @@ The backend's crates, leaves first:
 | `ananke-config` | config defaults, the descriptor table the docs are generated from, and the placement vocabulary (`SplitMode`, `DeviceSlot`) | — |
 | `ananke-estimate` | the VRAM estimator and the design-column contract the fitter shares | the four above |
 | `ananke-placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate` |
-| `ananke-measure` | the measurement log parser and the NDJSON record schema | `serde`, `regex` |
-| `ananke-calibrate` | deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-measure`, `ananke-estimate`, `ananke-placement` |
+| `ananke-measure` | the measurement harness, its log parser, and the NDJSON record schema | `serde`, `regex`, `nix` |
+| `ananke-calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-measure`, `ananke-estimate`, `ananke-placement` |
 | `ananke-api` | the DTOs that cross the wire to the frontend | — |
 | `ananke` | the daemon: supervision, scheduling, HTTP surface, the NVML probe | all of the above |
 | `anankectl` | the CLI | `ananke-api` |
@@ -30,9 +30,7 @@ regenerating the estimator's constants during a calibration campaign is the
 inner loop of that work, and it now costs a few seconds instead of a UI build.
 The estimator and then the packer followed for the same reason, and with them the
 `estimate` example — so no part of the calibration loop builds the UI any more.
-`scripts/calibration/{validate,scoreboard,dump_estimates}.py` invoke
-`cargo run -p ananke-placement --example estimate`, and none of them needs
-`ANANKE_SKIP_FRONTEND_BUILD`.
+No part of the calibration loop needs `ANANKE_SKIP_FRONTEND_BUILD`.
 
 `ananke` re-exports `gguf`, `estimator`, `allocator::placement`, `system::fs`, and
 `tracking::rolling::Corrections`, so `crate::…` paths inside the daemon are
@@ -58,8 +56,9 @@ cargo run -p ananke-calibrate --bin coverage -- --check  # is any regime measure
 cargo run -p ananke-calibrate --bin estimates            # every model's estimate, broken down
 ```
 
-The analysis half is Rust and the Python is gone. Each piece was verified against
-the Python it replaced before that Python was deleted: `validate` reproduces its 229
+The whole loop is Rust: the sweep generator, the harness, the driver, the
+derivers, and the gates. Each piece was verified against the Python it replaced
+before that Python was deleted: `validate` reproduces its 229
 cells and skip tally, `scoreboard` its seven models to within 1 MiB, the fitter its
 coefficients to 1.5e-16, `emit` its whole document byte for byte, and `coverage` its
 table but for one stale label. The oracles survive as tests — 31 derive tests against
@@ -81,9 +80,8 @@ cargo run -p ananke-measure --bin measure -- --out data/measurements.ndjson --re
 Both passes rewrite only the lines they change, which makes them checkable against
 the checked-in campaign: `--reparse` over it is a byte-for-byte no-op (the parser
 already reproduces all 604 recorded blocks), and `--retire-stale-builds` reselects
-exactly the 14 rows the campaign retired. `measure.py` and `measure_one.py` remain
-until `campaign.py`, which still shells out to them, is ported as well. Their two
-operational hazards did come across: the pre-flight fit gate weighs the *model
+exactly the 14 rows the campaign retired. Both of the Python's operational hazards
+came across: the pre-flight fit gate weighs the *model
 file*, which over-charges a heavily expert-offloaded cell (GLM-5.2's file is 205 GiB
 and its process peaks at 187), so it stays a `--force` away rather than being
 loosened; and the swap watchdog is always on, because a hybrid that overcommits
@@ -111,8 +109,34 @@ term; the checked-in `data/plan.json` predates the removal and still spells `thp
 which the harness's strict reader rejects by name rather than dropping. Regenerate
 it rather than hand-editing it.
 
-What is still Python is `campaign.py` and `progress.py`, which drive the loop, and
-`probe_host_growth.py`.
+The **driver** is `ananke-calibrate`'s `campaign` binary, with `progress` reading
+the dataset alongside it:
+
+```sh
+cargo run -p ananke-calibrate --bin campaign                # every cell, cheapest order
+cargo run -p ananke-calibrate --bin campaign -- --dry-run   # print the schedule and stop
+cargo run -p ananke-calibrate --bin campaign -- --only laguna
+cargo run -p ananke-calibrate --bin progress -- --watch     # how far it has got
+```
+
+The campaign owns the loop and the harness reports each cell as it finishes, so a
+data commit lands only at a cell boundary, where there is no half-written line.
+`campaign.py` instead polled every thirty seconds from a second process — its own
+comment called that a compromise to avoid coupling measurement to version control,
+and it could commit mid-append; `progress.py` carried a matching comment about
+expecting torn lines. The coupling is still avoided: the harness knows nothing about
+git, and `campaign::git` is the only place the two meet. Commits stay scoped to the
+data paths, so an overnight run cannot sweep up whatever else happens to be staged.
+
+`progress` keys on **cell identity** rather than filenames. `progress.py` globbed
+for `data/<phase>.ndjson` files the campaign stopped writing when it consolidated
+to one dataset, and defaulted to seven phase names that had stopped being
+questions — so it reported `0/?` for every row against 643 records, and nothing
+noticed because nothing checked. There is now a test asserting the real dataset
+reports real progress.
+
+The only Python left is `probe_host_growth.py`, a standalone diagnostic that
+separates a one-off allocation from one that accumulates with use.
 
 The harness does not reuse the daemon's `system::ProcessSpawner`, deliberately.
 That trait is async and coupled to the supervisor's `SpawnConfig` — built for
