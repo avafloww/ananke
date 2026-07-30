@@ -23,7 +23,7 @@
 //!   slot count alone suggests.
 //!
 //! Every term is GGUF metadata or a service flag, so nothing here is fitted.
-//! `scripts/calibration/analyse.py` holds this formula to all 13 distinct
+//! `ananke-calibrate`'s deriver holds this formula to all 13 distinct
 //! (architecture, slots, rollback) combinations in the measurement set and
 //! fails `emit` if any of them moves.
 

@@ -27,8 +27,10 @@ pub(crate) enum Charge {
     /// Memory the runtime allocates rather than reads: KV cache, compute
     /// buffers, the MTP draft context.
     Runtime,
-    /// Deliberate padding that is reserved but never expected to be used —
-    /// today the one-layer tensor-split fudge.
+    /// Bytes that are reserved but are not a prediction of what the process
+    /// will hold: the one-layer tensor-split fudge, the prompt-cache cap the
+    /// cache grows into rather than allocates, and the worst-case allowance
+    /// for concurrently active slots.
     ///
     /// Excluded from the rolling bases. The correction's ratio is
     /// observed-over-*predicted*, and slop is not a prediction: counting it

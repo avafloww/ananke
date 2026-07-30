@@ -5,8 +5,10 @@ was measured, on how much data, and what is still unresolved — so that a
 conclusion drawn early is not mistaken later for one the full dataset
 supports.
 
-Reproduce any of these with `python analyse.py` against
-`data/measurements.ndjson`.
+Reproduce any of these with `cargo run -p ananke-calibrate --bin emit` against
+`data/measurements.ndjson`. Entries written before the derivers were ported
+name the Python that produced them at the time; the tooling section of
+`CONTRIBUTING.md` is the guide to what runs today.
 
 ## The arena law is exact, including for sliding-window models
 
@@ -575,7 +577,7 @@ mechanism is that a median says nothing about the spread behind it: the median
 of a bimodal set describes none of its members and looks exactly like the
 median of a tight one.
 
-`analyse.py` now reduces measurements through `consensus`, which raises rather
+The derivers now reduce measurements through `consensus`, which raises rather
 than returns when the values span more than 15% of their median. A wide spread
 is treated as *a failure to have grouped properly*, not as noise to average
 over.
@@ -687,7 +689,7 @@ over-prediction as an error.
 
 Since the cause is not visible but the residual is reproducible, it is charged
 rather than explained: `baseline_offset` in `tuning.json`, keyed on the
-architecture and derived by `analyse.py` alongside everything else. Three
+architecture and derived alongside everything else. Three
 things had to be separated out of that derivation first, each surfaced by the
 `consensus` guard refusing to reduce a group that did not agree:
 

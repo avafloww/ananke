@@ -242,13 +242,8 @@ impl RollingBase {
     /// It also puts the correction where the uncertainty is. Host-resident
     /// weight is exact arithmetic over the GGUF tensor table; there is nothing
     /// to learn about it. What the daemon models rather than reads — the graph
-    /// arena, the prompt cache, the CPU KV share — is precisely what is left
-    /// in this denominator.
-    ///
-    /// Excluding them from both sides also puts the correction where the
-    /// uncertainty is: host-resident weight is exact arithmetic over the GGUF
-    /// tensor table, while the graph arena, the process baseline, and the CPU
-    /// KV share are all modelled.
+    /// arena, the process baseline, the CPU KV share — is precisely what is
+    /// left in this denominator.
     pub(crate) fn host_bytes(&self) -> u64 {
         self.inputs
             .uncorrected_host_bytes

@@ -1,8 +1,7 @@
-//! The two dataset helpers the fit needs, ported from `scripts/calibration/analyse.py`.
+//! The two dataset helpers the fit needs.
 //!
 //! They live here rather than in a general dataset module because the fit is
-//! currently their only Rust consumer; when the rest of `analyse.py` lands they
-//! belong somewhere both halves can reach.
+//! their only consumer.
 
 use std::collections::{HashMap, HashSet};
 

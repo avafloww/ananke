@@ -64,7 +64,7 @@
 //! See CONTRIBUTING for the procedure.
 
 // Every tuning constant below comes from `tuning.json`, which
-// `scripts/calibration/analyse.py` generates from the measurement dataset and
+// `ananke-calibrate`'s `emit` binary generates from the measurement dataset and
 // `build.rs` turns into compile-time constants. Each carries its evidence in
 // its own doc comment — how many models it rests on, and where it is weak.
 

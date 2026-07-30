@@ -1,8 +1,8 @@
 //! Measured tuning constants, generated from `tuning.json` at build time.
 //!
 //! The JSON at the crate root is the source of truth. It is produced by
-//! `scripts/calibration/analyse.py` from the measurement dataset, and `build.rs`
-//! turns it into the constants below — so a value the estimator uses cannot
+//! `cargo run -p ananke-calibrate --bin emit` from the measurement dataset, and
+//! `build.rs` turns it into the constants below — so a value the estimator uses cannot
 //! drift from the data that justifies it without that showing up as a diff in a
 //! generated file rather than as an unexplained edit.
 //!

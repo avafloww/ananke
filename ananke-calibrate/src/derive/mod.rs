@@ -1,11 +1,8 @@
 //! Deriving the estimator's tuned constants from the measurement dataset.
 //!
-//! This is a port of the derivers in `scripts/calibration/analyse.py`, which is
-//! still the authority on the campaign as a whole (the arena report, the compute
-//! model, the coverage plan). What lives here is the half that produces
-//! `ananke-tuning/tuning.json`: one function per constant, each a reduction over
-//! the record list, plus `emit` to write the document and `emit_check` to verify
-//! the committed one still matches the data.
+//! One function per constant, each a reduction over the record list, plus
+//! `emit` to write `ananke-tuning/tuning.json` and `emit_check` to verify the
+//! committed one still matches the data.
 //!
 //! Two rules run through all of it, and both were learned by getting them wrong.
 //!
