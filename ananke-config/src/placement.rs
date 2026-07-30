@@ -6,6 +6,8 @@
 //! to, are properties of the runtime invocation. `ananke::config::validate`
 //! re-exports both, so config-side paths are unchanged.
 
+use std::collections::BTreeMap;
+
 use crate::flags;
 
 /// Look up a variant's flag string in its `VARIANTS` table. Every variant is
@@ -78,6 +80,31 @@ pub enum DeviceSlot {
     Cpu,
     /// The GPU at this index.
     Gpu(u32),
+}
+
+/// Which device classes a service may be placed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlacementPolicy {
+    /// GPUs only; a model that does not fit fails placement rather than spilling.
+    GpuOnly,
+    /// Host memory only.
+    CpuOnly,
+    /// GPUs first, spilling to the host.
+    Hybrid,
+}
+
+/// Per-device VRAM/RAM the daemon keeps free, resolved from the global
+/// `[devices]` config. Copied onto each service config so the (pure) packer
+/// can read reserves without a separate config handle. The per-service
+/// `gpu_headroom_mb` is layered on top of these by the packer.
+#[derive(Debug, Clone, Default)]
+pub struct DeviceReserves {
+    /// VRAM (MiB) kept free on every GPU that lacks a `per_gpu_mb` entry.
+    pub default_gpu_mb: u64,
+    /// VRAM (MiB) kept free on specific GPUs, keyed by GPU id.
+    pub per_gpu_mb: BTreeMap<u32, u64>,
+    /// Host RAM (bytes) kept free; bounds the packer's CPU expert offload.
+    pub cpu_bytes: u64,
 }
 
 #[cfg(test)]
