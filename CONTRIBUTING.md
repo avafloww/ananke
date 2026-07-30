@@ -96,8 +96,8 @@ cargo run -p ananke-calibrate --bin plan -- all       # every question, disturba
 
 It emits `ananke_measure::record::Factors` — the same type the harness's `--plan`
 reader deserializes, so the two halves cannot drift in the way a shared JSON shape
-would. All 23 questions reproduce `plan.py`'s output byte for byte, kept as a
-fixture. A cell's identity is structural equality over the whole factor set with
+would. All 22 questions reproduce `plan.py`'s output byte for byte, as does the
+merged `all` schedule, kept as a fixture. A cell's identity is structural equality over the whole factor set with
 only the label and purpose blanked, rather than the Python's hash of its
 non-default fields: there is no field list for a factor to go missing from, which
 is the failure this campaign hit four times.
