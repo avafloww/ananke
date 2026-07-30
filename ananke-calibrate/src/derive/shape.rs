@@ -28,9 +28,9 @@ pub fn variant_key(record: &Record, with_environment: bool) -> String {
     let parsed = &record.parsed;
     let mut key = match parsed.arch.as_deref() {
         Some(arch) => arch.to_string(),
-        // Python stringifies `None`, and the resulting key is real: it appears
-        // in no table only because every cell reaching a keyed deriver has an
-        // architecture.
+        // The literal `"None"` is a real key, and appears in no table only
+        // because every cell reaching a keyed deriver has an architecture. It is
+        // spelled this way because the committed tables were keyed this way.
         None => "None".to_string(),
     };
     if parsed.n_expert.unwrap_or(0) != 0 {
@@ -186,8 +186,8 @@ pub fn device_context_sums(record: &Record) -> Vec<ContextSums> {
                 .map(|(_, b)| b.get("compute").copied().unwrap_or(0.0))
                 .sum(),
         };
-        // Python compares whole dicts, so a repeat only collapses when all three
-        // sums match; the check is against every earlier entry, not just the last.
+        // A repeat collapses only when all three sums match, and the check is
+        // against every earlier entry rather than just the last.
         if !out.contains(&entry) {
             out.push(entry);
         }

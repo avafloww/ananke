@@ -6,9 +6,8 @@ conclusion drawn early is not mistaken later for one the full dataset
 supports.
 
 Reproduce any of these with `cargo run -p ananke-calibrate --bin emit` against
-`data/measurements.ndjson`. Entries written before the derivers were ported
-name the Python that produced them at the time; the tooling section of
-`CONTRIBUTING.md` is the guide to what runs today.
+`data/measurements.ndjson`. The tooling section of `CONTRIBUTING.md` is the
+guide to what each binary does.
 
 ## The arena law is exact, including for sliding-window models
 
@@ -31,10 +30,10 @@ gemma3 is the significant row: an interleaved-SWA model, exact on both
 runtimes, which confirms the second-mask term — window-plus-batch on mainline,
 full-context on ik — rather than leaving it assumed.
 
-That distinction was worth a mistake. The first version of `analyse.py`
+That distinction was worth a mistake. An early version of the arena model
 applied mainline's window sizing to ik and produced K = 1.91 for gemma3 on ik,
 which reads exactly like a fork multiplier and is not one. `CONTRIBUTING.md`
-had the rule right; the re-implementation had it wrong. A "multiplier" that
+had the rule right; the implementation had it wrong. A "multiplier" that
 appears in only one architecture is more likely a missing term than a law.
 
 `mask = pad(n_kv) x min(ctx, ubatch) x (fa ? 2 : 4)`, plus two f32
@@ -481,17 +480,17 @@ to 0.50**.
 
 ## A stale constant in the analysis, and what it cost
 
-`analyse.py` went on using the flat 81 KiB per token for ik's MoE term after
+The analysis went on using the flat 81 KiB per token for ik's MoE term after
 the campaign had shown it scales with hidden size and the estimator had been
 changed to match. Every residual this file computed for an ik mixture of
 experts was inflated by the difference.
 
 Correcting it moved glm-dsa's two-card fit from a 3.38x multiple with a 136
 MiB residual to **1.00 with -0.5**, and turned what looked like an unexplained
-fork behaviour into an exact one. The lesson is narrow and worth stating: the
-analysis and the estimator now share `tuning.json` as their source of truth,
-but only the Rust side reads it mechanically. The Python side copies two
-values by hand, and those copies are the one place a drift can still hide.
+fork behaviour into an exact one. The lesson is narrow and worth stating: a
+constant copied by hand into the analysis is a constant that can drift from the
+estimator's. The analysis and the estimator now read `tuning.json` for every
+value they share, so there is no copy left to go stale.
 
 ## The GPU curves under-reserved, in two ways that OOM
 

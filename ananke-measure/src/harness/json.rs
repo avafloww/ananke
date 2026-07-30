@@ -9,36 +9,37 @@
 //! only way to see what a pass actually did.
 //!
 //! So a rewrite splices the new value into the original bytes ([`member_span`]),
-//! and anything newly written matches the Python harness's `json.dumps`
-//! defaults ([`to_python_json`]): `", "` and `": "` separators, and non-ASCII
-//! escaped as `\uXXXX`. The same writer produces the payload a cell's identity
-//! hashes, where matching Python exactly is not cosmetic but the difference
-//! between recognising the dataset and re-measuring all of it.
+//! and anything newly written matches the convention the existing lines were
+//! written with ([`to_dataset_json`]): `", "` and `": "` separators, and
+//! non-ASCII escaped as `\uXXXX`. The same writer produces the payload a cell's
+//! identity hashes, where matching byte for byte is not cosmetic but the
+//! difference between recognising the dataset and re-measuring all of it.
 
 use std::{io, ops::Range};
 
 use serde::Serialize;
 
-/// Serialize with Python's `json.dumps` defaults.
+/// Serialize the way every line already in the dataset was written: `", "` and
+/// `": "` separators, and non-ASCII escaped rather than emitted raw.
 ///
 /// Floats go through serde_json's own shortest-round-trip writer, which agrees
-/// with Python's `repr` on every magnitude this dataset holds. The two diverge
-/// only in exponent notation (`1e+22` against `1e22`), which no field here
-/// reaches.
-pub(crate) fn to_python_json<T: Serialize>(value: &T) -> String {
+/// with the committed lines on every magnitude this dataset holds. The two
+/// diverge only in exponent notation (`1e+22` against `1e22`), which no field
+/// here reaches.
+pub(crate) fn to_dataset_json<T: Serialize>(value: &T) -> String {
     let mut out = Vec::new();
-    let mut serializer = serde_json::Serializer::with_formatter(&mut out, PythonFormatter);
+    let mut serializer = serde_json::Serializer::with_formatter(&mut out, DatasetFormatter);
     value
         .serialize(&mut serializer)
         .expect("serializing to a Vec cannot fail");
     String::from_utf8(out).expect("the formatter emits ASCII only")
 }
 
-/// `json.dumps`'s defaults, which is `sort_keys` aside the only thing that
-/// separates its output from serde_json's compact form.
-struct PythonFormatter;
+/// The dataset's spacing and escaping, which is all that separates it from
+/// serde_json's compact form.
+struct DatasetFormatter;
 
-impl serde_json::ser::Formatter for PythonFormatter {
+impl serde_json::ser::Formatter for DatasetFormatter {
     fn begin_object_key<W: ?Sized + io::Write>(
         &mut self,
         writer: &mut W,
@@ -212,12 +213,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn python_separators_and_ascii_escaping() {
+    fn dataset_separators_and_ascii_escaping() {
         let value = serde_json::json!({"a": 1, "b": [2.0, "x"], "c": "caf\u{e9}"});
         // The accented byte comes back escaped, exactly as `ensure_ascii` writes
         // it, because a cell's identity is hashed over these bytes.
         assert_eq!(
-            to_python_json(&value),
+            to_dataset_json(&value),
             r#"{"a": 1, "b": [2.0, "x"], "c": "caf\u00e9"}"#
         );
     }

@@ -23,9 +23,8 @@
 //! One ordering dependency is real and is modelled as an argument rather than as
 //! shared state: [`baseline::baseline_offset`] subtracts the per-architecture rates
 //! [`pinned::no_flash_attn_rates`] produces, and without them it silently folds a
-//! per-token arena term into a flat baseline. The Python routes it through a module
-//! global and spells the dependency out in a comment; here it will not compile
-//! wrong.
+//! per-token arena term into a flat baseline. Passing it as an argument rather
+//! than through shared state means the order cannot be got wrong at compile time.
 
 use std::collections::BTreeMap;
 

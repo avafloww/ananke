@@ -16,7 +16,7 @@ use crate::{
         error::{DeriveError, Result},
         ordered::OrderedMap,
         shape::{CHECKPOINT_MIN_STEP, variant_key},
-        stats::{consensus, consensus_default, median, py_round},
+        stats::{consensus, consensus_default, median, round_half_even},
         tuning::Tuning,
     },
     record::Record,
@@ -36,11 +36,10 @@ use crate::{
 /// architecture string captures, and leaving it uncharged under-reserves qwen35 by
 /// nearly twice.
 ///
-/// `no_fa_rates` is a dependency rather than shared state, deliberately. The
-/// Python passes it through a module global and spells the ordering out in a
-/// comment in `emit`, because subtracting zeros here folds a per-token arena term
-/// into a flat baseline and leaves every flash-attention-off cell over-predicted at
-/// 0.71 to 0.78.
+/// `no_fa_rates` is a dependency rather than shared state, deliberately: an
+/// ordering the type system enforces cannot be got wrong, and subtracting zeros
+/// here folds a per-token arena term into a flat baseline and leaves every
+/// flash-attention-off cell over-predicted at 0.71 to 0.78.
 pub fn baseline_offset(
     rows: &[Record],
     tuning: &Tuning,
@@ -175,7 +174,7 @@ pub fn baseline_offset(
         .map(|(arch, group)| {
             (
                 arch.clone(),
-                py_round(group.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
+                round_half_even(group.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
             )
         })
         .collect();
@@ -199,7 +198,7 @@ pub fn baseline_offset(
         .fold(f64::NEG_INFINITY, f64::max);
     Ok((
         Scalar {
-            value: py_round(worst),
+            value: round_half_even(worst),
             evidence: format!(
                 "residual over the layer-count baseline, per architecture, across \
                  {cells} resident served cells: {detail} MiB. Negative offsets are \
@@ -301,13 +300,13 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
         .iter()
         .map(|(arch, group)| {
             let worst = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            (arch.clone(), py_round(worst * 1048576.0))
+            (arch.clone(), round_half_even(worst * 1048576.0))
         })
         .collect();
     let worst = deltas.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     Ok((
         Scalar {
-            value: py_round(worst * 1048576.0),
+            value: round_half_even(worst * 1048576.0),
             evidence: format!(
                 "{} models measured under both split modes at matching context, batch, \
                  slots and cards: {} MiB. Per architecture, since the spread across all \
@@ -363,7 +362,7 @@ pub fn per_device_bytes(rows: &[Record]) -> Result<Scalar> {
     }
     consensus_default(&deltas, "per-device host cost")?;
     Ok(Scalar {
-        value: py_round(median(&deltas)),
+        value: round_half_even(median(&deltas)),
         evidence: format!(
             "measured with placement pinned to the CPU so only the CUDA context count \
              varies: {} going from one card to two.",

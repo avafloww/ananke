@@ -98,10 +98,9 @@ pub enum Completed {
 /// The observer is called once per cell, after the row is on disk and before the
 /// next server spawns. That boundary is the point of it: a driver that commits the
 /// dataset as the campaign runs must not do so while a record is being appended,
-/// and this is the only moment at which there is no half-written line. The Python
-/// campaign committed on a thirty-second timer against a harness in another
-/// process, which had no such guarantee — `progress.py` carried a comment about
-/// expecting torn lines.
+/// and this is the only moment at which there is no half-written line. Committing
+/// on a timer from another process — the arrangement this replaces — has no such
+/// guarantee.
 pub fn measure_cells(
     cells: &[Factors],
     options: &Options,

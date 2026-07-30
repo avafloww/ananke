@@ -1,24 +1,21 @@
 //! Print every model's estimate and packing, for eyeballing.
 //!
-//! Replaces `scripts/calibration/dump_estimates.py`. Where `scoreboard` compares
-//! the seven production models against measurements, this covers every entry in
-//! `models.toml` and breaks each one down — which term is big, where the weights
-//! landed, how many expert layers went to the host.
+//! Where `scoreboard` compares the seven production models against measurements,
+//! this covers every entry in `models.toml` and breaks each one down — which term
+//! is big, where the weights landed, how many expert layers went to the host.
 //!
 //! Nothing here is a gate. It is the tool you reach for when a number looks wrong
 //! and you want to see its parts.
 //!
-//! Two figures differ from the Python's, both because this honours a field the
-//! Python dropped or chose differently:
+//! Two fields are easy to get wrong here, and both were:
 //!
-//! - `cache_ram_mb`. `dump_estimates.py` never passed `--cache-ram-mb`, so
-//!   gemma-4-31B-QAT's `cache_ram_mb = 0` was ignored and the 8192 MiB default
-//!   applied — the whole of the 8192 MiB difference in that model's CPU slot. The
-//!   ninth instance in this campaign of a config field going quietly missing from a
-//!   mapping, and the reason `ModelConfig` is `deny_unknown_fields`.
-//! - Card capacity. The Python passed `--gpu 24000` twice, and only when expert
-//!   offload was set. This uses the real 24576 MiB throughout, matching
-//!   `scoreboard`, which changes how a tensor split apportions between two cards.
+//! - `cache_ram_mb`. Dropping it from the mapping ignores gemma-4-31B-QAT's
+//!   `cache_ram_mb = 0` and applies the 8192 MiB default instead — the whole of
+//!   that model's CPU-slot difference. `ModelConfig` is `deny_unknown_fields` for
+//!   this reason.
+//! - Card capacity. The real 24576 MiB is used throughout, matching `scoreboard`.
+//!   Rounding it to 24000, or applying it only when expert offload is set, changes
+//!   how a tensor split apportions between two cards.
 
 use std::process::ExitCode;
 
@@ -182,10 +179,9 @@ fn estimate_one(fs: &LocalFs, config: &ModelConfig) -> Row {
 /// weights, plus the cache, plus the compute buffer on up to two cards, plus MTP.
 /// Token embeddings are excluded because llama.cpp keeps them on the host.
 ///
-/// One display difference from the Python this replaces, deliberately not
-/// reproduced: it rounded to two decimals and then formatted to one, so 36.0518
-/// became 36.05 and then 36.0 under banker's rounding. Rounding once gives 36.1,
-/// which is the correct value.
+/// Rounded once, at the point of display. Rounding to two decimals and then
+/// formatting to one turns 36.0518 into 36.05 and then into 36.0 under
+/// half-to-even; the correct value is 36.1.
 fn notional_gpu_mib(estimate: &Estimate, config: &ModelConfig) -> u64 {
     let gpu_weights = estimate
         .weights_bytes

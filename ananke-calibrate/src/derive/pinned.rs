@@ -10,7 +10,7 @@ use crate::{
         arena::arena_terms,
         error::{DeriveError, Result},
         shape::variant_key,
-        stats::{consensus, consensus_default, median, py_round},
+        stats::{consensus, consensus_default, median, round_half_even},
         tuning::Tuning,
     },
     record::Record,
@@ -71,14 +71,14 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
         median(&controls)
     };
     Ok(Scalar {
-        value: py_round(middle),
+        value: round_half_even(middle),
         evidence: format!(
             "{} E-variant cells at {middle:.0} B/layer/token, against {} \
              same-architecture control cells at {control:.0}. {} is {} f32 elements.",
             residuals.len(),
             controls.len(),
-            py_round(middle),
-            py_round(middle / 4.0),
+            round_half_even(middle),
+            round_half_even(middle / 4.0),
         ),
     })
 }
@@ -179,7 +179,7 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table)> {
             .map(|(arch, group)| {
                 (
                     arch.clone(),
-                    py_round(group.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
+                    round_half_even(group.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
                 )
             })
             .collect(),
@@ -189,7 +189,7 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table)> {
     let least = rates.iter().copied().fold(f64::INFINITY, f64::min);
     Ok((
         Scalar {
-            value: py_round(worst),
+            value: round_half_even(worst),
             evidence: format!(
                 "{} pairs differing in nothing but the cache type, every one showing \
                  the arena larger when it is quantised. Per-copy rates run {least:.0} \
@@ -253,11 +253,10 @@ struct CacheTypePairKey {
 /// modelled to within a megabyte, since it sizes masks against the whole cache and
 /// the widened element is the whole story there.
 ///
-/// `quant_rates` is `None` on the emit path, and deliberately so: the Python reads
-/// its quantised-cache table through module state that the quantised-cache deriver
-/// only fills *after* this one runs, so the term is absent from the residual the
-/// committed constants were fitted against. Passing the table would move every
-/// rate in this table.
+/// `quant_rates` is `None` on the emit path, and deliberately so: the quantised-cache
+/// table is produced *after* this deriver runs, so that term is absent from the
+/// residual the committed constants were fitted against. Passing the table would
+/// move every rate in this table.
 pub fn no_flash_attn_rates(
     rows: &[Record],
     tuning: &Tuning,
@@ -345,7 +344,7 @@ pub fn no_flash_attn_rates(
         .iter()
         .map(|(arch, group)| {
             let worst = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            (arch.clone(), py_round(worst).max(0))
+            (arch.clone(), round_half_even(worst).max(0))
         })
         .collect();
     let cells: usize = by_arch.values().map(Vec::len).sum();

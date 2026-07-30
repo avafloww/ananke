@@ -97,8 +97,8 @@ pub struct Emitted {
 /// Recompute every derived constant and table, and return the document to commit.
 ///
 /// `compute_model` is deliberately untouched: it is fitted by
-/// `scripts/calibration/compute_model.py` and its Rust counterpart, and carrying the
-/// committed section through unchanged is what lets this half be checked on its own.
+/// [`crate::compute_model`], and carrying the committed section through unchanged is
+/// what lets this half be checked on its own.
 pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     let committed = Tuning::parse(tuning_text)
         .map_err(|e| crate::derive::error::DeriveError::malformed(e.to_string()))?;
@@ -166,9 +166,9 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
         )),
     }
 
-    // `None` for the quantised rates, matching the Python: its table is filled by a
-    // deriver that runs *after* this one, so the term is absent from the residual the
-    // committed rates were fitted against.
+    // `None` for the quantised rates: that table is filled by a deriver running
+    // *after* this one, so the term is absent from the residual the committed rates
+    // were fitted against.
     let mut no_fa: Option<Table> = None;
     match pinned::no_flash_attn_rates(&rows, &committed, None) {
         Ok(table) => no_fa = Some(table),
@@ -268,7 +268,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     })
 }
 
-/// `emit`, plus the two assertions the Python makes just before writing the file.
+/// `emit`, plus the two assertions made just before writing the file.
 ///
 /// They guard the *write* rather than the check: a `--check` run is comparing two
 /// documents and does not need the arena model re-verified, while a run that replaces
@@ -324,7 +324,7 @@ pub fn emit_check(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     )))
 }
 
-/// One deriver per scalar constant, in the order the Python declares them.
+/// One deriver per scalar constant, in the order the document declares them.
 pub type ScalarDeriver = fn(&[Record], &Tuning) -> Result<Scalar>;
 
 /// Public so [`crate::crossval`] can refit each of them on a subset: a fold has to

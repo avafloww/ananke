@@ -1,9 +1,9 @@
 //! Every deriver, held against the committed `tuning.json`.
 //!
-//! The committed document is the oracle: `python3 scripts/calibration/analyse.py emit
-//! --check` passes against the same dataset, so a deriver that disagrees here means
-//! one of the two implementations is wrong. Integers are compared exactly — a
-//! loosened assertion would hide precisely the drift these tests exist to catch.
+//! The committed document is the oracle: `emit --check` passes against the same
+//! dataset, so a deriver that disagrees here means one of the two is wrong.
+//! Integers are compared exactly — a loosened assertion would hide precisely the
+//! drift these tests exist to catch.
 
 use std::{
     collections::BTreeMap,

@@ -135,7 +135,7 @@ impl Columns {
     /// to agree with the fitter's design matrix. Reading the scalars out of a GGUF
     /// summary is the estimator's own business; computing the columns from them is
     /// a contract shared with the fitter, and the test below holds this against
-    /// fixtures the Python that preceded it generates.
+    /// recorded fixtures.
     ///
     /// Public because the fitter in `ananke-calibrate` is the other consumer: it
     /// calls this to build its design rows so that there is one definition of a

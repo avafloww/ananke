@@ -56,8 +56,7 @@ pub fn latest_per_cell(rows: &[Record]) -> Vec<Record> {
             continue;
         };
         match newest.get(cell) {
-            // Strictly later, so the first of two rows sharing a timestamp wins,
-            // as it does on the Python side.
+            // Strictly later, so the first of two rows sharing a timestamp wins.
             Some(&held) if measured_at(record) <= measured_at(&rows[held]) => {}
             _ => {
                 newest.insert(cell, index);

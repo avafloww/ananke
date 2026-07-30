@@ -1,8 +1,7 @@
 //! Why a derivation stops.
 //!
-//! The Python raises `ValueError` for "no cell the deriver can use" and a
-//! `Disagreement` subclass of it for "the cells do not agree". `emit` catches
-//! both and reports the constant as not derived, so the distinction is
+//! Two cases: "no cell the deriver can use" and "the cells do not agree".
+//! `emit` reports the constant as not derived either way, so the distinction is
 //! informational rather than structural — but it is the interesting half of the
 //! message, so it is kept as a kind rather than folded into the text.
 

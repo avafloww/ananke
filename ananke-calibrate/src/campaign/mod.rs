@@ -10,15 +10,12 @@
 //! campaign leaves committed measurements behind and a resumed one skips them —
 //! the harness keys cells by their factors, so resuming is just running again.
 //!
-//! One structural difference from the Python this replaces. There, `measure.py`
-//! owned the loop and `campaign.py` polled every thirty seconds to commit
-//! alongside it, in a second process; its own comment called that a compromise to
-//! avoid coupling measurement to version control. It also meant the commit could
-//! land while a record was being appended — `progress.py` carried a comment about
-//! expecting torn lines. Here the driver owns the loop and the harness reports each
-//! cell as it finishes, so a commit happens only at a cell boundary, where there is
-//! no half-written line by construction. The coupling the Python avoided is still
-//! avoided: the harness knows nothing about git, and this module is the only place
+//! The driver owns the loop and the harness reports each cell as it finishes, so
+//! a commit happens only at a cell boundary, where there is no half-written line
+//! by construction. A committer polling the dataset from beside the harness would
+//! be simpler, and is the arrangement this replaces, but it can land a commit
+//! while a record is being appended. Measurement still knows nothing about version
+//! control: the harness has no idea git exists, and this module is the only place
 //! the two meet.
 
 use std::{path::PathBuf, time::Duration};
@@ -96,8 +93,8 @@ pub fn run(campaign: &Campaign, cells: &[Factors], vcs: &dyn Vcs) -> Result<Summ
 ///
 /// The commit cadence is the thing worth testing here and it only exists in
 /// relation to the harness's per-cell notifications, so testing the two apart
-/// leaves the seam between them — which is where the Python's torn-line hazard
-/// lived — checked by nobody.
+/// leaves the seam between them — which is where a torn line would come from —
+/// checked by nobody.
 pub fn run_with(
     campaign: &Campaign,
     cells: &[Factors],
@@ -362,8 +359,8 @@ mod tests {
     /// cell boundary, and the driver commits from inside that notification. Neither
     /// half means anything alone — a cadence with nothing to count, a notification
     /// nobody acts on — so the test runs them together against the harness's
-    /// in-memory world, which is what the Python arrangement could not have been
-    /// tested as at all, its two halves being separate processes.
+    /// in-memory world. Splitting the driver across two processes would put this
+    /// seam beyond the reach of any test.
     #[test]
     fn a_run_commits_at_cell_boundaries_and_reports_how_it_ended() {
         let git = FakeGit::dirty();

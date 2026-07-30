@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 /// The one wall-clock format the records use: ISO 8601 to the second, with an
-/// explicit offset, matching what the Python harness wrote.
+/// explicit offset, as every row already in the dataset carries.
 const STAMP: &str = "%Y-%m-%dT%H:%M:%S%:z";
 
 pub trait Clock: Send + Sync {

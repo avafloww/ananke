@@ -15,7 +15,7 @@ use crate::{
         error::{DeriveError, Result},
         mtp::pairs::{MASK_BYTES_PER_TOKEN_PAIR, mtp_pairs},
         shape::device_context_sums,
-        stats::py_round,
+        stats::round_half_even,
     },
     record::Record,
 };
@@ -118,7 +118,7 @@ pub fn mtp_unaccounted(rows: &[Record]) -> Result<Scalar> {
     // across more.
     let worst = per_device.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     Ok(Scalar {
-        value: py_round(worst),
+        value: round_half_even(worst),
         evidence: format!(
             "{} paired with/without cell(s), as the driver delta less every buffer \
              llama.cpp names — the draft context's cache and graph, the extra recurrent \
@@ -219,8 +219,8 @@ pub fn mtp_draft_compute(rows: &[Record]) -> Result<DraftComputeFit> {
             .map(|(x, y)| y - (base + slope * x))
             .fold(f64::NEG_INFINITY, f64::max);
         base += deficit.max(0.0);
-        bases.insert(arch.clone(), py_round(base));
-        slopes.insert(arch.clone(), py_round(slope * 1000.0));
+        bases.insert(arch.clone(), round_half_even(base));
+        slopes.insert(arch.clone(), round_half_even(slope * 1000.0));
         detail.push(format!(
             "{arch} {} context(s) {base:.0}+{slope:.3}/1k",
             points.len()

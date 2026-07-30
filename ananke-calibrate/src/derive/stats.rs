@@ -11,8 +11,8 @@ pub fn pad(value: u64, to: u64) -> u64 {
     value.div_ceil(to) * to
 }
 
-/// The median, matching Python's `statistics.median`: the mean of the two middle
-/// values on an even-length sample rather than the lower of them.
+/// The median: the mean of the two middle values on an even-length sample rather
+/// than the lower of them.
 pub fn median(values: &[f64]) -> f64 {
     let mut sorted: Vec<f64> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).expect("measurements are never NaN"));
@@ -113,12 +113,12 @@ pub fn check_no_outlier_dominates(values: &[f64], name: &str, tolerance: f64) ->
 /// reduction is treated as an artifact.
 pub const OUTLIER_TOLERANCE: f64 = 4.0;
 
-/// Python's `round` — half-to-even, where Rust's `f64::round` is half-away.
+/// Half-to-even rounding, where Rust's `f64::round` is half-away-from-zero.
 ///
 /// The difference only shows on an exact tie, but a tie is exactly what a
 /// measurement in whole MiB divided by two produces, and a constant that differs
 /// by one from the committed value is a failed `emit --check`.
-pub fn py_round(value: f64) -> i64 {
+pub fn round_half_even(value: f64) -> i64 {
     let fractional = value - value.trunc();
     if fractional.abs() != 0.5 {
         return value.round() as i64;
@@ -127,17 +127,17 @@ pub fn py_round(value: f64) -> i64 {
     if floor % 2 == 0 { floor } else { floor + 1 }
 }
 
-/// Python's `round(value, 1)`, as tenths, so a rate can be deduplicated and
-/// sorted on the same figure it is printed as.
-pub fn py_round_tenths(value: f64) -> i64 {
-    py_round(value * 10.0)
+/// Half-to-even to one decimal place, expressed as tenths, so a rate can be
+/// deduplicated and sorted on the same figure it is printed as.
+pub fn round_tenths_half_even(value: f64) -> i64 {
+    round_half_even(value * 10.0)
 }
 
-/// Python's `%g` — significant figures, switching to exponent form outside the
-/// range where a plain decimal is shorter, with trailing zeros stripped.
+/// Significant-figure formatting: exponent form outside the range where a plain
+/// decimal is shorter, with trailing zeros stripped.
 ///
-/// Reimplemented because the disagreement messages are part of the contract
-/// this port has to reproduce, and Rust has no `g` formatter.
+/// Written out because Rust has no `g` formatter and the disagreement messages
+/// this feeds are compared against the committed document.
 pub fn format_g(value: f64, precision: usize) -> String {
     if value == 0.0 {
         return "0".to_string();
@@ -166,7 +166,7 @@ pub fn format_g(value: f64, precision: usize) -> String {
     }
 }
 
-/// Python's `{:.0%}`: a ratio as a whole-number percentage.
+/// A ratio as a whole-number percentage.
 pub fn format_percent(ratio: f64) -> String {
     format!("{:.0}%", ratio * 100.0)
 }
@@ -213,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn format_g_matches_python() {
+    fn format_g_switches_to_exponent_form() {
         assert_eq!(format_g(28.0, 4), "28");
         assert_eq!(format_g(42.83, 4), "42.83");
         assert_eq!(format_g(1234567.0, 4), "1.235e+06");

@@ -53,10 +53,10 @@ impl Tuning {
     /// The per-architecture ik MoE rate, as the estimator resolves it.
     ///
     /// Note that the table is keyed `{arch}@{cards}` while the lookup is by
-    /// architecture alone, so in practice every call lands on `default`. That is
-    /// what the Python does and what the residuals in this file are computed
-    /// against, so it is reproduced rather than corrected here — changing it
-    /// would move the arena model out from under every constant fitted on it.
+    /// architecture alone, so in practice every call lands on `default`. The
+    /// residuals in this file are computed against that behaviour, so it is kept
+    /// rather than corrected here — changing it would move the arena model out
+    /// from under every constant fitted on it.
     pub fn ik_moe_rate(&self, arch: &str) -> i64 {
         let rates = self.document.get("ik_moe_rates");
         let default = rates
@@ -72,8 +72,7 @@ impl Tuning {
 
     /// mainline's host-resident MoE rate under a tensor split, per unit of
     /// hidden size. The arena model charges it, and derives it too — so the
-    /// value read here is the previous run's, exactly as the Python's
-    /// module-level constant is.
+    /// value read here is the previous run's.
     pub fn mainline_tensor_moe_per_nembd(&self) -> i64 {
         self.constant("MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD", 57)
     }

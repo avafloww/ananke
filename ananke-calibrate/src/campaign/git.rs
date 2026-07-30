@@ -6,8 +6,7 @@
 //!
 //! Every operation is scoped to an explicit path list. A bare `git commit` takes
 //! everything staged, which would sweep an operator's half-staged work into a data
-//! commit if they happened to be staging while an overnight campaign ran. The
-//! Python was careful about this and the care is worth keeping.
+//! commit if they happened to be staging while an overnight campaign ran.
 
 use std::{path::PathBuf, process::Command};
 

@@ -89,13 +89,11 @@ but a threshold that passes today would be measuring the campaign's model covera
 rather than the estimator's quality.
 
 The whole loop is Rust: the sweep generator, the harness, the driver, the
-derivers, and the gates. Each piece was verified against the Python it replaced
-before that Python was deleted: `validate` reproduces its 229
-cells and skip tally, `scoreboard` its seven models to within 1 MiB, the fitter its
-coefficients to 1.5e-16, `emit` its whole document byte for byte, and `coverage` its
-table but for one stale label. The oracles survive as tests — 31 derive tests against
-`tuning.json`, 604 archived logs against the recorded parses, and a fitter fixture —
-so the checks did not leave with the code.
+derivers, and the gates. Each piece is pinned to what the campaign recorded rather
+than to its own output — 31 derive tests against `tuning.json`, 604 archived logs
+against the parses taken from them at the time, a fitter fixture, and the plan
+schedule as a captured fixture. A change to any of them has to say what it changed
+and why, because the committed artefact disagrees first.
 
 The **harness** is Rust too, as `ananke-measure`'s `measure` binary. It spawns
 llama-server with a cell's flags, waits for `/health`, probes it, samples
@@ -112,12 +110,12 @@ cargo run -p ananke-measure --bin measure -- --out data/measurements.ndjson --re
 Both passes rewrite only the lines they change, which makes them checkable against
 the checked-in campaign: `--reparse` over it is a byte-for-byte no-op (the parser
 already reproduces all 604 recorded blocks), and `--retire-stale-builds` reselects
-exactly the 14 rows the campaign retired. Both of the Python's operational hazards
-came across: the pre-flight fit gate weighs the *model
-file*, which over-charges a heavily expert-offloaded cell (GLM-5.2's file is 205 GiB
-and its process peaks at 187), so it stays a `--force` away rather than being
-loosened; and the swap watchdog is always on, because a hybrid that overcommits
-thrashes the box rather than failing cleanly, and it tripped twice on GLM.
+exactly the 14 rows the campaign retired. Two operational hazards shape its
+defaults: the pre-flight fit gate weighs the *model file*, which over-charges a
+heavily expert-offloaded cell (GLM-5.2's file is 205 GiB and its process peaks at
+187), so it stays a `--force` away rather than being loosened; and the swap watchdog
+is always on, because a hybrid that overcommits thrashes the box rather than failing
+cleanly, and it tripped twice on GLM.
 
 The **sweep generator** is Rust as well, as `ananke-calibrate`'s `plan` binary:
 
@@ -128,18 +126,21 @@ cargo run -p ananke-calibrate --bin plan -- all       # every question, disturba
 
 It emits `ananke_measure::record::Factors` — the same type the harness's `--plan`
 reader deserializes, so the two halves cannot drift in the way a shared JSON shape
-would. All 22 questions reproduce `plan.py`'s output byte for byte, as does the
-merged `all` schedule, kept as a fixture. A cell's identity is structural equality over the whole factor set with
-only the label and purpose blanked, rather than the Python's hash of its
-non-default fields: there is no field list for a factor to go missing from, which
-is the failure this campaign hit four times.
+would. All 22 questions and the merged `all` schedule are held against a captured
+fixture. A cell's identity is structural equality over the whole factor set with
+only the label and purpose blanked, rather than a hash of its non-default fields:
+there is no field list for a factor to go missing from, which is the failure this
+campaign hit four times.
 
-Note that `plan.py` itself does not run any more — its sort key reads a `thp`
-field that was removed from `Cell` when the build turned out to reject
-`--use-thp`, so `plan.py all` raises `AttributeError`. The Rust drops that dead
-term; the checked-in `data/plan.json` predates the removal and still spells `thp`,
-which the harness's strict reader rejects by name rather than dropping. Regenerate
-it rather than hand-editing it.
+The sort key carries no `thp` term — that factor was removed when the build turned
+out to reject `--use-thp`. `data/plan.json` is a regenerated capture of `plan all`;
+regenerate it rather than hand-editing it, since the harness's reader rejects an
+unknown field by name rather than dropping it.
+
+Re-running the whole campaign from nothing therefore takes: `plan` for the
+schedule, `campaign` to drive `measure` over it, then `fit` and `emit` to turn the
+dataset back into constants, with `coverage`, `validate`, `scoreboard`, and
+`crossval` to say whether the result is worth trusting.
 
 The **driver** is `ananke-calibrate`'s `campaign` binary, with `progress` reading
 the dataset alongside it:
@@ -152,23 +153,22 @@ cargo run -p ananke-calibrate --bin progress -- --watch     # how far it has got
 ```
 
 The campaign owns the loop and the harness reports each cell as it finishes, so a
-data commit lands only at a cell boundary, where there is no half-written line.
-`campaign.py` instead polled every thirty seconds from a second process — its own
-comment called that a compromise to avoid coupling measurement to version control,
-and it could commit mid-append; `progress.py` carried a matching comment about
-expecting torn lines. The coupling is still avoided: the harness knows nothing about
-git, and `campaign::git` is the only place the two meet. Commits stay scoped to the
-data paths, so an overnight run cannot sweep up whatever else happens to be staged.
+data commit lands only at a cell boundary, where there is no half-written line. A
+committer polling from a second process is simpler and is what this replaces, but it
+can land a commit mid-append. Measurement still knows nothing about version control:
+the harness has no idea git exists, and `campaign::git` is the only place the two
+meet. Commits stay scoped to the data paths, so an overnight run cannot sweep up
+whatever else happens to be staged.
 
-`progress` keys on **cell identity** rather than filenames. `progress.py` globbed
-for `data/<phase>.ndjson` files the campaign stopped writing when it consolidated
-to one dataset, and defaulted to seven phase names that had stopped being
-questions — so it reported `0/?` for every row against 643 records, and nothing
-noticed because nothing checked. There is now a test asserting the real dataset
-reports real progress.
+`progress` keys on **cell identity** rather than filenames. Globbing for
+`data/<phase>.ndjson` is the arrangement it replaces: the campaign stopped writing
+those files when it consolidated to one dataset, and the phase names had stopped
+being questions, so every row read `0/?` against 643 records and nothing noticed
+because nothing checked. There is now a test asserting the real dataset reports real
+progress.
 
-The only Python left is `probe_host_growth.py`, a standalone diagnostic that
-separates a one-off allocation from one that accumulates with use.
+`probe_host_growth.py` sits alongside as a standalone diagnostic, separating a
+one-off allocation from one that accumulates with use.
 
 The harness does not reuse the daemon's `system::ProcessSpawner`, deliberately.
 That trait is async and coupled to the supervisor's `SpawnConfig` — built for
@@ -184,9 +184,9 @@ Those seams are public, and `measure_cells_with` takes them. The campaign commit
 from inside the harness's per-cell notification, so what the two agree on is an
 ordering — a cell is reported once, after its row is on disk — and an ordering is
 only worth stating if something checks it. `campaign::run_with` runs the whole
-driver against the in-memory world for that reason. The Python could not have been
-tested this way at all: its two halves were separate processes, which is exactly why
-its commits could land mid-append.
+driver against the in-memory world for that reason. Splitting the driver across two
+processes would put that seam beyond the reach of any test, which is exactly where
+a mid-append commit comes from.
 
 One rule for anything added here. Where a derivation pairs two cells, or reads a
 config, the key must pin **every** factor that could differ, and the reader should

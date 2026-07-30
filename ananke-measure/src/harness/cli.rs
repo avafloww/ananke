@@ -1,11 +1,11 @@
 //! The `measure` binary's command line.
 //!
-//! One binary rather than the Python's two. `measure_one.py` existed because the
-//! pre-flight fit gate weighs the *model file*, which is the wrong quantity for
-//! heavy expert offload — GLM-5.2's file is 205 GiB and its process peaks at 187 —
-//! so it ran the same `measure()` with the gate removed and a swap watchdog added.
-//! Here the gate is a `--force` away and the watchdog is always on: it costs
-//! nothing when nothing is paging, and it tripped twice on GLM during the campaign.
+//! One binary, with the pre-flight fit gate a `--force` away rather than a
+//! separate entry point. The gate weighs the *model file*, which is the wrong
+//! quantity under heavy expert offload — GLM-5.2's file is 205 GiB and its process
+//! peaks at 187 — so a cell like that needs it off. The swap watchdog is always
+//! on: it costs nothing when nothing is paging, and it tripped twice on GLM during
+//! the campaign.
 
 use std::{
     path::{Path, PathBuf},

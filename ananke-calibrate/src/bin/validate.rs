@@ -1,9 +1,8 @@
 //! Compare the estimator against every comparable measured cell.
 //!
-//! Replaces `scripts/calibration/validate.py`. That version spawned
-//! `cargo run --example estimate` once per cell — two hundred-odd process
-//! launches, each re-reading its GGUF — where this runs the estimator and the
-//! packer in-process.
+//! The estimator and the packer run in-process, once per cell. Spawning
+//! `cargo run --example estimate` instead would be two hundred-odd process
+//! launches, each re-reading its GGUF.
 
 use std::{collections::BTreeMap, path::Path, process::ExitCode};
 

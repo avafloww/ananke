@@ -1,8 +1,7 @@
 //! Report where the dataset is too thin to have measured what it claims.
 //!
-//! Replaces `scripts/calibration/coverage.py`. See
-//! [`ananke_calibrate::coverage`] for why this exists and which four constants it
-//! was written after.
+//! See [`ananke_calibrate::coverage`] for why this exists and which four
+//! constants it was written after.
 
 use std::process::ExitCode;
 

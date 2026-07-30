@@ -1,9 +1,8 @@
 //! Report how far the campaign has got, and whether it is still moving.
 //!
-//! Replaces `scripts/calibration/progress.py`, which had stopped reporting
-//! anything: it looked for `data/<phase>.ndjson` files the campaign no longer
-//! writes, so every row read `0/?`. See [`ananke_calibrate::campaign::progress`]
-//! for what replaced the filename globbing.
+//! Keyed on cell identity rather than on filenames, so consolidating the
+//! dataset into one file cannot silently stop it reporting. See
+//! [`ananke_calibrate::campaign::progress`].
 //!
 //! ```sh
 //! cargo run -p ananke-calibrate --bin progress

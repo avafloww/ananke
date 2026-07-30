@@ -14,7 +14,7 @@ use crate::{
         Table,
         error::{DeriveError, Result},
         shape::{CHECKPOINT_MIN_STEP, variant_key},
-        stats::{OUTLIER_TOLERANCE, check_no_outlier_dominates, py_round},
+        stats::{OUTLIER_TOLERANCE, check_no_outlier_dominates, round_half_even},
     },
     record::Record,
 };
@@ -116,7 +116,7 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
         .iter()
         .map(|(arch, group)| {
             let worst = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            (arch.clone(), py_round(worst).max(0))
+            (arch.clone(), round_half_even(worst).max(0))
         })
         .collect();
     let detail = table

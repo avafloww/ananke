@@ -4,9 +4,7 @@
 //! operator actually serves, each estimated the way the daemon would and compared
 //! against what the driver reported for the running process.
 //!
-//! Replaces `scripts/calibration/scoreboard.py`, which shelled out to
-//! `dump_estimates.py`, which in turn spawned the `estimate` example once per
-//! model.
+//! The estimator and the packer run in-process, once per model.
 
 use std::{collections::BTreeMap, path::Path, process::ExitCode};
 
@@ -123,8 +121,8 @@ fn main() -> ExitCode {
                 continue;
             }
         };
-        // The reservation, matching what the Python summed from the placement's
-        // GPU slots — this is the figure the operator's cards actually hold.
+        // The reservation summed over the placement's GPU slots — the figure the
+        // operator's cards actually hold.
         let est = ananke_calibrate::validate::gpu_reserved_mib(&packed);
         let drift = 100.0 * (est as f64 - *measured as f64) / *measured as f64;
         let flag = if drift.abs() <= TOLERANCE_PCT {

@@ -400,7 +400,7 @@ impl Record {
     /// Keyed by the *physical* id: the sampler records `gpu{id}_used_mib` while
     /// the loader's breakdown rows are in visible order, so a cell pinned to
     /// GPU 1 has its usage under `gpu1_used_mib` and its breakdown row under
-    /// `CUDA0`. A zero reads as absent, as it does on the Python side.
+    /// `CUDA0`. A zero reads as absent.
     pub fn gpu_card_used_mib(&self, card: u32) -> Option<f64> {
         self.rss.per_card.get(&card).copied()
     }
@@ -435,9 +435,8 @@ impl Factors {
 
     /// How many cards the cell was pinned to, with `default` for an empty pin.
     ///
-    /// The Python spells this several ways at different call sites — an empty
-    /// `gpus` reads as one card in most and as zero in the device-scaling
-    /// deriver — so the fallback is the caller's to choose.
+    /// An empty `gpus` means one card to most callers and zero to the
+    /// device-scaling deriver, so the fallback is the caller's to choose.
     pub fn cards_or(&self, default: usize) -> usize {
         if self.gpus.is_empty() {
             default
@@ -462,7 +461,7 @@ impl Factors {
     }
 
     /// The physical batch, with llama.cpp's default named where the cell did not
-    /// set one. Zero reads as absent, as it does on the Python side.
+    /// set one. Zero reads as absent.
     pub fn ubatch_or_default(&self) -> u32 {
         match self.ubatch.unwrap_or(0) {
             0 => 512,

@@ -9,7 +9,7 @@ use crate::{
         NestedTable, Scalar, Table,
         error::{DeriveError, Result},
         shape::{WEIGHT_TOLERANCE, query_head_count, same_resident_weights, table_less_compute},
-        stats::py_round,
+        stats::round_half_even,
     },
     record::Record,
 };
@@ -234,7 +234,7 @@ pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
         .fold(f64::NEG_INFINITY, f64::max);
     let shapes: BTreeSet<(u32, u32, i64)> = seen
         .iter()
-        .map(|(g, i, m)| (*i, *m, py_round(g / 1048576.0)))
+        .map(|(g, i, m)| (*i, *m, round_half_even(g / 1048576.0)))
         .collect();
     let detail = shapes
         .iter()
@@ -242,7 +242,7 @@ pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
         .collect::<Vec<_>>()
         .join(", ");
     Ok(Scalar {
-        value: py_round(worst),
+        value: round_half_even(worst),
         evidence: format!(
             "llama.cpp's own `adding N MiB to fit_params_target` figure net of the \
              summed clip tensor sizes, across {} cells and {} vision configurations: \
@@ -286,7 +286,7 @@ pub fn table_less_observations(rows: &[Record]) -> Result<NestedTable> {
         };
         let key = format!("ctx{}/ub{}", factors.ctx, factors.ubatch_or_default());
         let entry = observed.entry(arch).or_default().entry(key).or_insert(0);
-        *entry = (*entry).max(py_round(per_device));
+        *entry = (*entry).max(round_half_even(per_device));
     }
     if observed.is_empty() {
         return Err(DeriveError::no_data(

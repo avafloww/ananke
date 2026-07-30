@@ -26,7 +26,7 @@ use crate::harness::{
     sys::LocalFiles,
 };
 
-/// The campaign's own figure, from `measure.py --retire-stale-builds`.
+/// The campaign's own figure: the rows it retired when the build last changed.
 const RETIRED_ROWS: usize = 14;
 
 #[test]

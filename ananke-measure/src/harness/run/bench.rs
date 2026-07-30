@@ -3,13 +3,11 @@
 //! Realism is the part that cannot be synthesised: prompt-cache behaviour and
 //! generation both depend on what the tokens actually are, and filler that a
 //! cache or a drafter finds unnaturally easy measures the wrong thing. Vendored
-//! from the `llama-cpp-model-tuning` skill (by way of
-//! `scripts/calibration/coding_bench.py`) so a calibration run needs nothing
+//! from the `llama-cpp-model-tuning` skill so a calibration run needs nothing
 //! outside this repository; keep them in sync when either changes.
 //!
-//! Only the prompts came across. The Python module around them is a standalone
-//! throughput benchmark that the harness never called — it read the two constants
-//! out of the file and drove the conversation itself.
+//! Only the prompts are here. The harness drives the conversation itself, so a
+//! throughput benchmark wrapped around them would go uncalled.
 
 pub(crate) const SYSTEM: &str = "You are an expert software engineer. You have access to the following tools:
 

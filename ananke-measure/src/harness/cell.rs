@@ -3,16 +3,15 @@
 //! A cell *is* its factor set, so [`crate::record::Factors`] is the only
 //! definition of one: the plan writes it, the identity hashes it, the command
 //! line is built from it, and the record carries it back. Adding a factor
-//! therefore reaches all four at once, which is the property the Python was
-//! built around and the one that keeps a flag from being passed to the server
-//! while going unrecorded.
+//! therefore reaches all four at once, which is what keeps a flag from being
+//! passed to the server while going unrecorded.
 
 use sha2::{Digest, Sha256};
 
 use crate::{
     harness::{
         error::{Error, ErrorKind},
-        json::to_python_json,
+        json::to_dataset_json,
     },
     record::{Factors, Runtime},
 };
@@ -52,7 +51,7 @@ pub fn cell_id(factors: &Factors) -> String {
         .filter(|(key, _)| !matches!(key.as_str(), "label" | "purpose"))
         .filter(|(key, value)| defaults.get(*key) != Some(*value))
         .collect();
-    let digest = Sha256::digest(to_python_json(&payload).as_bytes());
+    let digest = Sha256::digest(to_dataset_json(&payload).as_bytes());
     // Twelve hex characters, as every existing row spells it.
     format!("{digest:x}")[..12].to_owned()
 }
@@ -331,9 +330,9 @@ mod tests {
     }
 
     /// The dataset is the oracle: every one of the campaign's rows carries both its
-    /// factor set and the id the Python harness hashed from it, so the two hashers
-    /// have to agree on all of them or this harness does not recognise its own
-    /// measurements and re-measures the lot.
+    /// factor set and the id hashed from it, so this hasher has to agree with all of
+    /// them or the harness does not recognise its own measurements and re-measures
+    /// the lot.
     #[test]
     fn every_recorded_cell_id_is_reproduced() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

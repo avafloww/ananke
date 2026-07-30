@@ -29,9 +29,9 @@ use crate::record::Record;
 /// An axis a regime's rule can depend on.
 ///
 /// An enum rather than a string key, so a regime naming an axis the record does not
-/// carry is a compile error. The Python indexed `factors` by name and would have
-/// reported a typo'd axis as "one distinct point" — indistinguishable from the
-/// failure this is meant to catch.
+/// carry is a compile error. Indexing the factor set by name instead would report a
+/// typo'd axis as "one distinct point" — indistinguishable from the failure this is
+/// meant to catch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Axis {
     Context,

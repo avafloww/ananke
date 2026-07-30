@@ -1,11 +1,10 @@
 //! An insertion-ordered map, because two evidence strings depend on one.
 //!
-//! Python dictionaries preserve insertion order, and two derivers list their
-//! cells in the order the dataset presents them rather than sorted — the
-//! per-device host cost and the MTP unaccounted residual. A `BTreeMap` there
-//! would reorder the evidence text and fail `emit --check` while every value
-//! matched, which is the most confusing possible failure. Everything that *is*
-//! sorted on the Python side uses `BTreeMap` instead.
+//! Two derivers list their cells in the order the dataset presents them rather
+//! than sorted — the per-device host cost and the MTP unaccounted residual. A
+//! `BTreeMap` there would reorder the evidence text and fail `emit --check` while
+//! every value matched, which is the most confusing possible failure. Everything
+//! whose order is genuinely sorted uses `BTreeMap` instead.
 //!
 //! Linear lookup: the dataset is under a thousand rows and the groups are a
 //! handful, so a hash is not worth the dependency.

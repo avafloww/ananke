@@ -12,7 +12,7 @@
 //!
 //! ```text
 //! cargo run -p ananke-calibrate --bin plan -- curves > curves.json
-//! python measure.py --out data/calibration/curves.csv --plan curves.json
+//! cargo run -p ananke-measure --bin measure -- --plan curves.json --out data/measurements.ndjson
 //! ```
 //!
 //! The output type is [`ananke_measure::record::Factors`], the harness's own
@@ -301,8 +301,7 @@ fn shard_stem(name: &str) -> Option<&str> {
     (is_five_digits(index) && is_five_digits(count)).then_some(stem)
 }
 
-/// Whether a file name is one of `stem`'s shards — the `{stem}-*-of-*.gguf` the
-/// Python planner globbed for.
+/// Whether a file name is one of `stem`'s shards: `{stem}-*-of-*.gguf`.
 fn is_shard_of(name: &str, stem: &str) -> bool {
     name.strip_suffix(".gguf")
         .and_then(|base| base.strip_prefix(stem))

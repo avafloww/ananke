@@ -1,9 +1,9 @@
 //! Compare the estimator's prediction against every comparable measured cell.
 //!
 //! This is the campaign's top-level accuracy signal. It runs the estimator and
-//! the packer **in-process**, where the Python it replaces spawned
-//! `cargo run --example estimate` once per cell — some two hundred subprocess
-//! launches, each re-reading the GGUF.
+//! the packer **in-process**: spawning `cargo run --example estimate` once per
+//! cell instead would be some two hundred subprocess launches, each re-reading
+//! the GGUF.
 //!
 //! What it compares is the *prediction*, not the reservation. The reservation
 //! carries slop the process is not expected to use — one layer's headroom above

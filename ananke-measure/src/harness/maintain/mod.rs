@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    harness::json::{member_span, splice_member, to_python_json},
+    harness::json::{member_span, splice_member, to_dataset_json},
     parse_log,
 };
 
@@ -23,9 +23,8 @@ use crate::{
 /// `reparsed` left absent so an analysis can tell which rows carry the newer
 /// fields. So does a record whose block the current parser reproduces exactly:
 /// there is nothing to re-derive, and rewriting the line would claim a change that
-/// did not happen. That is a deliberate departure from the Python, which rewrote
-/// every line unconditionally and so could not tell an idempotent pass from a
-/// substantive one.
+/// did not happen. Rewriting every line unconditionally would make an idempotent
+/// pass indistinguishable from a substantive one.
 pub(crate) fn reparse(
     lines: &[String],
     read_log: &dyn Fn(&str) -> Option<String>,
@@ -89,7 +88,7 @@ fn reparse_line(line: &str, read_log: &dyn Fn(&str) -> Option<String>) -> Repars
     if equivalent(&ours, &record["parsed"]) {
         return Reparsed::Unchanged;
     }
-    let Some(line) = splice_member(line, "parsed", &to_python_json(&parsed)) else {
+    let Some(line) = splice_member(line, "parsed", &to_dataset_json(&parsed)) else {
         return Reparsed::Skipped;
     };
     Reparsed::Rewritten(set_member(&line, "reparsed", "true"))
@@ -212,8 +211,8 @@ fn build(record: &serde_json::Value) -> String {
         .to_owned()
 }
 
-/// Set a top-level member, adding it at the end when it is not there — which is
-/// also where Python's insertion order would have put a new key.
+/// Set a top-level member, adding it at the end when it is not there, which is
+/// where the records already carrying it have it.
 fn set_member(line: &str, key: &str, value: &str) -> String {
     if member_span(line, key).is_some() {
         return splice_member(line, key, value).unwrap_or_else(|| line.to_owned());
@@ -260,7 +259,7 @@ mod tests {
     use super::*;
 
     fn row(cell: &str, arch: &str, build: &str, when: &str, gpu: u64) -> String {
-        to_python_json(&serde_json::json!({
+        to_dataset_json(&serde_json::json!({
             "cell": cell,
             "status": "ok",
             "provenance": {"runtime_sha256": build, "measured_at_utc": when},
@@ -349,10 +348,10 @@ mod tests {
     #[test]
     fn a_record_with_no_archived_log_keeps_the_parsed_block_it_has() {
         let lines = vec![
-            to_python_json(
+            to_dataset_json(
                 &serde_json::json!({"status": "ok", "log": "", "parsed": {"arch": "x"}}),
             ),
-            to_python_json(
+            to_dataset_json(
                 &serde_json::json!({"status": "failed-to-load", "log": "a.log.gz", "parsed": {}}),
             ),
         ];
@@ -370,7 +369,7 @@ mod tests {
 
     #[test]
     fn a_block_the_parser_now_reads_differently_is_rewritten_and_marked() {
-        let line = to_python_json(&serde_json::json!({
+        let line = to_dataset_json(&serde_json::json!({
             "status": "ok", "log": "a.log.gz", "parsed": {"arch": "stale"}, "cell": "abc",
         }));
         let (out, report) = reparse(&[line], &|_| Some("arch = llama\n".to_owned()));

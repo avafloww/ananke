@@ -4,11 +4,11 @@
 //! files to order the schedule, and touches neither the GPUs nor the running server
 //! nor the plan on disk.
 //!
-//! This is a rewrite rather than a port. `progress.py` reported per-question
-//! progress by globbing for `data/<phase>.ndjson`, a layout the campaign left
-//! behind when it consolidated to one `measurements.ndjson`, and it defaulted to
-//! seven phase names that had stopped being questions — so it printed `0/?` for
-//! every row against a dataset of 643 records, and had done for some time.
+//! Reporting per-question progress by globbing for `data/<phase>.ndjson` is the
+//! arrangement this replaces. The campaign left that layout behind when it
+//! consolidated to one `measurements.ndjson`, and the phase names it defaulted to
+//! had stopped being questions, so every row printed `0/?` against a dataset of
+//! 643 records and had done for some time.
 //!
 //! Progress here is keyed on **cell identity** instead: each question is asked what
 //! cells it wants, each cell is named the way the harness names it, and the dataset
@@ -168,9 +168,9 @@ mod tests {
 
     /// The report finds the real campaign's progress, and it is not zero.
     ///
-    /// This is the assertion `progress.py` would have failed: it reported `0/?` for
-    /// every question against this same dataset, and nothing noticed because
-    /// nothing checked.
+    /// This is the assertion the filename-globbing arrangement would have failed:
+    /// it reported `0/?` for every question against this same dataset, and nothing
+    /// noticed because nothing checked.
     #[test]
     fn the_real_dataset_reports_real_progress() {
         let report = report(&dataset(), &Library::from_env());
@@ -306,9 +306,9 @@ mod tests {
 
     /// The plan and the dataset agree on how cells are named.
     ///
-    /// If they did not, every question would read `0/N` — which is exactly the
-    /// state `progress.py` was in. The check is that the overlap is substantial,
-    /// because a stale-but-plausible identity function produces a small one.
+    /// If they did not, every question would read `0/N`. The check is that the
+    /// overlap is substantial, because a stale-but-plausible identity function
+    /// produces a small one.
     #[test]
     fn the_plan_and_the_dataset_name_cells_the_same_way() {
         let report = report(&dataset(), &Library::from_env());

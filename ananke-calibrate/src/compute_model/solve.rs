@@ -4,9 +4,9 @@
 //!
 //! Deliberately a few dozen lines of dense arithmetic rather than a linear-algebra
 //! dependency. The largest system is eight columns over a few hundred rows, the
-//! conditioning is checked by the pivot test rather than assumed, and the routine
-//! has to reproduce the Python it replaces bit for bit — which means the summation
-//! order is part of the contract.
+//! conditioning is checked by the pivot test rather than assumed, and the
+//! coefficients have to reproduce the committed ones bit for bit — which makes the
+//! summation order part of the contract.
 
 use ananke_estimate::compute_model::Columns;
 

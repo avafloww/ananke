@@ -1,26 +1,21 @@
-//! Every plan the generator can emit, held against the Python it replaced.
+//! Every plan the generator can emit, held against a recorded fixture.
 //!
-//! `scripts/calibration/plan.py` is deterministic — the same arguments produce the
-//! same plan, byte for byte — so the fixture is its output, captured with
-//! `LLM_DIR=/fake/llm` for all twenty-two questions plus `all`. Ordered lists are
-//! compared, not sets: the Python uses no randomness and iterates no set, and the
-//! run *order* is itself part of what the planner decides, since the whole point
-//! of `all` is to visit each model's cells while its weights are hot.
+//! Generation is deterministic — the same arguments produce the same plan, byte
+//! for byte — so the fixture is one capture of it under `LLM_DIR=/fake/llm`, for
+//! all twenty-two questions plus `all`. Ordered lists are compared, not sets:
+//! nothing here is random or set-iterated, and the run *order* is itself part of
+//! what the planner decides, since the whole point of `all` is to visit each
+//! model's cells while its weights are hot.
 //!
-//! One deliberate difference, and the only one: the Python's `_disturbance` reads
-//! `cell.thp`, a field that was removed from `Cell` when the llama.cpp build
-//! turned out to reject `--use-thp`, so `plan.py all` raises `AttributeError` as
-//! it stands. The fixture was captured with that dead term dropped from the sort
-//! key, which is what this port does too. Every other question is the unmodified
-//! Python's output.
+//! The sort key deliberately carries no `thp` term. That factor was removed when
+//! the llama.cpp build turned out to reject `--use-thp`, and the fixture was
+//! captured without it.
 //!
 //! `/fake/llm` is a root that does not exist, so every model reads as unreadable
 //! and the size term in the ordering is constant. That makes the fixture
 //! reproducible on any box while still exercising the merge and the whole rest of
-//! the sort key. The size term itself was verified separately against the real
-//! library: `plan all` under the campaign machine's `$LLM_DIR` reproduces the
-//! Python's ordering there too, and the shard-summing is unit-tested in
-//! `plan::tests`.
+//! the sort key. The size term itself was checked separately against the real
+//! library, and the shard-summing is unit-tested in `plan::tests`.
 
 use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
 
@@ -33,7 +28,7 @@ use pretty_assertions::assert_eq;
 const FAKE_ROOT: &str = "/fake/llm";
 
 #[test]
-fn every_question_matches_the_python() {
+fn every_question_matches_the_fixture() {
     let expected = fixture();
     let lib = Library::rooted(FAKE_ROOT);
     assert!(
@@ -53,7 +48,7 @@ fn every_question_matches_the_python() {
 /// The merged campaign: every question's cells de-duplicated, tagged with each
 /// question that asked for them, and ordered smallest-model-first.
 #[test]
-fn the_whole_campaign_matches_the_python() {
+fn the_whole_campaign_matches_the_fixture() {
     let expected = fixture();
     let cells = all_cells(&Library::rooted(FAKE_ROOT));
     assert_eq!(&to_json(&cells), expected.get("all").expect("captured"));

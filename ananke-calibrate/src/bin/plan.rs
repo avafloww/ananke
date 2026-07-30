@@ -1,12 +1,11 @@
 //! Print the measurement plan for one question, or the whole campaign.
 //!
-//! Replaces `scripts/calibration/plan.py`. See [`ananke_calibrate::plan`] for why
-//! the sweeps are generated rather than hand-written, and
-//! [`ananke_calibrate::coverage`] for the audit they answer.
+//! See [`ananke_calibrate::plan`] for why the sweeps are generated rather than
+//! hand-written, and [`ananke_calibrate::coverage`] for the audit they answer.
 //!
 //! ```text
 //! cargo run -p ananke-calibrate --bin plan -- curves > curves.json
-//! python measure.py --out data/calibration/curves.csv --plan curves.json
+//! cargo run -p ananke-measure --bin measure -- --plan curves.json --out data/measurements.ndjson
 //! ```
 
 use std::process::ExitCode;

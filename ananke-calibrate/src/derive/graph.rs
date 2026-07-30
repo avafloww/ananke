@@ -9,7 +9,7 @@ use crate::{
         Scalar, Table,
         arena::arena_terms,
         error::{DeriveError, Result},
-        stats::{consensus_default, median, py_round, py_round_tenths},
+        stats::{consensus_default, median, round_half_even, round_tenths_half_even},
         tuning::Tuning,
     },
     record::Record,
@@ -59,7 +59,7 @@ pub fn layer_split_copies(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         median(&singles)
     };
     Ok(Scalar {
-        value: py_round(median(&multiples)),
+        value: round_half_even(median(&multiples)),
         evidence: format!(
             "{} mainline layer-split cells at {:.2}, against {} single-card and \
              tensor-split cells at {single_median:.2}. Flat across context, batch, \
@@ -114,7 +114,7 @@ pub fn offload_min_batch(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
     let worst_on = on.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let first_off = off.iter().copied().fold(f64::INFINITY, f64::min);
     Ok(Scalar {
-        value: py_round(first_off),
+        value: round_half_even(first_off),
         evidence: format!(
             "bracketed to ({worst_on:.0}, {first_off:.0}] by {cells} ik MoE cells \
              across two models with different expert counts; the term collapses from \
@@ -168,18 +168,18 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
     let rates: Vec<f64> = points.iter().map(|(_, r)| *r).collect();
     let shapes: BTreeSet<(String, i64)> = points
         .iter()
-        .map(|(a, r)| (a.clone(), py_round_tenths(*r)))
+        .map(|(a, r)| (a.clone(), round_tenths_half_even(*r)))
         .collect();
     let detail = shapes
         .iter()
         .map(|(arch, tenths)| format!("{arch} {:.1}/unit", *tenths as f64 / 10.0))
         .collect::<Vec<_>>()
         .join(", ");
-    // Named for the constant it was first written against, which is what the
-    // Python calls it too; renaming it would change a message the check compares.
+    // Named for the constant it was first written against. Renaming it would
+    // change a message the check compares.
     consensus_default(&rates, "MTP embedded compute")?;
     Ok(Scalar {
-        value: py_round(median(&rates)),
+        value: round_half_even(median(&rates)),
         evidence: format!(
             "{} mainline tensor-split hybrid cells: {detail}. Linear in batch — \
              qwen35moe measures 28.3, 56.5, 113.0 and 226.1 MiB at ub 256, 512, 1024 \
@@ -300,7 +300,7 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
     }
     let shapes: BTreeSet<(u32, i64, String)> = points
         .iter()
-        .map(|p| (p.n_embd, py_round_tenths(p.rate), p.arch.clone()))
+        .map(|p| (p.n_embd, round_tenths_half_even(p.rate), p.arch.clone()))
         .collect();
     let detail = shapes
         .iter()
@@ -314,12 +314,15 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
         .collect::<Vec<_>>()
         .join(", ");
     let table = Table {
-        by_arch: by_key.into_iter().map(|(k, v)| (k, py_round(v))).collect(),
+        by_arch: by_key
+            .into_iter()
+            .map(|(k, v)| (k, round_half_even(v)))
+            .collect(),
         evidence: String::new(),
     };
     Ok((
         Scalar {
-            value: py_round(per_unit),
+            value: round_half_even(per_unit),
             evidence: format!(
                 "{} cells below the offload threshold: {detail}. The worst rate is \
                  taken rather than the median: the architectures differ, and a median \

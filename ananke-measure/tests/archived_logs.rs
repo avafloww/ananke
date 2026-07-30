@@ -1,8 +1,8 @@
-//! Re-parse every archived log and hold the result against the row the Python
-//! harness recorded for it.
+//! Re-parse every archived log and hold the result against the row recorded for
+//! it at the time.
 //!
 //! The campaign's logs are kept precisely so a record can be rebuilt from them,
-//! which makes them an oracle: the Rust parser is correct exactly insofar as it
+//! which makes them an oracle: the parser is correct exactly insofar as it
 //! reproduces the `parsed` block that the same log already produced. A
 //! disagreement is a finding either way round, so the failure message names the
 //! log, the field, and both values rather than only asserting inequality.
@@ -24,7 +24,7 @@ use serde_json::Value;
 const TOLERANCE: f64 = 1e-9;
 
 #[test]
-fn parsed_blocks_match_the_python_harness() {
+fn parsed_blocks_match_the_recorded_rows() {
     let data = data_dir();
     let measurements = std::fs::read_to_string(data.join("measurements.ndjson"))
         .expect("the campaign's measurements are checked in");

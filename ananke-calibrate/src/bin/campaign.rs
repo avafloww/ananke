@@ -1,9 +1,7 @@
 //! Run the calibration campaign end to end, committing as it goes.
 //!
-//! Replaces `scripts/calibration/campaign.py`, which shelled out to `plan.py` and
-//! `measure.py` — the last two Python pieces of the calibration loop. It could not
-//! have run as it stood: `plan.py all` raises `AttributeError` on a field that was
-//! removed from its cell type.
+//! The driver owns the loop: it generates the schedule, hands each cell to the
+//! harness, and commits the dataset at every cell boundary.
 //!
 //! ```sh
 //! cargo run -p ananke-calibrate --bin campaign               # every cell, cheapest order

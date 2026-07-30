@@ -7,10 +7,9 @@
 //! machine that stops responding. This tripped twice on GLM-5.2 during the
 //! campaign, which is the whole argument for keeping it.
 //!
-//! One deliberate divergence from the Python: that version reached for
-//! `pkill -f llama-server`, which also matches the shell driving the campaign and
-//! any unrelated server the operator left running. Here the trip is reported and
-//! the caller stops the child it spawned, by pid.
+//! The trip is reported and the caller stops the child it spawned, by pid.
+//! Reaching for `pkill -f llama-server` instead would also match the shell driving
+//! the campaign and any unrelated server the operator left running.
 
 use crate::harness::sys::ProcFs;
 

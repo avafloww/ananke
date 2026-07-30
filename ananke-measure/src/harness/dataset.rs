@@ -4,10 +4,10 @@
 //! appends happily beside older records instead of needing a schema migration —
 //! and an analysis reads what each record actually carries.
 //!
-//! Every write goes through [`to_python_json`], which reproduces the Python
-//! harness's `json.dumps` defaults. That is not nostalgia: the file is checked in
-//! as the campaign's oracle, and a line whose spacing differs from its neighbours
-//! is a diff that says nothing.
+//! Every write goes through [`to_dataset_json`], which reproduces the spacing and
+//! escaping of the lines already there. The file is checked in as the campaign's
+//! oracle, and a line whose spacing differs from its neighbours is a diff that
+//! says nothing.
 //!
 //! The filesystem arrives as a [`Files`] rather than being reached for directly,
 //! for the reason every other capability here does: the loop above this one appends
@@ -19,7 +19,7 @@ use std::{collections::BTreeSet, io::Read, path::Path};
 use crate::{
     harness::{
         error::{Error, ErrorKind},
-        json::to_python_json,
+        json::to_dataset_json,
         sys::Files,
     },
     record::Record,
@@ -63,7 +63,7 @@ pub(crate) fn already_measured(files: &dyn Files, path: &Path) -> Result<BTreeSe
 }
 
 pub(crate) fn append(files: &dyn Files, path: &Path, record: &Record) -> Result<(), Error> {
-    let line = format!("{}\n", to_python_json(record));
+    let line = format!("{}\n", to_dataset_json(record));
     files.append(path, line.as_bytes()).map_err(Error::io)
 }
 

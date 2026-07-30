@@ -132,8 +132,7 @@ impl Child for LocalChild {
 
     fn log(&self) -> String {
         // Lossily: a truncated multi-byte sequence at the end of a killed run's
-        // log is not a reason to lose the rest of it, and the Python read the
-        // same file with `errors="replace"`.
+        // log is not a reason to lose the rest of it.
         std::fs::read(&self.log_path)
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .unwrap_or_default()

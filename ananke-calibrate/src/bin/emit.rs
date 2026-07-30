@@ -1,8 +1,7 @@
 //! Derive the estimator's constants from the measurements, or verify them.
 //!
-//! Replaces `python3 scripts/calibration/analyse.py emit`. With `--check` it is
-//! the CI gate: a constant that no longer follows from the dataset fails the
-//! build rather than drifting quietly.
+//! With `--check` it is the CI gate: a constant that no longer follows from the
+//! dataset fails the build rather than drifting quietly.
 //!
 //! `compute_model` is written by the fitter (`ananke_calibrate::compute_model`),
 //! not here. `--check` compares the whole document including that section, so the
