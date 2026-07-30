@@ -332,9 +332,15 @@ _MTP = re.compile(r"estimated memory usage of MTP context is *([0-9.]+)")
 # `CUDA<n>`: under `--split-mode tensor` llama.cpp fuses the cards and reports
 # a single `Meta()` device. Keying on the CUDA name silently recorded zeros for
 # every tensor-split run — which is to say for every production configuration.
+# Every separator tolerates padding: the columns are right-aligned, so a value
+# with fewer digits than its column is preceded by more spaces. A literal single
+# space after the first `=` silently dropped any row whose free-memory figure was
+# narrower than its neighbour's — one card of a two-card breakdown, which left
+# the surviving row misaligned against the other card's driver reading and turned
+# one cell's compute target into 2042 MiB against a true 1032.
 _BREAKDOWN = re.compile(
-    r"- (.+?) +\| *(\d+) = (\d+) \+ \( *(\d+) = *(\d+) \+ *(\d+) \+ *(\d+)\)"
-    r" \+ *(\d+)")
+    r"- (.+?) +\| *(\d+) *= *(\d+) *\+ *\( *(\d+) *= *(\d+) *\+ *(\d+) *\+ *(\d+)\)"
+    r" *\+ *(\d+)")
 # The host row has no total/free and no unaccounted column.
 _BREAKDOWN_HOST = re.compile(
     r"- Host +\| *(\d+) = *(\d+) \+ *(\d+) \+ *(\d+)")
@@ -453,15 +459,23 @@ def parse_log(text: str) -> dict[str, float | str]:
     # column. `unaccounted` is the difference between what the driver reports
     # for the process and what llama.cpp can attribute — the term the GPU
     # compute-buffer bases carry as a margin, and previously discarded.
+    # Only the *last* table. Recent builds print one at the parameter-fitting
+    # stage, before anything is allocated, and another once the context exists;
+    # the first is a projection and its rows would misalign `devices[index]`
+    # against the cards. Relying on the fit-stage rows' negative `unaccounted`
+    # to exclude them worked by accident and stopped working for 16 cells whose
+    # projection happened to come out positive.
+    tables = text.split("memory breakdown [MiB]")
+    final = tables[-1] if len(tables) > 1 else text
     devices = []
-    for name, total, free, own, model, kv, compute, unacc in _BREAKDOWN.findall(text):
+    for name, total, free, own, model, kv, compute, unacc in _BREAKDOWN.findall(final):
         devices.append({"device": name.strip(), "total_mib": int(total),
                         "free_mib": int(free), "self_mib": int(own),
                         "model_mib": int(model), "kv_mib": int(kv),
                         "compute_mib": int(compute),
                         "unaccounted_mib": int(unacc)})
     parsed["devices"] = devices
-    host = _BREAKDOWN_HOST.search(text)
+    host = _BREAKDOWN_HOST.search(final)
     if host:
         parsed["host_breakdown"] = {
             "self_mib": int(host.group(1)), "model_mib": int(host.group(2)),

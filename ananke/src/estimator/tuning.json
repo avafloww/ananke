@@ -60,13 +60,13 @@
     ],
     "default": {
       "coefficients": {
-        "flat": 294.309229,
-        "hidden": 72.4015,
-        "mask": 2.482115,
-        "offload_head": 612.313508,
-        "quant": 4.62686
+        "flat": 295.783833,
+        "hidden": 72.83931,
+        "mask": 2.433157,
+        "offload_head": 611.27802,
+        "quant": 4.60611
       },
-      "evidence": "pooled over 407 mainline layer-split observations across every measured architecture; worst residual 65.8%"
+      "evidence": "pooled over 415 mainline layer-split observations across every measured architecture; worst residual 66.7%"
     },
     "entries": [
       {
@@ -223,11 +223,12 @@
           "laguna"
         ],
         "coefficients": {
-          "flat": 893.032182,
-          "hidden": 50.317211,
-          "mask": 0.969759
+          "flat": 362.334117,
+          "head_flat": 472.225622,
+          "hidden": 74.905471,
+          "mask": 1.653503
         },
-        "evidence": "non-negative weighted least squares over 11 per-device observation(s); worst residual 14.0%, 10 outside +/-5%",
+        "evidence": "non-negative weighted least squares over 18 per-device observation(s); worst residual 12.8%, 13 outside +/-5%",
         "runtime": null,
         "split": "layer",
         "variant": null
@@ -267,15 +268,12 @@
           "llama"
         ],
         "coefficients": {
-          "doubling": 149.421129,
-          "flat": 364.604969,
-          "head_flat": 0.655663,
-          "hidden": 45.365574,
-          "logits": 0.192566,
-          "mask": 3.119632,
-          "quant": 0.340365
+          "doubling": 11.132034,
+          "flat": 308.874411,
+          "hidden": 90.319604,
+          "mask": 2.270389
         },
-        "evidence": "non-negative weighted least squares over 35 per-device observation(s); worst residual 23.4%, 8 outside +/-5%",
+        "evidence": "non-negative weighted least squares over 36 per-device observation(s); worst residual 5.6%, 1 outside +/-5%",
         "runtime": null,
         "split": "layer",
         "variant": null
