@@ -1,7 +1,8 @@
 //! How far the campaign has got, and whether it is still moving.
 //!
-//! Reads only the dataset, so it is safe against a live campaign: it never touches
-//! the GPUs, the running server, or the plan on disk.
+//! Safe to run against a live campaign: it reads the dataset and stats the model
+//! files to order the schedule, and touches neither the GPUs nor the running server
+//! nor the plan on disk.
 //!
 //! This is a rewrite rather than a port. `progress.py` reported per-question
 //! progress by globbing for `data/<phase>.ndjson`, a layout the campaign left
@@ -49,9 +50,12 @@ pub struct Report {
     pub measured: usize,
     /// The most recent record's timestamp, as it appears in the data.
     pub last_record: Option<String>,
-    /// Measured cells no question currently plans. Not a fault in itself — a
-    /// question can be retired, or a cell measured by hand — but it is also what a
-    /// sweep that has quietly stopped generating its cells looks like.
+    /// Successfully measured cells no question currently plans. Not a fault in
+    /// itself — a question can be retired, or a cell measured by hand — but it is
+    /// also what a sweep that has quietly stopped generating its cells looks like.
+    ///
+    /// Counts only cells that reached `ok`, matching `measured`: a cell that failed
+    /// to load and that nobody plans is not a measurement anybody is missing.
     pub unplanned: usize,
 }
 
@@ -107,8 +111,8 @@ pub fn report(records: &[Record], lib: &Library) -> Report {
         .filter(|id| status_by_cell.get(id.as_str()) == Some(&"ok"))
         .count();
     let unplanned = status_by_cell
-        .keys()
-        .filter(|id| !planned_ids.contains(**id))
+        .iter()
+        .filter(|(id, status)| **status == "ok" && !planned_ids.contains(**id))
         .count();
 
     Report {
@@ -125,18 +129,24 @@ pub fn report(records: &[Record], lib: &Library) -> Report {
     }
 }
 
-/// Minutes between two ISO-8601 stamps, or `None` if either cannot be read.
+/// Minutes between two ISO-8601 stamps, or `None` if either cannot be read or the
+/// second precedes the first.
 ///
 /// Asked for the *total* in minutes rather than a span's minutes component: for
 /// timestamps `jiff` balances a span no higher than seconds, so a three-day gap
 /// arrives as ~259200 seconds with a minutes component of zero. Reading that
 /// component reports every idle campaign as "0 min ago — running", which is the one
 /// answer this function exists to rule out.
+///
+/// A record stamped in the future gets no age for the same reason. Clamping the
+/// negative gap to zero would answer "0 min ago — running" forever after a clock
+/// stepped backwards, which is the failure this function is here to prevent, only
+/// arrived at from the other side.
 pub fn minutes_between(earlier: &str, later: &str) -> Option<i64> {
     let earlier: jiff::Timestamp = earlier.parse().ok()?;
     let later: jiff::Timestamp = later.parse().ok()?;
     let minutes = later.since(earlier).ok()?.total(jiff::Unit::Minute).ok()?;
-    Some(minutes.max(0.0) as i64)
+    (minutes >= 0.0).then_some(minutes as i64)
 }
 
 /// Minutes since a record's timestamp.
@@ -177,37 +187,81 @@ mod tests {
         assert!(report.last_record.is_some(), "the dataset is timestamped");
     }
 
-    /// Every question's measured count is bounded by what it planned.
-    ///
-    /// The cheap way to get this wrong is to count dataset rows per question rather
-    /// than planned cells that have a row, which lets a resweep report over 100%.
+    /// The dataset really does contain retried cells, so the merge below is load-
+    /// bearing against it rather than a defence against a case that never occurs.
     #[test]
-    fn no_question_exceeds_its_plan() {
-        for question in report(&dataset(), &Library::from_env()).questions {
-            assert!(
-                question.measured <= question.planned,
-                "{}: {} measured of {} planned",
-                question.name,
-                question.measured,
-                question.planned
-            );
-        }
-    }
-
-    /// Counts are over distinct cells, not rows.
-    #[test]
-    fn a_retried_cell_counts_once() {
+    fn the_dataset_contains_retries() {
         let records = dataset();
-        let report = report(&records, &Library::from_env());
         let distinct: BTreeSet<&str> = records.iter().filter_map(|r| r.cell.as_deref()).collect();
-        assert!(records.len() >= distinct.len(), "the dataset has retries");
+        let with_id = records.iter().filter(|r| r.cell.is_some()).count();
         assert!(
-            report.measured + report.unplanned <= distinct.len(),
-            "{} measured + {} unplanned exceeds {} distinct cells",
-            report.measured,
-            report.unplanned,
+            with_id > distinct.len(),
+            "{with_id} identified rows over {} distinct cells — no cell was retried, so \
+             `a_retried_cell_is_measured_once` is testing a case the data does not have",
             distinct.len()
         );
+    }
+
+    /// A cell that failed and was retried is measured, and counted once.
+    ///
+    /// Both halves can fail: taking the *first* row's status leaves a recovered cell
+    /// reported as outstanding forever, and counting rows rather than cells lets a
+    /// question report more measured than it planned.
+    #[test]
+    fn a_retried_cell_is_measured_once() {
+        let records = synthetic(&[
+            ("cell-a", "failed-to-load"),
+            ("cell-a", "ok"),
+            ("cell-a", "ok"),
+        ]);
+        let report = report(&records, &Library::from_env());
+        assert_eq!(report.unplanned, 1, "one cell, whatever its row count");
+        assert_eq!(report.measured, 0, "and it is not one the plan asked for");
+    }
+
+    /// A cell that never loaded is not counted as an unplanned measurement.
+    ///
+    /// `unplanned` is reported to the operator as "measured cell(s) no question
+    /// currently plans"; counting failures there inflates it — 91 against a true 78
+    /// on the real dataset — and the inflated figure is what the identity check
+    /// below keys on.
+    #[test]
+    fn an_unplanned_failure_is_not_an_unplanned_measurement() {
+        let report = report(
+            &synthetic(&[("cell-a", "failed-to-load"), ("cell-b", "ok")]),
+            &Library::from_env(),
+        );
+        assert_eq!(report.unplanned, 1);
+    }
+
+    /// A row from before the schema carried a cell id is ignored, not guessed at.
+    #[test]
+    fn an_unidentified_row_is_not_counted() {
+        let report = report(
+            &synthetic(&[("", "ok"), ("cell-a", "ok")]),
+            &Library::from_env(),
+        );
+        assert_eq!(report.unplanned, 1);
+    }
+
+    /// Records with the given cell ids and statuses. An empty id means a row from
+    /// before the schema carried one.
+    fn synthetic(rows: &[(&str, &str)]) -> Vec<Record> {
+        let text: String = rows
+            .iter()
+            .map(|(cell, status)| {
+                let id = if cell.is_empty() {
+                    "null".to_string()
+                } else {
+                    format!("\"{cell}\"")
+                };
+                format!(
+                    r#"{{"cell":{id},"status":"{status}","factors":{{"model":"m","ctx":4096}}}}"#
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        read_ndjson(&text).expect("the synthetic rows parse")
     }
 
     /// A gap of days reads as thousands of minutes, not as zero.
@@ -233,6 +287,19 @@ mod tests {
     fn an_unreadable_stamp_has_no_age() {
         assert_eq!(
             minutes_between("not a date", "2026-07-30T06:11:17+00:00"),
+            None
+        );
+    }
+
+    /// A record stamped in the future has no age either.
+    ///
+    /// Clamping it to zero — which the first version did — reports "0 min ago,
+    /// running" for as long as the skew lasts, which is the same wrong answer the
+    /// span-component bug gave, reached from the other direction.
+    #[test]
+    fn a_record_from_the_future_has_no_age() {
+        assert_eq!(
+            minutes_between("2026-07-30T06:11:17+00:00", "2026-07-29T06:11:17+00:00"),
             None
         );
     }
