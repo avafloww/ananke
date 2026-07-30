@@ -7,6 +7,7 @@ mod tests;
 use crate::{
     allocator::placement::{
         entry::ONE_LAYER_FUDGE_MULTIPLIER,
+        experts_ncmoe::Ncmoe,
         packer::{Charge, Packer},
         types::{PackError, ShardedPlan},
     },
@@ -14,18 +15,16 @@ use crate::{
 };
 
 impl<'a> Packer<'a> {
-    /// Determine how many expert layers to offload to CPU in the sharded
-    /// path, charge them, and return the count and total bytes.
+    /// Determine which expert layers to offload to CPU in the sharded path,
+    /// charge them, and return the `-ncmoe` argument and the total bytes.
     ///
-    /// Uses the same `OffloadMode` logic as `distribute_experts_ncmoe`:
-    /// `Layers(n)` offloads exactly `n`, `Auto` offloads the trailing
-    /// surplus that does not fit the combined GPU pool, `Off` offloads
-    /// nothing. The offloaded expert bytes are charged to CPU and removed
-    /// from the per-layer sum the sharded path distributes across GPUs.
+    /// `Layers(n)` offloads what the runtime's own `-ncmoe n` would, `Auto`
+    /// offloads every expert layer, and `Off` offloads none. The offloaded
+    /// expert bytes are charged to CPU and removed from the per-layer sum the
+    /// sharded path distributes across GPUs.
     fn sharded_expert_offload(&mut self) -> (u32, u64) {
         let mut layers: Vec<u32> = self.expert_bytes_by_layer.keys().copied().collect();
         layers.sort_unstable();
-        let total = layers.len() as u32;
 
         // `--n-cpu-moe N` moves the expert tensors of blocks `[0, N)` — the
         // *leading* ones — to a CPU-mapped buffer, while every block's attention
@@ -42,25 +41,31 @@ impl<'a> Packer<'a> {
         // = 2 × 1431 = 2862 MiB ≈ all attention (1837) + the one retained
         // block's experts (568) + output head (242) + nextn tensors (~215).
         //
-        // `Layers(n)` honours the block bound; `Auto` offloads every expert
-        // layer, since this path has no per-card budget to fit a suffix against.
-        let cutoff = match self.offload_mode {
-            OffloadMode::Off => 0,
-            OffloadMode::Layers(n) => n,
-            OffloadMode::Auto => layers.last().map(|l| l + 1).unwrap_or(0),
+        // ik_llama takes the other end and counts expert layers rather than
+        // blocks; [`crate::allocator::placement::experts_ncmoe::Ncmoe`] holds
+        // both conventions and the measurements behind them.
+        //
+        // `Layers(n)` honours the runtime's argument; `Auto` offloads every
+        // expert layer, since this path has no per-card budget to fit a suffix
+        // against.
+        let plan = match self.offload_mode {
+            OffloadMode::Off => Ncmoe::for_runtime(self.svc, 0, &layers),
+            OffloadMode::Layers(n) => Ncmoe::for_runtime(self.svc, n, &layers),
+            OffloadMode::Auto => Ncmoe::keeping(self.svc, 0, &layers),
         };
 
         let mut offloaded = 0u64;
         for &l in &layers {
-            if l < cutoff {
-                let b = self.expert_bytes_by_layer[&l];
-                self.charge(DeviceSlot::Cpu, b, Charge::Weights);
-                self.expert_offload_cpu_bytes += b;
-                self.expert_offload_cpu_layers.insert(l);
-                offloaded += b;
+            if plan.keeps(l, &layers) {
+                continue;
             }
+            let b = self.expert_bytes_by_layer[&l];
+            self.charge(DeviceSlot::Cpu, b, Charge::Weights);
+            self.expert_offload_cpu_bytes += b;
+            self.expert_offload_cpu_layers.insert(l);
+            offloaded += b;
         }
-        (cutoff.min(total), offloaded)
+        (plan.flag(), offloaded)
     }
 
     /// Tensor/row split: shard the whole model across every spanned GPU in

@@ -12,8 +12,86 @@ use crate::{
         packer::{Charge, Packer},
         types::PackError,
     },
-    config::{DeviceSlot, OffloadMode},
+    config::{DeviceSlot, OffloadMode, ServiceConfig},
 };
+
+/// Which end of the expert layers `-ncmoe` moves to the host, and what its
+/// argument counts. The two runtimes disagree on both, and each was pinned
+/// exactly against a load log.
+///
+/// **Mainline** moves the expert tensors of blocks `[0, N)` — the leading ones,
+/// with `N` bounding *blocks* rather than counting expert layers. Its log names
+/// every tensor it moves: for laguna at `--n-cpu-moe 39` they run `blk.1` to
+/// `blk.38` (block 0 being dense), summing to the 41496 MiB its host buffer
+/// reports.
+///
+/// **ik_llama** moves the trailing `N` expert *layers*. The same model at
+/// `-ncmoe 30` on the fork puts 33672 MiB in its host buffer — the trailing 30
+/// layers' 33360 plus the 312 MiB embedding table — and its GPU buffers hold the
+/// complement to the byte.
+///
+/// The difference only shows when a quant widens later blocks' experts, as
+/// laguna's does: its leading 38 and trailing 39 differ by 1692 MiB. That is why
+/// one rule appeared to serve both.
+pub(crate) enum Ncmoe {
+    /// Mainline: offload blocks below this index.
+    LeadingBlocksBelow(u32),
+    /// ik_llama: offload this many trailing expert layers.
+    TrailingLayers(u32),
+}
+
+impl Ncmoe {
+    /// Is this service served by the fork?
+    pub(crate) fn is_ik(svc: &ServiceConfig) -> bool {
+        svc.llama_cpp().is_some_and(|lc| lc.runtime.ik().is_some())
+    }
+
+    /// The plan for an explicit `-ncmoe n` under this service's runtime.
+    pub(crate) fn for_runtime(svc: &ServiceConfig, n: u32, layers: &[u32]) -> Self {
+        if Self::is_ik(svc) {
+            Self::TrailingLayers(n.min(layers.len() as u32))
+        } else {
+            Self::LeadingBlocksBelow(n)
+        }
+    }
+
+    /// The plan that retains `kept` expert layers, from whichever end this
+    /// runtime keeps them.
+    pub(crate) fn keeping(svc: &ServiceConfig, kept: u32, layers: &[u32]) -> Self {
+        let total = layers.len() as u32;
+        if Self::is_ik(svc) {
+            Self::TrailingLayers(total.saturating_sub(kept))
+        } else {
+            // Mainline keeps a trailing suffix, so the bound is the lowest block
+            // it retains — or one past the highest when it retains none.
+            Self::LeadingBlocksBelow(match layers.len().checked_sub(kept as usize) {
+                Some(i) if i < layers.len() => layers[i],
+                _ => layers.last().map(|l| l + 1).unwrap_or(0),
+            })
+        }
+    }
+
+    pub(crate) fn keeps(&self, layer: u32, layers: &[u32]) -> bool {
+        match *self {
+            Self::LeadingBlocksBelow(bound) => layer >= bound,
+            Self::TrailingLayers(n) => {
+                let kept = layers.len().saturating_sub(n as usize);
+                layers
+                    .iter()
+                    .position(|&l| l == layer)
+                    .is_some_and(|i| i < kept)
+            }
+        }
+    }
+
+    /// The value to pass on the command line.
+    pub(crate) fn flag(&self) -> u32 {
+        match *self {
+            Self::LeadingBlocksBelow(bound) => bound,
+            Self::TrailingLayers(n) => n,
+        }
+    }
+}
 
 impl<'a> Packer<'a> {
     /// Phase B: offload the leading surplus expert *layers* to CPU as whole
@@ -60,35 +138,36 @@ impl<'a> Packer<'a> {
             .map(|g| self.gpu_remaining.get(g).copied().unwrap_or(0))
             .sum();
 
-        // The block index the offload stops below — the value that goes to
-        // `--n-cpu-moe`, not a count of expert layers.
-        let cutoff = match self.offload_mode {
-            OffloadMode::Layers(n) => n,
-            // The retained set is a trailing suffix, so the greedy walk runs
-            // from the last block down and the cutoff is the lowest block it
-            // could keep. Keeping nothing means offloading every expert layer,
-            // which is one past the highest.
+        // Which end this runtime takes, and how it counts (see [`Ncmoe`]). The
+        // greedy `Auto` walk starts from whichever end stays on the GPU.
+        let plan = match self.offload_mode {
+            OffloadMode::Layers(n) => Ncmoe::for_runtime(self.svc, n, &layers),
             OffloadMode::Auto => {
                 let mut used = 0u64;
-                let mut lowest_kept = layers.last().map(|l| l + 1).unwrap_or(0);
-                for &l in layers.iter().rev() {
+                let mut kept = 0u32;
+                let retained_from_the_top = !Ncmoe::is_ik(self.svc);
+                let walk: Vec<u32> = if retained_from_the_top {
+                    layers.iter().rev().copied().collect()
+                } else {
+                    layers.clone()
+                };
+                for &l in &walk {
                     let cost = self.vram_cost(self.expert_bytes_by_layer[&l]);
                     if used.saturating_add(cost) > pool {
                         break;
                     }
                     used += cost;
-                    lowest_kept = l;
+                    kept += 1;
                 }
-                lowest_kept
+                Ncmoe::keeping(self.svc, kept, &layers)
             }
-            OffloadMode::Off => 0,
+            OffloadMode::Off => Ncmoe::for_runtime(self.svc, 0, &layers),
         };
 
-        // Expert layers below the cutoff → CPU; the rest stay on GPU.
         let mut gpu_expert_bytes = 0u64;
         for &l in &layers {
             let b = self.expert_bytes_by_layer[&l];
-            if l >= cutoff {
+            if plan.keeps(l, &layers) {
                 gpu_expert_bytes += b;
             } else {
                 self.charge(DeviceSlot::Cpu, b, Charge::Weights);
@@ -97,6 +176,7 @@ impl<'a> Packer<'a> {
             }
         }
         let n_cpu = self.expert_offload_cpu_layers.len() as u32;
+        let flag = plan.flag();
         // Corrected, to match `pool` and the per-card charges below.
         let gpu_expert_cost = self.vram_cost(gpu_expert_bytes);
 
@@ -144,9 +224,9 @@ impl<'a> Packer<'a> {
         // layer-split shape — no `--n-cpu-moe 0`, and `ngl` stays the layer
         // count — so a fully-resident MoE looks identical to a non-MoE fit.
         if n_cpu > 0 {
-            // The *cutoff*, not the count: `--n-cpu-moe` names a block bound,
-            // and on a model with leading dense blocks the two differ.
-            self.n_cpu_moe = Some(cutoff);
+            // Not the count of offloaded layers: mainline's argument bounds
+            // blocks, so the two differ on a model with leading dense blocks.
+            self.n_cpu_moe = Some(flag);
             // `-ngl 999` puts all layers on GPU; `-ncmoe` then pulls the
             // leading experts back to CPU and the runtime owns the cross-GPU
             // split.

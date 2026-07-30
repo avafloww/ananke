@@ -194,6 +194,10 @@ pub fn estimate_with_summary(
         "post-dispatch estimate",
     );
 
+    if inputs.ik_llama {
+        drop_mtp_head_blocks(&mut est, &summary);
+    }
+
     // Apply user-declared override_tensor rules BEFORE mmproj so matched
     // tensors leave the layer/non-layer budget cleanly.
     if !inputs.override_tensor.is_empty() {
@@ -221,6 +225,37 @@ pub fn estimate_with_summary(
     }
 
     Ok((summary, est))
+}
+
+/// Drop an MTP head's trailing blocks from the weight accounting.
+///
+/// ik_llama does not load them at all — it says so for the tensors it can name
+/// (`model has unused tensor blk.78.indexer.k_norm.weight -- ignoring`) and its
+/// buffer sizes show the whole block missing. Qwen3.6-35B-A3B loads 25288 MiB
+/// across its GPU and host buffers on the fork against the GGUF's 25890, and the
+/// 602 MiB difference is block 40, its nextn head. The same model on mainline
+/// loads 25375 MiB onto the card — the GGUF less its CPU-mapped embedding table
+/// — so mainline does load the head, and this correction is fork-only.
+///
+/// The blocks are removed from every view the packer reads, not just the total:
+/// leaving them in `expert_tensors` would have it offload experts belonging to a
+/// block whose per-layer cost is zero.
+fn drop_mtp_head_blocks(est: &mut Estimate, summary: &GgufSummary) {
+    let span = recurrent::context_layer_span(summary, summary.architecture.as_str());
+    let Some(per_layer) = est.per_layer_bytes.as_mut() else {
+        return;
+    };
+    if span as usize >= per_layer.len() {
+        return;
+    }
+    for bytes in per_layer.iter_mut().skip(span as usize) {
+        est.weights_bytes = est.weights_bytes.saturating_sub(*bytes);
+        *bytes = 0;
+    }
+    est.expert_layers.retain(|&l| l < span);
+    if let Some(tensors) = est.expert_tensors.as_mut() {
+        tensors.retain(|t| t.layer < span);
+    }
 }
 
 pub fn dispatch(
