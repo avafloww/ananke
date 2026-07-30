@@ -3,20 +3,13 @@
 
 use std::collections::BTreeMap;
 
-use ananke_config::placement::PlacementInputs;
+use ananke_config::placement::{DeviceSlot, OffloadMode, PlacementInputs, PlacementPolicy};
+use ananke_estimate::{Estimate, ExpertKind, ExpertTensor, NonLayer};
 use smol_str::SmolStr;
 
 use crate::{
-    allocator::placement::Packed,
-    config::{
-        OffloadMode, PlacementPolicy,
-        validate::{
-            DeviceSlot,
-            test_fixtures::{expect_llama_cpp, minimal_service},
-        },
-    },
+    Packed,
     devices::{CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot},
-    estimator::{Estimate, ExpertKind, ExpertTensor, NonLayer},
 };
 
 pub(crate) const MIB: u64 = 1024 * 1024;
@@ -27,13 +20,12 @@ pub(crate) const GIB: u64 = 1024 * 1024 * 1024;
 pub(crate) fn svc(policy: PlacementPolicy, gpu_allow: Option<Vec<u32>>) -> PlacementInputs {
     let mut overrides = BTreeMap::new();
     overrides.insert(DeviceSlot::Gpu(0), 1000);
-    let mut svc = minimal_service("demo");
-    svc.placement_override = overrides;
-    svc.placement_policy = policy;
-    if let Some(a) = gpu_allow {
-        svc.gpu_allow = a;
+    PlacementInputs {
+        policy,
+        placement_override: overrides,
+        gpu_allow: gpu_allow.unwrap_or_default(),
+        ..PlacementInputs::named("demo")
     }
-    crate::config::service_inputs::placement_inputs(&svc)
 }
 
 pub(crate) fn snapshot(free_gpu_gb: &[u64]) -> DeviceSnapshot {
@@ -87,11 +79,11 @@ pub(crate) fn trivial_estimate(n_layers: u32, per_layer_mb: u64) -> Estimate {
 /// expert-aware packer path. `placement_override` is cleared so `pack`
 /// takes the estimator path.
 pub(crate) fn moe_svc(offload: OffloadMode) -> PlacementInputs {
-    let mut svc = minimal_service("moe");
-    svc.placement_override = BTreeMap::new();
-    svc.placement_policy = PlacementPolicy::Hybrid;
-    expect_llama_cpp(&mut svc).expert_offload = offload;
-    crate::config::service_inputs::placement_inputs(&svc)
+    PlacementInputs {
+        policy: PlacementPolicy::Hybrid,
+        expert_offload: offload,
+        ..PlacementInputs::named("moe")
+    }
 }
 
 /// A MoE estimate: every layer carries `nonexp_mb` of non-expert weight

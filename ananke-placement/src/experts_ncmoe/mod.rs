@@ -1,20 +1,17 @@
 //! Phase B of the expert-aware path: deciding how many leading expert
 //! *layers* to offload to CPU as whole units via `--n-cpu-moe`, after
-//! [`crate::allocator::placement::experts_nonexpert`] has pinned every
+//! [`crate::experts_nonexpert`] has pinned every
 //! layer's non-expert weight to a GPU.
 
 #[cfg(test)]
 mod tests;
 
-use ananke_config::placement::PlacementInputs;
+use ananke_config::placement::{DeviceSlot, OffloadMode, PlacementInputs};
 
 use crate::{
-    allocator::placement::{
-        entry::PackMode,
-        packer::{Charge, Packer},
-        types::PackError,
-    },
-    config::{DeviceSlot, OffloadMode},
+    entry::PackMode,
+    packer::{Charge, Packer},
+    types::PackError,
 };
 
 /// Which end of the expert layers `-ncmoe` moves to the host, and what its

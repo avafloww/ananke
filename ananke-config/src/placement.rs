@@ -85,9 +85,10 @@ pub enum DeviceSlot {
 }
 
 /// Which device classes a service may be placed on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlacementPolicy {
     /// GPUs only; a model that does not fit fails placement rather than spilling.
+    #[default]
     GpuOnly,
     /// Host memory only.
     CpuOnly,
@@ -147,7 +148,7 @@ mod tests {
 /// primitives or types declared above, so — exactly as `EstimatorInputs` does for
 /// the estimator — it takes those and nothing else. Building one from a validated
 /// config is the daemon's business; see `ananke::config::service_inputs`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PlacementInputs {
     /// Service name. Compared against the reservation table's keys, so it is the
     /// same small string the rest of the daemon uses.
@@ -175,6 +176,21 @@ pub struct PlacementInputs {
     pub tensor_split_weights: Option<Vec<f32>>,
     /// `override_tensor` rules the operator pinned by hand.
     pub override_tensor: Vec<String>,
+}
+
+impl PlacementInputs {
+    /// A placement with everything at its default and only a name set.
+    ///
+    /// For tests in crates that cannot reach the config validator to build a
+    /// real `ServiceConfig`. Production code goes through
+    /// `ananke::config::service_inputs::placement_inputs`, so the two cannot
+    /// disagree about how a config is read.
+    pub fn named(name: &str) -> Self {
+        Self {
+            name: SmolStr::new(name),
+            ..Self::default()
+        }
+    }
 }
 
 /// MoE expert-offload policy for a llama-cpp service. Resolved from the

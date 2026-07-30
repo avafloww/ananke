@@ -1,14 +1,13 @@
 //! Phase A of the expert-aware (MoE `--n-cpu-moe`) path: placing each
 //! layer's non-expert weight and KV share on a GPU, ahead of the Phase B
-//! expert-offload decision in [`crate::allocator::placement::experts_ncmoe`].
+//! expert-offload decision in [`crate::experts_ncmoe`].
+
+use ananke_config::placement::DeviceSlot;
 
 use crate::{
-    allocator::placement::{
-        entry::PackMode,
-        packer::{Charge, Packer},
-        types::PackError,
-    },
-    config::DeviceSlot,
+    entry::PackMode,
+    packer::{Charge, Packer},
+    types::PackError,
 };
 
 impl<'a> Packer<'a> {
@@ -17,7 +16,7 @@ impl<'a> Packer<'a> {
     /// the layer's home GPU. A layer whose non-expert part doesn't fit any GPU
     /// spills whole (experts included) to CPU, exactly like the non-MoE hybrid
     /// path. Experts are left for
-    /// [`crate::allocator::placement::experts_ncmoe::Packer::distribute_experts_ncmoe`].
+    /// [`crate::experts_ncmoe::Packer::distribute_experts_ncmoe`].
     pub(crate) fn place_nonexpert_layers(&mut self) -> Result<(), PackError> {
         self.initialise_gpu_remaining();
         let n_layers = self.per_layer.len() as u64;
@@ -94,16 +93,13 @@ impl<'a> Packer<'a> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_config::placement::OffloadMode;
+
     use super::*;
     use crate::{
-        allocator::{
-            AllocationTable,
-            placement::{
-                entry::pack,
-                test_support::{moe_estimate, moe_svc, snapshot},
-            },
-        },
-        config::OffloadMode,
+        AllocationTable,
+        entry::pack,
+        test_support::{moe_estimate, moe_svc, snapshot},
     };
 
     /// On the expert-aware path a layer's non-expert weight is GPU-only

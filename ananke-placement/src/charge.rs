@@ -11,10 +11,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::{
-    allocator::placement::{packer::Packer, types::RollingInputs},
-    config::DeviceSlot,
-};
+use ananke_config::placement::DeviceSlot;
+
+use crate::{packer::Packer, types::RollingInputs};
 
 /// What a charged byte count represents. The distinction drives two separate
 /// tallies: which bytes a host-RSS reading double-counts for GPU-resident
@@ -36,7 +35,7 @@ pub(crate) enum Charge {
     /// would make an accurate estimate read as an over-reservation by the slop
     /// fraction, and the next placement would then subtract exactly the
     /// headroom that was added on purpose. (See
-    /// [`crate::allocator::placement::packer::Packer::initialise_gpu_remaining`]
+    /// [`crate::packer::Packer::initialise_gpu_remaining`]
     /// for what that headroom is protecting against.)
     Slop,
 }
@@ -107,21 +106,17 @@ impl<'a> Packer<'a> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_config::placement::{OffloadMode, PlacementPolicy, SplitMode};
+
     use crate::{
-        allocator::{
-            AllocationTable,
-            placement::{
-                entry::{pack, pack_corrected},
-                test_support::{
-                    GIB, MIB, cpu_bytes, moe_estimate, moe_svc, snapshot, svc, trivial_estimate,
-                },
-            },
+        AllocationTable, Corrections,
+        entry::{pack, pack_corrected},
+        test_support::{
+            GIB, MIB, cpu_bytes, moe_estimate, moe_svc, snapshot, svc, trivial_estimate,
         },
-        config::{OffloadMode, PlacementPolicy, SplitMode},
-        tracking::rolling::Corrections,
     };
 
-    fn gpu_total(p: &crate::allocator::placement::Packed) -> u64 {
+    fn gpu_total(p: &crate::Packed) -> u64 {
         p.allocation
             .bytes
             .iter()
@@ -349,7 +344,7 @@ mod tests {
         // the KV: llama.cpp builds the same graph on every device under a
         // tensor split rather than dividing one between them, so a two-card
         // span pays it twice. That is the whole point of
-        // [`crate::estimator::compute_buffer::tensor_split_per_device`] being a
+        // [`ananke_estimate::compute_buffer::tensor_split_per_device`] being a
         // per-device figure.
         let weights = 20 * 200 * MIB;
         let compute = est.compute_buffer_mb as u64 * MIB * 2;
@@ -383,7 +378,7 @@ mod tests {
         let snap = snapshot(&[24, 24]);
 
         let layer_split = pack(&est, &s, &snap, &AllocationTable::new()).expect("layer fit");
-        s.split_mode = crate::config::SplitMode::Tensor;
+        s.split_mode = ananke_config::placement::SplitMode::Tensor;
         let sharded = pack(&est, &s, &snap, &AllocationTable::new()).expect("sharded fit");
 
         // Both hold exactly the token embeddings on the host …

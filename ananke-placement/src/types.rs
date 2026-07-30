@@ -2,10 +2,9 @@
 //! `Packed`, and the internal `ShardedPlan` handed between the sharded-split
 //! step and `finish`.
 
-use crate::{
-    config::SplitMode,
-    devices::{Allocation, DeviceId},
-};
+use ananke_config::placement::SplitMode;
+
+use crate::devices::{Allocation, DeviceId};
 
 #[derive(Debug, Clone, Default)]
 pub struct CommandArgs {
@@ -217,13 +216,13 @@ pub struct RollingInputs {
     pub gpu_weight_bytes: u64,
     /// Model tensor bytes placed on the host, uncorrected. Gates host-pool
     /// learning: see
-    /// [`crate::supervise::rolling::RollingBase::host_peak`].
+    /// `RollingBase::host_peak`.
     pub cpu_weight_bytes: u64,
 }
 
 /// A tensor/row-split distribution decided by
-/// [`crate::allocator::placement::sharded::distribute_sharded`].
-/// [`crate::allocator::placement::finish`] turns it into `--split-mode`,
+/// [`crate::sharded::distribute_sharded`].
+/// [`crate::finish`] turns it into `--split-mode`,
 /// `--main-gpu`, and the `--tensor-split` ratio (equal `1`s by default, or
 /// the weighted integers derived from `tensor_split_weights`).
 #[derive(Debug)]

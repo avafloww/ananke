@@ -2,15 +2,10 @@
 //! through its steps in order and return the finished `Packed` result.
 
 use ananke_config::placement::PlacementInputs;
+use ananke_estimate::Estimate;
 
 use crate::{
-    allocator::{
-        AllocationTable,
-        placement::{Packed, packer::Packer, types::PackError},
-    },
-    devices::DeviceSnapshot,
-    estimator::Estimate,
-    tracking::rolling::Corrections,
+    AllocationTable, Corrections, Packed, devices::DeviceSnapshot, packer::Packer, types::PackError,
 };
 
 /// Number of per-layer-equivalents added to every active backend as slop
@@ -203,13 +198,12 @@ fn pack_inner(
 
 #[cfg(test)]
 mod tests {
+    use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy};
+
     use super::*;
     use crate::{
-        allocator::placement::test_support::{
-            GIB, cpu_bytes, moe_estimate, moe_svc, snapshot, trivial_estimate,
-        },
-        config::{OffloadMode, PlacementPolicy, validate::test_fixtures::minimal_service},
         devices::CpuSnapshot,
+        test_support::{GIB, cpu_bytes, moe_estimate, moe_svc, snapshot, trivial_estimate},
     };
 
     fn total(p: &Packed) -> u64 {
@@ -233,9 +227,10 @@ mod tests {
     #[test]
     fn demand_matches_a_real_pack_when_the_model_fits() {
         let e = trivial_estimate(20, 1024); // 20 layers × ~1 GiB.
-        let mut cfg = minimal_service("m");
-        cfg.placement_override.clear();
-        cfg.placement_policy = PlacementPolicy::Hybrid;
+        let svc = PlacementInputs {
+            policy: PlacementPolicy::Hybrid,
+            ..PlacementInputs::named("m")
+        };
         // `free < total` on one card so the two modes' capacity views actually
         // differ. The stock fixture sets free == total, which collapses
         // `Strict`'s `min(free, total)` into `Demand`'s `total` and makes the
@@ -244,7 +239,6 @@ mod tests {
         // On gpu:0 — the card the walk actually fills. Starving gpu:1 would
         // leave the divergence untested, since nothing lands there.
         snap.gpus[0].free_bytes = 21 * GIB;
-        let svc = crate::config::service_inputs::placement_inputs(&cfg);
 
         let bare = pack_optimistic(&e, &svc, &snap, &AllocationTable::new()).expect("fits");
         let demand = pack_demand(&e, &svc, &snap, Corrections::NEUTRAL)
@@ -276,15 +270,15 @@ mod tests {
     #[test]
     fn demand_resolves_when_the_host_is_too_small_to_place() {
         let e = trivial_estimate(60, 1024); // 60 GiB over two 24 GiB cards.
-        let mut cfg = minimal_service("m");
-        cfg.placement_override.clear();
-        cfg.placement_policy = PlacementPolicy::Hybrid;
+        let svc = PlacementInputs {
+            policy: PlacementPolicy::Hybrid,
+            ..PlacementInputs::named("m")
+        };
         let mut snap = snapshot(&[24, 24]);
         snap.cpu = Some(CpuSnapshot {
             total_bytes: 2 * GIB,
             available_bytes: 2 * GIB,
         });
-        let svc = crate::config::service_inputs::placement_inputs(&cfg);
 
         assert!(
             pack(&e, &svc, &snap, &AllocationTable::new()).is_err(),
@@ -309,10 +303,10 @@ mod tests {
     #[test]
     fn demand_resolves_for_a_gpu_only_service_that_overflows_its_cards() {
         let e = trivial_estimate(60, 1024);
-        let mut cfg = minimal_service("m");
-        cfg.placement_override.clear();
-        cfg.placement_policy = PlacementPolicy::GpuOnly;
-        let svc = crate::config::service_inputs::placement_inputs(&cfg);
+        let svc = PlacementInputs {
+            policy: PlacementPolicy::GpuOnly,
+            ..PlacementInputs::named("m")
+        };
         let snap = snapshot(&[24, 24]);
 
         assert!(
@@ -331,10 +325,10 @@ mod tests {
     #[test]
     fn demand_matches_a_real_pack_for_a_gpu_only_service() {
         let e = trivial_estimate(10, 1024);
-        let mut cfg = minimal_service("m");
-        cfg.placement_override.clear();
-        cfg.placement_policy = PlacementPolicy::GpuOnly;
-        let svc = crate::config::service_inputs::placement_inputs(&cfg);
+        let svc = PlacementInputs {
+            policy: PlacementPolicy::GpuOnly,
+            ..PlacementInputs::named("m")
+        };
         let mut snap = snapshot(&[24, 24]);
         snap.gpus[0].free_bytes = 12 * GIB;
 

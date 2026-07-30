@@ -7,15 +7,15 @@
 
 pub mod balloon;
 pub mod eviction;
-pub mod placement;
-
 use std::collections::BTreeMap;
 
+/// Layer-aware placement, re-exported so `crate::allocator::placement::…`
+/// paths are unchanged.
+pub use ananke_placement as placement;
+pub use ananke_placement::AllocationTable;
 use smol_str::SmolStr;
 
 use crate::{config::validate::DeviceSlot, devices::DeviceSnapshot};
-
-pub type AllocationTable = BTreeMap<SmolStr, BTreeMap<DeviceSlot, u64>>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct NoFit {

@@ -1,10 +1,9 @@
 //! The final admission gate: does the CPU-side reservation the packer built
 //! up actually fit in host RAM?
 
-use crate::{
-    allocator::placement::{packer::Packer, reserve::sum_reserved, types::PackError},
-    config::DeviceSlot,
-};
+use ananke_config::placement::DeviceSlot;
+
+use crate::{packer::Packer, reserve::sum_reserved, types::PackError};
 
 impl<'a> Packer<'a> {
     /// Reject the pack if the bytes the packer wants to keep on the host exceed
@@ -44,17 +43,14 @@ impl<'a> Packer<'a> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_config::placement::OffloadMode;
+
     use super::*;
     use crate::{
-        allocator::{
-            AllocationTable,
-            placement::{
-                entry::{pack, pack_optimistic},
-                test_support::{GIB, moe_estimate, moe_svc},
-            },
-        },
-        config::OffloadMode,
+        AllocationTable,
         devices::CpuSnapshot,
+        entry::{pack, pack_optimistic},
+        test_support::{GIB, moe_estimate, moe_svc},
     };
 
     /// The "preview a running hybrid" shape: the service's own ~10 GiB CPU
@@ -65,7 +61,7 @@ mod tests {
     #[test]
     fn optimistic_cpu_check_trusts_pledges_over_live_free_ram() {
         let e = moe_estimate(10, 100, 300); // 10 GiB model, 1 GiB non-expert
-        let mut snap = crate::allocator::placement::test_support::snapshot(&[4]);
+        let mut snap = crate::test_support::snapshot(&[4]);
         snap.cpu = Some(CpuSnapshot {
             total_bytes: 128 * GIB,
             available_bytes: 2 * GIB, // the running child ate the rest

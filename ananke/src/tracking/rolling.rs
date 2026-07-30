@@ -14,7 +14,7 @@ use parking_lot::RwLock;
 use smol_str::SmolStr;
 use tracing::{info, warn};
 
-use crate::{config::DeviceSlot, daemon::events::EventBus};
+use crate::daemon::events::EventBus;
 
 /// Number of observed samples a service must accumulate before its rolling
 /// mean is trusted to scale placement. Below this, a single early sample —
@@ -119,51 +119,7 @@ impl RollingCorrection {
     }
 }
 
-/// The gated correction factors a placement runs with, one per pool.
-///
-/// The packer scales every byte it charges to a device by that device's
-/// factor, so the reservation it produces is what we predict the service will
-/// *actually* use — and the fit decisions (which layers land on which card,
-/// how many experts spill to the host) are made against the corrected numbers
-/// rather than the raw estimate.
-#[derive(Debug, Clone, Copy)]
-pub struct Corrections {
-    pub vram: f64,
-    pub host: f64,
-}
-
-impl Corrections {
-    /// No correction in either pool: what an untrained service, a preview of
-    /// bare hardware, or a test runs with.
-    pub const NEUTRAL: Self = Self {
-        vram: 1.0,
-        host: 1.0,
-    };
-
-    /// The factor for a destination slot.
-    pub fn for_slot(&self, slot: &DeviceSlot) -> f64 {
-        match slot {
-            DeviceSlot::Cpu => self.host,
-            DeviceSlot::Gpu(_) => self.vram,
-        }
-    }
-
-    /// Scale `bytes` by the factor for `slot`, rounding up so a correction
-    /// above 1.0 never rounds back down into an under-reservation.
-    pub fn scale(&self, slot: &DeviceSlot, bytes: u64) -> u64 {
-        let factor = self.for_slot(slot);
-        if factor == 1.0 {
-            return bytes;
-        }
-        (bytes as f64 * factor).ceil() as u64
-    }
-}
-
-impl Default for Corrections {
-    fn default() -> Self {
-        Self::NEUTRAL
-    }
-}
+pub use ananke_placement::Corrections;
 
 #[derive(Clone, Default)]
 pub struct RollingTable {
@@ -337,6 +293,7 @@ impl RollingTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DeviceSlot;
 
     #[test]
     fn mean_converges_to_observed_ratio() {

@@ -2,14 +2,10 @@
 //! available on this device", shared by the packer and the command-template
 //! GPU picker.
 
-use ananke_config::placement::PlacementInputs;
+use ananke_config::placement::{DeviceSlot, PlacementInputs, PlacementPolicy};
 use smol_str::SmolStr;
 
-use crate::{
-    allocator::AllocationTable,
-    config::{DeviceSlot, PlacementPolicy},
-    devices::DeviceSnapshot,
-};
+use crate::{AllocationTable, devices::DeviceSnapshot};
 
 /// The GPUs this service may be placed on: every GPU in the snapshot, narrowed
 /// by `gpu_allow` when set, and empty for a `CpuOnly` service.

@@ -1,22 +1,18 @@
 //! Tests for the `--n-cpu-moe` expert-offload path in
-//! [`crate::allocator::placement::experts_ncmoe`]: auto and manual offload
+//! [`crate::experts_ncmoe`]: auto and manual offload
 //! counts, the pooled-overflow rejection, and multi-GPU expert spread.
 
 use std::collections::BTreeMap;
 
+use ananke_estimate::{Estimate, ExpertKind, ExpertTensor, NonLayer};
 use smol_str::SmolStr;
 
 use super::*;
 use crate::{
-    allocator::{
-        AllocationTable,
-        placement::{
-            entry::{NGL_OFFLOAD_ALL, pack},
-            test_support::{GIB, MIB, cpu_bytes, moe_estimate, moe_svc, snapshot},
-        },
-    },
+    AllocationTable,
     devices::{CpuSnapshot, DeviceId},
-    estimator::{Estimate, ExpertKind, ExpertTensor, NonLayer},
+    entry::{NGL_OFFLOAD_ALL, pack},
+    test_support::{GIB, MIB, cpu_bytes, moe_estimate, moe_svc, snapshot},
 };
 
 #[test]

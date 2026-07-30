@@ -4,14 +4,13 @@
 #[cfg(test)]
 mod tests;
 
+use ananke_config::placement::{DeviceSlot, OffloadMode};
+
 use crate::{
-    allocator::placement::{
-        entry::ONE_LAYER_FUDGE_MULTIPLIER,
-        experts_ncmoe::Ncmoe,
-        packer::{Charge, Packer},
-        types::{PackError, ShardedPlan},
-    },
-    config::{DeviceSlot, OffloadMode},
+    entry::ONE_LAYER_FUDGE_MULTIPLIER,
+    experts_ncmoe::Ncmoe,
+    packer::{Charge, Packer},
+    types::{PackError, ShardedPlan},
 };
 
 impl<'a> Packer<'a> {
@@ -42,7 +41,7 @@ impl<'a> Packer<'a> {
         // block's experts (568) + output head (242) + nextn tensors (~215).
         //
         // ik_llama takes the other end and counts expert layers rather than
-        // blocks; [`crate::allocator::placement::experts_ncmoe::Ncmoe`] holds
+        // blocks; [`crate::experts_ncmoe::Ncmoe`] holds
         // both conventions and the measurements behind them.
         //
         // `Layers(n)` honours the runtime's argument; `Auto` offloads every
@@ -153,7 +152,7 @@ impl<'a> Packer<'a> {
         // reserved every card by a factor of the GPU count —
         // Qwen3.6-35B-A3B needs 1332 MiB *per* card where the estimate pledged
         // 685 across both. See
-        // [`crate::estimator::compute_buffer::tensor_split_per_device`].
+        // [`ananke_estimate::compute_buffer::tensor_split_per_device`].
         let compute_per_gpu = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
         let fudge_total = ONE_LAYER_FUDGE_MULTIPLIER * (per_layer_avg + kv_total / n_layers);
 
@@ -214,7 +213,7 @@ impl<'a> Packer<'a> {
         // The output head is model weight; the MTP draft context is a runtime
         // allocation. Sharded the same way, but tallied apart so the host-pool
         // observation can subtract the file-backed share (see
-        // [`crate::allocator::placement::types::RollingInputs`]).
+        // [`crate::types::RollingInputs`]).
         let output_head_shares =
             integer_shares(non_layer.output_head_bytes, &tensor_split, ratio_sum);
         // A separate draft model's weights are read through its own mmap, so

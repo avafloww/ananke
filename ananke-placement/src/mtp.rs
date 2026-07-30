@@ -1,9 +1,8 @@
 //! Reserving the MTP / NextN draft-context overhead ahead of the layer walk.
 
-use crate::{
-    allocator::placement::packer::{Charge, Packer},
-    config::DeviceSlot,
-};
+use ananke_config::placement::DeviceSlot;
+
+use crate::packer::{Charge, Packer};
 
 impl<'a> Packer<'a> {
     /// Reserve the MTP / NextN draft-context overhead (its KV cache plus
@@ -42,19 +41,15 @@ impl<'a> Packer<'a> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use ananke_config::placement::PlacementPolicy;
+    use ananke_estimate::{Estimate, NonLayer};
     use smol_str::SmolStr;
 
     use crate::{
-        allocator::{
-            AllocationTable,
-            placement::{
-                entry::pack,
-                test_support::{snapshot, svc},
-            },
-        },
-        config::PlacementPolicy,
+        AllocationTable,
         devices::DeviceId,
-        estimator::{Estimate, NonLayer},
+        entry::pack,
+        test_support::{snapshot, svc},
     };
 
     /// Regression for the live "insufficient_capacity on gpu:0" failure: the MTP

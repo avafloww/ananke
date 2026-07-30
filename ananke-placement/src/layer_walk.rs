@@ -2,12 +2,11 @@
 //! walk that assigns whole layers to the most-free-first GPU list, then
 //! reserves KV, the compute buffer, and the one-layer fudge on top.
 
+use ananke_config::placement::DeviceSlot;
+
 use crate::{
-    allocator::placement::{
-        packer::{Charge, Packer},
-        types::PackError,
-    },
-    config::DeviceSlot,
+    packer::{Charge, Packer},
+    types::PackError,
 };
 
 impl<'a> Packer<'a> {
@@ -131,7 +130,7 @@ impl<'a> Packer<'a> {
     /// against `nvidia-smi` VRAM readings and has never been measured on a
     /// host backend. What the host actually holds is the pinned graph arena
     /// and the prompt cache, which scale differently and exist even when every
-    /// layer is on a GPU — see [`crate::estimator::host_buffer`].
+    /// layer is on a GPU — see [`ananke_estimate::host_buffer`].
     pub(crate) fn add_compute_buffer(&mut self) {
         let compute_bytes = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
         // The output logits buffer is materialised only on the head GPU.
@@ -141,7 +140,7 @@ impl<'a> Packer<'a> {
         // reservation reflects reality and the freed VRAM fills with expert
         // weight instead. CPU and the head GPU keep the full term. Must use the
         // same head + trim as [`Packer::initialise_gpu_remaining`] and the
-        // tensor-split. See [`crate::estimator::Estimate::output_buffer_bytes`].
+        // tensor-split. See [`ananke_estimate::Estimate::output_buffer_bytes`].
         let head_gpu = self.head_gpu();
         let logits = self.head_logits_bytes();
         let active_gpus: Vec<DeviceSlot> = self
@@ -209,8 +208,7 @@ impl<'a> Packer<'a> {
             .saturating_mul(self.estimate.context as u64);
         let per_layer_avg = self.effective_layer_avg();
         let per_layer_kv = kv_total / n_layers as u64;
-        let fudge_each = crate::allocator::placement::entry::ONE_LAYER_FUDGE_MULTIPLIER
-            * (per_layer_avg + per_layer_kv);
+        let fudge_each = crate::entry::ONE_LAYER_FUDGE_MULTIPLIER * (per_layer_avg + per_layer_kv);
         let slots: Vec<DeviceSlot> = self.per_device.keys().cloned().collect();
         for slot in slots {
             match slot {
@@ -230,20 +228,16 @@ impl<'a> Packer<'a> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use ananke_config::placement::PlacementPolicy;
+    use ananke_estimate::{Estimate, NonLayer};
     use smol_str::SmolStr;
 
     use super::*;
     use crate::{
-        allocator::{
-            AllocationTable,
-            placement::{
-                entry::{pack, pack_optimistic},
-                test_support::{snapshot, svc, trivial_estimate},
-            },
-        },
-        config::PlacementPolicy,
+        AllocationTable,
         devices::DeviceId,
-        estimator::{Estimate, NonLayer},
+        entry::{pack, pack_optimistic},
+        test_support::{snapshot, svc, trivial_estimate},
     };
 
     /// The `-ot` synthesiser collapses a tail of fully-offloaded layers into a
@@ -285,7 +279,7 @@ mod tests {
             &AllocationTable::new(),
         )
         .expect("fit");
-        let total = |p: &crate::allocator::placement::Packed| -> u64 {
+        let total = |p: &crate::Packed| -> u64 {
             p.allocation
                 .bytes
                 .iter()

@@ -1,24 +1,20 @@
 //! Tests for the tensor/row-split placement path in
-//! [`crate::allocator::placement::sharded`]: per-GPU share arithmetic, the
+//! [`crate::sharded`]: per-GPU share arithmetic, the
 //! weighted `tensor_split` ratio, the slop accounting, and the MTP weight
 //! split this path builds itself.
 
 use std::collections::BTreeMap;
 
+use ananke_config::placement::{PlacementPolicy, SplitMode};
+use ananke_estimate::{Estimate, NonLayer};
 use smol_str::SmolStr;
 
 use super::*;
 use crate::{
-    allocator::{
-        AllocationTable,
-        placement::{
-            entry::pack,
-            test_support::{GIB, snapshot, svc, trivial_estimate},
-        },
-    },
-    config::{PlacementPolicy, SplitMode},
+    AllocationTable,
     devices::DeviceId,
-    estimator::{Estimate, NonLayer},
+    entry::pack,
+    test_support::{GIB, snapshot, svc, trivial_estimate},
 };
 
 /// Tensor split shards every layer across both GPUs in parallel: emits
@@ -425,7 +421,7 @@ fn a_sharded_separate_draft_models_weights_are_tallied_as_weights() {
     };
     let mut svc = svc(PlacementPolicy::GpuOnly, Some(vec![0, 1]));
     svc.placement_override = BTreeMap::new();
-    svc.split_mode = crate::config::SplitMode::Tensor;
+    svc.split_mode = ananke_config::placement::SplitMode::Tensor;
     let packed = pack(&e, &svc, &snapshot(&[24, 24]), &AllocationTable::new())
         .expect("sharded draft-MTP model must pack");
 

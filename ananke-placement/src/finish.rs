@@ -2,14 +2,13 @@
 //! `--tensor-split`, `--split-mode`/`--main-gpu`, and `-ot` from the packer's
 //! accumulated per-device state.
 
+use ananke_config::placement::DeviceSlot;
+
 use crate::{
-    allocator::placement::{
-        entry::{NGL_CPU_ONLY, NGL_OFFLOAD_ALL},
-        packer::Packer,
-        types::{CommandArgs, Packed},
-    },
-    config::DeviceSlot,
     devices::{Allocation, DeviceId},
+    entry::{NGL_CPU_ONLY, NGL_OFFLOAD_ALL},
+    packer::Packer,
+    types::{CommandArgs, Packed},
 };
 
 impl<'a> Packer<'a> {

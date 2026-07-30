@@ -1,6 +1,6 @@
 [workspace]
-members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-tuning", "scripts/xtask"]
-default-members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-tuning"]
+members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-placement", "ananke-tuning", "scripts/xtask"]
+default-members = ["ananke", "anankectl", "ananke-api", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-placement", "ananke-tuning"]
 resolver = "2"
 
 [workspace.package]
@@ -14,6 +14,7 @@ ananke-config = { path = "ananke-config" }
 ananke-estimate = { path = "ananke-estimate" }
 ananke-fs = { path = "ananke-fs" }
 ananke-gguf = { path = "ananke-gguf" }
+ananke-placement = { path = "ananke-placement" }
 ananke-tuning = { path = "ananke-tuning" }
 
 # Async + HTTP

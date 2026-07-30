@@ -8,22 +8,16 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
-use ananke_config::placement::PlacementInputs;
+use ananke_config::placement::{DeviceSlot, OffloadMode, PlacementInputs, PlacementPolicy};
+use ananke_estimate::Estimate;
 
-pub(crate) use crate::allocator::placement::charge::Charge;
+pub(crate) use crate::charge::Charge;
 use crate::{
-    allocator::{
-        AllocationTable,
-        placement::{
-            entry::{ONE_LAYER_FUDGE_MULTIPLIER, PackMode},
-            reserve::{allowed_gpu_list, gpu_reserve_bytes, sum_reserved},
-            types::{DeviceShortfall, ShardedPlan},
-        },
-    },
-    config::{DeviceSlot, OffloadMode, PlacementPolicy},
+    AllocationTable, Corrections,
     devices::{DeviceId, DeviceSnapshot},
-    estimator::Estimate,
-    tracking::rolling::Corrections,
+    entry::{ONE_LAYER_FUDGE_MULTIPLIER, PackMode},
+    reserve::{allowed_gpu_list, gpu_reserve_bytes, sum_reserved},
+    types::{DeviceShortfall, ShardedPlan},
 };
 
 /// Mutable bag threaded through the pack steps. Each method mutates the
@@ -252,7 +246,7 @@ impl<'a> Packer<'a> {
     /// Reserve the fixed per-GPU headroom that does not depend on how layers
     /// end up distributed: compute buffer + one-layer fudge. The per-layer KV
     /// *of placed layers* is reserved incrementally during the walk (folded
-    /// into [`crate::allocator::placement::layer_walk`]'s `layer_cost`); the
+    /// into [`crate::layer_walk`]'s `layer_cost`); the
     /// headroom reserved here must additionally cover the *fudge* layer that
     /// `add_one_layer_fudge` adds post-walk — and that fudge is
     /// `per_layer_avg + per_layer_kv`, so both terms have to be reserved
@@ -274,7 +268,7 @@ impl<'a> Packer<'a> {
         // The output logits buffer lives only on the head GPU, so every
         // secondary GPU needs that much less compute headroom — freeing the
         // room for expert weight. Must stay in lockstep with
-        // [`crate::allocator::placement::layer_walk::add_compute_buffer`]
+        // [`crate::layer_walk::add_compute_buffer`]
         // (same head, same trim).
         let head_gpu = self.head_gpu();
         let logits = self.head_logits_bytes();
@@ -388,18 +382,14 @@ impl<'a> Packer<'a> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_config::placement::{OffloadMode, PlacementPolicy};
     use smol_str::SmolStr;
 
     use super::*;
     use crate::{
-        allocator::placement::{
-            entry::pack,
-            test_support::{
-                GIB, MIB, cpu_bytes, moe_estimate, moe_svc, snapshot, trivial_estimate,
-            },
-        },
-        config::{OffloadMode, PlacementPolicy, validate::test_fixtures::minimal_service},
         devices::DeviceId,
+        entry::pack,
+        test_support::{GIB, MIB, cpu_bytes, moe_estimate, moe_svc, snapshot, trivial_estimate},
     };
 
     /// The output logits buffer is materialised only on the head GPU (the
@@ -443,10 +433,10 @@ mod tests {
     fn output_head_goes_to_lowest_id_gpu_under_asymmetric_headroom() {
         let mut e = trivial_estimate(1, 1024); // 1 layer, ~1 GiB
         e.non_layer.output_head_bytes = 5 * GIB;
-        let mut cfg = minimal_service("m");
-        cfg.placement_override = BTreeMap::new();
-        cfg.placement_policy = PlacementPolicy::GpuOnly;
-        let svc = crate::config::service_inputs::placement_inputs(&cfg);
+        let svc = PlacementInputs {
+            policy: PlacementPolicy::GpuOnly,
+            ..PlacementInputs::named("m")
+        };
         let snap = snapshot(&[24, 24]);
         // A resident model pledges 15 GiB on gpu:0, so gpu:1 has more pledge
         // headroom and sorts first — `allowed_gpus.first()` is now gpu:1.

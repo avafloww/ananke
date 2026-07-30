@@ -26,6 +26,7 @@ dependencies = [
  "ananke-estimate",
  "ananke-fs",
  "ananke-gguf",
+ "ananke-placement",
  "ananke-tuning",
  "arc-swap",
  "async-trait",
@@ -115,6 +116,16 @@ version = "0.2.0"
 dependencies = [
  "ananke-fs",
  "smol_str",
+]
+
+[[package]]
+name = "ananke-placement"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "ananke-estimate",
+ "smol_str",
+ "tracing",
 ]
 
 [[package]]

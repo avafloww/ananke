@@ -1,0 +1,10 @@
+[package]
+name = "ananke-placement"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+ananke-config.workspace = true
+ananke-estimate.workspace = true
+smol_str.workspace = true
+tracing.workspace = true

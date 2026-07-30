@@ -2,18 +2,13 @@
 //! that don't go through the layer packer but still need a VRAM-aware GPU
 //! pick or a placement-override fit check.
 
-use ananke_config::placement::PlacementInputs;
+use ananke_config::placement::{DeviceSlot, PlacementInputs};
 
 use crate::{
-    allocator::{
-        AllocationTable,
-        placement::{
-            reserve::{allowed_gpu_list, gpu_reserve_bytes, sum_reserved},
-            types::{DeviceShortfall, PackError},
-        },
-    },
-    config::DeviceSlot,
+    AllocationTable,
     devices::{DeviceId, DeviceSnapshot},
+    reserve::{allowed_gpu_list, gpu_reserve_bytes, sum_reserved},
+    types::{DeviceShortfall, PackError},
 };
 
 /// VRAM-aware GPU pick for a command-template service.
@@ -25,7 +20,7 @@ use crate::{
 /// back to "best of those that meet `min_mb`". This lets dynamic services
 /// (`min_mb` floor, `max_mb` growth ceiling) favour a GPU with room to grow.
 ///
-/// `optimistic_remaining` mirrors [`crate::allocator::placement::pack_optimistic`]:
+/// `optimistic_remaining` mirrors [`crate::pack_optimistic`]:
 /// when `false` the availability view is `min(nvml_free, total - pledged)`;
 /// when `true` we trust the pledge book exclusively (`total - pledged`).
 /// Eviction-retry passes `true` because nvml hasn't yet caught up to the
@@ -149,7 +144,7 @@ pub fn check_command_placement_override(
 /// Bytes `gpu` can offer this service: `min(nvml_free, total - pledged)`
 /// normally, or `total - pledged` when `optimistic_remaining` trusts the
 /// pledge book alone, less the configured per-GPU reserve. Mirrors
-/// [`crate::allocator::placement::packer::Packer::gpu_available`] for the
+/// [`crate::packer::Packer::gpu_available`] for the
 /// command-template path, which never builds a `Packer`.
 fn command_gpu_available(
     placement: &PlacementInputs,
@@ -175,13 +170,11 @@ fn command_gpu_available(
 mod tests {
     use std::collections::BTreeMap;
 
+    use ananke_config::placement::PlacementPolicy;
     use smol_str::SmolStr;
 
     use super::*;
-    use crate::{
-        allocator::placement::test_support::{MIB, snapshot, svc},
-        config::{PlacementPolicy, validate::test_fixtures::minimal_service},
-    };
+    use crate::test_support::{MIB, snapshot, svc};
 
     /// The override check must fail with a shortfall naming the GPU that
     /// overflowed, the bytes asked of it, and what it could actually offer —
@@ -325,14 +318,15 @@ mod tests {
     /// Mirrors the multi-GPU vLLM use case: TP=2 across two devices,
     /// each pledged separately.
     fn svc_with_override(pairs: &[(u32, u64)]) -> PlacementInputs {
-        let mut svc = minimal_service("vllm-demo");
         let mut overrides = BTreeMap::new();
         for (id, mb) in pairs {
             overrides.insert(DeviceSlot::Gpu(*id), *mb);
         }
-        svc.placement_override = overrides;
-        svc.placement_policy = PlacementPolicy::GpuOnly;
-        crate::config::service_inputs::placement_inputs(&svc)
+        PlacementInputs {
+            policy: PlacementPolicy::GpuOnly,
+            placement_override: overrides,
+            ..PlacementInputs::named("vllm-demo")
+        }
     }
 
     /// Two-GPU pledge that fits on both devices: every per-slot pledge
@@ -394,12 +388,13 @@ mod tests {
     /// capacity here). A pledge that's only on CPU should accept.
     #[test]
     fn check_placement_override_ignores_cpu_slots() {
-        let mut svc = minimal_service("demo");
         let mut overrides = BTreeMap::new();
         overrides.insert(DeviceSlot::Cpu, 8 * 1024);
-        svc.placement_override = overrides;
-        svc.placement_policy = PlacementPolicy::CpuOnly;
-        let placement = crate::config::service_inputs::placement_inputs(&svc);
+        let placement = PlacementInputs {
+            policy: PlacementPolicy::CpuOnly,
+            placement_override: overrides,
+            ..PlacementInputs::named("demo")
+        };
         let snap = snapshot(&[]);
         let table = AllocationTable::new();
         let r = check_command_placement_override(&placement, &snap, &table, false);
