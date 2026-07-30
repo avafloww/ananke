@@ -66,8 +66,12 @@ impl Vcs for LocalGit {
     }
 
     fn has_staged(&self, paths: &[PathBuf]) -> bool {
+        // `--quiet` exits 1 for "there is a difference" and 0 for "there is
+        // not". Anything else is git failing — a bad pathspec, a broken
+        // repository — and reading that as a difference would report a commit
+        // the campaign then never makes.
         self.git(&["diff", "--cached", "--quiet"], paths)
-            .is_ok_and(|output| !output.status.success())
+            .is_ok_and(|output| output.status.code() == Some(1))
     }
 
     fn commit(&self, message: &str, paths: &[PathBuf]) -> Result<(), String> {
