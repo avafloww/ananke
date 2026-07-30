@@ -52,7 +52,10 @@ export function ServiceRow({
     : [[], []];
 
   return (
-    <div className="flex items-center gap-3 px-4 py-2 transition-colors hover:bg-elevated/60">
+    // `py-1.5` against the old `py-2`: the row grew a second line, so the same
+    // padding would make it half again as tall and the list would stop being
+    // scannable at a glance.
+    <div className="flex items-center gap-3 px-4 py-1.5 transition-colors hover:bg-elevated/60">
       <button
         onClick={onToggleFavourite}
         className={`shrink-0 transition-colors ${
@@ -67,22 +70,18 @@ export function ServiceRow({
         className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden"
       >
         <StatusDot state={svc.state} />
-        <span
-          className={`min-w-0 truncate font-mono text-sm ${fitVerdictColor(svc.fit_verdict)}`}
-          title={fitVerdictTitle(svc.fit_verdict, t)}
-        >
-          {svc.name}
-        </span>
-        {svc.footprint_bytes != null && (
-          <span className="hidden shrink-0 font-mono text-xs text-tertiary sm:inline">
-            {formatBytes(svc.footprint_bytes)}
-            {/* An unplaceable service has no reservation to report, so the
-                figure is the model's demand — say so rather than letting it
-                read as memory the service is holding. */}
-            {svc.fit_verdict?.kind === "does_not_fit" &&
-              ` ${t("services.footprintNeeded")}`}
+        {/* Name over footprint. The tags beside it stay centred against the
+            pair rather than against the name alone, which is why the stack is
+            its own flex item instead of the row being two lines. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span
+            className={`min-w-0 truncate font-mono text-sm ${fitVerdictColor(svc.fit_verdict)}`}
+            title={fitVerdictTitle(svc.fit_verdict, t)}
+          >
+            {svc.name}
           </span>
-        )}
+          <Footprint svc={svc} />
+        </div>
         {svc.has_mmproj && (
           <span className="shrink-0 font-mono text-xs text-vision">vision</span>
         )}
@@ -96,16 +95,14 @@ export function ServiceRow({
             {svc.inflight_count} in-flight
           </span>
         )}
-        <div className="ml-auto flex shrink-0 items-center gap-3">
-          <div className="hidden h-6 w-20 shrink-0 sm:block">
-            <Sparkline
-              data={sparkLineData}
-              color={CHART_PALETTE[0]}
-              height={24}
-              xMin={xMin}
-              xMax={xMax}
-            />
-          </div>
+        <div className="hidden h-6 w-20 shrink-0 sm:block">
+          <Sparkline
+            data={sparkLineData}
+            color={CHART_PALETTE[0]}
+            height={24}
+            xMin={xMin}
+            xMax={xMax}
+          />
         </div>
       </Link>
       <a
@@ -172,6 +169,70 @@ export function ServiceRow({
       </div>
     </div>
   );
+}
+
+/// Where the service's memory would land, per device.
+///
+/// The breakdown is shown in preference to the total because it is the question
+/// a full box actually raises — a service is rarely short of memory in general,
+/// it is short of memory on one card. The total remains the fallback for a
+/// placement that names no device, which is the same condition that leaves
+/// `footprint_bytes` unset.
+function Footprint({ svc }: { svc: ServiceSummary }) {
+  const { t } = useTranslation();
+  const devices = svc.footprint_devices ?? [];
+  // An unplaceable service has no reservation to report, so the figure is the
+  // model's demand — say so rather than letting it read as memory the service
+  // is already holding.
+  const needed =
+    svc.fit_verdict?.kind === "does_not_fit"
+      ? ` ${t("services.footprintNeeded")}`
+      : "";
+
+  if (devices.length === 0) {
+    if (svc.footprint_bytes == null) return null;
+    return (
+      <span className="truncate font-mono text-xs text-tertiary">
+        {formatBytes(svc.footprint_bytes)}
+        {needed}
+      </span>
+    );
+  }
+
+  // The device and its size read as one phrase, so the cell is what gets the
+  // fixed width rather than the two fields inside it — spacing them separately
+  // aligns the columns at the cost of pulling the pair apart. Whole cells of a
+  // uniform width put every row's second device at the same offset just as well.
+  return (
+    <span className="flex items-baseline overflow-hidden font-mono text-xs text-tertiary">
+      {devices.map((dev, index) => (
+        <span key={dev.device} className="flex shrink-0 items-baseline">
+          {index > 0 && (
+            <span className="px-1.5 text-border-strong" aria-hidden="true">
+              /
+            </span>
+          )}
+          {/* `w-[15ch]` is exact because the row is monospaced, and is the
+              widest the pair can be: `gpu0` at four, a space, and ten for the
+              longest `formatBytes` output — `1023.9 MiB`, not the `4.57 GiB`
+              the common case suggests, since the sub-gibibyte branch carries an
+              extra digit. */}
+          <span className="w-[15ch] shrink-0">
+            <span className="text-brass">{deviceLabel(dev.device)}</span>{" "}
+            <span className="text-secondary">{formatBytes(dev.bytes)}</span>
+          </span>
+        </span>
+      ))}
+      {needed && <span className="shrink-0 pl-1">{needed.trim()}</span>}
+    </span>
+  );
+}
+
+/// `"gpu:0"` reads as `gpu0` here. The colon earns its place in a config file
+/// and in the API, where the slot is an identifier; in a row of several devices
+/// it is punctuation competing with the separator between them.
+function deviceLabel(device: string): string {
+  return device.replace(":", "");
 }
 
 type IconButtonProps = {

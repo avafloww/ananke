@@ -21,6 +21,7 @@ export type ServingConfig = Schemas["ServingConfig"];
 export type EstimateSummary = Schemas["EstimateSummary"];
 export type PlacementPreview = Schemas["PlacementPreview"];
 export type DevicePlacement = Schemas["DevicePlacement"];
+export type DeviceFootprint = Schemas["DeviceFootprint"];
 export type FitVerdict = Schemas["FitVerdict"];
 export type DeviceShortfall = Schemas["DeviceShortfall"];
 export type LogLine = Schemas["LogLine"];
