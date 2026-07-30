@@ -31,7 +31,8 @@ use ananke_measure::record::Factors;
 use serde::Serialize;
 use serde_json::ser::{PrettyFormatter, Serializer};
 
-use crate::plan::library::{Library, runtime_name};
+pub use crate::plan::library::Library;
+use crate::plan::library::runtime_name;
 
 /// One question, answered by the cells it builds.
 pub type Sweep = fn(&Library) -> Vec<Factors>;

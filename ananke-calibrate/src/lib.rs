@@ -1,3 +1,4 @@
+pub mod campaign;
 pub mod compute_model;
 pub mod coverage;
 pub mod derive;

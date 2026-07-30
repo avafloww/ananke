@@ -3,6 +3,10 @@ name = "ananke-calibrate"
 edition.workspace = true
 version.workspace = true
 
+[features]
+# The campaign's fake version control, so a driver test needs no repository.
+test-fakes = []
+
 [dependencies]
 ananke-config.workspace = true
 ananke-estimate.workspace = true
@@ -10,7 +14,9 @@ ananke-fs.workspace = true
 ananke-gguf.workspace = true
 ananke-measure.workspace = true
 ananke-placement.workspace = true
+clap.workspace = true
 jiff.workspace = true
+parking_lot.workspace = true
 serde.workspace = true
 toml.workspace = true
 serde_json.workspace = true

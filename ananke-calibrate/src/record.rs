@@ -1,9 +1,15 @@
 //! The measurement record as it appears in `measurements.ndjson`.
 //!
 //! Only the fields the calibration tools read are declared; serde ignores the
-//! rest, so the schema here can lag the harness without breaking. The harness is
-//! still Python (`scripts/calibration/measure.py`) and remains the authority on
-//! what a record contains — this is a reader.
+//! rest, so the schema here can lag the harness without breaking.
+//! [`ananke_measure::record`] is the authority on what a record contains — the
+//! harness writes it — and this is a reader.
+//!
+//! The two are kept honest by `tests/factors.rs`, which requires every factor the
+//! harness varies to be either read here or listed there as deliberately unread,
+//! with a reason. A factor quietly absent from this struct would have the derivers
+//! fitting a term across cells that differ in a way the fit cannot see, which is
+//! how four constants in this campaign came out wrong.
 //!
 //! Field names match the JSON exactly rather than being renamed to Rust
 //! conventions, because the NDJSON is the interchange format between the two

@@ -12,10 +12,10 @@ without re-deriving the method.
 ## Running it
 
 ```sh
-python campaign.py                  # every cell, cheapest order, committing as it goes
-python campaign.py --dry-run        # print the schedule and stop
-python campaign.py --only laguna    # cells whose label matches a substring
-python progress.py --watch          # how far it has got
+cargo run -p ananke-calibrate --bin campaign               # every cell, cheapest order, committing as it goes
+cargo run -p ananke-calibrate --bin campaign -- --dry-run  # print the schedule and stop
+cargo run -p ananke-calibrate --bin campaign -- --only laguna   # cells whose label matches a substring
+cargo run -p ananke-calibrate --bin progress -- --watch    # how far it has got
 ```
 
 The campaign is meant to be left alone for hours. It commits every fifteen
@@ -74,7 +74,7 @@ export MAINLINE_BIN=llama-server               # default: found on PATH
 export IK_BIN=ik-llama-server
 ```
 
-Then edit `MODELS` in `plan.py` to name the models you actually have. Each
+Then edit the `Model` registry in `ananke-calibrate/src/plan/library.rs` to name the models you actually have. Each
 entry needs a `key`, a path relative to `LLM_DIR`, and the runtimes it can be
 served with. **`n_cpu_moe` is tuned for 2x24 GiB** — recompute it for your
 cards, or the hybrid cells will not be measuring the regime they claim to.
@@ -95,7 +95,7 @@ load log kept gzipped alongside in `data/logs/`. Records from earlier,
 narrower schemas are kept in `data/legacy/` rather than merged, since they
 lack fields the current ones carry.
 
-- `schema` — bump it in `measure.py` whenever the shape changes. `1` was flat
+- `schema` — bump `SCHEMA` in `ananke-measure/src/record.rs` whenever the shape changes. `1` was flat
   CSV-era rows; `2` added nesting, hardware, and traces; `3` added the generic
   per-device breakdown, per-process GPU memory, and model identity.
 - `provenance` — when, where, which binary, which model, which ananke revision.
@@ -157,7 +157,7 @@ but do not settle them.
 
 ## Probes
 
-`measure.py` samples one process once per configuration, which cannot separate
+The harness samples one process once per configuration, which cannot separate
 a term allocated once from one that accumulates with use. `probe_host_growth.py`
 varies one thing at a time against a fresh server and reports the series:
 

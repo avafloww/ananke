@@ -1,6 +1,6 @@
 """Attribute host-memory growth that a single measurement cannot separate.
 
-`measure.py` samples one process once per configuration. That is the right
+The measurement harness samples one process once per configuration. That is the right
 shape for fitting constants, but it cannot tell a term that is allocated once
 from one that accumulates with use — both look like "this model holds more
 than the model predicts". These probes vary one thing at a time against a
@@ -62,7 +62,7 @@ PORT = int(os.environ.get("PROBE_PORT", "8399"))
 
 # A deliberately small registry: these probes answer "what shape is this
 # term", which needs a handful of contrasting models rather than the whole
-# library. `plan.py` owns the full registry for the campaign proper.
+# library. ananke-calibrate's plan owns the full registry for the campaign proper.
 MODELS = {
     "qwen36-27b": "unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-UD-Q5_K_XL.gguf",
     "gemma3-27b": "mlabonne/gemma-3-27b-it-abliterated-GGUF/gemma-3-27b-it-abliterated.q4_k_m.gguf",
