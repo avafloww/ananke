@@ -46,188 +46,6 @@
     },
     "default": 1692401664
   },
-  "compute_buffer_curves": {
-    "$comment": "Ordered: the first entry whose arch list contains the model's architecture wins, so a variant-guarded entry must precede the general one for the same arch. `slope_scales_with_ubatch` is true throughout: the context term is calibrated at ubatch 512 and the measured compute buffer is proportional to batch \u2014 Magidonia takes 388 MiB at ub 512 and 1552 at 2048, exactly four times, and Qwen3.6-27B 290 and 1160 \u2014 so a flat slope under-reserves at any larger batch. At the default batch this changes nothing.",
-    "default": {
-      "base_batch_mib": 459,
-      "base_mib": 116,
-      "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 63 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 9 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-      "runtime": null,
-      "slope_mib_per_1k": 5,
-      "slope_scales_with_ubatch": true
-    },
-    "entries": [
-      {
-        "archs": [
-          "qwen3"
-        ],
-        "base_batch_mib": 193,
-        "base_mib": 193,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 48 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 5 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 8,
-        "slope_scales_with_ubatch": true,
-        "variant": null
-      },
-      {
-        "archs": [
-          "gemma4"
-        ],
-        "base_batch_mib": 342,
-        "base_mib": 255,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 11 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 3 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 4,
-        "slope_scales_with_ubatch": true,
-        "variant": "gemma_e"
-      },
-      {
-        "archs": [
-          "gemma4"
-        ],
-        "base_batch_mib": 285,
-        "base_mib": 441,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 23 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 2 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 4,
-        "slope_scales_with_ubatch": true,
-        "variant": null
-      },
-      {
-        "archs": [
-          "gemma2",
-          "gemma3"
-        ],
-        "base_batch_mib": 298,
-        "base_mib": 184,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 33 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 8 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 11,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "qwen3vlmoe"
-        ],
-        "base_mib": 700,
-        "evidence": "inherited \u2014 no model with this architecture exists in the dataset, so this curve cannot be re-derived here and carries whatever the original ad-hoc calibration produced. See scripts/calibration/README.md.",
-        "runtime": null,
-        "slope_mib_per_1k": 7,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "gpt-oss",
-          "mixtral",
-          "qwen3moe",
-          "llama4",
-          "deepseek2",
-          "glm4moe"
-        ],
-        "base_mib": 600,
-        "evidence": "inherited \u2014 no model with this architecture exists in the dataset, so this curve cannot be re-derived here and carries whatever the original ad-hoc calibration produced. See scripts/calibration/README.md. Covers gpt-oss, mixtral, qwen3moe, llama4, deepseek2 and glm4moe.",
-        "runtime": null,
-        "slope_mib_per_1k": 2,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "glm-dsa"
-        ],
-        "base_mib": 3700,
-        "evidence": "Held, not fitted. GLM-5.2's cells carry no memory-breakdown table (ik_llama prints none), and `analyse.py`'s `table_less_compute` now recovers the per-device figure from the driver total: 901, 986, 1332, and 1968 MiB at ctx 8192, 32768, 65536, and 131072 at ubatch 512, against 6370 at the production ubatch 2048 and ctx 131072. The curve's affine-in-batch shape cannot carry that: the service runs `-amb 512`, which chunks ik's attention, so the graph changes regime above ubatch 512 and the context and batch terms couple. Fitting the shape anyway reproduces the low-batch cells and misses production by +7.8%; this value reproduces production and over-reserves the low-batch cells. Two more above-threshold contexts would settle it.",
-        "runtime": null,
-        "slope_mib_per_1k": 15,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "laguna"
-        ],
-        "base_batch_mib": 58,
-        "base_mib": 1065,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 10 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 1,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "qwen35moe"
-        ],
-        "base_batch_mib": 0,
-        "base_mib": 858,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 18 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 3 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 1,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "qwen35"
-        ],
-        "base_batch_mib": 259,
-        "base_mib": 211,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 30 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 3 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 8,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "talkie"
-        ],
-        "base_batch_mib": 227,
-        "base_mib": 291,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 12 layer-split cells at ctx 512-32768 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 2 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 4,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "mamba"
-        ],
-        "base_mib": 500,
-        "evidence": "inherited \u2014 no model with this architecture exists in the dataset, so this curve cannot be re-derived here and carries whatever the original ad-hoc calibration produced. See scripts/calibration/README.md.",
-        "runtime": null,
-        "slope_mib_per_1k": 2,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "jamba"
-        ],
-        "base_mib": 600,
-        "evidence": "inherited \u2014 no model with this architecture exists in the dataset, so this curve cannot be re-derived here and carries whatever the original ad-hoc calibration produced. See scripts/calibration/README.md.",
-        "runtime": null,
-        "slope_mib_per_1k": 4,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "lfm2"
-        ],
-        "base_batch_mib": 50,
-        "base_mib": 362,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 7 layer-split cells at ctx 2048-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 1 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 1,
-        "slope_scales_with_ubatch": true
-      },
-      {
-        "archs": [
-          "deepseek4"
-        ],
-        "base_batch_mib": 51,
-        "base_mib": 1658,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 12 layer-split cells at ctx 8192-131072 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 2 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
-        "runtime": null,
-        "slope_mib_per_1k": 1,
-        "slope_scales_with_ubatch": true
-      }
-    ]
-  },
   "compute_model": {
     "$comment": "One per-device compute model per (runtime, split, architecture), replacing `compute_buffer_curves`, `tensor_compute_curves` and its companion tables, and the `ik_compute_*` rates. Columns are dimensionally normalised so architectures of different width share coefficients; see scripts/calibration/compute_model.py for what each one counts and why. Coefficients are constrained non-negative because every column counts bytes of a buffer that either exists or does not. Ordered variant-guarded first.",
     "columns": [
@@ -617,13 +435,13 @@
           "qwen35moe"
         ],
         "coefficients": {
-          "doubling": 45.742757,
-          "flat": 366.920845,
-          "hidden": 28.062157,
-          "mask": 2.083874,
-          "quant": 2.876407
+          "doubling": 58.715467,
+          "flat": 369.798361,
+          "hidden": 20.264536,
+          "mask": 2.109639,
+          "quant": 3.158149
         },
-        "evidence": "non-negative weighted least squares over 16 per-device observation(s); worst residual 12.4%, 4 outside +/-5%",
+        "evidence": "non-negative weighted least squares over 18 per-device observation(s); worst residual 11.2%, 7 outside +/-5%",
         "runtime": null,
         "split": "tensor",
         "variant": null
@@ -732,7 +550,7 @@
     },
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": {
       "doc": "mainline's host-resident MoE intermediates under tensor split, per batch token per unit of hidden size. Multiply by n_embd for the per-token figure.",
-      "evidence": "27 mainline tensor-split hybrid cells: laguna 62.7/unit, laguna 62.8/unit, qwen35moe 56.5/unit, qwen35moe 56.8/unit. Linear in batch \u2014 qwen35moe measures 28.3, 56.5, 113.0 and 226.1 MiB at ub 256, 512, 1024 and 2048, a constant rate. The same models under layer split show 0.02 MiB, so this belongs to the split mode rather than to the hybrid placement alone.",
+      "evidence": "29 mainline tensor-split hybrid cells: laguna 62.7/unit, laguna 62.8/unit, qwen35moe 56.5/unit, qwen35moe 56.8/unit. Linear in batch \u2014 qwen35moe measures 28.3, 56.5, 113.0 and 226.1 MiB at ub 256, 512, 1024 and 2048, a constant rate. The same models under layer split show 0.02 MiB, so this belongs to the split mode rather than to the hybrid placement alone.",
       "kind": "derived",
       "type": "u64",
       "value": 57
@@ -764,6 +582,13 @@
       "kind": "derived",
       "type": "u64",
       "value": 2
+    },
+    "MTP_UNACCOUNTED_MIB_PER_DEVICE": {
+      "doc": "What an embedded-MTP process takes per device beyond every buffer\n/// llama.cpp names in its load log. Standing up a second context costs this\n/// much VRAM that the runtime's own books do not carry.",
+      "evidence": "11 paired with/without cell(s), as the driver delta less every buffer llama.cpp names \u2014 the draft context's cache and graph, the extra recurrent rollback copies, and the main graph's growth \u2014 over the card count: qwen35 2card np1 ctx32768 78; qwen35 2card np4 ctx131072 77; qwen35moe 2card np1 ctx32768 86; qwen35 2card np1 ctx32768 78; qwen35 2card np2 ctx32768 79; qwen35 2card np4 ctx32768 77; qwen35moe 2card np1 ctx32768 86; qwen35moe 2card np2 ctx32768 86; qwen35moe 2card np4 ctx32768 87; qwen35moe 1card np1 ctx32768 52; qwen35moe 1card np4 ctx32768 52 MiB/device. Flat in the slot count, which is what makes it a per-context cost rather than a share of one of the terms above. The largest is taken.",
+      "kind": "derived",
+      "type": "u64",
+      "value": 87
     },
     "PINNED_EXTRA_BYTES": {
       "doc": "Slack between the arena llama.cpp reports and the pinned memory actually resident.",
@@ -800,63 +625,17 @@
       "type": "u64",
       "value": 3565158
     },
-    "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": {
-      "doc": "Extra GPU compute a quantised KV cache costs, per byte of context x batch token.",
-      "evidence": "32 pairs differing in nothing but the cache type, normalised by ctx x n_tokens. Rates run 0.0 to 12.3 bytes and are zero at ctx 8192 for everything and at every context for deepseek4, laguna, llama, and qwen35moe, so the worst is charged to all. Previously absorbed into the compute curves, which are fitted from the worst cell per context and did not key on cache type, so one quantised cell set the slope and every f16 service paid it.",
-      "kind": "derived",
-      "type": "u64",
-      "value": 13
-    },
     "SPEC_RECURRENT_ROLLBACK_DEPTH": {
       "doc": "Extra copies of the recurrent state a speculative-decoding service holds,\n/// beyond the live one: llama.cpp's `n_rs_seq`.",
       "evidence": "llama.cpp's own `rs_seq` field, 3 on every speculative cell and 0 on every other, across 3 slot counts. The recurrent module is replicated `parallel x (depth + 1)`: production Qwen3.6-27B measures 1197.00 MiB against 149.62 at one slot without speculation, exactly 2 x 4.",
       "kind": "derived",
       "type": "u64",
       "value": 3
-    },
-    "TENSOR_MASK_BYTES_PER_TOKEN_PAIR": {
-      "doc": "Bytes of KQ mask llama.cpp materialises per (batch token, cache token):\n/// one f16 entry. Read from the graph, not fitted.",
-      "evidence": "every architecture measured grows by 1.00 MiB per 1024 cache tokens at ubatch 512, from talkie's 13B to gemma4's 31B, which is 2 bytes and nothing else.",
-      "kind": "structural",
-      "type": "u64",
-      "value": 2
     }
   },
   "dataset": "scripts/calibration/data/measurements.ndjson",
   "generator": "scripts/calibration/analyse.py",
   "hardware": "2x NVIDIA RTX 3090 (24 GiB), AMD Ryzen Threadripper 3960X (24 cores), 251 GiB RAM",
-  "ik_compute_flat_bytes": {
-    "$comment": "The context- and batch-independent part of ik's per-device layer-split compute buffer, by architecture. Fitted on two-card cells; see `derive_ik_compute`. `default` is 0, so an architecture with no ik cells falls back to the layer-split curve instead of a borrowed rate.",
-    "by_arch": {
-      "laguna": 350518584,
-      "qwen35moe": 462010900
-    },
-    "default": 0
-  },
-  "ik_compute_per_batch_token_bytes": {
-    "$comment": "Bytes per batch token, up to ik's 512-token attention chunk, of its per-device layer-split compute buffer. Fitted on two-card cells; see `derive_ik_compute`. `default` is 0, so an architecture with no ik cells falls back to the layer-split curve instead of a borrowed rate.",
-    "by_arch": {
-      "laguna": 331956,
-      "qwen35moe": 564240
-    },
-    "default": 0
-  },
-  "ik_compute_per_doubling_bytes": {
-    "$comment": "Bytes ik's compute buffer gains per *doubling* of the batch above its 512-token attention chunk. A constant per doubling, not per token: Qwen3.6-35B-A3B measures 719, 1227, and 1732 MiB at ubatch 512, 1024, and 2048. Fitted on two-card cells; see `derive_ik_compute`. `default` is 0, so an architecture with no ik cells falls back to the layer-split curve instead of a borrowed rate.",
-    "by_arch": {
-      "laguna": 389851940,
-      "qwen35moe": 525501899
-    },
-    "default": 0
-  },
-  "ik_compute_per_token_pair_bytes": {
-    "$comment": "Bytes per (batch token x cache token) \u2014 the attention mask and, for a sparse-attention architecture, its indexer's scores. One byte for qwen35moe's full attention against ~20 for glm-dsa. Fitted on two-card cells; see `derive_ik_compute`. `default` is 0, so an architecture with no ik cells falls back to the layer-split curve instead of a borrowed rate.",
-    "by_arch": {
-      "laguna": 3,
-      "qwen35moe": 1
-    },
-    "default": 0
-  },
   "ik_moe_rates": {
     "$comment": "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture. `default` applies to an architecture not listed.",
     "by_arch": {
@@ -868,7 +647,7 @@
     },
     "default": 54
   },
-  "measurements": 574,
+  "measurements": 578,
   "mtp_compute_intermediates": {
     "$comment": "n_embd-wide f32 graph intermediates the MTP draft context holds live per batch token, by architecture. Its whole per-device compute share is `ubatch x (this x n_embd x 4 + 2 x n_kv)`, the same shape as the main context's, and the total MTP cost is the draft cache's physical size plus this share on every spanned device.",
     "by_arch": {
@@ -877,9 +656,41 @@
     },
     "default": 12
   },
+  "mtp_draft_compute_base_mib": {
+    "$comment": "The MTP draft context's own per-device compute buffer at zero context, by architecture. read from the runtime's own draft-context buffers, cross-checked against its [spec] line: qwen35 4 context(s) 150+0.361/1k; qwen35moe 3 context(s) 76+0.445/1k. The slope is stored per 1000 of `ctx / 1024`. Flat in the slot count, the draft cache spanning every cell rather than one stream's share.",
+    "by_arch": {
+      "qwen35": 150,
+      "qwen35moe": 76
+    },
+    "default": 150
+  },
+  "mtp_draft_compute_mib_per_1k": {
+    "$comment": "Slope of the same buffer, in thousandths of a MiB per 1024 context tokens. Far below the 1000 a full `ubatch x n_kv x 2` f16 mask would cost at ubatch 512, which is why the mask shape the old model assumed over-reserved at long contexts.",
+    "by_arch": {
+      "qwen35": 361,
+      "qwen35moe": 445
+    },
+    "default": 445
+  },
+  "mtp_per_device_mib": {
+    "$comment": "Embedded-MTP overhead per spanned device, beyond the draft cache and the per-slot term, by architecture. Single-card cells separate the two: at one slot the residual is 320 MiB on one card against 520 on two. `default` is the largest measured.",
+    "by_arch": {
+      "qwen35": 201,
+      "qwen35moe": 153
+    },
+    "default": 201
+  },
+  "mtp_per_slot_mib": {
+    "$comment": "Embedded-MTP overhead per serving slot, beyond the draft cache, by architecture. Per *process*: the increment per slot is the same on one card as on two. `default` is the largest measured, so an unmeasured MTP architecture over-reserves rather than under. 3 (architecture, card count, context) group(s) fitted against the driver delta net of the modelled draft cache: qwen35 2card ctx32768 461/slot, 201/device; qwen35moe 1card ctx32768 201/slot, 119/device; qwen35moe 2card ctx32768 213/slot, 153/device. The larger of each is taken per architecture. Replaces a term calibrated against llama.cpp's own [spec] line, which reports well under half the delta the process shows and scaled the wrong way in the slot count.",
+    "by_arch": {
+      "qwen35": 461,
+      "qwen35moe": 213
+    },
+    "default": 461
+  },
   "mtp_slot_scaling": {
     "$comment": "Reported, not fitted. The MTP overhead measured at a fixed context across slot counts, which is what separates a genuine slot term from the longer context the first campaign confounded it with.",
-    "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB, np4 2376 MiB; Qwen3.6-35B-A3B-UD-Q5_K_ ctx 32768: np1 584 MiB, np2 812 MiB, np4 1224 MiB; gemma-4-31B-it-qat-UD-Q4 ctx 32768: np1 724 MiB, np2 724 MiB, np4 728 MiB"
+    "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB, np4 2376 MiB; Qwen3.6-35B-A3B-UD-Q5_K_ ctx 32768: np1 384 MiB, np2 812 MiB, np4 986 MiB; gemma-4-31B-it-qat-UD-Q4 ctx 32768: np1 724 MiB, np2 724 MiB, np4 728 MiB"
   },
   "no_flash_attn_rates": {
     "$comment": "Extra pinned bytes per batch token when flash attention is off, by architecture. The residual is flat in context and proportional to batch, and the rates differ fourfold between sliding-window models and the rest. `default` applies to an architecture not listed.",
@@ -1002,108 +813,6 @@
         "ctx8192/ub512": 719
       }
     }
-  },
-  "tensor_compute_curves": {
-    "$comment": "Per-device compute buffer under `--split-mode tensor`, charged to every spanned GPU rather than divided between them: llama.cpp builds the same graph on each device, and the measured compute column reads identically on one card and on two at every context in the set. Same shape and same architecture grouping as `compute_buffer_curves`, fitted against tensor cells. An architecture absent here uses `default`.",
-    "default": {
-      "base_batch_mib": 0,
-      "base_mib": 229,
-      "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 41 tensor-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 0 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
-      "slope_mib_per_1k": 1,
-      "slope_scales_with_ubatch": true
-    },
-    "entries": [
-      {
-        "archs": [
-          "gemma2",
-          "gemma3",
-          "gemma4"
-        ],
-        "base_batch_mib": 0,
-        "base_mib": 355,
-        "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 38 tensor-split cells at ctx 8192-131072 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 0 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
-        "slope_mib_per_1k": 1,
-        "slope_scales_with_ubatch": true,
-        "variant": null
-      },
-      {
-        "archs": [
-          "qwen3"
-        ],
-        "base_batch_mib": 0,
-        "base_mib": 159,
-        "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 33 tensor-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 0 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
-        "slope_mib_per_1k": 1,
-        "slope_scales_with_ubatch": true,
-        "variant": null
-      },
-      {
-        "archs": [
-          "qwen35"
-        ],
-        "base_batch_mib": 0,
-        "base_mib": 218,
-        "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 14 tensor-split cells at ctx 8192-131072 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 0 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
-        "slope_mib_per_1k": 1,
-        "slope_scales_with_ubatch": true,
-        "variant": null
-      },
-      {
-        "archs": [
-          "qwen35moe"
-        ],
-        "base_batch_mib": 67,
-        "base_mib": 58,
-        "evidence": "least-squares fit of max per-device compute column to base + base_batch + slope*(ctx/1024), across 13 tensor-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 2 larger-ubatch cells. The unaccounted remainder is excluded and derived separately as TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it across cards, so it is not a per-device figure.",
-        "slope_mib_per_1k": 1,
-        "slope_scales_with_ubatch": true,
-        "variant": null
-      }
-    ]
-  },
-  "tensor_compute_intermediates": {
-    "$comment": "n_embd-wide f32 graph intermediates a tensor split holds live per batch token, by architecture. The whole per-device compute buffer is `ubatch x (this x n_embd x 4 + 2 x n_kv + quantised_rate x context)`; the 2-byte term is the f16 KQ mask, read from the graph rather than fitted. `default` is the largest, so an unmeasured architecture over-reserves rather than OOMs.",
-    "by_arch": {
-      "gemma3": 15,
-      "gemma4": 21,
-      "laguna": 23,
-      "llama": 22,
-      "qwen3": 15,
-      "qwen35": 14,
-      "qwen35moe": 25,
-      "talkie": 12
-    },
-    "default": 25
-  },
-  "tensor_compute_quantised_rates": {
-    "$comment": "Extra tensor-split compute bytes per (batch token x context token) when the KV cache is quantised, by architecture. It follows the full context, not one stream's share: Qwen3-4B shows the same absolute increase at one slot and at four. `default` is 0 because llama and talkie measure no increase at all.",
-    "by_arch": {
-      "gemma3": 9,
-      "gemma4": 8,
-      "laguna": 6,
-      "llama": 0,
-      "qwen3": 5,
-      "qwen35": 8,
-      "qwen35moe": 4,
-      "talkie": 0
-    },
-    "default": 0
-  },
-  "tensor_compute_shadow_bytes": {
-    "$comment": "Per-device VRAM llama.cpp cannot attribute \u2014 CUDA context, cuBLAS workspaces, driver bookkeeping \u2014 by architecture, from single-device cells where the `unaccounted` column is still a per-device figure. Charged beside the tensor-split compute model, which excludes it.",
-    "by_arch": {
-      "deepseek4": 490733568,
-      "gemma3": 375390208,
-      "gemma4": 402653184,
-      "laguna": 379584512,
-      "lfm2": 365953024,
-      "llama": 363855872,
-      "qwen3": 361758720,
-      "qwen35": 416284672,
-      "qwen35moe": 375390208,
-      "talkie": 367001600
-    },
-    "default": 490733568
   },
   "tensor_split_baseline": {
     "$comment": "Extra host baseline bytes a tensor split costs beyond a layer split, by architecture. `default` applies to an architecture not listed.",

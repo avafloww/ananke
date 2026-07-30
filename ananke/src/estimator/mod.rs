@@ -273,7 +273,7 @@ pub fn dispatch(
         }
     }
     if inputs.allow_fallback {
-        return Ok(fallback::estimate_fallback(summary, inputs.context));
+        return Ok(fallback::estimate_fallback(summary, inputs));
     }
     Err(EstimatorError::UnknownArchitecture {
         architecture: summary.architecture.clone(),

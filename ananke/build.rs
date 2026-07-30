@@ -126,7 +126,6 @@ fn generate_tuning_constants() {
     }
 
     out.push_str(&generate_compute_model(&parsed));
-    out.push_str(&generate_curves(&parsed));
     out.push_str(&generate_ik_rates(&parsed));
     out.push_str(&generate_rate_table(
         &parsed,
@@ -156,61 +155,19 @@ fn generate_tuning_constants() {
         "PER_SLOT_HOST_BYTES_DEFAULT",
         "Host memory each concurrently active slot costs beyond the first, by\n/// architecture. Reserved as slop, never charged to the correction.",
     ));
-    for (key, table, default_name, doc) in [
-        (
-            "ik_compute_flat_bytes",
-            "IK_COMPUTE_FLAT_BYTES",
-            "IK_COMPUTE_FLAT_BYTES_DEFAULT",
-            "The context- and batch-independent part of ik's per-device layer-split\n/// compute buffer, by architecture.",
-        ),
-        (
-            "ik_compute_per_batch_token_bytes",
-            "IK_COMPUTE_PER_BATCH_TOKEN_BYTES",
-            "IK_COMPUTE_PER_BATCH_TOKEN_BYTES_DEFAULT",
-            "Bytes per batch token, up to ik's attention chunk, of its per-device\n/// layer-split compute buffer.",
-        ),
-        (
-            "ik_compute_per_doubling_bytes",
-            "IK_COMPUTE_PER_DOUBLING_BYTES",
-            "IK_COMPUTE_PER_DOUBLING_BYTES_DEFAULT",
-            "Bytes ik's compute buffer gains per *doubling* of the batch above its\n/// attention chunk — a constant per doubling, not per token.",
-        ),
-        (
-            "ik_compute_per_token_pair_bytes",
-            "IK_COMPUTE_PER_TOKEN_PAIR_BYTES",
-            "IK_COMPUTE_PER_TOKEN_PAIR_BYTES_DEFAULT",
-            "Bytes per (batch token x cache token): the attention mask, plus a\n/// sparse-attention indexer's scores where there is one.",
-        ),
-    ] {
-        out.push_str(&generate_rate_table(&parsed, key, table, default_name, doc));
-    }
     out.push_str(&generate_rate_table(
         &parsed,
-        "mtp_compute_intermediates",
-        "MTP_COMPUTE_INTERMEDIATES",
-        "MTP_COMPUTE_INTERMEDIATES_DEFAULT",
-        "n_embd-wide f32 graph intermediates the MTP draft context holds live per\n/// batch token, by architecture.",
+        "mtp_draft_compute_base_mib",
+        "MTP_DRAFT_COMPUTE_BASE_MIB",
+        "MTP_DRAFT_COMPUTE_BASE_MIB_DEFAULT",
+        "The MTP draft context's own per-device compute buffer at zero context, by\n/// architecture.",
     ));
     out.push_str(&generate_rate_table(
         &parsed,
-        "tensor_compute_intermediates",
-        "TENSOR_COMPUTE_INTERMEDIATES",
-        "TENSOR_COMPUTE_INTERMEDIATES_DEFAULT",
-        "n_embd-wide f32 graph intermediates a tensor split holds live per batch\n/// token, by architecture.",
-    ));
-    out.push_str(&generate_rate_table(
-        &parsed,
-        "tensor_compute_quantised_rates",
-        "TENSOR_COMPUTE_QUANTISED_RATES",
-        "TENSOR_COMPUTE_QUANTISED_RATE_DEFAULT",
-        "Extra tensor-split compute bytes per (batch token x context token) when\n/// the KV cache is quantised, by architecture.",
-    ));
-    out.push_str(&generate_rate_table(
-        &parsed,
-        "tensor_compute_shadow_bytes",
-        "TENSOR_COMPUTE_SHADOW_BYTES",
-        "TENSOR_COMPUTE_SHADOW_BYTES_DEFAULT",
-        "Per-device VRAM llama.cpp cannot attribute — CUDA context, cuBLAS\n/// workspaces, driver bookkeeping — by architecture.",
+        "mtp_draft_compute_mib_per_1k",
+        "MTP_DRAFT_COMPUTE_MIB_PER_1K",
+        "MTP_DRAFT_COMPUTE_MIB_PER_1K_DEFAULT",
+        "Slope of that buffer, in thousandths of a MiB per 1024 context tokens.",
     ));
     out.push_str(&generate_rate_table(
         &parsed,
@@ -270,6 +227,39 @@ const COMPUTE_MODEL_COLUMNS: &[&str] = &[
 /// the group did not identify is absent from the JSON and generated as zero,
 /// which is the same thing: a term the data gave no evidence for contributes
 /// nothing.
+/// Per-architecture rates for ik's CPU-resident MoE intermediates.
+///
+/// One number cannot serve every architecture: the measured rates differ by a
+/// third, so a single value either under-reserves the worst or over-reserves
+/// the rest.
+fn generate_ik_rates(parsed: &serde_json::Value) -> String {
+    let Some(rates) = parsed.get("ik_moe_rates") else {
+        return String::new();
+    };
+    let default = rates.get("default").and_then(|v| v.as_u64()).unwrap_or(0);
+    let by_arch = rates.get("by_arch").and_then(|v| v.as_object());
+    let mut out = String::from(
+        "\n/// Bytes per batch token per unit of hidden size for ik's \
+         CPU-resident\n/// MoE intermediates, by architecture.\n\
+         pub static IK_MOE_RATES: &[(&str, u64)] = &[\n",
+    );
+    if let Some(map) = by_arch {
+        for (arch, value) in map {
+            out.push_str(&format!(
+                "    ({arch:?}, {}),\n",
+                value.as_u64().unwrap_or(default)
+            ));
+        }
+    }
+    out.push_str(
+        "];\n\n/// Applied to an ik mixture of experts this dataset has \
+                  not measured.\npub const IK_MOE_RATE_DEFAULT: u64 = ",
+    );
+    out.push_str(&default.to_string());
+    out.push_str(";\n");
+    out
+}
+
 fn generate_compute_model(parsed: &serde_json::Value) -> String {
     let model = match parsed.get("compute_model") {
         Some(m) => m,
@@ -404,93 +394,6 @@ fn coefficients_literal(entry: &serde_json::Value) -> String {
     format!("ComputeCoefficients {{ {fields} }}")
 }
 
-fn generate_curves(parsed: &serde_json::Value) -> String {
-    let curves = match parsed.get("compute_buffer_curves") {
-        Some(c) => c,
-        None => return String::new(),
-    };
-    let mut out = String::from(
-        "\n/// A per-architecture GPU compute-buffer curve: \
-         `base_mib + base_batch_mib * k + slope_mib_per_1k * (ctx / 1024) * k`, \
-         where `k = ubatch / 512`, per device.\n\
-         #[derive(Debug, Clone, Copy)]\n\
-         pub struct Curve {\n\
-         \x20   /// Architectures this curve applies to.\n\
-         \x20   pub archs: &'static [&'static str],\n\
-         \x20   /// A variant discriminator the caller must also match, where one\n\
-         \x20   /// architecture string covers models with different graphs.\n\
-         \x20   pub variant: Option<&'static str>,\n\
-         \x20   /// The serving runtime this curve was fitted against, or `None`\n\
-         \x20   /// for one that applies to either. The two forks build\n\
-         \x20   /// different graphs for the same architecture, so a fork-only\n\
-         \x20   /// entry takes precedence over a general one.\n\
-         \x20   pub runtime: Option<&'static str>,\n\
-         \x20   pub base_mib: u32,\n\
-         \x20   /// A constant that scales with the batch but not the context —\n\
-         \x20   /// large on some architectures, and with nowhere to go in a\n\
-         \x20   /// two-term curve but the flat base or the margin.\n\
-         \x20   pub base_batch_mib: u32,\n\
-         \x20   pub slope_mib_per_1k: u32,\n\
-         \x20   /// Whether the slope is linear in ubatch off the 512-token\n\
-         \x20   /// calibration point.\n\
-         \x20   pub slope_scales_with_ubatch: bool,\n\
-         }\n\n",
-    );
-
-    let entries = curves
-        .get("entries")
-        .and_then(|e| e.as_array())
-        .unwrap_or_else(|| panic!("compute_buffer_curves has no `entries` array"));
-    out.push_str("/// Ordered; first match wins.\npub static CURVES: &[Curve] = &[\n");
-    for entry in entries {
-        out.push_str(&curve_literal(entry));
-    }
-    out.push_str("];\n\n");
-
-    let default = curves
-        .get("default")
-        .unwrap_or_else(|| panic!("compute_buffer_curves has no `default`"));
-    out.push_str(
-        "/// Used by any architecture without its own entry.\npub static DEFAULT_CURVE: Curve = ",
-    );
-    out.push_str(curve_literal(default).trim().trim_end_matches(','));
-    out.push_str(";\n");
-    out
-}
-
-/// Per-architecture rates for ik's CPU-resident MoE intermediates.
-///
-/// One number cannot serve every architecture: the measured rates differ by a
-/// third, so a single value either under-reserves the worst or over-reserves
-/// the rest.
-fn generate_ik_rates(parsed: &serde_json::Value) -> String {
-    let Some(rates) = parsed.get("ik_moe_rates") else {
-        return String::new();
-    };
-    let default = rates.get("default").and_then(|v| v.as_u64()).unwrap_or(0);
-    let by_arch = rates.get("by_arch").and_then(|v| v.as_object());
-    let mut out = String::from(
-        "\n/// Bytes per batch token per unit of hidden size for ik's \
-         CPU-resident\n/// MoE intermediates, by architecture.\n\
-         pub static IK_MOE_RATES: &[(&str, u64)] = &[\n",
-    );
-    if let Some(map) = by_arch {
-        for (arch, value) in map {
-            out.push_str(&format!(
-                "    ({arch:?}, {}),\n",
-                value.as_u64().unwrap_or(default)
-            ));
-        }
-    }
-    out.push_str(
-        "];\n\n/// Applied to an ik mixture of experts this dataset has \
-                  not measured.\npub const IK_MOE_RATE_DEFAULT: u64 = ",
-    );
-    out.push_str(&default.to_string());
-    out.push_str(";\n");
-    out
-}
-
 /// A per-architecture rate table: `&[(arch, value)]` plus a default.
 /// The same table, for values that may be negative.
 ///
@@ -548,52 +451,6 @@ fn generate_rate_table(
     out.push_str(&format!(
         "];\n\n/// Applied to an architecture this dataset has not measured.\n\
          pub const {default_name}: u64 = {default};\n"
-    ));
-    out
-}
-
-fn curve_literal(entry: &serde_json::Value) -> String {
-    let archs: Vec<String> = entry
-        .get("archs")
-        .and_then(|a| a.as_array())
-        .map(|a| {
-            a.iter()
-                .map(|v| format!("{:?}", v.as_str().unwrap_or_default()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let optional = |key: &str| match entry.get(key).and_then(|v| v.as_str()) {
-        Some(v) => format!("Some({v:?})"),
-        None => "None".to_string(),
-    };
-    let variant = optional("variant");
-    let runtime = optional("runtime");
-    let number = |key: &str| {
-        entry
-            .get(key)
-            .and_then(|v| v.as_u64())
-            .unwrap_or_else(|| panic!("curve entry missing `{key}`"))
-    };
-    let base_batch = entry
-        .get("base_batch_mib")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let scales = entry
-        .get("slope_scales_with_ubatch")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let evidence = entry.get("evidence").and_then(|v| v.as_str()).unwrap_or("");
-    let mut out = String::new();
-    for line in wrap(evidence, 68) {
-        out.push_str(&format!("    // {line}\n"));
-    }
-    out.push_str(&format!(
-        "    Curve {{ archs: &[{}], variant: {variant}, runtime: {runtime}, \
-         base_mib: {}, base_batch_mib: {base_batch}, slope_mib_per_1k: {}, \
-         slope_scales_with_ubatch: {scales} }},\n",
-        archs.join(", "),
-        number("base_mib"),
-        number("slope_mib_per_1k"),
     ));
     out
 }

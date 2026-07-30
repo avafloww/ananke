@@ -873,145 +873,13 @@ def check_recurrent_model(rows: list[dict], tolerance_mib: float = 0.02) -> None
               "estimator/recurrent.rs and this file have drifted apart.")
 
 
-def tensor_compute_cells(rows: list[dict]) -> list[dict]:
-    """Every tensor-split cell's measured per-device compute buffer.
-
-    A tensor split reports one fused `Meta()` device whose `compute` column is
-    already one card's figure — and reads the same on one card as on two at
-    every context in the set, because llama.cpp builds the same graph on each
-    device rather than dividing one between them. That is the quantity the
-    packer must charge to each spanned GPU.
-    """
-    # `-md` loads the draft model *first*, so a drafted cell's `arch` and
-    # `n_embd` describe the four-block MTP head rather than the model whose
-    # graph was measured — which read as 92 hidden-width intermediates per
-    # token against the target's 21. The shape is taken from an undrafted cell
-    # of the same file instead.
-    shape_of: dict[str, tuple[str, int]] = {}
-    for record in rows:
-        parsed = record["parsed"]
-        if record["factors"]["draft"] or not parsed.get("n_embd"):
-            continue
-        shape_of.setdefault(record["factors"]["model"],
-                            (parsed["arch"], parsed["n_embd"]))
-
-    out = []
-    for record in rows:
-        factors, parsed = record["factors"], record["parsed"]
-        if (factors["split"] or "layer") != "tensor":
-            continue
-        if factors["flash_attn"] != "on":
-            continue
-        fused = [d for d in parsed.get("devices", [])
-                 if d["compute_mib"] and d["device"].startswith("Meta")]
-        if not fused:
-            continue
-        arch, n_embd = shape_of.get(
-            factors["model"], (parsed.get("arch", ""), parsed.get("n_embd", 0)))
-        if not n_embd:
-            continue
-        # The mask spans one stream's share of the cache: `--kv-unified`
-        # collapses the slots onto one, otherwise each slot holds its own.
-        streams = 1 if factors["kv_unified"] else max(1, factors["parallel"] or 1)
-        out.append({
-            "arch": arch,
-            "n_embd": n_embd,
-            "ubatch": factors["ubatch"] or 512,
-            "context": factors["ctx"],
-            "n_kv": factors["ctx"] // streams,
-            "quantised": factors["kv_type"] != "f16",
-            "measured_mib": max(d["compute_mib"] for d in fused),
-            "label": factors["label"],
-        })
-    return out
-
-
-# The KQ mask llama.cpp materialises per batch token, one f16 entry per cache
-# token. Read from the graph rather than fitted, and it is what makes the
-# context term of the tensor-split compute buffer exact: every architecture in
-# the set grows by 1.00 MiB per 1024 cache tokens at ubatch 512, from talkie's
-# 13B up to gemma4's 31B, which is 2 bytes and nothing else.
 MASK_BYTES_PER_TOKEN_PAIR = 2
 
 
-def _tensor_intermediates(cells: list[dict]) -> dict[str, list[tuple[float, str]]]:
-    """`K` per architecture: n_embd-wide f32 graph intermediates per batch token.
-
-    With the mask term known, what remains of a tensor-split compute buffer is
-    flat in context and exactly proportional to the batch — laguna measures
-    67, 134, 270, and 544 MiB of it at ubatch 256, 512, 1024, and 2048. Divided
-    by `n_embd x 4` it comes out dimensionless and near-integral: 12 on talkie,
-    15 on qwen3, 17 on gemma4, 22 on llama and laguna. It is a count of hidden-
-    width f32 buffers the graph holds live, so it is a property of the graph's
-    shape and transfers across model sizes within a family rather than being a
-    curve to extrapolate.
-    """
-    per_arch: dict[str, list[tuple[float, str]]] = defaultdict(list)
-    for cell in cells:
-        if cell["quantised"]:
-            continue
-        residual = (cell["measured_mib"] * 1024 ** 2 / cell["ubatch"]
-                    - MASK_BYTES_PER_TOKEN_PAIR * cell["n_kv"])
-        per_arch[cell["arch"]].append(
-            (residual / (cell["n_embd"] * 4), cell["label"]))
-    return per_arch
 
 
-def derive_tensor_intermediates(rows: list[dict]) -> str:
-    """The `K` table, plus the fallback for an architecture with no cells."""
-    per_arch = _tensor_intermediates(tensor_compute_cells(rows))
-    if not per_arch:
-        raise ValueError("no flash-attention tensor-split cells with an f16 cache")
-    _TENSOR_INTERMEDIATES.clear()
-    for arch, values in per_arch.items():
-        # Rounded up, and the worst cell within the architecture: the packer
-        # charges this to every spanned GPU and under-reserving a card OOMs.
-        _TENSOR_INTERMEDIATES[arch] = math.ceil(max(v for v, _ in values))
-    fallback = max(_TENSOR_INTERMEDIATES.values())
-    return (
-        "n_embd-wide f32 graph intermediates per batch token, from the "
-        "tensor-split compute column net of the f16 KQ mask: "
-        + ", ".join(f"{a} {v}" for a, v in sorted(_TENSOR_INTERMEDIATES.items()))
-        + f". Worst cell per architecture, rounded up. The fallback {fallback} "
-        f"is the largest, since an unmeasured architecture must not "
-        f"under-reserve."
-    )
 
 
-def derive_tensor_quantised(rows: list[dict]) -> str:
-    """Extra tensor-split compute a quantised KV cache costs, per context token.
-
-    A quantised cache is dequantised into the compute buffer, and the buffer
-    grows with the **full** context rather than with one stream's share of it:
-    Qwen3-4B at ctx 32768 shows the same absolute increase at one slot and at
-    four, where a term following the mask would have quartered. Some
-    architectures show none at all (llama, talkie), so it is a per-architecture
-    rate with a zero default rather than one number.
-    """
-    cells = tensor_compute_cells(rows)
-    intermediates = {a: math.ceil(max(v for v, _ in vs))
-                     for a, vs in _tensor_intermediates(cells).items()}
-    per_arch: dict[str, list[float]] = defaultdict(list)
-    for cell in cells:
-        if not cell["quantised"] or cell["arch"] not in intermediates:
-            continue
-        modelled = (intermediates[cell["arch"]] * cell["n_embd"] * 4
-                    + MASK_BYTES_PER_TOKEN_PAIR * cell["n_kv"])
-        residual = cell["measured_mib"] * 1024 ** 2 / cell["ubatch"] - modelled
-        per_arch[cell["arch"]].append(max(0.0, residual) / cell["context"])
-    if not per_arch:
-        raise ValueError("no tensor-split cells with a quantised cache")
-    _TENSOR_QUANTISED.clear()
-    for arch, values in per_arch.items():
-        _TENSOR_QUANTISED[arch] = math.ceil(max(values))
-    return (
-        "extra bytes per (batch token x context token) with a quantised cache: "
-        + ", ".join(f"{a} {v}" for a, v in sorted(_TENSOR_QUANTISED.items()))
-        + ". Worst cell per architecture. The default is 0: llama and talkie "
-        "measure no increase at all, so an unmeasured architecture is charged "
-        "nothing here rather than inheriting a rate that may not apply to its "
-        "graph."
-    )
 
 
 def derive_no_flash_attn_score(rows: list[dict]) -> str:
@@ -1187,47 +1055,6 @@ def derive_mtp_compute_intermediates(rows: list[dict]) -> str:
     )
 
 
-def derive_tensor_shadow(rows: list[dict]) -> str:
-    """VRAM each device holds that llama.cpp cannot attribute, by architecture.
-
-    The CUDA context, cuBLAS workspaces, and the driver's own per-process
-    bookkeeping. It shows up as the `unaccounted` column, which is only a
-    per-device figure on a **single-device** run: with two cards a tensor split
-    reports one fused device whose total is summed across both, so the same
-    column reads 23 GiB there and means something else entirely.
-
-    So it is derived from single-device cells only, and taken as the worst
-    within each architecture rather than the typical one — the packer charges
-    it to every spanned GPU and under-reserving a card OOMs the load. The
-    spread across architectures is real (deepseek4 holds 468 MiB against
-    qwen3's 345), which is why it is a table and not a constant.
-
-    The layer-split curves fold the same quantity into their own fit; this
-    table exists because the tensor-split model deliberately does not, the
-    compute column being the only part of that fused row that survives.
-    """
-    per_arch: dict[str, list[int]] = defaultdict(list)
-    for record in rows:
-        factors, parsed = record["factors"], record["parsed"]
-        if len(factors["gpus"].split(",")) != 1:
-            continue
-        for device in parsed.get("devices", []):
-            if device["unaccounted_mib"]:
-                per_arch[parsed["arch"]].append(device["unaccounted_mib"])
-    if not per_arch:
-        raise ValueError("no single-device cell reports an unaccounted remainder")
-    _TENSOR_SHADOW.clear()
-    for arch, values in per_arch.items():
-        _TENSOR_SHADOW[arch] = max(values) * 1024 * 1024
-    return (
-        "worst `unaccounted` column per architecture across single-device rows: "
-        + ", ".join(f"{a} {v // 1024 // 1024} MiB"
-                    for a, v in sorted(_TENSOR_SHADOW.items()))
-        + ". Single-device only: a fused tensor-split row sums the column "
-        "across cards and reads in the thousands. Reconciles the production "
-        "Qwen3.6-35B-A3B cell, whose driver total exceeds its accounted terms "
-        "by 356 MiB per card against the 355 its architecture measures here."
-    )
 
 
 def derive_spec_rollback_depth(rows: list[dict]) -> tuple[int, str]:
@@ -1327,68 +1154,6 @@ def derive_checkpoint_headroom(rows: list[dict]) -> str:
     )
 
 
-def derive_quantised_kv_compute(rows: list[dict]) -> tuple[int, str]:
-    """Extra *GPU* compute a quantised KV cache costs, per context-token byte.
-
-    The host side of a quantised cache is already modelled. The GPU side was
-    not, and it is much larger: paired cells differing in nothing but
-    `cache_type_*` show the per-device compute buffer up to 394 MiB higher at
-    ctx 65536, with gemma3 at 1.86x, qwen3 at 1.95x, gemma4 at 1.77x.
-
-    It was being absorbed into the compute *curves*, which are fitted from the
-    worst cell at each context and did not key on cache type — so one
-    quantised cell at a long context set the slope, and every f16 service paid
-    it. That is the whole of gemma3 reserving 1918 MiB against 562 taken.
-
-    Normalised by `ctx x n_tokens` because that is what the score matrix it
-    perturbs scales with. The rate is not constant across architectures or
-    contexts — zero below ctx 8192 for everything, and zero at every context
-    for deepseek4, laguna, llama, and qwen35moe — so the worst is charged to
-    all, which over-reserves an f16-sized cache by nothing and a quantised one
-    by at most a few hundred MiB.
-    """
-    from collections import defaultdict as _dd
-    pairs: dict[tuple, dict[str, int]] = _dd(dict)
-    for record in rows:
-        parsed, factors = record["parsed"], record["factors"]
-        if factors["spec_type"] or not parsed.get("devices"):
-            continue
-        devices = [d for d in parsed["devices"]
-                   if not d["device"].startswith(("Meta", "CPU")) and d["compute_mib"]]
-        if not devices:
-            continue
-        # `n_cpu_moe` belongs in the key. Without it a resident cell pairs
-        # with a hybrid one — qwen35moe read 116 MiB against 486 at ctx 8192,
-        # a "4.19x cache-type effect" that is entirely the expert placement.
-        # Its true same-placement pair is 486 against 486, i.e. nothing.
-        key = (parsed.get("arch"), factors["runtime"], factors["ctx"], factors["ubatch"],
-               factors["gpus"], factors["split"] or "layer", factors["parallel"],
-               bool(factors["kv_unified"]), factors["flash_attn"],
-               factors["n_cpu_moe"] or 0)
-        pairs[key][factors["kv_type"]] = max(d["compute_mib"] for d in devices)
-
-    rates = []
-    for key, pair in pairs.items():
-        if "f16" not in pair:
-            continue
-        for kind, taken in pair.items():
-            if kind == "f16":
-                continue
-            tokens = min(key[2], key[3])
-            rates.append((taken - pair["f16"]) * 1024**2 / (key[2] * tokens))
-    if not rates:
-        raise ValueError("no cells differing only in cache type")
-    worst = max(rates)
-    return math.ceil(worst), (
-        f"{len(rates)} pairs differing in nothing but the cache type, "
-        f"normalised by ctx x n_tokens. Rates run {min(rates):.1f} to "
-        f"{worst:.1f} bytes and are zero at ctx 8192 for everything and at "
-        f"every context for deepseek4, laguna, llama, and qwen35moe, so the "
-        f"worst is charged to all. Previously absorbed into the compute "
-        f"curves, which are fitted from the worst cell per context and did not "
-        f"key on cache type, so one quantised cell set the slope and every f16 "
-        f"service paid it."
-    )
 
 
 def derive_quantised_cache_bytes(rows: list[dict]) -> tuple[int, str]:
@@ -1597,6 +1362,8 @@ def derive_offload_min_batch(rows: list[dict]) -> tuple[int, str]:
 # to be lowercase. A constant absent from here is an error, so adding one
 # forces the question of what justifies it.
 KINDS = {
+    # ik_llama's `-amb` default, read from the runtime rather than fitted.
+    "IK_ATTENTION_CHUNK": "structural",
     # Read from llama.cpp's source or arithmetic over the graph; not fitted.
     "KV_CACHE_PAD": "structural",
     "TENSOR_MASK_BYTES_PER_TOKEN_PAIR": "structural",
@@ -1985,6 +1752,9 @@ def _fit_mtp_slot_model(rows: list[dict]) -> dict[str, int]:
 
 
 _MTP_SLOTS: list[str] = []
+_MTP_DRAFT_BASE: dict[str, int] = {}
+_MTP_DRAFT_SLOPE: dict[str, int] = {}
+_MTP_DRAFT_EVIDENCE: list[str] = []
 _IK_RATES: dict[str, int] = {}
 _QUANT_RATES: dict[str, int] = {}
 _NO_FA_RATES: dict[str, int] = {}
@@ -2039,6 +1809,7 @@ def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]
         owned = lambda r: ((r["rss"].get("rss_anon_kb", 0)
                             + r["rss"].get("rss_shmem_kb", 0)) // 1024)
         on["_host_delta"] = owned(on) - owned(off)
+        on["_mtp_pair_without"] = off
         out.append((key[0], key[1], delta, on))
     return out
 
@@ -2104,108 +1875,6 @@ def table_less_compute(record: dict) -> float | None:
     return remainder / devices if remainder > 0 else None
 
 
-def derive_ik_compute(rows: list[dict]) -> str:
-    """ik's per-device layer-split compute buffer, by architecture.
-
-    The fork's compute buffer has a shape the affine curves cannot express, and
-    the sweep that shows it varies batch and context independently:
-
-        compute = flat
-                + per_batch_token x min(ubatch, CHUNK)
-                + per_doubling x log2(max(ubatch, CHUNK) / CHUNK)
-                + per_token_pair x ubatch x n_kv
-
-    The third term is the surprise. Above ik's attention chunk the buffer grows
-    by a *constant* per doubling of the batch rather than in proportion to it:
-    Qwen3.6-35B-A3B measures 719, 1227, and 1732 MiB at ubatch 512, 1024, and
-    2048, which is two equal steps of ~505. Below the chunk it is linear
-    (ubatch 256 measures 586). An affine curve fitted at ubatch 512 misses the
-    2048 cells by 30-40%.
-
-    The fourth term is the mask, and its width is what distinguishes the
-    architectures: one byte per (batch token, cache token) for qwen35moe's full
-    attention, ~3 for laguna, ~20 for glm-dsa — whose DSA indexer scores every
-    cache token and so carries far more per token than a mask alone.
-
-    Fitted on **two-card** cells only. Per-device compute genuinely differs by
-    card count under a layer split — the head card also materialises the logits
-    — and pooling the two put a 1-card reading 177 MiB above the 2-card fit for
-    the same (context, batch).
-    """
-    per_arch: dict[str, dict[tuple[int, int], float]] = defaultdict(dict)
-    for record in rows:
-        factors, parsed = record["factors"], record["parsed"]
-        if factors["runtime"] != "ik" or factors["flash_attn"] != "on":
-            continue
-        if factors["kv_type"] != "f16" or factors["spec_type"]:
-            continue
-        if len([g for g in factors["gpus"].split(",") if g]) != 2:
-            continue
-        measured = table_less_compute(record)
-        if not measured:
-            continue
-        key = (factors["ctx"], factors["ubatch"] or 512)
-        seen = per_arch[parsed["arch"]]
-        # The worst reading at each point: the reservation has to cover it.
-        seen[key] = max(seen.get(key, 0.0), measured)
-
-    _IK_COMPUTE.clear()
-    detail: list[str] = []
-    rejected: list[str] = []
-    for arch, points in sorted(per_arch.items()):
-        if len({ub for _ctx, ub in points}) < 3 or len({c for c, _ub in points}) < 2:
-            continue
-        design = [_ik_compute_terms(ub, ctx) for ctx, ub in points]
-        target = list(points.values())
-        solution = _least_squares(design, target)
-        if solution is None:
-            continue
-        worst = max(
-            abs(sum(c * t for c, t in zip(solution, _ik_compute_terms(ub, ctx))) - y)
-            for (ctx, ub), y in points.items())
-        # An architecture whose measurements this shape does not describe is
-        # left out, so it falls back to its curve rather than being estimated by
-        # a model that does not fit it. glm-dsa is the case that motivates the
-        # gate: eight candidate shapes, the best 19% out at worst, and — the
-        # part that matters — *under*-reserving by up to 560 MiB at short
-        # context. Its sparse-attention indexer selects the top 2048 of the
-        # whole cache per query, and its compute grows with context faster than
-        # a mask does: the ubatch-1024 column rises 1887, 2017, 2289, 2977 with
-        # increments that double each time the context does. Nothing in this
-        # four-term shape can produce that.
-        if worst > IK_COMPUTE_WORST_RESIDUAL_MIB:
-            rejected.append(f"{arch} ({worst:.0f} MiB worst residual)")
-            continue
-        flat, per_batch_token, per_doubling, per_pair = solution
-        _IK_COMPUTE[arch] = {
-            "flat_bytes": max(0, round(flat * 1024 ** 2)),
-            "per_batch_token_bytes": max(0, round(per_batch_token * 1024 ** 2)),
-            "per_doubling_bytes": max(0, round(per_doubling * 1024 ** 2)),
-            # Already bytes: the design column is `ub x n_kv / 2^20`, so its
-            # coefficient is MiB per (2^20 token-pairs), which is bytes per one.
-            "per_token_pair_bytes": max(0, round(per_pair)),
-        }
-        detail.append(f"{arch} {len(points)} cells, worst residual {worst:.0f} MiB")
-    if not _IK_COMPUTE:
-        raise ValueError("no architecture has ik cells across three batches "
-                         "and two contexts")
-    return (
-        "least squares on two-card ik cells of `flat + per_batch_token x "
-        "min(ub, 512) + per_doubling x log2(ub/512) + per_token_pair x ub x "
-        "n_kv`: " + "; ".join(detail)
-        + ". The per-doubling term is what an affine curve cannot carry — above "
-        "ik's 512-token attention chunk the buffer grows by a constant per "
-        "doubling of the batch, not in proportion to it."
-        + (f" Left out because this shape does not describe them: "
-           f"{', '.join(rejected)}; they keep their fitted curve instead."
-           if rejected else "")
-    )
-
-
-# How far the ik compute model may miss an architecture's worst cell before that
-# architecture is left out of the table entirely. Chosen so a model that does not
-# describe an architecture cannot silently *under*-reserve it: glm-dsa misses by
-# 560 MiB in that direction, against qwen35moe's 8 and laguna's 44.
 IK_COMPUTE_WORST_RESIDUAL_MIB = 100
 
 
@@ -2216,14 +1885,6 @@ IK_COMPUTE_WORST_RESIDUAL_MIB = 100
 IK_ATTENTION_CHUNK = 512
 
 
-def _ik_compute_terms(ubatch: int, n_kv: int) -> list[float]:
-    """The four design-matrix columns of the ik compute model."""
-    return [
-        1.0,
-        float(min(ubatch, IK_ATTENTION_CHUNK)),
-        math.log2(max(ubatch, IK_ATTENTION_CHUNK) / IK_ATTENTION_CHUNK),
-        float(ubatch) * n_kv / 1024 ** 2,
-    ]
 
 
 def _least_squares(design: list[list[float]], target: list[float]) -> list[float] | None:
@@ -2379,184 +2040,156 @@ def report_table_less_compute(rows: list[dict]) -> str:
         f"{arch} at {len(points)} points" for arch, points in sorted(_TABLE_LESS.items()))
 
 
-def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
-                 e_variant: bool | None = None, split: str = "layer"):
-    """Fit one architecture's compute curve to what it actually needed.
 
-    Under a layer split the target is llama.cpp's own `compute` column plus its
-    `unaccounted` remainder — the CUDA context and whatever else sits outside
-    its books — since that is what the packer must cover beyond weights and KV.
 
-    Under a **tensor** split the target is the `compute` column alone. That
-    split reports one fused `Meta()` device whose `total`, `free`, and `self`
-    are summed across cards while `model`, `kv`, and `compute` are one card's
-    share, so its `unaccounted` remainder is not a per-device figure at all —
-    23 GiB of it on the gemma4 production cell. The genuine per-device
-    remainder is derived separately as
-    `TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB` and charged beside the curve, which
-    keeps two quantities that were measured differently from being fitted as
-    one.
+def _device_context_sums(record: dict) -> list[dict]:
+    """Per-context device-side buffer sums for one cell, in MiB.
 
-    The compute column itself, unlike the remainder, is directly comparable:
-    it reads the same on one card as on two at every context measured, because
-    llama.cpp builds the same graph on each device rather than dividing one.
-    That is also why the sharded packer charges this curve *per* spanned GPU
-    instead of splitting it between them.
+    Host buffers are excluded — `CUDA_Host` is page-locked *host* memory, not
+    VRAM, and folding it in overstates the draft context's device cost by the
+    40 MiB it holds. `Meta()` is one card's share under a tensor split, so the
+    caller multiplies by the card count.
 
-    Only the calibration batch feeds the main fit, because the slope is scaled
-    by batch at the point of use.
+    Identical consecutive entries are collapsed: the load log prints the draft
+    context twice, once at creation and once at reserve.
     """
-    def deriver(rows: list[dict]) -> tuple[int, str]:
-        # Collect per-run average (compute + unaccounted) / n_gpus at each
-        # (context, ubatch) point. The packer charges compute_buffer_mb per
-        # GPU, so the per-run average is the value the curve must reproduce:
-        # n_gpus × compute_buffer_mb = total measured compute + unaccounted.
-        by_ctx_ub: dict[tuple[int, int], list[float]] = defaultdict(list)
-        for record in rows:
-            parsed, factors = record["parsed"], record["factors"]
-            if parsed.get("arch") not in archs:
-                continue
-            if any(m in record["provenance"]["model_key"] for m in exclude_models):
-                continue
-            if e_variant is not None and \
-                    bool(parsed.get("per_layer_token_embd")) != e_variant:
-                continue
-            if factors["spec_type"] or factors["flash_attn"] != "on":
-                continue
-            if (factors["split"] or "layer") != split:
-                continue
-            # All kv_types are included: the curve must cover the worst-case
-            # cell at each context, which is often a quantised-cache run.
-            # The quantised-KV compute term was removed from the estimator
-            # because it was absorbed into the curves this way — a quantised
-            # cache *reduces* total VRAM (smaller KV outweighs the compute
-            # increase), so a separate charge double-counted.
-            if not parsed.get("devices"):
-                # ik_llama prints no memory-breakdown table. Its cells are
-                # readable now — `table_less_compute` recovers the same
-                # quantity from the driver total — but they are deliberately
-                # *not* pooled into these curves: the two runtimes build
-                # different graphs for the same architecture, and mixing them
-                # moved four curves at once when it was tried. An ik-only
-                # architecture needs its own entry, not a share of a mainline
-                # one. See `report_table_less_compute`.
-                continue
-            if split == "tensor":
-                # One fused `Meta()` row, whose compute column is already a
-                # per-device figure. Its own `unaccounted` is not, so it is
-                # left out and carried by the shadow constant instead.
-                devs = [d for d in parsed["devices"]
-                        if d["compute_mib"] and d["device"].startswith("Meta")]
-                if not devs:
-                    continue
-                per_dev = max(d["compute_mib"] for d in devs)
-            else:
-                devs = [d for d in parsed["devices"]
-                        if d["compute_mib"] and not d["device"].startswith("Meta")]
-                if not devs:
-                    continue
-                total = sum(d["compute_mib"] + d["unaccounted_mib"] for d in devs)
-                per_dev = total / len(devs)
-            by_ctx_ub[(factors["ctx"], factors["ubatch"])].append(per_dev)
-        # Group by context at the calibration batch (ub=512) for the main fit.
-        # Use the max per-run average at each context: the packer charges the
-        # same compute_buffer_mb to every GPU, so the curve must cover the
-        # worst-case per-device need, not the average — under-reserving OOMs.
-        by_ctx: dict[int, list[float]] = defaultdict(list)
-        for (ctx, ub), vals in by_ctx_ub.items():
-            if ub == 512:
-                by_ctx[ctx].extend(vals)
-        if len(by_ctx) < 2:
-            raise ValueError(f"{'/'.join(archs)}: fewer than two contexts")
-        # Least-squares fit of y = a + b*(ctx/1024) to the max per-run
-        # average at each context. This is the curve the packer uses at
-        # ub=512: compute_buffer_mb = base + base_batch + slope*(ctx/1024).
-        # The batch-scaling term (base_batch) is fitted separately from
-        # larger ubatch points.
-        from statistics import mean
-        ctx_points = sorted(by_ctx)
-        xs = [c / 1024 for c in ctx_points]
-        ys = [max(by_ctx[c]) for c in ctx_points]
+    out: list[dict] = []
+    for context in record["parsed"].get("contexts", []):
+        device = {name: buffers for name, buffers in context["buffers"].items()
+                  if not name.endswith("_Host") and not name.startswith("CPU")}
+        entry = {
+            "kv": sum(pool["total_mib"] for pool in context.get("kv_pools") or []),
+            "rs": sum(b.get("rs", 0.0) for b in device.values()),
+            "compute": sum(b.get("compute", 0.0) for b in device.values()),
+        }
+        if entry not in out:
+            out.append(entry)
+    return out
+
+
+def derive_mtp_unaccounted(rows: list[dict]) -> tuple[int, str]:
+    """What an MTP process takes per device beyond every buffer llama.cpp names.
+
+    The driver delta between a with-MTP cell and its without-MTP twin decomposes
+    almost entirely into buffers the runtime reports: the draft context's cache
+    and graph, the extra recurrent rollback copies in the main context, and a
+    small growth in the main context's own graph. What is left over is constant
+    in the slot count — 52 MiB at one slot and at four alike on one card, 172 and
+    174 on two — so it is a per-device cost of standing up a second context that
+    the runtime's own books do not carry.
+
+    Deriving it is what turns the MTP model from a fitted constant into an
+    accounting identity: every term above is measured or modelled, and this is
+    the residual.
+    """
+    per_device, detail = [], []
+    for _model, ctx, delta, record in _mtp_pairs(rows, draft=False):
+        without = record.get("_mtp_pair_without")
+        if without is None:
+            continue
+        cards = max(1, len([g for g in record["factors"]["gpus"].split(",") if g]))
+        on, off = _device_context_sums(record), _device_context_sums(without)
+        if len(on) < 2 or not off:
+            continue
+        draft, main_on, main_off = on[0], on[-1], off[-1]
+        named = (draft["kv"]
+                 + cards * draft["compute"]
+                 + cards * (main_on["rs"] - main_off["rs"])
+                 + cards * (main_on["compute"] - main_off["compute"]))
+        gap = (delta - named) / cards
+        if gap <= 0:
+            continue
+        per_device.append(gap)
+        detail.append(f"{record['parsed']['arch']} {cards}card "
+                      f"np{record['factors']['parallel']} ctx{ctx} {gap:.0f}")
+    if not per_device:
+        raise ValueError("no embedded-MTP pair with a full context breakdown")
+    # The largest, so a model measured on one card is not under-reserved when
+    # spread across more.
+    return round(max(per_device)), (
+        f"{len(per_device)} paired with/without cell(s), as the driver delta less "
+        f"every buffer llama.cpp names — the draft context's cache and graph, the "
+        f"extra recurrent rollback copies, and the main graph's growth — over the "
+        f"card count: {'; '.join(detail)} MiB/device. Flat in the slot count, "
+        f"which is what makes it a per-context cost rather than a share of one of "
+        f"the terms above. The largest is taken."
+    )
+
+
+def derive_mtp_draft_compute(rows: list[dict]) -> tuple[dict[str, int], dict[str, int], str]:
+    """The MTP draft context's own compute buffer, per device, by architecture.
+
+    Taken from what the runtime reports for that context and nothing else. The
+    `[spec] estimated memory usage of MTP context is N MiB` line is exact for the
+    draft context — 258 MiB for Qwen3.6-27B at ctx 32768 is precisely the 128 MiB
+    cache plus the 130 MiB the load log then shows as that context's device
+    compute — so the quantity wanted here is `reported - cache`, read straight
+    off.
+
+    What the old model got wrong was not the magnitude but the *shape*. It built
+    the share from an f16 KQ mask over one stream's share of the context, which
+    is wrong twice over: the draft context keeps a single cache spanning every
+    cell, so `--parallel` does not narrow it (130.02 MiB at one, two, and four
+    slots alike), and the width itself is far below a full mask — the share grows
+    0.36 MiB per 1024 tokens on qwen35 and 0.45 on qwen35moe, against the 1.00 a
+    full `ubatch x n_kv x 2` mask would cost at ubatch 512.
+
+    So it is fitted as `base + slope x (ctx / 1024)` per architecture, which the
+    measured points support to within 26 MiB across a 32768-to-524288 range.
+    """
+    by_arch: dict[str, dict[int, float]] = defaultdict(dict)
+    for record in rows:
+        factors, parsed = record["factors"], record["parsed"]
+        if not factors["spec_type"] or factors.get("draft"):
+            continue
+        contexts = parsed.get("contexts") or []
+        if len(contexts) < 2:
+            continue
+        draft = contexts[0]
+        cache = sum(pool["total_mib"] for pool in draft.get("kv_pools") or [])
+        share = sum(buffers.get("compute", 0.0)
+                    for name, buffers in draft["buffers"].items()
+                    if not name.endswith("_Host") and not name.startswith("CPU"))
+        if share <= 0:
+            continue
+        reported = parsed.get("mtp_context_mib")
+        # Cross-check the runtime's own summary line against the per-buffer
+        # lines, so a parse that picked up the wrong context is caught here
+        # rather than becoming a coefficient.
+        if reported and abs(reported - (cache + share)) > 1.0:
+            raise Disagreement(
+                f"{parsed['arch']} ctx {factors['ctx']}: [spec] reports "
+                f"{reported} MiB but the buffer lines sum to {cache + share}")
+        by_arch[parsed["arch"]][factors["ctx"]] = share
+
+    bases, slopes, detail = {}, {}, []
+    for arch, points in sorted(by_arch.items()):
+        if len(points) < 2:
+            continue
+        xs = [ctx / 1024 for ctx in sorted(points)]
+        ys = [points[ctx] for ctx in sorted(points)]
         n = len(xs)
-        sx, sy = sum(xs), sum(ys)
-        sxy = sum(x * y for x, y in zip(xs, ys))
-        sxx = sum(x * x for x in xs)
-        slope_raw = (n * sxy - sx * sy) / (n * sxx - sx * sx) if n * sxx != sx * sx else 0.0
-        intercept = (sy - slope_raw * sx) / n  # base + base_batch at ub=512
-        # Raise the intercept so the fitted line covers the worst point at
-        # every context. Least-squares to max values does not guarantee
-        # coverage — the line is pulled below the max at short contexts by
-        # the long ones — so this correction is necessary: under-reserving
-        # OOMs a load.
-        for c in ctx_points:
-            fitted = intercept + slope_raw * (c / 1024)
-            deficit = max(by_ctx[c]) - fitted
-            if deficit > 0:
-                intercept += deficit
-        # Fit base_batch from larger ubatch points. The Rust formula is:
-        # `base + base_batch*(ub/512) + slope*(ctx/1024)` — the slope does
-        # not scale with batch, only base_batch does.
-        # At k=1: `base + base_batch + slope*(ctx/1024)` = intercept + slope*(ctx/1024).
-        # The residual at k>1 from the k=1 line is `(k-1) * base_batch`.
-        batch_only = []
-        for (ctx, ub), vals in by_ctx_ub.items():
-            if ub <= 512:
-                continue
-            k = ub / 512
-            for v in vals:
-                residual = v - intercept - slope_raw * (ctx / 1024)
-                batch_only.append(residual / (k - 1))
-        base_batch = max(batch_only) if batch_only else 0.0
-        base_batch = max(0.0, base_batch)
-        # Raise base_batch so the formula covers the worst point at every
-        # (ctx, ub>512) combination, using the rounded base and slope.
-        # The Rust formula is: `base + base_batch*k + slope*(ctx/1024)`.
-        base_pre = max(0, round(intercept - base_batch))
-        slope_pre = max(1, round(slope_raw))
-        for (ctx, ub), vals in by_ctx_ub.items():
-            if ub <= 512:
-                continue
-            k = ub / 512
-            for v in vals:
-                fitted = base_pre + base_batch * k + slope_pre * (ctx / 1024)
-                while fitted < v:
-                    base_batch += 1 / k
-                    fitted = base_pre + base_batch * k + slope_pre * (ctx / 1024)
-        base = max(0, round(intercept - base_batch))
-        base_batch_mib = max(0, round(base_batch))
-        slope = max(1, round(slope_raw))
-        # Verify coverage with the rounded integer values the Rust code will
-        # use, and raise base until every ub=512 point is covered — the
-        # float fit and slope rounding can leave the integer curve below
-        # the measured integer.
-        for c in ctx_points:
-            fitted = base + base_batch_mib + slope * (c / 1024)
-            while fitted < max(by_ctx[c]):
-                base += 1
-                fitted += 1
-        # Add one MiB of headroom for the integer arithmetic mismatch: the
-        # Rust code uses `context / 1024` (integer division) and saturating
-        # addition, which can lose up to 1 MiB per term versus the float
-        # fit. This is a rounding correction, not a fudge factor.
-        base += 1
-        target = ("max per-device compute column" if split == "tensor"
-                  else "max per-run average (compute + unaccounted) / n_gpus")
-        tail = ("The unaccounted remainder is excluded and derived separately as "
-                "TENSOR_SPLIT_PER_DEVICE_SHADOW_MIB: the fused device sums it "
-                "across cards, so it is not a per-device figure."
-                if split == "tensor" else
-                "Tensor-split cells are excluded: they report one fused device "
-                "whose unaccounted remainder is an artifact of that "
-                "representation.")
-        evidence = (
-            f"least-squares fit of {target} to base + base_batch + "
-            f"slope*(ctx/1024), across "
-            f"{sum(len(v) for v in by_ctx.values())} {split}-split cells at ctx "
-            f"{ctx_points[0]}-{ctx_points[-1]} (ub 512, all kv_types). "
-            f"Intercept raised to cover the worst point at every context. "
-            f"Base_batch from {len(batch_only)} larger-ubatch cells. {tail}")
-        return base, evidence, slope, base_batch_mib
-    return deriver
+        mean_x, mean_y = sum(xs) / n, sum(ys) / n
+        sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+        sxx = sum((x - mean_x) ** 2 for x in xs)
+        slope = sxy / sxx if sxx else 0.0
+        base = mean_y - slope * mean_x
+        # Lift the base so the line covers every measured point: this term is a
+        # reservation, and the draft context is small enough that a few tens of
+        # MiB of headroom costs less than an OOM.
+        deficit = max((y - (base + slope * x) for x, y in zip(xs, ys)), default=0.0)
+        base += max(0.0, deficit)
+        bases[arch] = round(base)
+        slopes[arch] = round(slope * 1000)
+        detail.append(f"{arch} {len(points)} context(s) {base:.0f}+{slope:.3f}/1k")
+    if not bases:
+        raise ValueError("no embedded-MTP architecture measured at two contexts")
+    return bases, slopes, (
+        f"read from the runtime's own draft-context buffers, cross-checked "
+        f"against its [spec] line: {'; '.join(detail)}. The slope is stored per "
+        f"1000 of `ctx / 1024`. Flat in the slot count, the draft cache spanning "
+        f"every cell rather than one stream's share."
+    )
 
 
 def derive_compute_model(rows: list[dict]) -> tuple[dict, list[str]]:
@@ -2574,106 +2207,19 @@ def derive_compute_model(rows: list[dict]) -> tuple[dict, list[str]]:
     return compute_model.document_section(groups)
 
 
-def derive_deepseek4_curve(rows: list[dict]) -> tuple[int, str]:
-    """deepseek4's compute-buffer base, over the regime this hardware reaches.
-
-    The architecture cannot be run GPU-resident on 48 GiB of VRAM — the
-    weights alone want 48.5 GiB on one card — so every measurable
-    configuration is a high-offload hybrid. In that regime the buffer is flat.
-    """
-    points = []
-    for record in rows:
-        parsed, factors = record["parsed"], record["factors"]
-        if parsed.get("arch") != "deepseek4" or not parsed.get("devices"):
-            continue
-        if factors["flash_attn"] != "on":
-            continue
-        device = parsed["devices"][0]
-        points.append((factors["ctx"], device["compute_mib"] + device["unaccounted_mib"]))
-    if len(points) < 3:
-        raise ValueError("too few deepseek4 cells")
-    contexts = sorted({c for c, _ in points})
-    per_ctx = {c: st.median(v for cc, v in points if cc == c) for c in contexts}
-    spread = max(per_ctx.values()) - min(per_ctx.values())
-    value = round(max(per_ctx.values()) * 1.05 / 100) * 100
-    return value, (
-        f"{len(points)} cells over ctx {min(contexts)}-{max(contexts)}: the "
-        f"compute buffer plus its unaccounted share moves {spread:.0f} MiB across "
-        f"that range, i.e. it is flat. Base set {value} MiB with 5% headroom and "
-        "the slope left nominal. LIMITATION: this architecture cannot be run "
-        "GPU-resident on 48 GiB of VRAM, so the steep context scaling the "
-        "previous slope encoded is untestable here and may be real on a larger "
-        "machine."
-    )
-
-
-# Curves are derived separately: they live in the ordered table rather than
-# among the scalars, and a deriver returns a base, a slope and its evidence.
-# `derive_deepseek4_curve` below is superseded and kept only as the record of
-# what the hold-out was protecting. Its argument was that the curve covers a
-# 9.3 GiB residual at ctx 131072 that llama.cpp's own compute column, at 2.0
-# GiB, does not describe. The sweep retires it: the total measured GPU
-# footprint is 15496 MiB at ctx 8192 and 16425 at 131072, a difference of 929
-# MiB and exactly the KV growth, so any residual beyond the compute column is
-# *flat in context*. A flat residual cannot justify a context slope — it is
-# equally present at 8192, where the old curve reserved 2428 MiB. deepseek4 is
-# therefore fitted by the general deriver like everything else.
-# Keyed by the entry each targets, not by architecture: `llama` and `qwen3`
-# share the default curve, so it has to cover the worse of the two rather than
-# be written twice, and gemma4 has a variant-guarded entry that must be fitted
-# separately from the general one.
-CURVE_DERIVERS = {
-    # One entry covers gemma2, gemma3 and gemma4, so it is fitted over all of
-    # them at once; the E-variant has its own entry and its model is held out.
-    # Fitted like every other architecture now. Held out until the sweep could
-    # answer the question: the worst per-device need is 2398 MiB at ctx 8192
-    # and 2396 at 131072, so the curve's context slope described nothing. See
-    # `derive_deepseek4_curve` below for what the hold-out was protecting and
-    # why the measurements retire it.
-    "deepseek4": derive_curve(("deepseek4",)),
-    # The variant-guarded entry, fitted from the E-variant's own cells. It was
-    # the one curve nobody derived: a hand-set 1100/7 that stayed put while
-    # every other curve moved, which is how it came to sit *above* the general
-    # gemma curve after that one was corrected.
-    "gemma4@gemma_e": derive_curve(("gemma4",), e_variant=True),
-    # Its own entry, ahead of the shared one, because the shared slope
-    # extrapolates badly past the sweep's range: at ctx 240000 it asks 3083 MiB
-    # per device where gemma-4-31B's own cells (584 at ctx 8192, 680 at 32768,
-    # 808 at 65536) describe a curve a quarter as steep. gemma2 and gemma3 keep
-    # the shared entry, which their own cells still fit.
-    "gemma4": derive_curve(("gemma4",), e_variant=False),
-    "gemma3": derive_curve(("gemma2", "gemma3"), e_variant=False),
-    "laguna": derive_curve(("laguna",)),
-    "lfm2": derive_curve(("lfm2",)),
-    "qwen35": derive_curve(("qwen35",)),
-    "qwen35moe": derive_curve(("qwen35moe",)),
-    "talkie": derive_curve(("talkie",)),
-    # Its own entry rather than the shared default. The default has to cover
-    # the worse of llama and qwen3 *and* serve as the fallback for an
-    # architecture nobody has measured, and the batch term amplifies that
-    # spread: pooled, qwen3 reserved 3.5x what it took.
-    "qwen3": derive_curve(("qwen3",)),
-    "default": derive_curve(("llama", "qwen3")),
-}
-
-
-# The MTP overhead model carries both an affine KV term (intercept + slope × ctx,
-# constant across slots) and a per-slot overhead + base. This replaces the
-# held-back `derive_mtp_embedded_compute`, which could not model the slot-count
-# dependence and was kept high to compensate.
 DERIVERS = {
     "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD": derive_mainline_tensor_moe,
     "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN": derive_gemma_e_per_layer_token,
     "PROCESS_BASE_BYTES_PER_DEVICE": derive_per_device_bytes,
     "MAINLINE_LAYER_SPLIT_MASK_COPIES": derive_layer_split_copies,
     "IK_OP_OFFLOAD_MIN_BATCH": derive_offload_min_batch,
-    "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": derive_quantised_kv_compute,
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": derive_draft_compute_slope,
     "MTP_HOST_BYTES_EMBEDDED": derive_mtp_host_embedded,
     "MTP_HOST_BYTES_SEPARATE_DRAFT": derive_mtp_host_separate,
     "MTP_HOST_MIB_PER_1K": derive_mtp_host_slope,
     "SPEC_RECURRENT_ROLLBACK_DEPTH": derive_spec_rollback_depth,
     "MMPROJ_GRAPH_BYTES": derive_mmproj_graph,
+    "MTP_UNACCOUNTED_MIB_PER_DEVICE": derive_mtp_unaccounted,
 }
 
 
@@ -2802,21 +2348,6 @@ def check_table_signs(document: dict) -> None:
             )
 
 
-def curve_entry(section: dict, key: str) -> dict | None:
-    """The curve-table entry a deriver key names, or `None` if absent.
-
-    `default` is the fallback entry; `arch@variant` is the variant-guarded one;
-    a bare architecture name is the *unguarded* entry, since a variant-guarded
-    one describes a different graph and is fitted separately.
-    """
-    if key == "default":
-        return section["default"]
-    if "@" in key:
-        name, variant = key.split("@", 1)
-        return next((e for e in section["entries"]
-                     if name in e["archs"] and e.get("variant") == variant), None)
-    return next((e for e in section["entries"]
-                 if key in e["archs"] and not e.get("variant")), None)
 
 
 def emit(rows: list[dict], path: Path, check: bool) -> int:
@@ -2875,12 +2406,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"per-slot host bytes: cannot derive — {error}")
     for name, table_deriver in (("table-less compute observations", report_table_less_compute),
-                                ("ik compute model", derive_ik_compute),
-                                ("unfused-attention score rates", derive_no_flash_attn_score),
-                                ("MTP compute intermediates", derive_mtp_compute_intermediates),
-                                ("tensor compute intermediates", derive_tensor_intermediates),
-                                ("tensor quantised-cache rates", derive_tensor_quantised),
-                                ("tensor per-device shadow", derive_tensor_shadow)):
+                                ("unfused-attention score rates", derive_no_flash_attn_score)):
         try:
             table_deriver(rows)
         except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
@@ -2921,30 +2447,6 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         entry["evidence"] = evidence
         entry["kind"] = "derived"
 
-    for arch, deriver in CURVE_DERIVERS.items():
-        entry = curve_entry(document["compute_buffer_curves"], arch)
-        if entry is None:
-            failed.append(f"{arch}: curve deriver has no matching entry")
-            continue
-        try:
-            base, evidence, slope, base_batch = deriver(rows)
-        except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
-            failed.append(f"{arch} curve: cannot derive — {error}")
-            continue
-        if entry["base_mib"] != base:
-            changed.append(f"{arch} curve base: {entry['base_mib']} -> {base}")
-        if entry.get("slope_mib_per_1k") != slope:
-            changed.append(f"{arch} slope: {entry.get('slope_mib_per_1k')} -> {slope}")
-        if entry.get("base_batch_mib", 0) != base_batch:
-            changed.append(
-                f"{arch} base_batch: {entry.get('base_batch_mib', 0)} -> {base_batch}")
-        entry["base_batch_mib"] = base_batch
-        entry["base_mib"] = base
-        entry["slope_mib_per_1k"] = slope
-        entry["slope_scales_with_ubatch"] = True
-        entry["evidence"] = evidence
-
-
     for name, entry in constants.items():
         if name in DERIVERS:
             continue
@@ -2953,6 +2455,17 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             failed.append(f"{name}: no declared kind — add it to KINDS")
             continue
         entry["kind"] = kind
+
+    try:
+        bases, slopes, evidence = derive_mtp_draft_compute(rows)
+        _MTP_DRAFT_BASE.clear()
+        _MTP_DRAFT_BASE.update(bases)
+        _MTP_DRAFT_SLOPE.clear()
+        _MTP_DRAFT_SLOPE.update(slopes)
+        _MTP_DRAFT_EVIDENCE.clear()
+        _MTP_DRAFT_EVIDENCE.append(evidence)
+    except (ValueError, KeyError, ZeroDivisionError, StatisticsError, Disagreement) as error:
+        failed.append(f"MTP draft compute: cannot derive — {error}")
 
     try:
         section, coverage = derive_compute_model(rows)
@@ -2978,6 +2491,22 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "an architecture not listed.",
             "default": max(_TENSOR_BASE.values()),
             "by_arch": dict(sorted(_TENSOR_BASE.items())),
+        }
+    if _MTP_DRAFT_BASE:
+        document["mtp_draft_compute_base_mib"] = {
+            "$comment": "The MTP draft context's own per-device compute buffer at "
+                        "zero context, by architecture. " + _MTP_DRAFT_EVIDENCE[0],
+            "default": max(_MTP_DRAFT_BASE.values()),
+            "by_arch": dict(sorted(_MTP_DRAFT_BASE.items())),
+        }
+        document["mtp_draft_compute_mib_per_1k"] = {
+            "$comment": "Slope of the same buffer, in thousandths of a MiB per "
+                        "1024 context tokens. Far below the 1000 a full "
+                        "`ubatch x n_kv x 2` f16 mask would cost at ubatch 512, "
+                        "which is why the mask shape the old model assumed "
+                        "over-reserved at long contexts.",
+            "default": max(_MTP_DRAFT_SLOPE.values()),
+            "by_arch": dict(sorted(_MTP_DRAFT_SLOPE.items())),
         }
     if _MTP_SLOTS:
         document["mtp_slot_scaling"] = {

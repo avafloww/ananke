@@ -30,9 +30,9 @@
 use crate::{
     estimator::{
         tuning::{
-            DEFAULT_UBATCH, DRAFT_MODEL_COMPUTE_MIB, DRAFT_MODEL_COMPUTE_MIB_PER_1K,
-            MTP_COMPUTE_INTERMEDIATES, MTP_COMPUTE_INTERMEDIATES_DEFAULT,
-            TENSOR_MASK_BYTES_PER_TOKEN_PAIR,
+            DRAFT_MODEL_COMPUTE_MIB, DRAFT_MODEL_COMPUTE_MIB_PER_1K, MTP_DRAFT_COMPUTE_BASE_MIB,
+            MTP_DRAFT_COMPUTE_BASE_MIB_DEFAULT, MTP_DRAFT_COMPUTE_MIB_PER_1K,
+            MTP_DRAFT_COMPUTE_MIB_PER_1K_DEFAULT, MTP_UNACCOUNTED_MIB_PER_DEVICE,
         },
         types::EstimatorInputs,
     },
@@ -152,10 +152,21 @@ pub fn mtp_overhead_bytes(
         * (((key_length + value_length) as f64) * bytes_per_element) as u64
         * context;
     let devices = u64::from(inputs.visible_devices.max(1));
-    kv_bytes + devices * draft_compute_share_bytes(summary, arch, inputs)
+    kv_bytes
+        + devices
+            * (draft_compute_share_bytes(summary, arch, inputs)
+                + MTP_UNACCOUNTED_MIB_PER_DEVICE * 1024 * 1024)
 }
 
 /// One device's share of the MTP draft context's compute buffer.
+///
+/// This is the draft context's own graph. Two other things MTP costs are
+/// modelled elsewhere and must not be added here, or they are counted twice:
+/// the recurrent module's speculative rollback copies, which
+/// [`crate::estimator::recurrent`] scales by `parallel x (rs_seq + 1)` and which
+/// account for most of the driver delta's growth with the slot count (188 MiB at
+/// one slot against 754 at four, on Qwen3.6-35B-A3B), and the main context's own
+/// compute, which the unified compute model covers.
 ///
 /// The same two terms as the main context's — see
 /// [`crate::estimator::compute_buffer::tensor_split_per_device`] — because it
@@ -170,27 +181,32 @@ pub fn mtp_overhead_bytes(
 /// per-architecture count is taken from the worst cell and over-reserves the
 /// long contexts by that much.
 fn draft_compute_share_bytes(
-    summary: &GgufSummary,
+    _summary: &GgufSummary,
     arch: &str,
     inputs: &EstimatorInputs<'_>,
 ) -> u64 {
-    let n_embd = summary
-        .metadata
-        .get(&*format!("{arch}.embedding_length"))
-        .and_then(|v| v.as_u32())
-        .map(u64::from)
-        .unwrap_or(0);
-    let intermediates = MTP_COMPUTE_INTERMEDIATES
+    let base = rate(
+        MTP_DRAFT_COMPUTE_BASE_MIB,
+        arch,
+        MTP_DRAFT_COMPUTE_BASE_MIB_DEFAULT,
+    );
+    let slope = rate(
+        MTP_DRAFT_COMPUTE_MIB_PER_1K,
+        arch,
+        MTP_DRAFT_COMPUTE_MIB_PER_1K_DEFAULT,
+    );
+    let mib = base + slope * u64::from(inputs.context / 1024) / 1000;
+    mib * 1024 * 1024
+}
+
+/// A per-architecture rate, or the table's default.
+fn rate(table: &[(&str, u64)], arch: &str, fallback: u64) -> u64 {
+    table
         .iter()
         .find(|(a, _)| *a == arch)
         .map(|(_, v)| *v)
-        .unwrap_or(MTP_COMPUTE_INTERMEDIATES_DEFAULT);
-    let batch = u64::from(inputs.ubatch.unwrap_or(DEFAULT_UBATCH).max(1));
-    let n_kv = u64::from(inputs.context / inputs.streams().max(1));
-    batch * (intermediates * n_embd * F32_BYTES + TENSOR_MASK_BYTES_PER_TOKEN_PAIR * n_kv)
+        .unwrap_or(fallback)
 }
-
-const F32_BYTES: u64 = 4;
 
 fn meta_u32(summary: &GgufSummary, arch: &str, key: &str) -> Option<u32> {
     summary
@@ -328,17 +344,24 @@ mod tests {
             let modelled_cache = u64::from(kv_heads) * 512 * 2 * u64::from(context) / (1024 * 1024);
             assert_eq!(modelled_cache, cache, "{arch} draft cache");
 
-            // One share is `reported - cache`; two cards pay it twice.
+            // One share is `reported - cache`; two cards pay it twice. On top of
+            // the runtime's own books sits the per-device remainder the driver
+            // shows and the books do not — see
+            // `MTP_UNACCOUNTED_MIB_PER_DEVICE`, derived as the residual of the
+            // paired with/without deltas — so the reservation must exceed the
+            // reported figure by about that much rather than match it.
             let share = reported - cache;
+            let books = cache + 2 * share;
+            let expected = books + 2 * MTP_UNACCOUNTED_MIB_PER_DEVICE;
             assert!(
-                mib >= cache + 2 * share,
+                mib >= books,
                 "{arch}: {mib} MiB must cover the cache plus both cards' \
                  {share} MiB share"
             );
             assert!(
-                mib <= cache + 2 * share + 64,
-                "{arch}: {mib} MiB over-reserves against {} MiB",
-                cache + 2 * share
+                mib <= expected + 96,
+                "{arch}: {mib} MiB over-reserves against {expected} MiB \
+                 ({books} on the runtime's books plus the measured remainder)"
             );
         }
     }

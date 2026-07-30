@@ -8,7 +8,7 @@ use tracing::warn;
 use crate::{
     estimator::{
         compute_buffer,
-        types::{Estimate, NonLayer},
+        types::{Estimate, EstimatorInputs, NonLayer},
     },
     gguf::GgufSummary,
 };
@@ -25,7 +25,7 @@ const FALLBACK_WEIGHTS_HEADROOM_BYTES: u64 = 512 * 1024 * 1024;
 /// headroom landing in `weights_bytes`; no KV modelling; no per-layer
 /// split. Emits a warning so the operator knows rolling correction is
 /// the only tuning they'll get.
-pub fn estimate_fallback(summary: &GgufSummary, context: u32) -> Estimate {
+pub fn estimate_fallback(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
     warn!(
         architecture = %summary.architecture,
         "unknown architecture — using fallback estimator"
@@ -35,11 +35,11 @@ pub fn estimate_fallback(summary: &GgufSummary, context: u32) -> Estimate {
     Estimate {
         weights_bytes: weights,
         kv_per_token: 0,
-        // Unknown archs never hit the ubatch-sensitive deepseek4 curve, so
-        // the default ubatch is fine here. Flash attention is assumed on: an
-        // unknown architecture has no head count to size the unfused score
-        // matrix from, so the term would be zero regardless.
-        compute_buffer_mb: compute_buffer::default_for(summary, context, None, true),
+        // The compute model's pooled default entry, which is fitted across every
+        // measured architecture rather than borrowed from whichever one happens to
+        // be listed first. An unknown architecture has no head count to size an
+        // unfused score matrix from, so that term stays zero regardless.
+        compute_buffer_mb: compute_buffer::per_device_for(summary, inputs),
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
         mmproj_graph_bytes: 0,
@@ -59,13 +59,15 @@ pub fn estimate_fallback(summary: &GgufSummary, context: u32) -> Estimate {
         override_tensor_bytes: BTreeMap::new(),
         expert_layers: Vec::new(),
         expert_tensors: None,
-        context,
+        context: inputs.context,
         architecture: SmolStr::new(summary.architecture.as_str()),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     fn summary_with(total_bytes: u64, arch: &str) -> GgufSummary {
@@ -83,7 +85,31 @@ mod tests {
     #[test]
     fn fallback_applies_declared_scale_and_headroom() {
         let s = summary_with(1_000_000_000, "nonsense-arch");
-        let e = estimate_fallback(&s, 4096);
+        const EMPTY: &[String] = &[];
+        let inputs = EstimatorInputs {
+            name: "demo",
+            model: Path::new("/fake"),
+            mmproj: None,
+            context: 4096,
+            ubatch: None,
+            visible_devices: 1,
+            host_resident_experts: false,
+            split_mode: crate::config::validate::SplitMode::Layer,
+            cache_type_k: None,
+            cache_type_v: None,
+            override_tensor: EMPTY,
+            compute_buffer_mb: None,
+            allow_fallback: true,
+            mtp: false,
+            draft_model: None,
+            ik_llama: false,
+            ik_dsa: false,
+            parallel: None,
+            flash_attn: None,
+            kv_unified: None,
+            cache_ram_mb: None,
+        };
+        let e = estimate_fallback(&s, &inputs);
         // Assert against the named constants so the test tracks any
         // future re-tuning without silently drifting.
         assert_eq!(
