@@ -66,10 +66,53 @@ table but for one stale label. The oracles survive as tests — 31 derive tests 
 `tuning.json`, 604 archived logs against the recorded parses, and a fitter fixture —
 so the checks did not leave with the code.
 
-What is still Python is the **harness**: `measure.py` and `measure_one.py` spawn
-llama-server and sample `/proc` and `nvidia-smi`, and `plan.py` generates sweeps.
-`ananke-measure` holds the log *parser* those write through, so the record schema
-has one definition either way.
+The **harness** is Rust too, as `ananke-measure`'s `measure` binary. It spawns
+llama-server with a cell's flags, waits for `/health`, probes it, samples
+`/proc/<pid>/status` and `nvidia-smi` on the daemon's own two-second cadence, and
+appends one NDJSON record; it also holds the two maintenance passes over an
+existing dataset.
+
+```sh
+cargo run -p ananke-measure --bin measure -- --plan plan.json --out data/measurements.ndjson
+cargo run -p ananke-measure --bin measure -- --out data/measurements.ndjson --reparse
+cargo run -p ananke-measure --bin measure -- --out data/measurements.ndjson --retire-stale-builds
+```
+
+Both passes rewrite only the lines they change, which makes them checkable against
+the checked-in campaign: `--reparse` over it is a byte-for-byte no-op (the parser
+already reproduces all 604 recorded blocks), and `--retire-stale-builds` reselects
+exactly the 14 rows the campaign retired. `measure.py` and `measure_one.py` remain
+until `campaign.py`, which still shells out to them, is ported as well. Their two
+operational hazards did come across: the pre-flight fit gate weighs the *model
+file*, which over-charges a heavily expert-offloaded cell (GLM-5.2's file is 205 GiB
+and its process peaks at 187), so it stays a `--force` away rather than being
+loosened; and the swap watchdog is always on, because a hybrid that overcommits
+thrashes the box rather than failing cleanly, and it tripped twice on GLM.
+
+The **sweep generator** is Rust as well, as `ananke-calibrate`'s `plan` binary:
+
+```sh
+cargo run -p ananke-calibrate --bin plan -- curves    # one question's cells
+cargo run -p ananke-calibrate --bin plan -- all       # every question, disturbance-ordered
+```
+
+It emits `ananke_measure::record::Factors` — the same type the harness's `--plan`
+reader deserializes, so the two halves cannot drift in the way a shared JSON shape
+would. All 23 questions reproduce `plan.py`'s output byte for byte, kept as a
+fixture. A cell's identity is structural equality over the whole factor set with
+only the label and purpose blanked, rather than the Python's hash of its
+non-default fields: there is no field list for a factor to go missing from, which
+is the failure this campaign hit four times.
+
+Note that `plan.py` itself does not run any more — its sort key reads a `thp`
+field that was removed from `Cell` when the build turned out to reject
+`--use-thp`, so `plan.py all` raises `AttributeError`. The Rust drops that dead
+term; the checked-in `data/plan.json` predates the removal and still spells `thp`,
+which the harness's strict reader rejects by name rather than dropping. Regenerate
+it rather than hand-editing it.
+
+What is still Python is `campaign.py` and `progress.py`, which drive the loop, and
+`probe_host_growth.py`.
 
 The harness does not reuse the daemon's `system::ProcessSpawner`, deliberately.
 That trait is async and coupled to the supervisor's `SpawnConfig` — built for
