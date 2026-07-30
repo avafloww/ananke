@@ -71,13 +71,19 @@ pub fn mtp_host_fit(rows: &[Record], draft: bool) -> Result<HostFit> {
     Ok(HostFit {
         base,
         slope,
+        // The slope reported is the one charged, not the one measured: `slope`
+        // is `worst_slope` rounded up, and a measured 1.04 printed as "1.0"
+        // beside a charged 2 makes this document contradict itself — which is
+        // the failure the evidence field exists to prevent. The measured figure
+        // rides alongside so the rounding is visible rather than hidden.
         evidence: format!(
             "{} paired with/without cells across {} model(s), host owned memory rather \
-             than driver VRAM. Flat in the slot count and linear in context at {:.1} \
-             MiB per 1024, so the flat constant this replaces was wrong in shape. Base \
-             covers the worst residual over every cell.",
+             than driver VRAM. Flat in the slot count and linear in context at {} MiB \
+             per 1024 (worst measured {:.2}, rounded up), so the flat constant this \
+             replaces was wrong in shape. Base covers the worst residual over every cell.",
             points.len(),
             by_model.len(),
+            slope,
             if slopes.is_empty() { 0.0 } else { worst_slope },
         ),
     })

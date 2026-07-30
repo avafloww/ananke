@@ -563,14 +563,14 @@
     },
     "MTP_HOST_BYTES_EMBEDDED": {
       "doc": "Host cost of an embedded multi-token-prediction head.",
-      "evidence": "3 paired with/without cells across 2 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 1.0 MiB per 1024, so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
+      "evidence": "3 paired with/without cells across 2 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 2 MiB per 1024 (worst measured 1.02, rounded up), so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
       "kind": "derived",
       "type": "u64",
       "value": 288358400
     },
     "MTP_HOST_BYTES_SEPARATE_DRAFT": {
       "doc": "Host cost of a separate draft GGUF for multi-token prediction.",
-      "evidence": "3 paired with/without cells across 1 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 1.0 MiB per 1024, so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
+      "evidence": "3 paired with/without cells across 1 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 2 MiB per 1024 (worst measured 1.01, rounded up), so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
       "kind": "derived",
       "type": "u64",
       "value": 257949696
