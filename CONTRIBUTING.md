@@ -17,6 +17,8 @@ The backend's crates, leaves first:
 | `ananke-config` | config defaults, the descriptor table the docs are generated from, and the placement vocabulary (`SplitMode`, `DeviceSlot`) | — |
 | `ananke-estimate` | the VRAM estimator and the design-column contract the fitter shares | the four above |
 | `ananke-placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate` |
+| `ananke-measure` | the measurement log parser and the NDJSON record schema | `serde`, `regex` |
+| `ananke-calibrate` | deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-measure`, `ananke-estimate`, `ananke-placement` |
 | `ananke-api` | the DTOs that cross the wire to the frontend | — |
 | `ananke` | the daemon: supervision, scheduling, HTTP surface, the NVML probe | all of the above |
 | `anankectl` | the CLI | `ananke-api` |
@@ -35,6 +37,37 @@ The estimator and then the packer followed for the same reason, and with them th
 `ananke` re-exports `gguf`, `estimator`, `allocator::placement`, `system::fs`, and
 `tracking::rolling::Corrections`, so `crate::…` paths inside the daemon are
 unchanged by the split.
+
+`ananke-measure` deliberately depends on neither `ananke-estimate` nor
+`ananke-placement`: measurement and estimation stay apart so that nothing on the
+estimation side ever links a process spawner.
+
+### Calibration
+
+The tuned constants are derived from the measurement dataset, not chosen:
+
+```sh
+cargo run -p ananke-calibrate --bin emit             # regenerate tuning.json
+cargo run -p ananke-calibrate --bin emit -- --check  # CI gate: does it still follow from the data?
+cargo run -p ananke-calibrate --bin validate         # every comparable cell, predicted against measured
+cargo run -p ananke-calibrate --bin scoreboard       # the production models
+```
+
+The Python under `scripts/calibration/` is being retired as these land. What is
+still Python is the *harness* — spawning llama-server, sampling `/proc` and
+`nvidia-smi`, planning sweeps — and `dump_estimates.py`/`coverage.py`. The
+analysis, the fitting, and both accuracy reports are Rust, and each was verified
+against the Python it replaced: `validate` reproduces its 229 cells and skip tally,
+`scoreboard` its seven models to within 1 MiB, the fitter its coefficients to
+1.5e-16, and `emit` its whole document.
+
+One rule for anything added here. Where a derivation pairs two cells, or reads a
+config, the key must pin **every** factor that could differ, and the reader should
+be the strict form (`serde(deny_unknown_fields)`, named fields over a `Value` map).
+A field quietly missing from a mapping has produced four wrong constants in this
+campaign — `bool(n_cpu_moe)` instead of the count, a pairing key missing `ngl`, a
+`cram` omitted from a cell identity, and a `mtp` key that serde dropped in silence
+while the scoreboard read 16% low and still looked plausible.
 
 Getting the estimator and the packer out took a real decoupling rather than a file
 move. Both had taken a whole `ServiceConfig`; both now take a distilled input

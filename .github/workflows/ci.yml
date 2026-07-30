@@ -59,7 +59,7 @@ jobs:
       # data produces — which is the whole guarantee: a constant cannot drift
       # from its evidence without the drift being visible here.
       - name: Tuning constants match the dataset
-        run: python3 scripts/calibration/analyse.py emit --check
+        run: cargo run -q -p ananke-calibrate --bin emit -- --check
 
       # A term measured at one point in some axis looks flat in that axis, and
       # that has produced four wrong constants in this campaign. This fails
