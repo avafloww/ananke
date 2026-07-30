@@ -61,6 +61,7 @@ fn large_estimate() -> Estimate {
         output_buffer_bytes: 0,
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
+        mmproj_graph_bytes: 0,
         host_overhead_bytes: 0,
         host_cache_bytes: 0,
         host_slot_bytes: 0,

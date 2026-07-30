@@ -378,6 +378,21 @@ _DEV_BUFFER = re.compile(
     r"|llama_init_from_model|llama_context): +([A-Za-z0-9_()]+) +"
     r"(model|KV|RS|compute|output) buffer size *= *([0-9.]+)")
 _GRAPH_SHAPE = re.compile(r"graph (nodes|splits) += *(\d+)")
+# What a vision projector costs, as llama.cpp's own accounting states it. The
+# `fit_params_target` line is the whole per-device figure — the projector's
+# weights *and* its CLIP graph buffer — so pairing it with the summed tensor
+# sizes below isolates the graph term, which the estimator was modelling as
+# zero. The two are printed on different lines and neither is derivable from
+# the mmproj file's size (that includes GGUF framing).
+_MMPROJ_RESERVED = re.compile(
+    r"adding ([0-9.]+) MiB to fit_params_target for device ([A-Za-z0-9_()]+)")
+_CLIP_TENSOR = re.compile(r"clip_model_loader: tensor\[\d+\]:.*tensor_size=(\d+)")
+# The two vision settings that differ between the projectors measured, and so
+# the first candidates for what the graph buffer scales with. Recorded rather
+# than used: three cells across two configurations cannot distinguish a rate
+# in either of them from a constant.
+_CLIP_IMAGE_SIZE = re.compile(r"image size = (\d+) x (\d+)")
+_CLIP_MERGE = re.compile(r"n_merge: *(\d+)")
 
 
 def parse_log(text: str) -> dict[str, float | str]:
@@ -411,6 +426,17 @@ def parse_log(text: str) -> dict[str, float | str]:
         gguf_kv.setdefault(key, int(value))
     parsed["gguf_kv"] = gguf_kv
     parsed["contexts"] = _parse_contexts(text)
+    reserved = {device: float(mib) for mib, device in _MMPROJ_RESERVED.findall(text)}
+    if reserved:
+        parsed["mmproj_reserved_mib"] = reserved
+        parsed["mmproj_tensor_bytes"] = sum(
+            int(n) for n in _CLIP_TENSOR.findall(text))
+        image = _CLIP_IMAGE_SIZE.search(text)
+        if image:
+            parsed["clip_image_size"] = int(image.group(1))
+        merge = _CLIP_MERGE.search(text)
+        if merge:
+            parsed["clip_n_merge"] = int(merge.group(1))
     mtp = _MTP.search(text)
     parsed["mtp_context_mib"] = float(mtp.group(1)) if mtp else 0.0
     nextn = _NEXTN.search(text)

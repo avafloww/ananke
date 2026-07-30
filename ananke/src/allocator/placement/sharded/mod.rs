@@ -189,8 +189,12 @@ impl<'a> Packer<'a> {
             let mut weight_bytes =
                 weights_shares[idx] + output_head_shares[idx] + mtp_weight_shares[idx];
             let runtime_bytes = kv_shares[idx] + mtp_runtime_shares[idx] + compute_per_gpu;
+            let mut runtime_bytes = runtime_bytes;
             if gpu == main {
                 weight_bytes += main_only + remainder;
+                // The CLIP graph buffer rides the main GPU whatever the split:
+                // llama.cpp names one device for it.
+                runtime_bytes += self.estimate.mmproj_graph_bytes;
             }
             let slot = DeviceSlot::Gpu(gpu);
             // Charge first, then gate on what was actually charged: the three

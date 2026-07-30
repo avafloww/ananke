@@ -1007,6 +1007,57 @@ def derive_tensor_quantised(rows: list[dict]) -> str:
     )
 
 
+def derive_mmproj_graph(rows: list[dict]) -> tuple[int, str]:
+    """The CLIP graph buffer a vision projector needs beyond its weights.
+
+    llama.cpp reserves both together and reports the sum per device:
+
+        [mtmd] adding 1283.89 MiB to fit_params_target for device CUDA0
+
+    Subtracting the summed `clip_model_loader` tensor sizes isolates the graph
+    term. It was modelled as zero, which cost 140 to 248 MiB on every
+    vision-capable service.
+
+    Two configurations were measured, and the term is a property of the *vision*
+    settings rather than of the language model: Qwen3.6-27B and Qwen3.6-35B-A3B
+    have different hidden sizes and different projector files and land on 248.09
+    and 248.10 MiB, sharing an image size of 1472 and a patch merge of 2, while
+    gemma-4-31B's 768/3 projector takes 140.50.
+
+    So it is charged as the worst of the two rather than as a rate. Both
+    candidate scalings — image size and merge factor — have exactly one degree
+    of freedom against two points, so either would fit and neither would be
+    evidence. A third vision configuration is what would settle it; until then a
+    flat maximum over-reserves gemma-4 by 108 MiB and predicts the Qwen
+    projectors exactly, which is the right way round given the Qwen shape is the
+    one two of the three cells use.
+    """
+    seen = []
+    for record in rows:
+        parsed = record["parsed"]
+        reserved = (parsed.get("mmproj_reserved_mib") or {}).get("CUDA0")
+        tensors = parsed.get("mmproj_tensor_bytes")
+        if not reserved or not tensors:
+            continue
+        graph = reserved * 1024 ** 2 - tensors
+        seen.append((graph, parsed.get("clip_image_size"), parsed.get("clip_n_merge")))
+    if not seen:
+        raise ValueError("no cell reports an mmproj reservation")
+    worst = max(g for g, _, _ in seen)
+    shapes = sorted({(i, m, round(g / 1024 ** 2)) for g, i, m in seen})
+    return round(worst), (
+        "llama.cpp's own `adding N MiB to fit_params_target` figure net of the "
+        "summed clip tensor sizes, across "
+        f"{len(seen)} cells and {len(shapes)} vision configurations: "
+        + ", ".join(f"image {i}/merge {m} takes {g} MiB" for i, m, g in shapes)
+        + ". Charged flat at the worst rather than as a rate: two "
+        "configurations cannot distinguish a scaling in image size from one in "
+        "the merge factor, since either has a single degree of freedom against "
+        "two points. Identical across two language models sharing a vision "
+        "configuration, so it is a property of the projector."
+    )
+
+
 def derive_mtp_compute_intermediates(rows: list[dict]) -> str:
     """The MTP draft context's compute buffer, in the same shape as the main one.
 
@@ -1499,6 +1550,9 @@ KINDS = {
     "MTP_HOST_MIB_PER_1K": "derived",
     # Read straight out of llama.cpp's own `rs_seq` field.
     "SPEC_RECURRENT_ROLLBACK_DEPTH": "derived",
+    # The worst of two measured vision configurations; see the deriver
+    # for why it is not yet a rate.
+    "MMPROJ_GRAPH_BYTES": "reachable",
 }
 
 def derive_mtp_kv_intercept(rows: list[dict]) -> tuple[int, str]:
@@ -2204,6 +2258,7 @@ DERIVERS = {
     "MTP_HOST_BYTES_SEPARATE_DRAFT": derive_mtp_host_separate,
     "MTP_HOST_MIB_PER_1K": derive_mtp_host_slope,
     "SPEC_RECURRENT_ROLLBACK_DEPTH": derive_spec_rollback_depth,
+    "MMPROJ_GRAPH_BYTES": derive_mmproj_graph,
 }
 
 

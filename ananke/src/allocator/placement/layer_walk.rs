@@ -152,10 +152,15 @@ impl<'a> Packer<'a> {
             .collect();
         for slot in active_gpus {
             let mut add = compute_bytes;
-            if let DeviceSlot::Gpu(id) = slot
-                && head_gpu != Some(id)
-            {
-                add = add.saturating_sub(logits);
+            if let DeviceSlot::Gpu(id) = slot {
+                if head_gpu != Some(id) {
+                    add = add.saturating_sub(logits);
+                } else {
+                    // The vision projector's CLIP graph buffer rides one
+                    // device, and llama.cpp names it: the same head GPU that
+                    // holds the projector's weights.
+                    add = add.saturating_add(self.estimate.mmproj_graph_bytes);
+                }
             }
             self.charge(slot, add, Charge::Runtime);
         }
@@ -251,6 +256,48 @@ mod tests {
         let packed = pack(&e, &svc(PlacementPolicy::GpuOnly, None), &snap, &alloc).unwrap();
         assert_eq!(packed.args.ngl, Some(10));
         assert!(packed.args.tensor_split.is_none());
+    }
+
+    /// llama.cpp names one device for the projector's CLIP graph buffer, so it
+    /// is charged once and on the head GPU — not once per card the way the
+    /// compute buffer is. Charging it per card would over-reserve a two-card
+    /// span by 248 MiB.
+    #[test]
+    fn the_mmproj_graph_buffer_rides_the_head_gpu_alone() {
+        let mut e = trivial_estimate(20, 200);
+        let graph = 248 * 1024 * 1024;
+        e.mmproj_graph_bytes = graph;
+        let plain = {
+            let mut without = e.clone();
+            without.mmproj_graph_bytes = 0;
+            pack(
+                &without,
+                &svc(PlacementPolicy::GpuOnly, Some(vec![0, 1])),
+                &snapshot(&[12, 12]),
+                &AllocationTable::new(),
+            )
+            .expect("fit")
+        };
+        let packed = pack(
+            &e,
+            &svc(PlacementPolicy::GpuOnly, Some(vec![0, 1])),
+            &snapshot(&[12, 12]),
+            &AllocationTable::new(),
+        )
+        .expect("fit");
+        let total = |p: &crate::allocator::placement::Packed| -> u64 {
+            p.allocation
+                .bytes
+                .iter()
+                .filter(|(id, _)| matches!(id, DeviceId::Gpu(_)))
+                .map(|(_, b)| *b)
+                .sum()
+        };
+        assert_eq!(
+            total(&packed) - total(&plain),
+            graph,
+            "exactly one graph buffer across both cards"
+        );
     }
 
     #[test]
@@ -376,6 +423,7 @@ mod tests {
             output_buffer_bytes: 0,
             mtp_bytes: 0,
             mtp_weight_bytes: 0,
+            mmproj_graph_bytes: 0,
             host_overhead_bytes: 0,
             host_cache_bytes: 0,
             host_slot_bytes: 0,
@@ -424,6 +472,7 @@ mod tests {
             output_buffer_bytes: 0,
             mtp_bytes: 0,
             mtp_weight_bytes: 0,
+            mmproj_graph_bytes: 0,
             host_overhead_bytes: 0,
             host_cache_bytes: 0,
             host_slot_bytes: 0,

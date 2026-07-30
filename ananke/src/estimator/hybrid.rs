@@ -125,6 +125,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         compute_buffer_mb: compute_buffer::per_device_for(summary, inputs),
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
+        mmproj_graph_bytes: 0,
         host_overhead_bytes: 0,
         host_cache_bytes: 0,
         host_slot_bytes: 0,

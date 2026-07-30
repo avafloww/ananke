@@ -319,6 +319,13 @@ pub struct Estimate {
     /// — non-zero only for a separate draft model. See
     /// [`crate::estimator::mtp::mtp_weight_bytes`].
     pub mtp_weight_bytes: u64,
+    /// The vision projector's CLIP graph buffer, beyond its weights. llama.cpp
+    /// puts it on one device and says so — `[mtmd] adding N MiB to
+    /// fit_params_target for device CUDA0` — so the packer charges it to the
+    /// main GPU as runtime, not as weight: it is a device allocation and never
+    /// appears in the host RSS the rolling correction subtracts weights from.
+    /// Zero without an mmproj.
+    pub mmproj_graph_bytes: u64,
     /// Host bytes the runtime is predicted to hold that are neither weights
     /// nor KV: the pinned graph arena and the process baseline. Charged to the
     /// `Cpu` slot whatever the placement, because a fully GPU-offloaded model

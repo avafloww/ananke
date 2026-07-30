@@ -273,6 +273,13 @@
       "type": "u64",
       "value": 57
     },
+    "MMPROJ_GRAPH_BYTES": {
+      "doc": "The vision projector's CLIP graph buffer, beyond its weights. Charged to\n/// the one device llama.cpp names for it.",
+      "evidence": "llama.cpp's own `adding N MiB to fit_params_target` figure net of the summed clip tensor sizes, across 4 cells and 2 vision configurations: image 768/merge 3 takes 140 MiB, image 1472/merge 2 takes 248 MiB. Charged flat at the worst rather than as a rate: two configurations cannot distinguish a scaling in image size from one in the merge factor, since either has a single degree of freedom against two points. Identical across two language models sharing a vision configuration, so it is a property of the projector.",
+      "kind": "derived",
+      "type": "u64",
+      "value": 260147059
+    },
     "MTP_HOST_BYTES_EMBEDDED": {
       "doc": "Host cost of an embedded multi-token-prediction head.",
       "evidence": "3 paired with/without cells across 2 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 1.0 MiB per 1024, so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",

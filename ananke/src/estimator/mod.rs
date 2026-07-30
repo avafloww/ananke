@@ -200,7 +200,12 @@ pub fn estimate_with_summary(
         override_tensor::parse_and_apply(&mut est, &summary, inputs.override_tensor);
     }
 
-    // Add mmproj bytes to GPU 0 weights.
+    // Add mmproj bytes to GPU 0 weights, and its CLIP graph buffer beside
+    // them. llama.cpp reserves both together on one device and reports the sum
+    // (`[mtmd] adding N MiB to fit_params_target for device CUDA0`), but they
+    // are charged apart: the weights are file-backed and the graph buffer is
+    // not, and only the former belongs in the tally the host-pool observation
+    // subtracts.
     if let Some(mmproj) = inputs.mmproj {
         match gguf::read(fs, mmproj) {
             Ok(proj) => {
@@ -209,6 +214,7 @@ pub fn estimate_with_summary(
                     .non_layer
                     .other_bytes
                     .saturating_add(proj.total_tensor_bytes);
+                est.mmproj_graph_bytes = tuning::MMPROJ_GRAPH_BYTES;
             }
             Err(e) => warn!(error = %e, path = %mmproj.display(), "mmproj read failed"),
         }
