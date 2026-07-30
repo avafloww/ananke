@@ -19,7 +19,7 @@ pub(crate) enum ErrorKind {
 }
 
 #[derive(Debug)]
-pub(crate) struct Error {
+pub struct Error {
     kind: ErrorKind,
     detail: String,
 }

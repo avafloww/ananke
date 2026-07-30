@@ -22,6 +22,17 @@
 
 pub mod cli;
 
+/// The seam a driver needs: measure a plan, and name a cell the way the dataset
+/// does. `ananke-calibrate`'s campaign generates the plan and commits the rows as
+/// they land, and both halves have to agree with the harness on what a cell *is* —
+/// so the identity is shared rather than restated. Everything else here stays
+/// private.
+pub use crate::harness::{
+    cell::cell_id,
+    error::Error,
+    run::{Completed, Options, Summary, measure_cells},
+};
+
 mod cell;
 mod dataset;
 mod error;

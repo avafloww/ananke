@@ -117,7 +117,9 @@ fn dispatch(args: Args) -> Result<ExitCode, Error> {
         force: args.force,
         remeasure: args.remeasure,
     };
-    let summary = run::run_cells(&Deps::local(), &cells, &options)?;
+    // No observer: the standalone binary measures one plan and reports at the end.
+    // `campaign` is the driver that wants per-cell notice.
+    let summary = run::run_cells(&Deps::local(), &cells, &options, &mut |_, _| {})?;
     println!(
         "{} measured, {} skipped, {} without a measurement",
         summary.measured, summary.skipped, summary.failed

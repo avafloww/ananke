@@ -38,7 +38,7 @@ use crate::{
 /// from this key is two different measurements sharing one identity, and the
 /// second silently never runs; a `cram` omitted from a cell identity is one of
 /// the bugs this campaign actually shipped.
-pub(crate) fn cell_id(factors: &Factors) -> String {
+pub fn cell_id(factors: &Factors) -> String {
     let mine = serde_json::to_value(factors).expect("Factors serializes as a JSON object");
     let defaults =
         serde_json::to_value(Factors::default()).expect("Factors serializes as a JSON object");

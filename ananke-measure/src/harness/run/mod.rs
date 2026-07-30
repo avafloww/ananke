@@ -53,39 +53,68 @@ const PORT_WAIT: Duration = Duration::from_secs(180);
 const SETTLE: Duration = Duration::from_secs(3);
 const TAIL_LINES: usize = 40;
 
-pub(crate) struct Options {
-    pub(crate) out: PathBuf,
-    pub(crate) log_dir: PathBuf,
+pub struct Options {
+    pub out: PathBuf,
+    pub log_dir: PathBuf,
     /// Where the gzipped load logs go; they are what makes a record re-parseable
     /// later. Absent means the logs are left in the log directory only.
-    pub(crate) archive_dir: Option<PathBuf>,
-    pub(crate) port: u16,
-    pub(crate) load_timeout: Duration,
-    pub(crate) headroom_gib: f64,
-    pub(crate) swap_limit_gib: f64,
+    pub archive_dir: Option<PathBuf>,
+    pub port: u16,
+    pub load_timeout: Duration,
+    pub headroom_gib: f64,
+    pub swap_limit_gib: f64,
     /// Measure a cell the pre-flight gate would refuse. See [`host::fits`] for why
     /// the gate is both right and too strict.
-    pub(crate) force: bool,
+    pub force: bool,
     /// Measure a cell that already has a record. A cell id hashes the factors, so
     /// an unchanged configuration is normally skipped — but the runtime is not one
     /// of the factors, and when it changes under you the old record describes a
     /// different program.
-    pub(crate) remeasure: bool,
+    pub remeasure: bool,
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct Summary {
-    pub(crate) measured: usize,
-    pub(crate) skipped: usize,
-    pub(crate) failed: usize,
+pub struct Summary {
+    pub measured: usize,
+    pub skipped: usize,
+    pub failed: usize,
     /// How far past its baseline swap had grown when the watchdog stopped the run.
-    pub(crate) aborted_on_swap: Option<f64>,
+    pub aborted_on_swap: Option<f64>,
+}
+
+/// What became of one cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Completed {
+    /// A record was written and it loaded.
+    Measured,
+    /// Already present, or refused by the pre-flight gate.
+    Skipped,
+    /// A record was written saying why it did not load.
+    Failed,
+}
+
+/// Measure a plan against the real machine, reporting each cell as it finishes.
+///
+/// The observer is called once per cell, after the row is on disk and before the
+/// next server spawns. That boundary is the point of it: a driver that commits the
+/// dataset as the campaign runs must not do so while a record is being appended,
+/// and this is the only moment at which there is no half-written line. The Python
+/// campaign committed on a thirty-second timer against a harness in another
+/// process, which had no such guarantee — `progress.py` carried a comment about
+/// expecting torn lines.
+pub fn measure_cells(
+    cells: &[Factors],
+    options: &Options,
+    observer: &mut dyn FnMut(usize, Completed),
+) -> Result<Summary, Error> {
+    run_cells(&Deps::local(), cells, options, observer)
 }
 
 pub(crate) fn run_cells(
     deps: &Deps,
     cells: &[Factors],
     options: &Options,
+    observer: &mut dyn FnMut(usize, Completed),
 ) -> Result<Summary, Error> {
     let done = if options.remeasure {
         Default::default()
@@ -99,6 +128,7 @@ pub(crate) fn run_cells(
         if done.contains(&id) {
             println!("{prefix} skip {} ({id})", factors.label);
             summary.skipped += 1;
+            observer(index, Completed::Skipped);
             continue;
         }
         if !options.force && !host::fits(deps, factors, options.headroom_gib) {
@@ -118,6 +148,7 @@ pub(crate) fn run_cells(
             );
             dataset::append(&options.out, &skipped)?;
             summary.skipped += 1;
+            observer(index, Completed::Skipped);
             continue;
         }
 
@@ -139,8 +170,10 @@ pub(crate) fn run_cells(
                 dataset::append(&options.out, &measurement)?;
                 if status == Status::Ok {
                     summary.measured += 1;
+                    observer(index, Completed::Measured);
                 } else {
                     summary.failed += 1;
+                    observer(index, Completed::Failed);
                 }
             }
         }
