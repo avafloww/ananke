@@ -310,6 +310,11 @@ pub struct Estimate {
     /// the true value keeps the secondaries safe, subtracting more would
     /// under-reserve and OOM them.
     pub output_buffer_bytes: u64,
+    /// Weights `--split-mode tensor` holds on *every* spanned card instead of
+    /// dividing: the narrow gating and shared-expert paths every shard consumes.
+    /// Zero for an architecture that ships none, which is every dense model
+    /// measured. See [`crate::estimator::replicated`].
+    pub tensor_split_replicated_bytes: u64,
     /// Extra VRAM (bytes) for the MTP / NextN draft context when the
     /// service runs `--spec-type draft-mtp`. Zero when MTP is off or the
     /// model carries no MTP head. Reserved as a single lump on the

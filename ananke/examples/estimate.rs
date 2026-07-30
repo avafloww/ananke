@@ -407,6 +407,7 @@ fn main() {
         "kv_total_bytes": kv_total_bytes,
         "kv_total_mib": kv_total_bytes / (1024 * 1024),
         "compute_buffer_mb": estimate.compute_buffer_mb,
+        "tensor_split_replicated_mib": estimate.tensor_split_replicated_bytes / (1024 * 1024),
         "mtp_bytes": estimate.mtp_bytes,
         "mtp_mib": estimate.mtp_bytes / (1024 * 1024),
         "output_buffer_bytes": estimate.output_buffer_bytes,

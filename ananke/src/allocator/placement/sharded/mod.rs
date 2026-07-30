@@ -229,11 +229,22 @@ impl<'a> Packer<'a> {
         // host overhead itself rather than inheriting it.
         self.add_host_overhead();
 
+        // The replicated tensors are already counted once inside the split pool,
+        // so what each card still owes is the rest of a full copy. Spread evenly
+        // across symmetric cards that is `replicated x (cards - 1) / cards` each,
+        // which totals the one extra copy a two-card split was measured holding.
+        let replicated_extra = self
+            .estimate
+            .tensor_split_replicated_bytes
+            .saturating_mul(gpus.len().saturating_sub(1) as u64)
+            / gpus.len().max(1) as u64;
+
         for (idx, &gpu) in gpus.iter().enumerate() {
             let mut weight_bytes = weights_shares[idx]
                 + output_head_shares[idx]
                 + mtp_weight_shares[idx]
-                + tied_head_shares[idx];
+                + tied_head_shares[idx]
+                + replicated_extra;
             let runtime_bytes = kv_shares[idx] + mtp_runtime_shares[idx] + compute_per_gpu;
             let mut runtime_bytes = runtime_bytes;
             if gpu == main {

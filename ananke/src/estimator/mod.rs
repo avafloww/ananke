@@ -12,6 +12,7 @@ pub mod moe;
 pub mod mtp;
 pub mod override_tensor;
 pub mod recurrent;
+mod replicated;
 pub mod tuning;
 pub mod types;
 
@@ -227,6 +228,11 @@ pub fn estimate_with_summary(
             Err(e) => warn!(error = %e, path = %mmproj.display(), "mmproj read failed"),
         }
     }
+
+    // Weights a tensor split holds on every card rather than dividing. Read from
+    // the tensor table, so it is zero for an architecture without them — which is
+    // every dense model measured. See [`crate::estimator::replicated`].
+    est.tensor_split_replicated_bytes = replicated::tensor_split_replicated_bytes(&summary);
 
     Ok((summary, est))
 }
