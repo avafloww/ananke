@@ -2,6 +2,8 @@
 //! that don't go through the layer packer but still need a VRAM-aware GPU
 //! pick or a placement-override fit check.
 
+use ananke_config::placement::PlacementInputs;
+
 use crate::{
     allocator::{
         AllocationTable,
@@ -10,7 +12,7 @@ use crate::{
             types::{DeviceShortfall, PackError},
         },
     },
-    config::{DeviceSlot, ServiceConfig},
+    config::DeviceSlot,
     devices::{DeviceId, DeviceSnapshot},
 };
 
@@ -33,14 +35,14 @@ use crate::{
 /// surface this as a [`PackError::WeightsDoNotFit`] so the supervisor can
 /// run its eviction-retry loop.
 pub fn pick_command_gpu(
-    svc: &ServiceConfig,
+    placement: &PlacementInputs,
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
     min_mb: u64,
     prefer_mb: Option<u64>,
     optimistic_remaining: bool,
 ) -> Option<u32> {
-    let allowed = allowed_gpu_list(svc, snapshot);
+    let allowed = allowed_gpu_list(placement, snapshot);
     if allowed.is_empty() {
         return None;
     }
@@ -52,7 +54,7 @@ pub fn pick_command_gpu(
         .map(|gpu| {
             (
                 gpu,
-                command_gpu_available(svc, snapshot, reserved, gpu, optimistic_remaining),
+                command_gpu_available(placement, snapshot, reserved, gpu, optimistic_remaining),
             )
         })
         .filter(|(_, available)| *available >= need_min_bytes)
@@ -77,14 +79,14 @@ pub fn pick_command_gpu(
 /// [`PackError::WeightsDoNotFit`] so the failure names the cards it was
 /// measured against rather than reporting a bare "does not fit".
 pub fn command_gpu_shortfalls(
-    svc: &ServiceConfig,
+    placement: &PlacementInputs,
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
     min_mb: u64,
     optimistic_remaining: bool,
 ) -> Vec<DeviceShortfall> {
     let requested_bytes = min_mb.saturating_mul(1024 * 1024);
-    let mut allowed = allowed_gpu_list(svc, snapshot);
+    let mut allowed = allowed_gpu_list(placement, snapshot);
     allowed.sort_unstable();
     allowed
         .into_iter()
@@ -92,7 +94,7 @@ pub fn command_gpu_shortfalls(
             device: DeviceId::Gpu(gpu),
             requested_bytes,
             available_bytes: command_gpu_available(
-                svc,
+                placement,
                 snapshot,
                 reserved,
                 gpu,
@@ -113,24 +115,24 @@ pub fn command_gpu_shortfalls(
 /// [`PackError::WeightsDoNotFit`] so the supervisor's eviction-retry
 /// loop can engage.
 pub fn check_command_placement_override(
-    svc: &ServiceConfig,
+    placement: &PlacementInputs,
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
     optimistic_remaining: bool,
 ) -> Result<(), PackError> {
-    for (slot, mib) in &svc.placement_override {
+    for (slot, mib) in &placement.placement_override {
         let DeviceSlot::Gpu(gid) = slot else { continue };
         let need_bytes = mib.saturating_mul(1024 * 1024);
         let free = snapshot.free_bytes(slot).unwrap_or(0);
         let total = snapshot.total_bytes(slot).unwrap_or(free);
-        let pledged = sum_reserved(reserved, slot, &svc.name);
+        let pledged = sum_reserved(reserved, slot, &placement.name);
         let via_pledge = total.saturating_sub(pledged);
         let available = if optimistic_remaining {
             via_pledge
         } else {
             free.min(via_pledge)
         };
-        let available = available.saturating_sub(gpu_reserve_bytes(svc, *gid));
+        let available = available.saturating_sub(gpu_reserve_bytes(placement, *gid));
         if available < need_bytes {
             return Err(PackError::WeightsDoNotFit {
                 shortfalls: vec![DeviceShortfall {
@@ -150,7 +152,7 @@ pub fn check_command_placement_override(
 /// [`crate::allocator::placement::packer::Packer::gpu_available`] for the
 /// command-template path, which never builds a `Packer`.
 fn command_gpu_available(
-    svc: &ServiceConfig,
+    placement: &PlacementInputs,
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
     gpu: u32,
@@ -159,14 +161,14 @@ fn command_gpu_available(
     let slot = DeviceSlot::Gpu(gpu);
     let free = snapshot.free_bytes(&slot).unwrap_or(0);
     let total = snapshot.total_bytes(&slot).unwrap_or(free);
-    let pledged = sum_reserved(reserved, &slot, &svc.name);
+    let pledged = sum_reserved(reserved, &slot, &placement.name);
     let via_pledge = total.saturating_sub(pledged);
     let available = if optimistic_remaining {
         via_pledge
     } else {
         free.min(via_pledge)
     };
-    available.saturating_sub(gpu_reserve_bytes(svc, gpu))
+    available.saturating_sub(gpu_reserve_bytes(placement, gpu))
 }
 
 #[cfg(test)]
@@ -322,15 +324,15 @@ mod tests {
     /// Build a service with an explicit per-GPU placement_override.
     /// Mirrors the multi-GPU vLLM use case: TP=2 across two devices,
     /// each pledged separately.
-    fn svc_with_override(pairs: &[(u32, u64)]) -> ServiceConfig {
+    fn svc_with_override(pairs: &[(u32, u64)]) -> PlacementInputs {
         let mut svc = minimal_service("vllm-demo");
-        let mut placement = BTreeMap::new();
+        let mut overrides = BTreeMap::new();
         for (id, mb) in pairs {
-            placement.insert(DeviceSlot::Gpu(*id), *mb);
+            overrides.insert(DeviceSlot::Gpu(*id), *mb);
         }
-        svc.placement_override = placement;
+        svc.placement_override = overrides;
         svc.placement_policy = PlacementPolicy::GpuOnly;
-        svc
+        crate::config::service_inputs::placement_inputs(&svc)
     }
 
     /// Two-GPU pledge that fits on both devices: every per-slot pledge
@@ -393,13 +395,14 @@ mod tests {
     #[test]
     fn check_placement_override_ignores_cpu_slots() {
         let mut svc = minimal_service("demo");
-        let mut placement = BTreeMap::new();
-        placement.insert(DeviceSlot::Cpu, 8 * 1024);
-        svc.placement_override = placement;
+        let mut overrides = BTreeMap::new();
+        overrides.insert(DeviceSlot::Cpu, 8 * 1024);
+        svc.placement_override = overrides;
         svc.placement_policy = PlacementPolicy::CpuOnly;
+        let placement = crate::config::service_inputs::placement_inputs(&svc);
         let snap = snapshot(&[]);
         let table = AllocationTable::new();
-        let r = check_command_placement_override(&svc, &snap, &table, false);
+        let r = check_command_placement_override(&placement, &snap, &table, false);
         assert_eq!(r, Ok(()));
     }
 }

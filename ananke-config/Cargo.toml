@@ -9,4 +9,5 @@ name = "ananke_config"
 path = "src/lib.rs"
 
 [dependencies]
+smol_str.workspace = true
 serde.workspace = true

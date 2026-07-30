@@ -19,7 +19,7 @@ use axum::{
 use crate::{
     allocator::placement,
     api::management::handlers::{model_estimate_entry, placement_preview, read_current_allocation},
-    config::ServiceConfig,
+    config::{ServiceConfig, service_inputs::placement_inputs},
     daemon::{app_state::AppState, estimate_cache::CacheEntry},
 };
 
@@ -431,6 +431,7 @@ fn summary_footprint_bytes(
     // — the head-vs-secondary logits trim, the CPU-side compute buffer, the
     // one-layer fudge, MTP, expert offload — falls out of the same code that
     // computes a real placement, so the two cannot disagree.
-    let packed = placement::pack_demand(est, svc_cfg, &snapshot, corrections).ok()?;
+    let packed =
+        placement::pack_demand(est, &placement_inputs(svc_cfg), &snapshot, corrections).ok()?;
     Some(packed.allocation.bytes.values().sum())
 }

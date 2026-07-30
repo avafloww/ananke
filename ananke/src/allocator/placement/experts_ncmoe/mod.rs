@@ -6,13 +6,15 @@
 #[cfg(test)]
 mod tests;
 
+use ananke_config::placement::PlacementInputs;
+
 use crate::{
     allocator::placement::{
         entry::PackMode,
         packer::{Charge, Packer},
         types::PackError,
     },
-    config::{DeviceSlot, OffloadMode, ServiceConfig},
+    config::{DeviceSlot, OffloadMode},
 };
 
 /// Which end of the expert layers `-ncmoe` moves to the host, and what its
@@ -52,8 +54,8 @@ pub(crate) enum Ncmoe {
 
 impl Ncmoe {
     /// Is this service served by the fork?
-    pub(crate) fn is_ik(svc: &ServiceConfig) -> bool {
-        svc.llama_cpp().is_some_and(|lc| lc.runtime.ik().is_some())
+    pub(crate) fn is_ik(placement: &PlacementInputs) -> bool {
+        placement.ik_llama
     }
 
     /// The plan for an explicit `-ncmoe n` under this service's runtime and
@@ -63,13 +65,13 @@ impl Ncmoe {
     /// expert layers the MTP head accounted for — both of which change which
     /// blocks ik picks. See the type's own documentation.
     pub(crate) fn for_runtime(
-        svc: &ServiceConfig,
+        placement: &PlacementInputs,
         n: u32,
         layers: &[u32],
         gpus: usize,
         mtp_head_layers: u32,
     ) -> Self {
-        if Self::is_ik(svc) && gpus >= 2 && n < layers.len() as u32 + mtp_head_layers {
+        if Self::is_ik(placement) && gpus >= 2 && n < layers.len() as u32 + mtp_head_layers {
             // The window is taken over the full block range, so the head blocks
             // it reaches are overridden and then never loaded.
             let real = n.saturating_sub(mtp_head_layers);
@@ -81,9 +83,9 @@ impl Ncmoe {
 
     /// The plan that retains `kept` expert layers, from whichever end this
     /// runtime keeps them.
-    pub(crate) fn keeping(svc: &ServiceConfig, kept: u32, layers: &[u32]) -> Self {
+    pub(crate) fn keeping(placement: &PlacementInputs, kept: u32, layers: &[u32]) -> Self {
         let total = layers.len() as u32;
-        if Self::is_ik(svc) {
+        if Self::is_ik(placement) {
             Self::TrailingLayers(total.saturating_sub(kept))
         } else {
             // Mainline keeps a trailing suffix, so the bound is the lowest block
@@ -168,12 +170,12 @@ impl<'a> Packer<'a> {
         let head_layers = self.estimate.mtp_head_expert_layers;
         let plan = match self.offload_mode {
             OffloadMode::Layers(n) => {
-                Ncmoe::for_runtime(self.svc, n, &layers, gpu_count, head_layers)
+                Ncmoe::for_runtime(self.placement, n, &layers, gpu_count, head_layers)
             }
             OffloadMode::Auto => {
                 let mut used = 0u64;
                 let mut kept = 0u32;
-                let retained_from_the_top = !Ncmoe::is_ik(self.svc);
+                let retained_from_the_top = !Ncmoe::is_ik(self.placement);
                 let walk: Vec<u32> = if retained_from_the_top {
                     layers.iter().rev().copied().collect()
                 } else {
@@ -187,9 +189,11 @@ impl<'a> Packer<'a> {
                     used += cost;
                     kept += 1;
                 }
-                Ncmoe::keeping(self.svc, kept, &layers)
+                Ncmoe::keeping(self.placement, kept, &layers)
             }
-            OffloadMode::Off => Ncmoe::for_runtime(self.svc, 0, &layers, gpu_count, head_layers),
+            OffloadMode::Off => {
+                Ncmoe::for_runtime(self.placement, 0, &layers, gpu_count, head_layers)
+            }
         };
 
         let mut gpu_expert_bytes = 0u64;

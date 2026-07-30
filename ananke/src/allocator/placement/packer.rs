@@ -8,6 +8,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+use ananke_config::placement::PlacementInputs;
+
 pub(crate) use crate::allocator::placement::charge::Charge;
 use crate::{
     allocator::{
@@ -18,7 +20,7 @@ use crate::{
             types::{DeviceShortfall, ShardedPlan},
         },
     },
-    config::{DeviceSlot, OffloadMode, PlacementPolicy, ServiceConfig},
+    config::{DeviceSlot, OffloadMode, PlacementPolicy},
     devices::{DeviceId, DeviceSnapshot},
     estimator::Estimate,
     tracking::rolling::Corrections,
@@ -29,7 +31,7 @@ use crate::{
 /// it owns.
 pub(crate) struct Packer<'a> {
     pub(crate) estimate: &'a Estimate,
-    pub(crate) svc: &'a ServiceConfig,
+    pub(crate) placement: &'a PlacementInputs,
     pub(crate) snapshot: &'a DeviceSnapshot,
     pub(crate) reserved: &'a AllocationTable,
 
@@ -107,7 +109,7 @@ pub(crate) struct Packer<'a> {
 impl<'a> Packer<'a> {
     pub(crate) fn new(
         estimate: &'a Estimate,
-        svc: &'a ServiceConfig,
+        placement: &'a PlacementInputs,
         snapshot: &'a DeviceSnapshot,
         reserved: &'a AllocationTable,
         mode: PackMode,
@@ -117,7 +119,7 @@ impl<'a> Packer<'a> {
         // needs, which is a property of the model and the hardware, not of who
         // currently holds a pledge.
         let optimistic_remaining = matches!(mode, PackMode::Optimistic | PackMode::Demand);
-        let mut allowed_gpus = allowed_gpu_list(svc, snapshot);
+        let mut allowed_gpus = allowed_gpu_list(placement, snapshot);
         // Sort by descending pledge-book headroom (total - already committed)
         // so the GPU with the fewest active reservations is tried first. Using
         // the pledge book rather than nvml_free avoids letting driver-level
@@ -126,7 +128,7 @@ impl<'a> Packer<'a> {
         allowed_gpus.sort_by_key(|gpu| {
             let slot = DeviceSlot::Gpu(*gpu);
             let total = snapshot.total_bytes(&slot).unwrap_or(0);
-            let pledged = sum_reserved(reserved, &slot, &svc.name);
+            let pledged = sum_reserved(reserved, &slot, &placement.name);
             Reverse(total.saturating_sub(pledged))
         });
         // Demand forces CPU spill on regardless of policy: the surplus of a
@@ -135,15 +137,12 @@ impl<'a> Packer<'a> {
         // A `GpuOnly` service would otherwise fail the walk and yield no figure.
         let allow_cpu = matches!(mode, PackMode::Demand)
             || matches!(
-                svc.placement_policy,
+                placement.policy,
                 PlacementPolicy::CpuOnly | PlacementPolicy::Hybrid
             );
         let per_layer = estimate.per_layer_bytes.clone().unwrap_or_default();
 
-        let offload_mode = svc
-            .llama_cpp()
-            .map(|lc| lc.expert_offload)
-            .unwrap_or(OffloadMode::Off);
+        let offload_mode = placement.expert_offload;
         let expert_tensors = estimate.expert_tensors.clone().unwrap_or_default();
         let expert_aware = offload_mode.is_enabled() && !expert_tensors.is_empty();
         let mut expert_bytes_by_layer: BTreeMap<u32, u64> = BTreeMap::new();
@@ -153,7 +152,7 @@ impl<'a> Packer<'a> {
 
         Self {
             estimate,
-            svc,
+            placement,
             snapshot,
             reserved,
             allowed_gpus,
@@ -315,7 +314,7 @@ impl<'a> Packer<'a> {
         let slot = DeviceSlot::Gpu(gpu);
         let free = self.snapshot.free_bytes(&slot).unwrap_or(0);
         let total = self.snapshot.total_bytes(&slot).unwrap_or(free);
-        let reserved_here = sum_reserved(self.reserved, &slot, &self.svc.name);
+        let reserved_here = sum_reserved(self.reserved, &slot, &self.placement.name);
         let via_pledge = total.saturating_sub(reserved_here);
         let avail = if self.optimistic_remaining {
             via_pledge
@@ -324,7 +323,7 @@ impl<'a> Packer<'a> {
         };
         // Keep the configured headroom (global `[devices]` reserve + this
         // service's `gpu_headroom_mb`) free on the card.
-        avail.saturating_sub(gpu_reserve_bytes(self.svc, gpu))
+        avail.saturating_sub(gpu_reserve_bytes(self.placement, gpu))
     }
 
     /// Per-allowed-GPU breakdown of a failed placement of `requested` bytes,
@@ -444,9 +443,10 @@ mod tests {
     fn output_head_goes_to_lowest_id_gpu_under_asymmetric_headroom() {
         let mut e = trivial_estimate(1, 1024); // 1 layer, ~1 GiB
         e.non_layer.output_head_bytes = 5 * GIB;
-        let mut svc = minimal_service("m");
-        svc.placement_override = BTreeMap::new();
-        svc.placement_policy = PlacementPolicy::GpuOnly;
+        let mut cfg = minimal_service("m");
+        cfg.placement_override = BTreeMap::new();
+        cfg.placement_policy = PlacementPolicy::GpuOnly;
+        let svc = crate::config::service_inputs::placement_inputs(&cfg);
         let snap = snapshot(&[24, 24]);
         // A resident model pledges 15 GiB on gpu:0, so gpu:1 has more pledge
         // headroom and sorts first — `allowed_gpus.first()` is now gpu:1.

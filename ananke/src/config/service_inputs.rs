@@ -1,9 +1,11 @@
-//! Building estimator inputs from a validated service config.
+//! Building estimator and placement inputs from a validated service config.
 //!
 //! The `extra_args` readers live here rather than beside the estimator: they
 //! parse llama.cpp's own command line the way the runtime does — last flag wins,
 //! and `extra_args` is appended after everything the daemon generates — which is
 //! a property of the configuration, not of the estimate.
+
+use ananke_config::placement::PlacementInputs;
 
 use crate::{config::ServiceConfig, estimator::EstimatorInputs};
 
@@ -132,5 +134,34 @@ fn flash_attn_from_extra_args(extra_args: &[String]) -> Option<bool> {
         "on" | "1" | "true" => Some(true),
         "off" | "0" | "false" => Some(false),
         _ => None,
+    }
+}
+
+/// Distil the packer-relevant fields out of a `ServiceConfig`.
+///
+/// Same reasoning as [`estimator_inputs`]: the packer is a pure function over a
+/// placement, an estimate, and a device snapshot, and should not have to know
+/// what a `ServiceConfig` is. `reserves` is cloned rather than borrowed because
+/// it is three small fields and the `Arc` on the config exists for a different
+/// sharing pattern.
+pub fn placement_inputs(svc: &ServiceConfig) -> PlacementInputs {
+    PlacementInputs {
+        name: svc.name.clone(),
+        policy: svc.placement_policy,
+        placement_override: svc.placement_override.clone(),
+        split_mode: svc.split_mode,
+        gpu_allow: svc.gpu_allow.clone(),
+        gpu_headroom_mb: svc.gpu_headroom_mb,
+        reserves: (*svc.reserves).clone(),
+        ik_llama: svc.llama_cpp().is_some_and(|lc| lc.runtime.ik().is_some()),
+        expert_offload: svc
+            .llama_cpp()
+            .map(|lc| lc.expert_offload)
+            .unwrap_or_default(),
+        tensor_split_weights: svc.tensor_split_weights.clone(),
+        override_tensor: svc
+            .llama_cpp()
+            .map(|lc| lc.override_tensor.clone())
+            .unwrap_or_default(),
     }
 }

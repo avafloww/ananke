@@ -113,11 +113,7 @@ impl<'a> Packer<'a> {
         // Operator-declared `-ot` rules pass straight through; the packer no
         // longer synthesises expert-offload rules (whole-layer offload rides
         // on `--n-cpu-moe`, emitted above).
-        let override_tensor = self
-            .svc
-            .llama_cpp()
-            .map(|lc| lc.override_tensor.clone())
-            .unwrap_or_default();
+        let override_tensor = self.placement.override_tensor.clone();
 
         let expert_offload_bytes = self.expert_offload_cpu_bytes;
         let expert_offload_layers = self.expert_offload_cpu_layers.len() as u32;

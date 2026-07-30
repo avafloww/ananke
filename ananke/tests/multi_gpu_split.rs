@@ -86,8 +86,13 @@ fn multi_gpu_split_produces_tensor_split_and_both_gpus_allocated() {
     let reserved = AllocationTable::new();
     let est = large_estimate();
 
-    let packed = placement::pack(&est, &svc, &snap, &reserved)
-        .expect("placement must succeed across two GPUs");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &reserved,
+    )
+    .expect("placement must succeed across two GPUs");
 
     // Both GPUs should carry some allocation.
     assert!(

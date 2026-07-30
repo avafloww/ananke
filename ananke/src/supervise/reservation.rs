@@ -2,9 +2,12 @@
 //! (or the command-template GPU pick) to decide what a spawn would reserve,
 //! without touching the allocation table.
 
-use crate::supervise::{
-    RunLoop,
-    ensure::{MisconfiguredKind, ReservationFailure, pack_err_to_reservation_failure},
+use crate::{
+    config::service_inputs::placement_inputs,
+    supervise::{
+        RunLoop,
+        ensure::{MisconfiguredKind, ReservationFailure, pack_err_to_reservation_failure},
+    },
 };
 
 impl RunLoop {
@@ -93,7 +96,7 @@ impl RunLoop {
         let corrections = self.deps.rolling.get(&svc.name).corrections();
         let packed = crate::allocator::placement::pack_corrected(
             &est,
-            svc,
+            &placement_inputs(svc),
             snap,
             table,
             corrections,
@@ -166,7 +169,10 @@ impl RunLoop {
         // land the whole `min_mb` on a single GPU.
         if !svc.placement_override.is_empty() {
             crate::allocator::placement::check_command_placement_override(
-                svc, snap, table, optimistic,
+                &placement_inputs(svc),
+                snap,
+                table,
+                optimistic,
             )
             .map_err(ReservationFailure::PackFailed)?;
             map = svc.placement_override.clone();
@@ -190,7 +196,12 @@ impl RunLoop {
             crate::config::DeviceSlot::Cpu
         } else {
             match crate::allocator::placement::pick_command_gpu(
-                svc, snap, table, min_mb, prefer_mb, optimistic,
+                &placement_inputs(svc),
+                snap,
+                table,
+                min_mb,
+                prefer_mb,
+                optimistic,
             ) {
                 Some(id) => crate::config::DeviceSlot::Gpu(id),
                 None if snap.gpus.is_empty() => {
@@ -204,7 +215,11 @@ impl RunLoop {
                     return Err(ReservationFailure::PackFailed(
                         crate::allocator::placement::PackError::WeightsDoNotFit {
                             shortfalls: crate::allocator::placement::command_gpu_shortfalls(
-                                svc, snap, table, min_mb, optimistic,
+                                &placement_inputs(svc),
+                                snap,
+                                table,
+                                min_mb,
+                                optimistic,
                             ),
                         },
                     ));

@@ -437,7 +437,12 @@ fn main() {
     if args.pack {
         let svc = build_service_config(&args);
         let snapshot = build_snapshot(&args);
-        match pack_demand(&estimate, &svc, &snapshot, Corrections::NEUTRAL) {
+        match pack_demand(
+            &estimate,
+            &ananke::config::service_inputs::placement_inputs(&svc),
+            &snapshot,
+            Corrections::NEUTRAL,
+        ) {
             Ok(packed) => {
                 let allocation: serde_json::Map<_, _> = packed
                     .allocation

@@ -15,7 +15,10 @@ use crate::{
         AllocationTable,
         placement::{self, PackError},
     },
-    config::{AllocationMode, DeviceSlot, PlacementPolicy, ServiceConfig},
+    config::{
+        AllocationMode, DeviceSlot, PlacementPolicy, ServiceConfig,
+        service_inputs::placement_inputs,
+    },
     devices::{DeviceId, DeviceSnapshot},
     estimator::Estimate,
     supervise::preview::PlacementOutcome,
@@ -44,13 +47,29 @@ pub fn preview_placement(
     // Strict honours currently-free memory (what the daemon checks before
     // deciding to evict); optimistic trusts the pledge book; on-empty models
     // the bare hardware capacity (could it ever fit on the allowed devices).
-    let strict = placement::pack_corrected(est, svc, snapshot, table, corrections, false).ok();
-    let optimistic = placement::pack_corrected(est, svc, snapshot, table, corrections, true).ok();
+    let strict = placement::pack_corrected(
+        est,
+        &placement_inputs(svc),
+        snapshot,
+        table,
+        corrections,
+        false,
+    )
+    .ok();
+    let optimistic = placement::pack_corrected(
+        est,
+        &placement_inputs(svc),
+        snapshot,
+        table,
+        corrections,
+        true,
+    )
+    .ok();
     // The on-empty pack is the last word on "can this ever be placed", so its
     // error is the one that explains a `DoesNotFit` to the operator.
     let on_empty = placement::pack_corrected(
         est,
-        svc,
+        &placement_inputs(svc),
         snapshot,
         &AllocationTable::new(),
         corrections,
@@ -112,9 +131,15 @@ pub fn preview_override_placement(
         })
         .collect();
 
-    let fits_now = placement::check_command_placement_override(svc, snapshot, table, false).is_ok();
-    let on_empty =
-        placement::check_command_placement_override(svc, snapshot, &AllocationTable::new(), true);
+    let fits_now =
+        placement::check_command_placement_override(&placement_inputs(svc), snapshot, table, false)
+            .is_ok();
+    let on_empty = placement::check_command_placement_override(
+        &placement_inputs(svc),
+        snapshot,
+        &AllocationTable::new(),
+        true,
+    );
     let verdict = if running || fits_now {
         FitVerdict::Fits
     } else {
@@ -165,9 +190,16 @@ pub fn preview_command_placement(
         });
     }
 
-    let strict = placement::pick_command_gpu(svc, snapshot, table, min_mb, prefer_mb, false);
+    let strict = placement::pick_command_gpu(
+        &placement_inputs(svc),
+        snapshot,
+        table,
+        min_mb,
+        prefer_mb,
+        false,
+    );
     let on_empty = placement::pick_command_gpu(
-        svc,
+        &placement_inputs(svc),
         snapshot,
         &AllocationTable::new(),
         min_mb,
@@ -183,7 +215,7 @@ pub fn preview_command_placement(
         // each one's headroom against the ask.
         does_not_fit(&PackError::WeightsDoNotFit {
             shortfalls: placement::command_gpu_shortfalls(
-                svc,
+                &placement_inputs(svc),
                 snapshot,
                 &AllocationTable::new(),
                 min_mb,

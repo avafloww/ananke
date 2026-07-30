@@ -53,11 +53,13 @@ impl<'a> Packer<'a> {
         let gpu_count = self.allowed_gpus.len();
         let head_layers = self.estimate.mtp_head_expert_layers;
         let plan = match self.offload_mode {
-            OffloadMode::Off => Ncmoe::for_runtime(self.svc, 0, &layers, gpu_count, head_layers),
-            OffloadMode::Layers(n) => {
-                Ncmoe::for_runtime(self.svc, n, &layers, gpu_count, head_layers)
+            OffloadMode::Off => {
+                Ncmoe::for_runtime(self.placement, 0, &layers, gpu_count, head_layers)
             }
-            OffloadMode::Auto => Ncmoe::keeping(self.svc, 0, &layers),
+            OffloadMode::Layers(n) => {
+                Ncmoe::for_runtime(self.placement, n, &layers, gpu_count, head_layers)
+            }
+            OffloadMode::Auto => Ncmoe::keeping(self.placement, 0, &layers),
         };
 
         let mut offloaded = 0u64;
@@ -158,7 +160,7 @@ impl<'a> Packer<'a> {
         // Default weights give the historical equal split; explicit weights are
         // validated to be one-per-allowed-GPU in ascending id order.
         let weights = self
-            .svc
+            .placement
             .tensor_split_weights
             .as_deref()
             .map(|w| w.to_vec())
@@ -281,7 +283,7 @@ impl<'a> Packer<'a> {
         // the tensor-split list, so the integer ratio is what matters, not the
         // absolute values.
         self.sharded = Some(ShardedPlan {
-            mode: self.svc.split_mode,
+            mode: self.placement.split_mode,
             tensor_split,
         });
         Ok(())

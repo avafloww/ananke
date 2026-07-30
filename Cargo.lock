@@ -84,6 +84,7 @@ name = "ananke-config"
 version = "0.2.0"
 dependencies = [
  "serde",
+ "smol_str",
 ]
 
 [[package]]

@@ -27,14 +27,14 @@ impl<'a> Packer<'a> {
             return Ok(());
         };
         let total = self.snapshot.total_bytes(&slot).unwrap_or(free);
-        let reserved_here = sum_reserved(self.reserved, &slot, &self.svc.name);
+        let reserved_here = sum_reserved(self.reserved, &slot, &self.placement.name);
         let via_pledge = total.saturating_sub(reserved_here);
         let avail = if self.optimistic_remaining {
             via_pledge
         } else {
             free.min(via_pledge)
         };
-        let available = avail.saturating_sub(self.svc.reserves.cpu_bytes);
+        let available = avail.saturating_sub(self.placement.reserves.cpu_bytes);
         if needed > available {
             return Err(PackError::CpuDoesNotFit { needed, available });
         }

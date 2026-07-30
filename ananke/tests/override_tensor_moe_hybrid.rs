@@ -63,8 +63,13 @@ fn override_tensor_rules_propagate_to_command_args() {
     };
 
     let reserved = AllocationTable::new();
-    let packed = placement::pack(&est, &svc, &snap, &reserved)
-        .expect("placement must succeed on single GPU");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &reserved,
+    )
+    .expect("placement must succeed on single GPU");
 
     // The override_tensor rules declared in the service must be forwarded
     // verbatim to CommandArgs so the spawn renderer can emit -ot flags.
@@ -131,8 +136,13 @@ fn auto_expert_offload_emits_n_cpu_moe_under_hybrid() {
         taken_at_ms: 0,
     };
 
-    let packed = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect("hybrid auto-offload must pack on a 1 GiB card");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect("hybrid auto-offload must pack on a 1 GiB card");
 
     // -ngl 999: all layers to GPU, then --n-cpu-moe pulls the trailing
     // experts back to CPU (the runtime owns the cross-GPU split).

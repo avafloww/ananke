@@ -80,30 +80,7 @@ pub struct IkSettings {
     pub runtime_repack: bool,
 }
 
-/// MoE expert-offload policy for a llama-cpp service. Resolved from the
-/// `expert_offload` config value. The packer reads this to decide whether and
-/// how much expert weight to move off the GPU when the model doesn't fit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OffloadMode {
-    /// No expert offload. The model packs whole layers, spilling entire layers
-    /// to CPU only under a CPU-allowing placement.
-    #[default]
-    Off,
-    /// The packer keeps each expert on its layer's home GPU while that GPU has
-    /// room, then greedily spills the experts that don't fit — to the most-free
-    /// other GPU first, then to CPU — so only the surplus over live VRAM moves.
-    Auto,
-    /// The packer offloads the experts of exactly the `N` tail-most
-    /// expert-bearing layers, regardless of fit.
-    Layers(u32),
-}
-
-impl OffloadMode {
-    /// Whether any expert offload is requested (i.e. not [`OffloadMode::Off`]).
-    pub fn is_enabled(self) -> bool {
-        !matches!(self, OffloadMode::Off)
-    }
-}
+pub use ananke_config::placement::OffloadMode;
 
 #[cfg(test)]
 mod tests {

@@ -1,12 +1,13 @@
 //! Public entry points: `pack` and `pack_optimistic` drive the packer
 //! through its steps in order and return the finished `Packed` result.
 
+use ananke_config::placement::PlacementInputs;
+
 use crate::{
     allocator::{
         AllocationTable,
         placement::{Packed, packer::Packer, types::PackError},
     },
-    config::ServiceConfig,
     devices::DeviceSnapshot,
     estimator::Estimate,
     tracking::rolling::Corrections,
@@ -72,13 +73,13 @@ pub enum PackMode {
 /// of bare hardware, tests) want this one.
 pub fn pack(
     estimate: &Estimate,
-    svc: &ServiceConfig,
+    placement: &PlacementInputs,
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
 ) -> Result<Packed, PackError> {
     pack_inner(
         estimate,
-        svc,
+        placement,
         snapshot,
         reserved,
         PackMode::Strict,
@@ -96,7 +97,7 @@ pub fn pack(
 /// correction already moved.
 pub fn pack_corrected(
     estimate: &Estimate,
-    svc: &ServiceConfig,
+    placement: &PlacementInputs,
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
     corrections: Corrections,
@@ -107,19 +108,19 @@ pub fn pack_corrected(
     } else {
         PackMode::Strict
     };
-    pack_inner(estimate, svc, snapshot, reserved, mode, corrections)
+    pack_inner(estimate, placement, snapshot, reserved, mode, corrections)
 }
 
 /// See [`PackMode::Optimistic`].
 pub fn pack_optimistic(
     estimate: &Estimate,
-    svc: &ServiceConfig,
+    placement: &PlacementInputs,
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
 ) -> Result<Packed, PackError> {
     pack_inner(
         estimate,
-        svc,
+        placement,
         snapshot,
         reserved,
         PackMode::Optimistic,
@@ -137,13 +138,13 @@ pub fn pack_optimistic(
 /// number to report and the caller should render nothing rather than a guess.
 pub fn pack_demand(
     estimate: &Estimate,
-    svc: &ServiceConfig,
+    placement: &PlacementInputs,
     snapshot: &DeviceSnapshot,
     corrections: Corrections,
 ) -> Result<Packed, PackError> {
     pack_inner(
         estimate,
-        svc,
+        placement,
         snapshot,
         &AllocationTable::new(),
         PackMode::Demand,
@@ -153,13 +154,13 @@ pub fn pack_demand(
 
 fn pack_inner(
     estimate: &Estimate,
-    svc: &ServiceConfig,
+    placement: &PlacementInputs,
     snapshot: &DeviceSnapshot,
     reserved: &AllocationTable,
     mode: PackMode,
     corrections: Corrections,
 ) -> Result<Packed, PackError> {
-    let mut packer = Packer::new(estimate, svc, snapshot, reserved, mode, corrections);
+    let mut packer = Packer::new(estimate, placement, snapshot, reserved, mode, corrections);
     // Sharded (tensor/row) split distributes every layer across all spanned
     // GPUs in parallel — a fundamentally different shape from the first-fit
     // layer walk. Taken only when the service opts in, at least two GPUs are
@@ -167,7 +168,7 @@ fn pack_inner(
     // halve. Otherwise fall through to the layer path: a single-GPU "tensor
     // split" is just an ordinary placement, and a fallback-arch model (no
     // per-layer detail) can't be evenly sharded.
-    if packer.svc.split_mode.is_sharded()
+    if packer.placement.split_mode.is_sharded()
         && packer.allowed_gpus.len() >= 2
         && !packer.per_layer.is_empty()
     {
@@ -232,9 +233,9 @@ mod tests {
     #[test]
     fn demand_matches_a_real_pack_when_the_model_fits() {
         let e = trivial_estimate(20, 1024); // 20 layers × ~1 GiB.
-        let mut svc = minimal_service("m");
-        svc.placement_override.clear();
-        svc.placement_policy = PlacementPolicy::Hybrid;
+        let mut cfg = minimal_service("m");
+        cfg.placement_override.clear();
+        cfg.placement_policy = PlacementPolicy::Hybrid;
         // `free < total` on one card so the two modes' capacity views actually
         // differ. The stock fixture sets free == total, which collapses
         // `Strict`'s `min(free, total)` into `Demand`'s `total` and makes the
@@ -243,6 +244,7 @@ mod tests {
         // On gpu:0 — the card the walk actually fills. Starving gpu:1 would
         // leave the divergence untested, since nothing lands there.
         snap.gpus[0].free_bytes = 21 * GIB;
+        let svc = crate::config::service_inputs::placement_inputs(&cfg);
 
         let bare = pack_optimistic(&e, &svc, &snap, &AllocationTable::new()).expect("fits");
         let demand = pack_demand(&e, &svc, &snap, Corrections::NEUTRAL)
@@ -274,14 +276,15 @@ mod tests {
     #[test]
     fn demand_resolves_when_the_host_is_too_small_to_place() {
         let e = trivial_estimate(60, 1024); // 60 GiB over two 24 GiB cards.
-        let mut svc = minimal_service("m");
-        svc.placement_override.clear();
-        svc.placement_policy = PlacementPolicy::Hybrid;
+        let mut cfg = minimal_service("m");
+        cfg.placement_override.clear();
+        cfg.placement_policy = PlacementPolicy::Hybrid;
         let mut snap = snapshot(&[24, 24]);
         snap.cpu = Some(CpuSnapshot {
             total_bytes: 2 * GIB,
             available_bytes: 2 * GIB,
         });
+        let svc = crate::config::service_inputs::placement_inputs(&cfg);
 
         assert!(
             pack(&e, &svc, &snap, &AllocationTable::new()).is_err(),
@@ -306,9 +309,10 @@ mod tests {
     #[test]
     fn demand_resolves_for_a_gpu_only_service_that_overflows_its_cards() {
         let e = trivial_estimate(60, 1024);
-        let mut svc = minimal_service("m");
-        svc.placement_override.clear();
-        svc.placement_policy = PlacementPolicy::GpuOnly;
+        let mut cfg = minimal_service("m");
+        cfg.placement_override.clear();
+        cfg.placement_policy = PlacementPolicy::GpuOnly;
+        let svc = crate::config::service_inputs::placement_inputs(&cfg);
         let snap = snapshot(&[24, 24]);
 
         assert!(
@@ -327,9 +331,10 @@ mod tests {
     #[test]
     fn demand_matches_a_real_pack_for_a_gpu_only_service() {
         let e = trivial_estimate(10, 1024);
-        let mut svc = minimal_service("m");
-        svc.placement_override.clear();
-        svc.placement_policy = PlacementPolicy::GpuOnly;
+        let mut cfg = minimal_service("m");
+        cfg.placement_override.clear();
+        cfg.placement_policy = PlacementPolicy::GpuOnly;
+        let svc = crate::config::service_inputs::placement_inputs(&cfg);
         let mut snap = snapshot(&[24, 24]);
         snap.gpus[0].free_bytes = 12 * GIB;
 

@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 
+use smol_str::SmolStr;
+
 use crate::flags;
 
 /// Look up a variant's flag string in its `VARIANTS` table. Every variant is
@@ -135,5 +137,67 @@ mod tests {
             SplitMode::valid_values(),
             flags::quoted_list(flags::split_mode::ALL)
         );
+    }
+}
+
+/// What the packer reads about a service, distilled out of its config.
+///
+/// The packer used to take a whole `ServiceConfig`, which tied it to the config
+/// validator and everything behind it. It needs eight fields, all of them either
+/// primitives or types declared above, so — exactly as `EstimatorInputs` does for
+/// the estimator — it takes those and nothing else. Building one from a validated
+/// config is the daemon's business; see `ananke::config::service_inputs`.
+#[derive(Debug, Clone)]
+pub struct PlacementInputs {
+    /// Service name. Compared against the reservation table's keys, so it is the
+    /// same small string the rest of the daemon uses.
+    pub name: SmolStr,
+    /// Which device classes this service may be placed on.
+    pub policy: PlacementPolicy,
+    /// Operator-pinned per-device byte counts, which override the walk entirely.
+    pub placement_override: BTreeMap<DeviceSlot, u64>,
+    /// How the model is spread across the cards it spans.
+    pub split_mode: SplitMode,
+    /// GPU indices this service is restricted to. Empty means every present card.
+    pub gpu_allow: Vec<u32>,
+    /// Extra VRAM (MiB) to keep free on each spanned GPU, on top of `reserves`.
+    pub gpu_headroom_mb: u64,
+    /// Per-device memory the daemon keeps free.
+    pub reserves: DeviceReserves,
+    /// Whether the service runs on the ik_llama fork, which differs from
+    /// mainline on which end of the expert layers `-ncmoe` moves and on how it
+    /// counts.
+    pub ik_llama: bool,
+    /// Whether, and how far, expert tensors are moved to the host.
+    pub expert_offload: OffloadMode,
+    /// Explicit per-GPU shares for a sharded split, one per allowed GPU in
+    /// ascending id order. `None` gives the historical equal split.
+    pub tensor_split_weights: Option<Vec<f32>>,
+    /// `override_tensor` rules the operator pinned by hand.
+    pub override_tensor: Vec<String>,
+}
+
+/// MoE expert-offload policy for a llama-cpp service. Resolved from the
+/// `expert_offload` config value. The packer reads this to decide whether and how
+/// much expert weight to move off the GPU when the model doesn't fit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OffloadMode {
+    /// No expert offload. The model packs whole layers, spilling entire layers to
+    /// CPU only under a CPU-allowing placement.
+    #[default]
+    Off,
+    /// The packer keeps each expert on its layer's home GPU while that GPU has
+    /// room, then greedily spills the experts that don't fit — to the most-free
+    /// other GPU first, then to CPU — so only the surplus over live VRAM moves.
+    Auto,
+    /// The packer offloads the experts of exactly the `N` tail-most
+    /// expert-bearing layers, regardless of fit.
+    Layers(u32),
+}
+
+impl OffloadMode {
+    /// Whether any expert offload is requested (i.e. not [`OffloadMode::Off`]).
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, OffloadMode::Off)
     }
 }

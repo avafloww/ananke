@@ -22,7 +22,10 @@ use crate::{
         AllocationTable,
         placement::{self, CommandArgs, PackError},
     },
-    config::{AllocationMode, DeviceSlot, PlacementPolicy, ServiceConfig, Template},
+    config::{
+        AllocationMode, DeviceSlot, PlacementPolicy, ServiceConfig, Template,
+        service_inputs::placement_inputs,
+    },
     devices::{Allocation, DeviceId, DeviceSnapshot},
     estimator::{self, EstimatorError},
     supervise::spawn::{SpawnConfig, render_argv},
@@ -97,8 +100,15 @@ fn plan(
         .ok_or(PreviewError::NoModelPath)?;
     let (_summary, est) =
         estimator::estimate_with_summary(fs, &inputs).map_err(PreviewError::Estimator)?;
-    let packed = placement::pack_corrected(&est, svc, snapshot, table, corrections, true)
-        .map_err(PreviewError::Pack)?;
+    let packed = placement::pack_corrected(
+        &est,
+        &placement_inputs(svc),
+        snapshot,
+        table,
+        corrections,
+        true,
+    )
+    .map_err(PreviewError::Pack)?;
     Ok((packed.allocation, Some(packed.args)))
 }
 
@@ -122,20 +132,31 @@ fn plan_command_map(
         return Ok(map);
     }
     if !svc.placement_override.is_empty() {
-        placement::check_command_placement_override(svc, snapshot, table, true)
+        placement::check_command_placement_override(&placement_inputs(svc), snapshot, table, true)
             .map_err(PreviewError::Pack)?;
         return Ok(svc.placement_override.clone());
     }
     let slot = if matches!(svc.placement_policy, PlacementPolicy::CpuOnly) {
         DeviceSlot::Cpu
     } else {
-        match placement::pick_command_gpu(svc, snapshot, table, min_mb, prefer_mb, true) {
+        match placement::pick_command_gpu(
+            &placement_inputs(svc),
+            snapshot,
+            table,
+            min_mb,
+            prefer_mb,
+            true,
+        ) {
             Some(id) => DeviceSlot::Gpu(id),
             None if snapshot.gpus.is_empty() => DeviceSlot::Cpu,
             None => {
                 return Err(PreviewError::Pack(PackError::WeightsDoNotFit {
                     shortfalls: placement::command_gpu_shortfalls(
-                        svc, snapshot, table, min_mb, true,
+                        &placement_inputs(svc),
+                        snapshot,
+                        table,
+                        min_mb,
+                        true,
                     ),
                 }));
             }
