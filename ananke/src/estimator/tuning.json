@@ -80,13 +80,23 @@
       },
       {
         "archs": [
-          "gemma2",
-          "gemma3",
           "gemma4"
         ],
-        "base_batch_mib": 292,
-        "base_mib": 213,
-        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 57 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 9 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "base_batch_mib": 285,
+        "base_mib": 441,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 23 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 2 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
+        "slope_mib_per_1k": 4,
+        "slope_scales_with_ubatch": true,
+        "variant": null
+      },
+      {
+        "archs": [
+          "gemma2",
+          "gemma3"
+        ],
+        "base_batch_mib": 298,
+        "base_mib": 184,
+        "evidence": "least-squares fit of max per-run average (compute + unaccounted) / n_gpus to base + base_batch + slope*(ctx/1024), across 34 layer-split cells at ctx 8192-65536 (ub 512, all kv_types). Intercept raised to cover the worst point at every context. Base_batch from 7 larger-ubatch cells. Tensor-split cells are excluded: they report one fused device whose unaccounted remainder is an artifact of that representation.",
         "slope_mib_per_1k": 11,
         "slope_scales_with_ubatch": true
       },

@@ -2227,7 +2227,13 @@ CURVE_DERIVERS = {
     # every other curve moved, which is how it came to sit *above* the general
     # gemma curve after that one was corrected.
     "gemma4@gemma_e": derive_curve(("gemma4",), e_variant=True),
-    "gemma3": derive_curve(("gemma2", "gemma3", "gemma4"), e_variant=False),
+    # Its own entry, ahead of the shared one, because the shared slope
+    # extrapolates badly past the sweep's range: at ctx 240000 it asks 3083 MiB
+    # per device where gemma-4-31B's own cells (584 at ctx 8192, 680 at 32768,
+    # 808 at 65536) describe a curve a quarter as steep. gemma2 and gemma3 keep
+    # the shared entry, which their own cells still fit.
+    "gemma4": derive_curve(("gemma4",), e_variant=False),
+    "gemma3": derive_curve(("gemma2", "gemma3"), e_variant=False),
     "laguna": derive_curve(("laguna",)),
     "lfm2": derive_curve(("lfm2",)),
     "qwen35": derive_curve(("qwen35",)),
