@@ -135,11 +135,7 @@ pub struct HealthSettings {
     pub probe_interval_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DeviceSlot {
-    Cpu,
-    Gpu(u32),
-}
+pub use ananke_config::placement::DeviceSlot;
 
 #[cfg(test)]
 mod tests {

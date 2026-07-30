@@ -24,7 +24,7 @@ use crate::{
     },
     config::{AllocationMode, DeviceSlot, PlacementPolicy, ServiceConfig, Template},
     devices::{Allocation, DeviceId, DeviceSnapshot},
-    estimator::{self, EstimatorError, EstimatorInputs},
+    estimator::{self, EstimatorError},
     supervise::spawn::{SpawnConfig, render_argv},
     system::Fs,
     templates::SubstituteError,
@@ -92,7 +92,7 @@ fn plan(
     if !svc.placement_override.is_empty() {
         return Ok((Allocation::from_override(&svc.placement_override), None));
     }
-    let inputs = EstimatorInputs::from_service(svc)
+    let inputs = crate::config::service_inputs::estimator_inputs(svc)
         .map(|i| i.with_visible_devices(snapshot.gpus.len() as u32))
         .ok_or(PreviewError::NoModelPath)?;
     let (_summary, est) =

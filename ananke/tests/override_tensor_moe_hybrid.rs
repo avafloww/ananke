@@ -46,7 +46,7 @@ fn override_tensor_rules_propagate_to_command_args() {
         .into_in_memory_fs(path);
 
     let svc = moe_svc_with_override_tensor(path.to_path_buf());
-    let inputs = estimator::EstimatorInputs::from_service(&svc).unwrap();
+    let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
     let est =
         estimator::estimate_from_path(&fs, &inputs).expect("estimate must succeed on MoE GGUF");
 
@@ -113,7 +113,7 @@ fn auto_expert_offload_emits_n_cpu_moe_under_hybrid() {
     lc.model = path.to_path_buf();
     lc.expert_offload = OffloadMode::Auto;
 
-    let inputs = estimator::EstimatorInputs::from_service(&svc).unwrap();
+    let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
     let est = estimator::estimate_from_path(&fs, &inputs).expect("estimate must succeed");
 
     // 1 GiB card, generous host RAM.

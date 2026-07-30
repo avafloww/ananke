@@ -214,7 +214,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
 
 /// Set the llama-cpp service's model path. Tests that produce a synthetic
 /// GGUF under a specific path in `InMemoryFs` need the `ServiceConfig`'s
-/// `model` to point at that same path so `EstimatorInputs::from_service`
+/// `model` to point at that same path so `crate::config::service_inputs::estimator_inputs`
 /// resolves correctly.
 pub fn set_model_path(svc: &mut ServiceConfig, path: &std::path::Path) {
     match &mut svc.template_config {

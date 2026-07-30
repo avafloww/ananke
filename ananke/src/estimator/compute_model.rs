@@ -24,8 +24,9 @@
 //! that way also reproduces a tensor split, whose fused row reports a per-card
 //! average: the average times the card count is the same total either way.
 
+use ananke_config::placement::SplitMode;
+
 use crate::{
-    config::validate::SplitMode,
     estimator::{
         tuning::{
             COMPUTE_MODEL, COMPUTE_MODEL_DEFAULT, ComputeCoefficients, DEFAULT_UBATCH,

@@ -67,6 +67,7 @@
 // `scripts/calibration/analyse.py` generates from the measurement dataset and
 // `build.rs` turns into compile-time constants. Each carries its evidence in
 // its own doc comment — how many models it rests on, and where it is weak.
+
 pub use crate::estimator::tuning::DEFAULT_CACHE_RAM_MB;
 use crate::{
     estimator::{
@@ -116,7 +117,7 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
     // The operator runs several services this way, and every one of them was
     // under-predicted by that much.
     let tensor_split = if inputs.visible_devices > 1
-        && inputs.split_mode == crate::config::validate::SplitMode::Tensor
+        && inputs.split_mode == ananke_config::placement::SplitMode::Tensor
     {
         tensor_split_baseline(arch)
     } else {
@@ -332,7 +333,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     let ubatch = inputs.ubatch.unwrap_or(DEFAULT_UBATCH).max(1) as u64;
     let n_tokens = context.min(ubatch);
 
-    // `EstimatorInputs::from_service` resolves `-fa auto` the way the runtime
+    // `crate::config::service_inputs::estimator_inputs` resolves `-fa auto` the way the runtime
     // will, so an unset value here only arises in tests. Default to off there,
     // which is the larger mask.
     let flash_attn = inputs.flash_attn.unwrap_or(false);
@@ -464,7 +465,7 @@ fn mainline_tensor_moe_bytes(
 ) -> u64 {
     if inputs.ik_llama
         || !inputs.host_resident_experts
-        || inputs.split_mode != crate::config::validate::SplitMode::Tensor
+        || inputs.split_mode != ananke_config::placement::SplitMode::Tensor
     {
         return 0;
     }
@@ -482,7 +483,7 @@ fn mask_copies(inputs: &EstimatorInputs<'_>) -> u64 {
     let split_across_devices = inputs.visible_devices > 1
         && matches!(
             inputs.split_mode,
-            crate::config::validate::SplitMode::Layer | crate::config::validate::SplitMode::Row
+            ananke_config::placement::SplitMode::Layer | ananke_config::placement::SplitMode::Row
         );
     if split_across_devices && !inputs.host_resident_experts {
         MAINLINE_LAYER_SPLIT_MASK_COPIES
@@ -618,7 +619,7 @@ mod tests {
         EstimatorInputs {
             visible_devices: 1,
             host_resident_experts: false,
-            split_mode: crate::config::validate::SplitMode::Layer,
+            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "t",
             model: std::path::Path::new("/m.gguf"),
             mmproj: None,
@@ -1064,11 +1065,10 @@ mod tests {
 
 #[cfg(test)]
 mod measured_tests {
+    use ananke_config::placement::SplitMode;
+
     use super::*;
-    use crate::{
-        config::validate::SplitMode,
-        estimator::llama::test_support::{fake_summary, inputs},
-    };
+    use crate::estimator::llama::test_support::{fake_summary, inputs};
 
     /// Two cards under layer split replicate the masks; one card does not,
     /// and neither does tensor split, where llama.cpp fuses the devices.

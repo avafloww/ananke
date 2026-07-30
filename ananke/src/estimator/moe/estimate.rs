@@ -214,7 +214,7 @@ mod tests {
         let inputs = EstimatorInputs {
             host_resident_experts: false,
             visible_devices: 1,
-            split_mode: crate::config::validate::SplitMode::Layer,
+            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
             model: Path::new("/fake"),
             mmproj: None,
@@ -333,7 +333,7 @@ mod tests {
         let inputs = EstimatorInputs {
             host_resident_experts: false,
             visible_devices: 1,
-            split_mode: crate::config::validate::SplitMode::Layer,
+            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
             model: Path::new("/fake"),
             mmproj: None,
@@ -478,7 +478,7 @@ mod tests {
         let inputs = EstimatorInputs {
             host_resident_experts: false,
             visible_devices: 1,
-            split_mode: crate::config::validate::SplitMode::Layer,
+            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
             model: Path::new("/fake"),
             mmproj: None,
@@ -523,7 +523,7 @@ mod tests {
         let inputs_q8 = EstimatorInputs {
             host_resident_experts: false,
             visible_devices: 1,
-            split_mode: crate::config::validate::SplitMode::Layer,
+            split_mode: ananke_config::placement::SplitMode::Layer,
             cache_type_k: Some("q8_0"),
             cache_type_v: Some("q8_0"),
             ..inputs

@@ -215,7 +215,7 @@ fn render_llama_server_flags(
     // operator already passes the flag through `extra_args` — duplicating it
     // would leave two conflicting values on the command line, and the
     // estimator reads theirs for the reservation.
-    if crate::estimator::types::cache_ram_from_extra_args(&svc.extra_args).is_none() {
+    if crate::config::service_inputs::cache_ram_from_extra_args(&svc.extra_args).is_none() {
         args.push("-cram".into());
         args.push(
             lc.cache_ram_mb

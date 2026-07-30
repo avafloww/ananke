@@ -482,7 +482,7 @@ fn an_operator_supplied_cache_ram_is_not_duplicated() {
         "exactly one cache-ram flag should reach the child: {args:?}"
     );
     assert_eq!(
-        crate::estimator::types::cache_ram_from_extra_args(&svc.extra_args),
+        crate::config::service_inputs::cache_ram_from_extra_args(&svc.extra_args),
         Some(0),
         "the estimator must read the operator's value"
     );

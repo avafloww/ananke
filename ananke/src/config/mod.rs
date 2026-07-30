@@ -8,6 +8,7 @@ pub mod file;
 pub mod manager;
 pub mod merge;
 pub mod parse;
+pub mod service_inputs;
 pub mod validate;
 
 pub use file::{PathSources, resolve_config_path, resolve_from_env};

@@ -96,7 +96,7 @@ mod tests {
             ubatch: None,
             visible_devices: 1,
             host_resident_experts: false,
-            split_mode: crate::config::validate::SplitMode::Layer,
+            split_mode: ananke_config::placement::SplitMode::Layer,
             cache_type_k: None,
             cache_type_v: None,
             override_tensor: EMPTY,

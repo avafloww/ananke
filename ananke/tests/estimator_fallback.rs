@@ -22,7 +22,7 @@ fn unknown_architecture_rejects_unless_opted_in() {
 
     let mut svc = common::minimal_llama_service("demo", 0);
     common::set_model_path(&mut svc, path);
-    let inputs = estimator::EstimatorInputs::from_service(&svc).unwrap();
+    let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
 
     match estimator::estimate_from_path(&fs, &inputs) {
         Err(EstimatorError::UnknownArchitecture { architecture }) => {
@@ -45,7 +45,7 @@ fn fallback_estimator_runs_when_opted_in() {
 
     let mut svc = common::minimal_llama_service("demo", 0);
     common::set_model_path(&mut svc, path);
-    let mut inputs = estimator::EstimatorInputs::from_service(&svc).unwrap();
+    let mut inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
     inputs.allow_fallback = true;
     let est = estimator::estimate_from_path(&fs, &inputs).unwrap();
     assert!(
