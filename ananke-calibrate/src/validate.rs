@@ -126,37 +126,13 @@ pub fn placement_inputs(record: &Record) -> PlacementInputs {
 /// The driver reserves a little of each card, which is why a nominally 24576 MiB
 /// 3090 reads ~24124 free. Pack against what was actually available.
 pub fn snapshot(record: &Record) -> DeviceSnapshot {
-    let ids = record.gpu_ids();
-    let gpus = ids
+    let capacities: Vec<u64> = record
+        .hardware
+        .gpus
         .iter()
-        .enumerate()
-        .map(|(index, &id)| {
-            let total = record
-                .hardware
-                .gpus
-                .get(index)
-                .map(|g| g.memory_total_mib)
-                .unwrap_or(24_576)
-                * 1024
-                * 1024;
-            GpuSnapshot {
-                id,
-                name: format!("GPU {id}"),
-                total_bytes: total,
-                free_bytes: total,
-            }
-        })
+        .map(|g| g.memory_total_mib)
         .collect();
-    DeviceSnapshot {
-        gpus,
-        cpu: Some(ananke_placement::devices::CpuSnapshot {
-            total_bytes: CPU_CAPACITY_MIB * 1024 * 1024,
-            available_bytes: CPU_CAPACITY_MIB * 1024 * 1024,
-        }),
-        // A validation run compares the estimator against a recorded
-        // measurement; nothing here is time-dependent.
-        taken_at_ms: 0,
-    }
+    snapshot_for(&record.gpu_ids(), &capacities)
 }
 
 fn split_mode(split: Option<&str>) -> SplitMode {
@@ -205,6 +181,49 @@ pub fn gpu_totals(per_device: &BTreeMap<DeviceSlot, u64>) -> (u64, usize) {
         }
     }
     (total / (1024 * 1024), cards)
+}
+
+/// A snapshot of the given cards at the given capacities.
+///
+/// `capacities_mib` is positional against `ids`; a card without an entry gets the
+/// campaign's 24576 MiB default.
+pub fn snapshot_for(ids: &[u32], capacities_mib: &[u64]) -> DeviceSnapshot {
+    let gpus = ids
+        .iter()
+        .enumerate()
+        .map(|(index, &id)| {
+            let total = capacities_mib.get(index).copied().unwrap_or(24_576) * 1024 * 1024;
+            GpuSnapshot {
+                id,
+                name: format!("GPU {id}"),
+                total_bytes: total,
+                free_bytes: total,
+            }
+        })
+        .collect();
+    DeviceSnapshot {
+        gpus,
+        cpu: Some(ananke_placement::devices::CpuSnapshot {
+            total_bytes: CPU_CAPACITY_MIB * 1024 * 1024,
+            available_bytes: CPU_CAPACITY_MIB * 1024 * 1024,
+        }),
+        taken_at_ms: 0,
+    }
+}
+
+/// The reservation summed over the GPU slots, in MiB.
+///
+/// Distinct from the *prediction* `validate` compares: this carries the slop the
+/// packer adds and is what the cards are actually asked to hold.
+pub fn gpu_reserved_mib(packed: &ananke_placement::Packed) -> u64 {
+    packed
+        .allocation
+        .bytes
+        .iter()
+        .filter(|(id, _)| matches!(id, ananke_placement::devices::DeviceId::Gpu(_)))
+        .map(|(_, &b)| b)
+        .sum::<u64>()
+        / (1024 * 1024)
 }
 
 /// The neutral corrections a validation run packs with: this compares the

@@ -16,6 +16,10 @@ use serde::Deserialize;
 /// One measured cell.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Record {
+    /// A hash of the factors, so two records sharing one describe the same
+    /// configuration. Absent from the oldest schema versions.
+    #[serde(default)]
+    pub cell: Option<String>,
     pub status: String,
     pub factors: Factors,
     #[serde(default)]
@@ -75,6 +79,52 @@ pub struct Factors {
 pub struct Parsed {
     #[serde(default)]
     pub arch: Option<String>,
+    /// Hidden width. Absent where the runtime's log did not name it.
+    #[serde(default)]
+    pub n_embd: Option<u32>,
+    #[serde(default)]
+    pub n_vocab: Option<u64>,
+    /// Set on the Gemma E-variants, which keep their embeddings per layer on the
+    /// host. That is a different graph under the same architecture string, so it
+    /// discriminates a fit variant.
+    #[serde(default)]
+    pub per_layer_token_embd: Option<bool>,
+    /// llama.cpp's memory breakdown table, one row per device — or a single fused
+    /// `Meta()` row under a tensor split. Empty for a runtime that prints no
+    /// table at all, which is ik.
+    #[serde(default)]
+    pub devices: Vec<Device>,
+    /// The runtime's own buffer lines, one entry per context it created. The only
+    /// route to a per-device figure where there is no breakdown table.
+    #[serde(default)]
+    pub contexts: Vec<Context>,
+}
+
+/// One row of llama.cpp's memory breakdown table.
+///
+/// A tensor split reports a single fused row whose `total`, `free`, and `self`
+/// are summed across cards but whose `model`, `kv`, and `compute` columns are one
+/// card's share. The row is recognised by its `device` name starting `Meta`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Device {
+    #[serde(default)]
+    pub device: String,
+    #[serde(default)]
+    pub model_mib: f64,
+    #[serde(default)]
+    pub kv_mib: f64,
+    #[serde(default)]
+    pub compute_mib: f64,
+    #[serde(default)]
+    pub unaccounted_mib: f64,
+}
+
+/// One llama context's buffer lines, keyed by backend name then by role
+/// (`model`, `kv`, `rs`, `compute`, `output`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Context {
+    #[serde(default)]
+    pub buffers: BTreeMap<String, BTreeMap<String, f64>>,
 }
 
 /// The machine the cell ran on.
@@ -93,12 +143,29 @@ pub struct HardwareGpu {
 pub struct Provenance {
     #[serde(default)]
     pub model_key: String,
+    /// When the cell was measured, ISO-8601. Compared as a string, which sorts
+    /// correctly for that format and avoids a date dependency.
+    #[serde(default)]
+    pub measured_at_utc: String,
 }
 
 impl Record {
     /// The driver's total for the whole process, in MiB.
     pub fn gpu_used_mib(&self) -> Option<u64> {
         self.rss.get("gpu_used_mib").and_then(|v| v.as_u64())
+    }
+
+    /// One card's driver reading, in MiB.
+    ///
+    /// Keyed by the *physical* id: the sampler records `gpu{id}_used_mib` while
+    /// the loader's breakdown rows are in visible order, so a cell pinned to
+    /// GPU 1 has its usage under `gpu1_used_mib` and its breakdown row under
+    /// `CUDA0`. A zero reads as absent, as it does on the Python side.
+    pub fn gpu_card_used_mib(&self, card: &str) -> Option<f64> {
+        self.rss
+            .get(&format!("gpu{card}_used_mib"))
+            .and_then(|v| v.as_f64())
+            .filter(|v| *v != 0.0)
     }
 
     /// How many cards the driver reported usage on.
