@@ -66,7 +66,7 @@ jobs:
       # when a regime feeding a constant varies in none of the axes its rule
       # depends on.
       - name: Calibration coverage
-        run: python3 scripts/calibration/coverage.py --check
+        run: cargo run -q -p ananke-calibrate --bin coverage -- --check
 
       - name: Docs check (configuration)
         env:
