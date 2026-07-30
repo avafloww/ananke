@@ -135,6 +135,15 @@ mod fake {
             fake
         }
 
+        /// Something new landed on disk, as appending a cell's row does.
+        ///
+        /// A commit clears the staged flag, so without this a driver test would see
+        /// `NothingToDo` for every commit after the first — the fake would be
+        /// modelling a campaign that measures nothing.
+        pub fn touch(&self) {
+            self.state.lock().staged = true;
+        }
+
         /// Make every commit fail, as a missing signing key would.
         pub fn failing(reason: &str) -> Self {
             let fake = Self::dirty();
