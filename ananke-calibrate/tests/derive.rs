@@ -286,15 +286,6 @@ fn mtp_draft_compute_matches() {
 }
 
 #[test]
-fn mtp_compute_intermediates_match() {
-    // Unwired on the Python side, so the committed table is whatever an earlier run
-    // left. It still reproduces, which is what says the port of the deriver is right
-    // rather than merely plausible.
-    let rates = mtp::mtp_compute_intermediates(&rows()).expect("derives");
-    assert_eq!(rates.by_arch, table_only("mtp_compute_intermediates"));
-}
-
-#[test]
 fn table_less_observations_match() {
     let observed = vram::table_less_observations(&rows()).expect("derives");
     let want: BTreeMap<String, BTreeMap<String, i64>> =

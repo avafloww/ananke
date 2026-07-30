@@ -647,14 +647,6 @@
     "default": 54
   },
   "measurements": 582,
-  "mtp_compute_intermediates": {
-    "$comment": "n_embd-wide f32 graph intermediates the MTP draft context holds live per batch token, by architecture. Its whole per-device compute share is `ubatch x (this x n_embd x 4 + 2 x n_kv)`, the same shape as the main context's, and the total MTP cost is the draft cache's physical size plus this share on every spanned device.",
-    "by_arch": {
-      "qwen35": 10,
-      "qwen35moe": 12
-    },
-    "default": 12
-  },
   "mtp_draft_compute_base_mib": {
     "$comment": "The MTP draft context's own per-device compute buffer at zero context, by architecture. read from the runtime's own draft-context buffers, cross-checked against its [spec] line: qwen35 4 context(s) 150+0.361/1k; qwen35moe 3 context(s) 76+0.445/1k. The slope is stored per 1000 of `ctx / 1024`. Flat in the slot count, the draft cache spanning every cell rather than one stream's share.",
     "by_arch": {
@@ -670,22 +662,6 @@
       "qwen35moe": 445
     },
     "default": 445
-  },
-  "mtp_per_device_mib": {
-    "$comment": "Embedded-MTP overhead per spanned device, beyond the draft cache and the per-slot term, by architecture. Single-card cells separate the two: at one slot the residual is 320 MiB on one card against 520 on two. `default` is the largest measured.",
-    "by_arch": {
-      "qwen35": 201,
-      "qwen35moe": 153
-    },
-    "default": 201
-  },
-  "mtp_per_slot_mib": {
-    "$comment": "Embedded-MTP overhead per serving slot, beyond the draft cache, by architecture. Per *process*: the increment per slot is the same on one card as on two. `default` is the largest measured, so an unmeasured MTP architecture over-reserves rather than under. 3 (architecture, card count, context) group(s) fitted against the driver delta net of the modelled draft cache: qwen35 2card ctx32768 461/slot, 201/device; qwen35moe 1card ctx32768 201/slot, 119/device; qwen35moe 2card ctx32768 213/slot, 153/device. The larger of each is taken per architecture. Replaces a term calibrated against llama.cpp's own [spec] line, which reports well under half the delta the process shows and scaled the wrong way in the slot count.",
-    "by_arch": {
-      "qwen35": 461,
-      "qwen35moe": 213
-    },
-    "default": 461
   },
   "mtp_slot_scaling": {
     "$comment": "Reported, not fitted. The MTP overhead measured at a fixed context across slot counts, which is what separates a genuine slot term from the longer context the first campaign confounded it with.",

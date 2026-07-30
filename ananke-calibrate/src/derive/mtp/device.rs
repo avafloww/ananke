@@ -11,9 +11,9 @@ use std::collections::BTreeMap;
 
 use crate::{
     derive::{
-        Scalar, Table,
+        Scalar,
         error::{DeriveError, Result},
-        mtp::pairs::{MASK_BYTES_PER_TOKEN_PAIR, mtp_pairs},
+        mtp::pairs::mtp_pairs,
         shape::device_context_sums,
         stats::round_half_even,
     },
@@ -252,93 +252,4 @@ pub struct DraftComputeFit {
     /// The slope, in thousandths of a MiB per 1024 context tokens.
     pub slopes: BTreeMap<String, i64>,
     pub evidence: String,
-}
-
-/// The MTP draft context's compute buffer, in the same shape as the main one.
-///
-/// llama.cpp states the whole cost itself:
-///
-/// ```text
-/// [spec] estimated memory usage of MTP context is N MiB
-/// ```
-///
-/// is the draft cache's *physical* size plus **one** device's share of that context's
-/// compute buffer — which the per-context parse confirms to the second decimal on
-/// every measured cell. So the compute share is read off that line rather than fitted
-/// from a with/without driver delta, which is how the constants this replaces came to
-/// absorb the speculatively-replicated recurrent state and then double-count it.
-///
-/// The share has the main model's two terms: an f16 KQ mask of two bytes per (batch
-/// token, cache token), and a flat count of hidden-width f32 intermediates per batch
-/// token. Net of the mask the remainder is genuinely flat — 68 MiB for qwen35 at
-/// contexts 65536, 131072, and 360448 alike, 40 for qwen35moe at 65536 and 524288 — so
-/// only the count is derived.
-///
-/// Not reached by `emit`: the Python leaves this deriver unwired, so the table it
-/// would write is whatever a previous run left in `tuning.json`. Ported because the
-/// shape is the record of what the measurement showed, and re-wiring it is a decision
-/// for whoever next re-runs the campaign.
-pub fn mtp_compute_intermediates(rows: &[Record]) -> Result<Table> {
-    let mut per_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-    for record in rows {
-        let (factors, parsed) = (&record.factors, &record.parsed);
-        let Some(reported) = parsed.mtp_context_mib.filter(|v| *v != 0.0) else {
-            continue;
-        };
-        let nextn = parsed.nextn_predict_layers.unwrap_or(0);
-        let n_embd = parsed.n_embd.unwrap_or(0);
-        if nextn == 0 || n_embd == 0 {
-            continue;
-        }
-        // The MTP context is the one whose cache spans exactly the head's layers and
-        // which has no recurrent module of its own.
-        let pool = parsed
-            .contexts
-            .iter()
-            .filter(|context| context.rs_pool.is_none())
-            .flat_map(|context| context.kv_pools.iter())
-            .find(|pool| pool.layers == nextn);
-        let Some(pool) = pool else {
-            continue;
-        };
-        let batch = factors.ubatch_or_default();
-        let streams = if factors.kv_unified {
-            1
-        } else {
-            factors.parallel.unwrap_or(1).max(1)
-        };
-        let share = (reported - pool.total_mib) * 1048576.0;
-        let mask = (MASK_BYTES_PER_TOKEN_PAIR * u64::from(factors.ctx / streams) * u64::from(batch))
-            as f64;
-        per_arch
-            .entry(parsed.arch.clone().unwrap_or_else(|| "None".to_string()))
-            .or_default()
-            .push((share - mask) / f64::from(batch) / (f64::from(n_embd) * 4.0));
-    }
-    if per_arch.is_empty() {
-        return Err(DeriveError::no_data("no cell reports an MTP context size"));
-    }
-    let table: BTreeMap<String, i64> = per_arch
-        .iter()
-        .map(|(arch, values)| {
-            let worst = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            (arch.clone(), (worst.ceil() as i64).max(0))
-        })
-        .collect();
-    let detail = table
-        .iter()
-        .map(|(arch, value)| format!("{arch} {value}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Ok(Table {
-        by_arch: table,
-        evidence: format!(
-            "from llama.cpp's own `estimated memory usage of MTP context` line, net of \
-             the draft cache it includes and of the f16 KQ mask: {detail} n_embd-wide \
-             f32 intermediates per batch token. Worst cell per architecture; the \
-             remainder is flat in context above ctx 32768 and ~30 MiB (qwen35) and ~4 \
-             MiB (qwen35moe) higher at it, so the long contexts over-reserve by that \
-             much."
-        ),
-    })
 }

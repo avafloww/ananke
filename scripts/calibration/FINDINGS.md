@@ -1271,3 +1271,30 @@ Not measurable here:
   allocated on the first batched prefill. It is bounded and it saturates, so a
   constant is the right shape; a machine with a different CUDA runtime may
   still need different numbers, and nothing in the derivation would notice.
+
+## The `[spec]` line decomposes exactly, and the residual is flat
+
+The line llama.cpp prints at load,
+
+```text
+[spec] estimated memory usage of MTP context is N MiB
+```
+
+is the draft cache's *physical* size plus **one** device's share of that
+context's compute buffer. The per-context parse confirms it to the second
+decimal on every measured cell.
+
+That share has the main model's two terms: an f16 KQ mask at two bytes per
+(batch token, cache token), and a flat count of hidden-width f32 intermediates
+per batch token. Net of the mask the remainder is flat in context — 68 MiB for
+qwen35 at 65536, 131072, and 360448 alike, 40 MiB for qwen35moe at 65536 and
+524288 — which puts the count at 10 n_embd-wide f32 intermediates per batch
+token for qwen35 and 12 for qwen35moe.
+
+Nothing charges this. The MTP terms the estimator uses are fitted from the
+driver delta between paired with-MTP and without-MTP cells, which measures the
+whole cost rather than the part this line can see. The decomposition is
+recorded because it is what says the `[spec]` line is not the cost, and because
+an implementation that wanted to charge the compute share directly would start
+here.
+
