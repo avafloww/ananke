@@ -373,10 +373,14 @@ _RS_POOL = re.compile(
     r"S \([a-z0-9_]+\): *([0-9.]+) MiB")
 # Per-device buffer lines, whatever the loader called the stage. `Meta()` is
 # the fused device a tensor split reports, and its figure is ONE card's share.
+# `llm_load_tensors` is ik_llama's spelling and it omits the word `model`
+# entirely — `CUDA0 buffer size = 6992.89` — so a pattern demanding the kind
+# recorded nothing at all for the fork, which is most of what runs in
+# production. The kind is taken from the stage when the line does not name one.
 _DEV_BUFFER = re.compile(
-    r"(?:load_tensors|llama_kv_cache(?:_init)?|llama_memory_recurrent|sched_reserve"
-    r"|llama_init_from_model|llama_context): +([A-Za-z0-9_()]+) +"
-    r"(model|KV|RS|compute|output) buffer size *= *([0-9.]+)")
+    r"(load_tensors|llm_load_tensors|llama_kv_cache(?:_init)?|llama_memory_recurrent"
+    r"|sched_reserve|llama_init_from_model|llama_context): +([A-Za-z0-9_()]+) +"
+    r"(?:(model|KV|RS|compute|output) +)?buffer size *= *([0-9.]+)")
 _GRAPH_SHAPE = re.compile(r"graph (nodes|splits) += *(\d+)")
 # What a vision projector costs, as llama.cpp's own accounting states it. The
 # `fit_params_target` line is the whole per-device figure — the projector's
@@ -486,7 +490,9 @@ def _parse_contexts(text: str) -> list[dict[str, object]]:
         segment = text[start:boundary.end()]
         start = boundary.end()
         buffers: dict[str, dict[str, float]] = {}
-        for device, kind, mib in _DEV_BUFFER.findall(segment):
+        for stage, device, kind, mib in _DEV_BUFFER.findall(segment):
+            if not kind:
+                kind = "model" if stage.endswith("load_tensors") else "compute"
             buffers.setdefault(device, {})[kind.lower()] = float(mib)
         entry: dict[str, object] = {"buffers": buffers}
         kv_pools = []

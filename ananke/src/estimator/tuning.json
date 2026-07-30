@@ -128,7 +128,7 @@
           "glm-dsa"
         ],
         "base_mib": 3700,
-        "evidence": "GLM-5.2 measured at ctx 8192-131072 and ub 256-2048. The host-side arena for this architecture is exact; this GPU curve is a separate quantity and was not re-fitted.",
+        "evidence": "Held, not fitted. GLM-5.2's cells carry no memory-breakdown table (ik_llama prints none), and `analyse.py`'s `table_less_compute` now recovers the per-device figure from the driver total: 901, 986, 1332, and 1968 MiB at ctx 8192, 32768, 65536, and 131072 at ubatch 512, against 6370 at the production ubatch 2048 and ctx 131072. The curve's affine-in-batch shape cannot carry that: the service runs `-amb 512`, which chunks ik's attention, so the graph changes regime above ubatch 512 and the context and batch terms couple. Fitting the shape anyway reproduces the low-batch cells and misses production by +7.8%; this value reproduces production and over-reserves the low-batch cells. Two more above-threshold contexts would settle it.",
         "slope_mib_per_1k": 15,
         "slope_scales_with_ubatch": true
       },
@@ -452,6 +452,62 @@
       "talkie": 164
     },
     "default": 6144
+  },
+  "table_less_compute_observations": {
+    "$comment": "Per-device `compute + unaccounted` for architectures whose runtime prints no memory-breakdown table, recovered from the driver total less the weights and the context. Recorded, not fitted: these are the measurements behind a `compute_buffer_curves` entry that has to be held by hand, so the held value's justification cannot go stale. Deliberately not pooled into the curves \u2014 the two runtimes build different graphs for one architecture, and pooling them moved four curves at once. MiB per device, keyed by context and batch.",
+    "by_arch": {
+      "gemma3": {
+        "ctx32768/ub2048": 1619,
+        "ctx32768/ub512": 648,
+        "ctx8192/ub512": 620
+      },
+      "glm-dsa": {
+        "ctx131072/ub2048": 6370,
+        "ctx131072/ub512": 1968,
+        "ctx32768/ub1024": 2914,
+        "ctx32768/ub2048": 2585,
+        "ctx32768/ub256": 1030,
+        "ctx32768/ub512": 1236,
+        "ctx65536/ub512": 1332,
+        "ctx8192/ub512": 901
+      },
+      "laguna": {
+        "ctx131072/ub2048": 2081,
+        "ctx131072/ub512": 691,
+        "ctx32768/ub1024": 1008,
+        "ctx32768/ub2048": 1397,
+        "ctx32768/ub256": 438,
+        "ctx32768/ub512": 568,
+        "ctx65536/ub512": 569,
+        "ctx8192/ub512": 503
+      },
+      "llama": {
+        "ctx32768/ub2048": 1136,
+        "ctx32768/ub512": 604,
+        "ctx65536/ub512": 540,
+        "ctx8192/ub512": 512
+      },
+      "qwen3": {
+        "ctx32768/ub2048": 1093,
+        "ctx32768/ub512": 657,
+        "ctx65536/ub512": 545,
+        "ctx8192/ub512": 517
+      },
+      "qwen35": {
+        "ctx32768/ub2048": 1591,
+        "ctx32768/ub512": 882,
+        "ctx65536/ub512": 688,
+        "ctx8192/ub512": 660
+      },
+      "qwen35moe": {
+        "ctx32768/ub1024": 1251,
+        "ctx32768/ub2048": 1780,
+        "ctx32768/ub256": 586,
+        "ctx32768/ub512": 956,
+        "ctx65536/ub512": 747,
+        "ctx8192/ub512": 719
+      }
+    }
   },
   "tensor_compute_curves": {
     "$comment": "Per-device compute buffer under `--split-mode tensor`, charged to every spanned GPU rather than divided between them: llama.cpp builds the same graph on each device, and the measured compute column reads identically on one card and on two at every context in the set. Same shape and same architecture grouping as `compute_buffer_curves`, fitted against tensor cells. An architecture absent here uses `default`.",

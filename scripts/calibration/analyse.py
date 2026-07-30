@@ -2036,6 +2036,7 @@ def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]
     return out
 
 
+_TABLE_LESS: dict[str, dict[str, float]] = {}
 _NO_FA_SCORE: dict[str, int] = {}
 _MTP_INTERMEDIATES: dict[str, int] = {}
 _TENSOR_INTERMEDIATES: dict[str, int] = {}
@@ -2058,6 +2059,75 @@ def _measured_at(record: dict) -> float:
 # the measured values, not over-reserve. The previous 1.6x margin was a
 # fudge factor that inflated every reservation by 60%.
 CURVE_MARGIN = 1.0
+
+
+def table_less_compute(record: dict) -> float | None:
+    """Per-device `compute + unaccounted` for a cell with no breakdown table.
+
+    ik_llama does not print llama.cpp's memory breakdown, so the column the
+    curve fit wants does not exist. It is still recoverable: the driver's total
+    for the process, less the weights it loaded onto each card and less the
+    context it allocated there, over the number of cards. Everything left is
+    the graph plus whatever the driver holds that the runtime never named —
+    which is exactly what the table's two columns sum to.
+
+    Reproduces the production GLM-5.2 cell: 38708 MiB from the driver against
+    14064 of weights and 11904 of cache leaves 6370 per card, and the runtime's
+    own compute-buffer lines account for 6260 of that.
+    """
+    parsed, factors = record["parsed"], record["factors"]
+    total = record["rss"].get("gpu_used_mib")
+    devices = max(1, len([g for g in factors["gpus"].split(",") if g]))
+    if not total:
+        return None
+    weights = kv = 0.0
+    for context in parsed.get("contexts", []):
+        for name, buffers in context["buffers"].items():
+            if not name.startswith("CUDA") or name.endswith("Host"):
+                continue
+            weights += buffers.get("model", 0.0)
+            kv += buffers.get("kv", 0.0) + buffers.get("rs", 0.0)
+    if not weights:
+        return None
+    remainder = total - weights - kv
+    # A negative remainder means the buffer lines and the driver disagree about
+    # what is on the cards — a partial offload the parse cannot attribute — and
+    # is not a compute-buffer measurement.
+    return remainder / devices if remainder > 0 else None
+
+
+def report_table_less_compute(rows: list[dict]) -> str:
+    """Record the per-device compute of architectures the curve fit cannot see.
+
+    ik_llama prints no memory-breakdown table, so an ik-only architecture's
+    cells never reach `derive_curve` and its entry has to be held by hand. That
+    is a reason to write the numbers down where they cannot go stale, not a
+    reason to leave them in a comment: `table_less_compute` recovers them, and
+    this puts them in `tuning.json` beside the held value they justify.
+
+    Pooling them into the mainline curves is the thing not to do. The two
+    runtimes build different graphs for the same architecture, and trying it
+    moved four curves at once and took GLM-5.2 from -3.2% to +7.8%.
+    """
+    observed: dict[str, dict[str, float]] = defaultdict(dict)
+    for record in rows:
+        parsed, factors = record["parsed"], record["factors"]
+        if parsed.get("devices") or not parsed.get("arch"):
+            continue
+        if factors["flash_attn"] != "on" or factors["spec_type"]:
+            continue
+        per_device = table_less_compute(record)
+        if per_device is None:
+            continue
+        key = f"ctx{factors['ctx']}/ub{factors['ubatch'] or 512}"
+        observed[parsed["arch"]][key] = max(
+            observed[parsed["arch"]].get(key, 0.0), round(per_device))
+    if not observed:
+        raise ValueError("every architecture has a memory-breakdown table")
+    _TABLE_LESS.clear()
+    _TABLE_LESS.update({a: dict(sorted(v.items())) for a, v in observed.items()})
+    return ", ".join(
+        f"{arch} at {len(points)} points" for arch, points in sorted(_TABLE_LESS.items()))
 
 
 def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
@@ -2095,7 +2165,7 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
         by_ctx_ub: dict[tuple[int, int], list[float]] = defaultdict(list)
         for record in rows:
             parsed, factors = record["parsed"], record["factors"]
-            if parsed.get("arch") not in archs or not parsed.get("devices"):
+            if parsed.get("arch") not in archs:
                 continue
             if any(m in record["provenance"]["model_key"] for m in exclude_models):
                 continue
@@ -2112,6 +2182,16 @@ def derive_curve(archs: tuple[str, ...], exclude_models: tuple[str, ...] = (),
             # because it was absorbed into the curves this way — a quantised
             # cache *reduces* total VRAM (smaller KV outweighs the compute
             # increase), so a separate charge double-counted.
+            if not parsed.get("devices"):
+                # ik_llama prints no memory-breakdown table. Its cells are
+                # readable now — `table_less_compute` recovers the same
+                # quantity from the driver total — but they are deliberately
+                # *not* pooled into these curves: the two runtimes build
+                # different graphs for the same architecture, and mixing them
+                # moved four curves at once when it was tried. An ik-only
+                # architecture needs its own entry, not a share of a mainline
+                # one. See `report_table_less_compute`.
+                continue
             if split == "tensor":
                 # One fused `Meta()` row, whose compute column is already a
                 # per-device figure. Its own `unaccounted` is not, so it is
@@ -2445,7 +2525,10 @@ def check_table_signs(document: dict) -> None:
     for name, table in document.items():
         if not isinstance(table, dict) or name in SIGNED_TABLES:
             continue
-        negative = {k: v for k, v in (table.get("by_arch") or {}).items() if v < 0}
+        # A nested `by_arch` holds observations rather than one rate per
+        # architecture, and `build.rs` does not read those at all.
+        negative = {k: v for k, v in (table.get("by_arch") or {}).items()
+                    if isinstance(v, (int, float)) and v < 0}
         if negative:
             raise Disagreement(
                 f"{name} holds negative values {negative} but is read through "
@@ -2512,7 +2595,8 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         derive_per_slot_bytes(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"per-slot host bytes: cannot derive — {error}")
-    for name, table_deriver in (("unfused-attention score rates", derive_no_flash_attn_score),
+    for name, table_deriver in (("table-less compute observations", report_table_less_compute),
+                                ("unfused-attention score rates", derive_no_flash_attn_score),
                                 ("MTP compute intermediates", derive_mtp_compute_intermediates),
                                 ("tensor compute intermediates", derive_tensor_intermediates),
                                 ("tensor quantised-cache rates", derive_tensor_quantised),
@@ -2639,6 +2723,21 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "belongs in the packer's slop, beside the prompt cache.",
             "default": max(_PER_SLOT.values()),
             "by_arch": dict(sorted(_PER_SLOT.items())),
+        }
+    if _TABLE_LESS:
+        document["table_less_compute_observations"] = {
+            "$comment": "Per-device `compute + unaccounted` for architectures "
+                        "whose runtime prints no memory-breakdown table, "
+                        "recovered from the driver total less the weights and "
+                        "the context. Recorded, not fitted: these are the "
+                        "measurements behind a `compute_buffer_curves` entry "
+                        "that has to be held by hand, so the held value's "
+                        "justification cannot go stale. Deliberately not pooled "
+                        "into the curves — the two runtimes build different "
+                        "graphs for one architecture, and pooling them moved "
+                        "four curves at once. MiB per device, keyed by context "
+                        "and batch.",
+            "by_arch": dict(sorted(_TABLE_LESS.items())),
         }
     if _NO_FA_SCORE:
         document["no_flash_attn_score_bytes"] = {
