@@ -2036,6 +2036,7 @@ def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]
     return out
 
 
+_IK_COMPUTE: dict[str, dict[str, int]] = {}
 _TABLE_LESS: dict[str, dict[str, float]] = {}
 _NO_FA_SCORE: dict[str, int] = {}
 _MTP_INTERMEDIATES: dict[str, int] = {}
@@ -2094,6 +2095,247 @@ def table_less_compute(record: dict) -> float | None:
     # what is on the cards — a partial offload the parse cannot attribute — and
     # is not a compute-buffer measurement.
     return remainder / devices if remainder > 0 else None
+
+
+def derive_ik_compute(rows: list[dict]) -> str:
+    """ik's per-device layer-split compute buffer, by architecture.
+
+    The fork's compute buffer has a shape the affine curves cannot express, and
+    the sweep that shows it varies batch and context independently:
+
+        compute = flat
+                + per_batch_token x min(ubatch, CHUNK)
+                + per_doubling x log2(max(ubatch, CHUNK) / CHUNK)
+                + per_token_pair x ubatch x n_kv
+
+    The third term is the surprise. Above ik's attention chunk the buffer grows
+    by a *constant* per doubling of the batch rather than in proportion to it:
+    Qwen3.6-35B-A3B measures 719, 1227, and 1732 MiB at ubatch 512, 1024, and
+    2048, which is two equal steps of ~505. Below the chunk it is linear
+    (ubatch 256 measures 586). An affine curve fitted at ubatch 512 misses the
+    2048 cells by 30-40%.
+
+    The fourth term is the mask, and its width is what distinguishes the
+    architectures: one byte per (batch token, cache token) for qwen35moe's full
+    attention, ~3 for laguna, ~20 for glm-dsa — whose DSA indexer scores every
+    cache token and so carries far more per token than a mask alone.
+
+    Fitted on **two-card** cells only. Per-device compute genuinely differs by
+    card count under a layer split — the head card also materialises the logits
+    — and pooling the two put a 1-card reading 177 MiB above the 2-card fit for
+    the same (context, batch).
+    """
+    per_arch: dict[str, dict[tuple[int, int], float]] = defaultdict(dict)
+    for record in rows:
+        factors, parsed = record["factors"], record["parsed"]
+        if factors["runtime"] != "ik" or factors["flash_attn"] != "on":
+            continue
+        if factors["kv_type"] != "f16" or factors["spec_type"]:
+            continue
+        if len([g for g in factors["gpus"].split(",") if g]) != 2:
+            continue
+        measured = table_less_compute(record)
+        if not measured:
+            continue
+        key = (factors["ctx"], factors["ubatch"] or 512)
+        seen = per_arch[parsed["arch"]]
+        # The worst reading at each point: the reservation has to cover it.
+        seen[key] = max(seen.get(key, 0.0), measured)
+
+    _IK_COMPUTE.clear()
+    detail: list[str] = []
+    rejected: list[str] = []
+    for arch, points in sorted(per_arch.items()):
+        if len({ub for _ctx, ub in points}) < 3 or len({c for c, _ub in points}) < 2:
+            continue
+        design = [_ik_compute_terms(ub, ctx) for ctx, ub in points]
+        target = list(points.values())
+        solution = _least_squares(design, target)
+        if solution is None:
+            continue
+        worst = max(
+            abs(sum(c * t for c, t in zip(solution, _ik_compute_terms(ub, ctx))) - y)
+            for (ctx, ub), y in points.items())
+        # An architecture whose measurements this shape does not describe is
+        # left out, so it falls back to its curve rather than being estimated by
+        # a model that does not fit it. glm-dsa is the case that motivates the
+        # gate: eight candidate shapes, the best 19% out at worst, and — the
+        # part that matters — *under*-reserving by up to 560 MiB at short
+        # context. Its sparse-attention indexer selects the top 2048 of the
+        # whole cache per query, and its compute grows with context faster than
+        # a mask does: the ubatch-1024 column rises 1887, 2017, 2289, 2977 with
+        # increments that double each time the context does. Nothing in this
+        # four-term shape can produce that.
+        if worst > IK_COMPUTE_WORST_RESIDUAL_MIB:
+            rejected.append(f"{arch} ({worst:.0f} MiB worst residual)")
+            continue
+        flat, per_batch_token, per_doubling, per_pair = solution
+        _IK_COMPUTE[arch] = {
+            "flat_bytes": max(0, round(flat * 1024 ** 2)),
+            "per_batch_token_bytes": max(0, round(per_batch_token * 1024 ** 2)),
+            "per_doubling_bytes": max(0, round(per_doubling * 1024 ** 2)),
+            # Already bytes: the design column is `ub x n_kv / 2^20`, so its
+            # coefficient is MiB per (2^20 token-pairs), which is bytes per one.
+            "per_token_pair_bytes": max(0, round(per_pair)),
+        }
+        detail.append(f"{arch} {len(points)} cells, worst residual {worst:.0f} MiB")
+    if not _IK_COMPUTE:
+        raise ValueError("no architecture has ik cells across three batches "
+                         "and two contexts")
+    return (
+        "least squares on two-card ik cells of `flat + per_batch_token x "
+        "min(ub, 512) + per_doubling x log2(ub/512) + per_token_pair x ub x "
+        "n_kv`: " + "; ".join(detail)
+        + ". The per-doubling term is what an affine curve cannot carry — above "
+        "ik's 512-token attention chunk the buffer grows by a constant per "
+        "doubling of the batch, not in proportion to it."
+        + (f" Left out because this shape does not describe them: "
+           f"{', '.join(rejected)}; they keep their fitted curve instead."
+           if rejected else "")
+    )
+
+
+# How far the ik compute model may miss an architecture's worst cell before that
+# architecture is left out of the table entirely. Chosen so a model that does not
+# describe an architecture cannot silently *under*-reserve it: glm-dsa misses by
+# 560 MiB in that direction, against qwen35moe's 8 and laguna's 44.
+IK_COMPUTE_WORST_RESIDUAL_MIB = 100
+
+
+# ik's attention chunk: the batch size above which its graph stops processing
+# the whole micro-batch in one pass. It is the fork's `-amb` default, and the
+# GLM-5.2 service passes the same value explicitly. Structural, so a service
+# that overrides `-amb` would need it read rather than assumed.
+IK_ATTENTION_CHUNK = 512
+
+
+def _ik_compute_terms(ubatch: int, n_kv: int) -> list[float]:
+    """The four design-matrix columns of the ik compute model."""
+    return [
+        1.0,
+        float(min(ubatch, IK_ATTENTION_CHUNK)),
+        math.log2(max(ubatch, IK_ATTENTION_CHUNK) / IK_ATTENTION_CHUNK),
+        float(ubatch) * n_kv / 1024 ** 2,
+    ]
+
+
+def _least_squares(design: list[list[float]], target: list[float]) -> list[float] | None:
+    """Normal equations with partial pivoting; `None` if singular."""
+    width = len(design[0])
+    matrix = [[sum(row[i] * row[j] for row in design) for j in range(width)]
+              + [sum(row[i] * y for row, y in zip(design, target))]
+              for i in range(width)]
+    for i in range(width):
+        pivot = max(range(i, width), key=lambda r: abs(matrix[r][i]))
+        matrix[i], matrix[pivot] = matrix[pivot], matrix[i]
+        if abs(matrix[i][i]) < 1e-9:
+            return None
+        for r in range(i + 1, width):
+            factor = matrix[r][i] / matrix[i][i]
+            for c in range(i, width + 1):
+                matrix[r][c] -= factor * matrix[i][c]
+    out = [0.0] * width
+    for i in reversed(range(width)):
+        out[i] = (matrix[i][width]
+                  - sum(matrix[i][j] * out[j] for j in range(i + 1, width))) / matrix[i][i]
+    return out
+
+
+def latest_per_cell(rows: list[dict]) -> list[dict]:
+    """Drop rows superseded by a later measurement of the same cell.
+
+    A cell id hashes the factors, so two rows sharing one describe the same
+    configuration — and when they were taken under different runtime builds, the
+    older one describes a program that is no longer installed. Fitting across
+    both fits two programs at once.
+
+    Keeping the newest is the rule rather than averaging because the quantity is
+    deterministic within a build: repeats taken back to back reproduce to the
+    megabyte, so a disagreement is a change in the runtime, not noise. GLM-5.2's
+    production cell reads 38708 MiB on one build and 34978 on the next.
+    """
+    newest: dict[str, dict] = {}
+    for record in rows:
+        cell = record.get("cell")
+        if cell is None:
+            continue
+        current = newest.get(cell)
+        if current is None or _measured_at(record) > _measured_at(current):
+            newest[cell] = record
+    # Order preserved from the input, so an analysis that walks the dataset sees
+    # it in measurement order rather than hash order.
+    keep = {id(r) for r in newest.values()}
+    return [r for r in rows if id(r) in keep]
+
+
+def report_stale_builds(rows: list[dict]) -> list[str]:
+    """How much of the dataset predates the runtime that is installed now.
+
+    Not a failure — re-measuring 500 cells costs days of GPU time, and most
+    terms do not move between builds: qwen35moe and laguna read identically
+    across the upgrade that shrank glm-dsa's compute buffer by a third. But
+    "most" is doing real work in that sentence, so the split is reported rather
+    than assumed, per runtime, with the newest build named.
+    """
+    by_runtime: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for record in rows:
+        if record.get("status") != "ok":
+            continue
+        runtime = record["factors"]["runtime"]
+        build = record["provenance"]["runtime_sha256"]
+        by_runtime[runtime][build].append(_measured_at(record))
+    out = []
+    for runtime, builds in sorted(by_runtime.items()):
+        if len(builds) < 2:
+            continue
+        current = max(builds, key=lambda b: max(builds[b]))
+        stale = sum(len(v) for b, v in builds.items() if b != current)
+        out.append(f"{runtime}: {stale} of {stale + len(builds[current])} cells "
+                   f"predate the newest build {current}; their terms are "
+                   f"calibrated against a program that is no longer installed")
+    return out
+
+
+def check_runtime_builds(rows: list[dict], tolerance: float = 0.10) -> None:
+    """Refuse a dataset whose runtime builds disagree about the same cell.
+
+    A cell id hashes the *factors*, and the runtime binary is not one of them —
+    so upgrading llama.cpp leaves every existing row describing a program that
+    is no longer installed, with nothing to say so. That is not hypothetical:
+    ik_llama's DSA compute buffer shrank by a third between two builds, and
+    GLM-5.2 measured 11524 MiB of it on one and 7794 on the next at
+    byte-identical settings. The stale row is what made its measured grid look
+    like it accelerated with context, which is what made every candidate shape
+    fail to fit it.
+
+    So: where the same configuration was measured under two binaries, the two
+    readings must agree. They usually do — qwen35moe and laguna are unchanged
+    across the same upgrade — and where they do not, the older row has to go
+    rather than be averaged in.
+
+    `runtime_sha256` is what makes this checkable, and it is the reason to keep
+    recording it even though nothing consumed it for two campaigns.
+    """
+    by_cell: dict[str, dict[str, int]] = defaultdict(dict)
+    for record in rows:
+        if record.get("status") != "ok" or not record["rss"].get("gpu_used_mib"):
+            continue
+        by_cell[record["cell"]][record["provenance"]["runtime_sha256"]] = (
+            record["rss"]["gpu_used_mib"])
+    disagreed = []
+    for cell, readings in by_cell.items():
+        if len(readings) < 2:
+            continue
+        low, high = min(readings.values()), max(readings.values())
+        if low and (high - low) / low > tolerance:
+            disagreed.append(f"{cell} reads {low}-{high} MiB across "
+                             f"{len(readings)} builds")
+    if disagreed:
+        raise Disagreement(
+            "the same configuration measures differently under different "
+            "runtime builds: " + "; ".join(sorted(disagreed))
+            + ". A constant fitted across both is fitted to two programs. "
+              "Re-measure under the installed build and drop the older rows.")
 
 
 def report_table_less_compute(rows: list[dict]) -> str:
@@ -2566,7 +2808,22 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     """
     document = json.loads(path.read_text())
     constants = document["constants"]
-    changed, failed = [], []
+    changed, failed, notes = [], [], []
+
+    # Superseded rows go first, so nothing downstream fits two programs at once.
+    # The check then runs on what survives, where a disagreement can no longer be
+    # explained by a stale duplicate and so is a real problem.
+    superseded = len(rows)
+    rows = latest_per_cell(rows)
+    superseded -= len(rows)
+    if superseded:
+        notes.append(f"{superseded} row(s) superseded by a later measurement "
+                     f"of the same cell under a newer runtime")
+    notes.extend(report_stale_builds(rows))
+    try:
+        check_runtime_builds(rows)
+    except Disagreement as error:
+        failed.append(f"runtime builds: {error}")
 
     # Order matters here and is not incidental: `derive_baseline_offset`
     # subtracts the flash-attention rate, so it must run after
@@ -2596,6 +2853,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"per-slot host bytes: cannot derive — {error}")
     for name, table_deriver in (("table-less compute observations", report_table_less_compute),
+                                ("ik compute model", derive_ik_compute),
                                 ("unfused-attention score rates", derive_no_flash_attn_score),
                                 ("MTP compute intermediates", derive_mtp_compute_intermediates),
                                 ("tensor compute intermediates", derive_tensor_intermediates),
@@ -2724,6 +2982,32 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             "default": max(_PER_SLOT.values()),
             "by_arch": dict(sorted(_PER_SLOT.items())),
         }
+    for field, table, comment in (
+        ("flat_bytes", "ik_compute_flat_bytes",
+         "The context- and batch-independent part of ik's per-device layer-split "
+         "compute buffer, by architecture."),
+        ("per_batch_token_bytes", "ik_compute_per_batch_token_bytes",
+         "Bytes per batch token, up to ik's 512-token attention chunk, of its "
+         "per-device layer-split compute buffer."),
+        ("per_doubling_bytes", "ik_compute_per_doubling_bytes",
+         "Bytes ik's compute buffer gains per *doubling* of the batch above its "
+         "512-token attention chunk. A constant per doubling, not per token: "
+         "Qwen3.6-35B-A3B measures 719, 1227, and 1732 MiB at ubatch 512, 1024, "
+         "and 2048."),
+        ("per_token_pair_bytes", "ik_compute_per_token_pair_bytes",
+         "Bytes per (batch token x cache token) — the attention mask and, for a "
+         "sparse-attention architecture, its indexer's scores. One byte for "
+         "qwen35moe's full attention against ~20 for glm-dsa."),
+    ):
+        if _IK_COMPUTE:
+            document[table] = {
+                "$comment": comment + " Fitted on two-card cells; see "
+                            "`derive_ik_compute`. `default` is 0, so an "
+                            "architecture with no ik cells falls back to the "
+                            "layer-split curve instead of a borrowed rate.",
+                "default": 0,
+                "by_arch": {a: v[field] for a, v in sorted(_IK_COMPUTE.items())},
+            }
     if _TABLE_LESS:
         document["table_less_compute_observations"] = {
             "$comment": "Per-device `compute + unaccounted` for architectures "
@@ -2834,6 +3118,12 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         }
     document["constants"] = dict(sorted(constants.items()))
     document["measurements"] = len(rows)
+
+    # Printed either way, and never a verdict: how much of the dataset predates
+    # the installed runtime is context for reading the numbers, not drift
+    # between the numbers and the data.
+    for line in notes:
+        print(f"  note: {line}")
 
     if check:
         current = json.loads(path.read_text())

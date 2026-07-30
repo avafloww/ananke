@@ -1301,6 +1301,67 @@ def reparse(out: Path, archive_dir: Path) -> int:
     return 0
 
 
+def retire_stale_builds(out: Path, tolerance: float = 0.02) -> int:
+    """Mark rows a runtime upgrade invalidated, so every reader skips them.
+
+    A cell id hashes the *factors*, and the runtime binary is not one of them.
+    Upgrade llama.cpp and every existing row keeps describing a program that is
+    no longer installed, with nothing to say so — and a constant fitted across
+    the two is fitted to two programs.
+
+    The evidence needed is one re-measurement per architecture. From this
+    dataset's upgrade: six of seven production cells reproduce to the megabyte,
+    and the seventh, GLM-5.2, moves 9.6% because ik's sparse-attention compute
+    buffer shrank by a third. laguna on the same fork is unchanged, so the fork
+    is not the unit that changed — `glm-dsa` is.
+
+    So an (architecture, build) pair is retired only where a cell measured under
+    both it and a later build disagrees. Being older is not evidence: three ik
+    builds appear here and only one is shown to differ, and retiring on age
+    alone would discard a whole batch-and-context sweep because a
+    `nixos-rebuild` landed between running it and checking it.
+
+    Retired rows keep their data and their archived log; only `status` changes,
+    to `stale-runtime`. That is deliberately the same gate every consumer
+    already applies — `analyse.py`, `validate.py`, and the estimator's
+    integration tests all take `status == "ok"` — so none of them needs to learn
+    about builds, and one that forgets is looking at a status it understands
+    rather than being silently wrong.
+    """
+    records = [json.loads(line) for line in out.read_text().splitlines()
+               if line.strip()]
+    readings: dict[tuple[str, str], dict[str, tuple[int, str]]] = {}
+    for record in records:
+        if record.get("status") != "ok" or not record["rss"].get("gpu_used_mib"):
+            continue
+        key = (record["parsed"].get("arch", "?"), record["cell"])
+        readings.setdefault(key, {})[record["provenance"]["runtime_sha256"]] = (
+            record["rss"]["gpu_used_mib"], record["provenance"]["measured_at_utc"])
+
+    stale: set[tuple[str, str]] = set()
+    for (arch, _cell), seen in readings.items():
+        for build, (value, when) in seen.items():
+            for other_build, (other, other_when) in seen.items():
+                if build == other_build or not value:
+                    continue
+                if abs(other - value) / value > tolerance and when < other_when:
+                    stale.add((arch, build))
+
+    retired = 0
+    for record in records:
+        key = (record["parsed"].get("arch", "?"),
+               record["provenance"]["runtime_sha256"])
+        if record.get("status") == "ok" and key in stale:
+            record["status"] = "stale-runtime"
+            retired += 1
+    out.write_text("\n".join(json.dumps(r, default=str) for r in records) + "\n")
+    if stale:
+        for arch, build in sorted(stale):
+            print(f"retired {arch} rows measured under {build}")
+    print(f"{retired} row(s) marked stale-runtime")
+    return 0
+
+
 def load_plan(path: Path) -> list[Cell]:
     """Read a campaign plan: a JSON list of objects, each a `Cell`'s fields."""
     raw = json.loads(path.read_text())
@@ -1311,6 +1372,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--plan", type=Path, help="JSON list of cells to run")
+    parser.add_argument("--retire-stale-builds", action="store_true",
+                        help="mark rows a runtime upgrade invalidated, proven "
+                             "by a re-measured cell, as stale-runtime so every "
+                             "reader skips them")
     parser.add_argument("--reparse", action="store_true",
                         help="re-derive every record's parsed block from its "
                              "archived log instead of measuring anything")
@@ -1329,6 +1394,8 @@ def main(argv: list[str] | None = None) -> int:
                              "--no-mmap load takes minutes")
     args = parser.parse_args(argv)
 
+    if args.retire_stale_builds:
+        return retire_stale_builds(args.out)
     if args.reparse:
         return reparse(args.out, args.archive_dir)
     if not args.plan:

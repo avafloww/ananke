@@ -1,33 +1,45 @@
-//! Per-architecture compute-buffer sizing.
+//! Per-device compute-buffer sizing.
 //!
-//! The packer multiplies this number by the count of active devices
-//! (GPUs + CPU when token embeddings land there) and adds it to the
-//! per-device reservation. It's the only term in the estimate that
-//! reflects *unmodelled* overhead — CUDA context + cuBLAS workspace +
-//! attention scratch + KV ring buffers, all lumped together.
+//! [`per_device_for`] is the entry point, and it picks between three models,
+//! because the graph a device builds depends on how the model was split across
+//! devices and on which runtime built it. Each is documented where it lives:
 //!
-//! Per-architecture tuning exists because the overhead scales with
-//! different knobs on different architectures:
+//! - [`tensor_split_per_device`] — `--split-mode tensor`. Built from the model's
+//!   hyperparameters: hidden-width intermediates per batch token, an f16 KQ
+//!   mask, and a dequantisation term. Charged to *every* spanned GPU, since
+//!   llama.cpp builds the same graph on each rather than dividing one.
+//! - [`ik_layer_split_per_device`] — a layer split on ik_llama, where the fork
+//!   has been measured. Also from hyperparameters, but with a batch term that
+//!   steps by a constant per doubling above the fork's attention chunk — a shape
+//!   no affine curve can express.
+//! - [`layer_split_per_device`] — a layer split otherwise, from the fitted
+//!   per-architecture curves in `tuning.json`. This is the one remaining term
+//!   that is a curve rather than a model: `base + base_batch × k + slope ×
+//!   ctx/1024`, with `k = ubatch / 512`.
 //!
-//! - Dense large-hidden (gemma3/gemma4 with hidden ≥ 4k): attention
-//!   scratch grows quickly with context.
-//! - Dense standard-hidden (llama, qwen3 < 5k): slower context scaling.
-//! - MoE (gpt-oss, mixtral, qwen3moe): compute buffer is almost flat
-//!   because only a few experts run per token.
-//! - Hybrid MoE + SSM (qwen35moe): SSM state scales with `ssm_d_*`
-//!   constants, not context, so the slope is small.
-//! - Gemma 4 E-variants (detected by `per_layer_token_embd.weight`):
-//!   small hidden + per-layer embeddings on CPU; fits under a much
-//!   lower curve than the fat-model gemma4 default.
+//! An architecture gets its own curve because the overhead scales with different
+//! knobs — attention scratch grows fast with context on wide dense models,
+//! stays nearly flat on an MoE where few experts run per token, and Gemma 4's
+//! E-variants sit far below the fat-model default because their per-layer
+//! embeddings live on the CPU. Which curve an architecture takes is data in
+//! `tuning.json`, not a match arm here, so adding one arrives with its evidence
+//! attached.
 //!
-//! Operators can still override per service via
-//! `estimation.compute_buffer_mb`, which short-circuits this table.
+//! On top of whichever model applies, [`no_flash_attn_mib`] adds the score
+//! matrix an unfused attention pass materialises.
+//!
+//! Operators can still override the whole term per service via
+//! `estimation.compute_buffer_mb`.
 
 use crate::{
     config::validate::SplitMode,
     estimator::{
         tuning::{
-            CURVES, DEFAULT_CURVE, DEFAULT_UBATCH, NO_FLASH_ATTN_SCORE_BYTES,
+            CURVES, Curve, DEFAULT_CURVE, DEFAULT_UBATCH, IK_COMPUTE_FLAT_BYTES,
+            IK_COMPUTE_FLAT_BYTES_DEFAULT, IK_COMPUTE_PER_BATCH_TOKEN_BYTES,
+            IK_COMPUTE_PER_BATCH_TOKEN_BYTES_DEFAULT, IK_COMPUTE_PER_DOUBLING_BYTES,
+            IK_COMPUTE_PER_DOUBLING_BYTES_DEFAULT, IK_COMPUTE_PER_TOKEN_PAIR_BYTES,
+            IK_COMPUTE_PER_TOKEN_PAIR_BYTES_DEFAULT, NO_FLASH_ATTN_SCORE_BYTES,
             NO_FLASH_ATTN_SCORE_BYTES_DEFAULT, TENSOR_COMPUTE_INTERMEDIATES,
             TENSOR_COMPUTE_INTERMEDIATES_DEFAULT, TENSOR_COMPUTE_QUANTISED_RATE_DEFAULT,
             TENSOR_COMPUTE_QUANTISED_RATES, TENSOR_COMPUTE_SHADOW_BYTES,
@@ -53,12 +65,19 @@ struct Tuning {
 /// arrives with its evidence attached, and an architecture nobody has
 /// measured says so in its own comment instead of looking like every other
 /// row.
-fn tuning_for(summary: &GgufSummary, _ubatch: u32) -> Tuning {
+fn tuning_for(summary: &GgufSummary, ik_llama: bool) -> Tuning {
     let arch = summary.architecture.as_str();
     let variant = variant_of(summary);
+    // A fork-specific entry wins over a general one for the same architecture:
+    // the two runtimes build different graphs, and where the fork has been
+    // measured its own fit is the better answer. Falling back to the general
+    // entry is deliberate — most architectures have no fork cells at all.
+    let matches = |c: &&Curve| c.archs.contains(&arch) && c.variant == variant;
+    let runtime = ik_llama.then_some("ik");
     let curve = CURVES
         .iter()
-        .find(|c| c.archs.contains(&arch) && c.variant == variant)
+        .find(|c| matches(c) && c.runtime == runtime)
+        .or_else(|| CURVES.iter().find(|c| matches(c) && c.runtime.is_none()))
         .unwrap_or(&DEFAULT_CURVE);
 
     // The slope does not scale with ubatch. The data confirms this: at
@@ -156,7 +175,7 @@ pub fn default_for_inputs(
     streams: u32,
     _quantised_kv: bool,
 ) -> u32 {
-    layer_split_per_device(summary, context, ubatch, flash_attn, streams)
+    layer_split_per_device(summary, context, ubatch, flash_attn, streams, false)
 }
 
 /// Per-device compute buffer, choosing the model that matches how llama.cpp
@@ -175,6 +194,11 @@ pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u3
     }
     let flash_attn = inputs.flash_attn.unwrap_or(true);
     match inputs.split_mode {
+        // Note that the tensor model is fitted entirely on mainline cells: the
+        // dataset holds 160 mainline tensor-split cells and *no* ik ones, so a
+        // fork service configured with `--split-mode tensor` is estimated from
+        // the other runtime's graph. Nothing in the data says whether that is
+        // close; measuring one fork tensor cell would say.
         SplitMode::Tensor | SplitMode::Row => tensor_split_per_device(
             summary,
             inputs.context,
@@ -189,6 +213,7 @@ pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u3
             inputs.ubatch,
             flash_attn,
             inputs.streams(),
+            inputs.ik_llama,
         ),
     }
 }
@@ -279,6 +304,74 @@ fn rate(table: &[(&str, u64)], arch: &str, fallback: u64) -> u64 {
 
 const F32_BYTES: u64 = 4;
 
+/// ik's attention chunk: the batch above which its graph stops handling the
+/// whole micro-batch in one pass. This is the fork's `-amb` default, and the
+/// GLM-5.2 service passes the same value explicitly. A service that overrode
+/// `-amb` would need it read rather than assumed — ananke does not model the
+/// flag today, so nothing can.
+const IK_ATTENTION_CHUNK: u32 = 512;
+
+/// Per-device compute buffer for a layer split on ik_llama, or `None` for an
+/// architecture the fork has not been measured on.
+///
+/// The fork's buffer has a shape the affine curves cannot express:
+///
+/// ```text
+/// flat + per_batch_token × min(ubatch, chunk)
+///      + per_doubling × log2(max(ubatch, chunk) / chunk)
+///      + per_token_pair × ubatch × n_kv
+/// ```
+///
+/// The third term is the one that matters. Above the attention chunk the buffer
+/// grows by a *constant per doubling* of the batch rather than in proportion to
+/// it: Qwen3.6-35B-A3B measures 719, 1227, and 1732 MiB at ubatch 512, 1024, and
+/// 2048 — two equal steps of ~505 — so a curve fitted at 512 and scaled by
+/// `ubatch/512` misses the 2048 cells by 30 to 40%. Below the chunk it is
+/// linear, which ubatch 256's 586 MiB pins.
+///
+/// The last term is the mask, and its width separates the architectures: one
+/// byte per (batch token, cache token) for qwen35moe's full attention, three for
+/// laguna's sliding window, nineteen for glm-dsa — whose sparse-attention
+/// indexer scores every cache token and so carries far more than a mask.
+///
+/// Fitted across thirteen two-card cells for qwen35moe with a worst residual of
+/// 5 MiB. `None` falls back to the general curve rather than borrowing another
+/// architecture's rates.
+fn ik_layer_split_per_device(
+    summary: &GgufSummary,
+    context: u32,
+    ubatch: Option<u32>,
+    streams: u32,
+) -> Option<u32> {
+    let arch = summary.architecture.as_str();
+    let flat = rate(IK_COMPUTE_FLAT_BYTES, arch, IK_COMPUTE_FLAT_BYTES_DEFAULT);
+    if flat == 0 {
+        return None;
+    }
+    let batch = u64::from(ubatch.unwrap_or(DEFAULT_UBATCH).max(1));
+    let chunk = u64::from(IK_ATTENTION_CHUNK);
+    let doublings = (batch.max(chunk) / chunk).ilog2();
+    let n_kv = u64::from(context / streams.max(1));
+    let bytes = flat
+        + rate(
+            IK_COMPUTE_PER_BATCH_TOKEN_BYTES,
+            arch,
+            IK_COMPUTE_PER_BATCH_TOKEN_BYTES_DEFAULT,
+        ) * batch.min(chunk)
+        + rate(
+            IK_COMPUTE_PER_DOUBLING_BYTES,
+            arch,
+            IK_COMPUTE_PER_DOUBLING_BYTES_DEFAULT,
+        ) * u64::from(doublings)
+        + rate(
+            IK_COMPUTE_PER_TOKEN_PAIR_BYTES,
+            arch,
+            IK_COMPUTE_PER_TOKEN_PAIR_BYTES_DEFAULT,
+        ) * batch
+            * n_kv;
+    Some((bytes / (1024 * 1024)).min(u64::from(u32::MAX)) as u32)
+}
+
 /// Per-device compute buffer under a layer split, from the fitted curves.
 fn layer_split_per_device(
     summary: &GgufSummary,
@@ -286,9 +379,20 @@ fn layer_split_per_device(
     ubatch: Option<u32>,
     flash_attn: bool,
     streams: u32,
+    ik_llama: bool,
 ) -> u32 {
+    // The fork has its own model where it has been measured; the curves
+    // describe mainline's graph.
+    if ik_llama && let Some(mib) = ik_layer_split_per_device(summary, context, ubatch, streams) {
+        return mib.saturating_add(no_flash_attn_mib(
+            summary,
+            context / streams.max(1),
+            ubatch.unwrap_or(DEFAULT_UBATCH),
+            flash_attn,
+        ));
+    }
     let batch = ubatch.unwrap_or(DEFAULT_UBATCH);
-    let t = tuning_for(summary, batch);
+    let t = tuning_for(summary, ik_llama);
     // The batch-scaling constant, off the 512-token calibration point. It is
     // separate from `base` because it is not flat — 357 MiB on gemma3 at
     // ubatch 512 and four times that at 2048 — and separate from `slope`
@@ -565,6 +669,56 @@ mod tests {
         };
         assert_eq!(net(1024), net(512) * 2);
         assert_eq!(net(2048), net(512) * 4);
+    }
+
+    /// The whole Qwen3.6-35B-A3B grid on ik, in both axes.
+    ///
+    /// Twelve cells the sweep measured, and the point of them is the batch axis:
+    /// 719 → 1227 → 1732 MiB at ubatch 512 → 1024 → 2048 is two *equal* steps,
+    /// not growth proportional to the batch. An affine curve scaled by
+    /// `ubatch/512` cannot produce that shape at all, whatever its coefficients,
+    /// which is why the fork needed its own model rather than its own fit.
+    #[test]
+    fn the_ik_model_reproduces_the_measured_grid() {
+        let s = sized_summary("qwen35moe", 2048);
+        // (context, ubatch) → measured per-device MiB, two cards, f16 cache.
+        let cells = [
+            ((8192u32, 512u32), 719u32),
+            ((8192, 1024), 1227),
+            ((8192, 2048), 1732),
+            ((32768, 256), 586),
+            ((32768, 512), 731),
+            ((32768, 1024), 1251),
+            ((32768, 2048), 1780),
+            ((65536, 512), 747),
+            ((65536, 1024), 1283),
+            ((65536, 2048), 1843),
+            ((131072, 512), 779),
+            ((131072, 1024), 1337),
+            ((131072, 2048), 1971),
+        ];
+        for ((context, ubatch), measured) in cells {
+            let got = ik_layer_split_per_device(&s, context, Some(ubatch), 1)
+                .expect("qwen35moe has ik rates");
+            let drift = got.abs_diff(measured);
+            assert!(
+                drift <= 24,
+                "ctx {context} ub {ubatch}: modelled {got} against measured \
+                 {measured}"
+            );
+        }
+    }
+
+    /// An architecture the fork has not been measured on falls back to the
+    /// general curve rather than borrowing another's rates — the mask width
+    /// alone spans one byte to nineteen across the three that were measured, so
+    /// a borrowed rate would be worse than no rate.
+    #[test]
+    fn an_unmeasured_architecture_has_no_ik_model() {
+        assert!(ik_layer_split_per_device(&sized_summary("llama", 4096), 32768, None, 1).is_none());
+        assert!(
+            ik_layer_split_per_device(&sized_summary("qwen35moe", 2048), 32768, None, 1).is_some()
+        );
     }
 
     #[test]

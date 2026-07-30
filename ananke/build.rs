@@ -155,6 +155,34 @@ fn generate_tuning_constants() {
         "PER_SLOT_HOST_BYTES_DEFAULT",
         "Host memory each concurrently active slot costs beyond the first, by\n/// architecture. Reserved as slop, never charged to the correction.",
     ));
+    for (key, table, default_name, doc) in [
+        (
+            "ik_compute_flat_bytes",
+            "IK_COMPUTE_FLAT_BYTES",
+            "IK_COMPUTE_FLAT_BYTES_DEFAULT",
+            "The context- and batch-independent part of ik's per-device layer-split\n/// compute buffer, by architecture.",
+        ),
+        (
+            "ik_compute_per_batch_token_bytes",
+            "IK_COMPUTE_PER_BATCH_TOKEN_BYTES",
+            "IK_COMPUTE_PER_BATCH_TOKEN_BYTES_DEFAULT",
+            "Bytes per batch token, up to ik's attention chunk, of its per-device\n/// layer-split compute buffer.",
+        ),
+        (
+            "ik_compute_per_doubling_bytes",
+            "IK_COMPUTE_PER_DOUBLING_BYTES",
+            "IK_COMPUTE_PER_DOUBLING_BYTES_DEFAULT",
+            "Bytes ik's compute buffer gains per *doubling* of the batch above its\n/// attention chunk — a constant per doubling, not per token.",
+        ),
+        (
+            "ik_compute_per_token_pair_bytes",
+            "IK_COMPUTE_PER_TOKEN_PAIR_BYTES",
+            "IK_COMPUTE_PER_TOKEN_PAIR_BYTES_DEFAULT",
+            "Bytes per (batch token x cache token): the attention mask, plus a\n/// sparse-attention indexer's scores where there is one.",
+        ),
+    ] {
+        out.push_str(&generate_rate_table(&parsed, key, table, default_name, doc));
+    }
     out.push_str(&generate_rate_table(
         &parsed,
         "mtp_compute_intermediates",
@@ -232,6 +260,11 @@ fn generate_curves(parsed: &serde_json::Value) -> String {
          \x20   /// A variant discriminator the caller must also match, where one\n\
          \x20   /// architecture string covers models with different graphs.\n\
          \x20   pub variant: Option<&'static str>,\n\
+         \x20   /// The serving runtime this curve was fitted against, or `None`\n\
+         \x20   /// for one that applies to either. The two forks build\n\
+         \x20   /// different graphs for the same architecture, so a fork-only\n\
+         \x20   /// entry takes precedence over a general one.\n\
+         \x20   pub runtime: Option<&'static str>,\n\
          \x20   pub base_mib: u32,\n\
          \x20   /// A constant that scales with the batch but not the context —\n\
          \x20   /// large on some architectures, and with nowhere to go in a\n\
@@ -369,10 +402,12 @@ fn curve_literal(entry: &serde_json::Value) -> String {
                 .collect()
         })
         .unwrap_or_default();
-    let variant = match entry.get("variant").and_then(|v| v.as_str()) {
+    let optional = |key: &str| match entry.get(key).and_then(|v| v.as_str()) {
         Some(v) => format!("Some({v:?})"),
         None => "None".to_string(),
     };
+    let variant = optional("variant");
+    let runtime = optional("runtime");
     let number = |key: &str| {
         entry
             .get(key)
@@ -393,8 +428,8 @@ fn curve_literal(entry: &serde_json::Value) -> String {
         out.push_str(&format!("    // {line}\n"));
     }
     out.push_str(&format!(
-        "    Curve {{ archs: &[{}], variant: {variant}, base_mib: {}, \
-         base_batch_mib: {base_batch}, slope_mib_per_1k: {}, \
+        "    Curve {{ archs: &[{}], variant: {variant}, runtime: {runtime}, \
+         base_mib: {}, base_batch_mib: {base_batch}, slope_mib_per_1k: {}, \
          slope_scales_with_ubatch: {scales} }},\n",
         archs.join(", "),
         number("base_mib"),

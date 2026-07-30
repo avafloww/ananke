@@ -91,11 +91,18 @@ def main() -> int:
     parser.add_argument("--archive-dir", type=Path, default=HERE / "data" / "logs")
     parser.add_argument("--load-timeout", type=int, default=1800)
     parser.add_argument("--swap-limit-gib", type=float, default=4.0)
+    parser.add_argument("--force", action="store_true",
+                        help="measure a cell that already has a record. A cell "
+                             "id hashes the factors, so an unchanged "
+                             "configuration is normally skipped — but the "
+                             "runtime is not one of the factors, and when it "
+                             "changes under you the old record describes a "
+                             "different program")
     args = parser.parse_args()
 
     measure = load_measure()
     cells = measure.load_plan(args.plan)
-    done = measure.already_measured(args.out)
+    done = set() if args.force else measure.already_measured(args.out)
     for index, cell in enumerate(cells, start=1):
         if cell.cell_id in done:
             print(f"[{index}/{len(cells)}] skip {cell.label} (measured)", flush=True)
