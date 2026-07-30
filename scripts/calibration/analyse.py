@@ -32,6 +32,7 @@ import compute_model  # noqa: E402  (needs the path insertion above)
 
 DATA = Path(__file__).parent / "data" / "measurements.ndjson"
 TUNING_JSON = Path(__file__).parents[2] / "ananke-tuning/tuning.json"
+COLUMN_FIXTURES = Path(__file__).parents[2] / "ananke/tests/fixtures/compute_columns.json"
 
 
 def load(path: Path) -> list[dict]:
@@ -2531,6 +2532,11 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             failed.append(f"{name}: no declared kind — add it to KINDS")
             continue
         entry["kind"] = kind
+
+    # The column contract, written beside the constants so the two move together.
+    COLUMN_FIXTURES.parent.mkdir(parents=True, exist_ok=True)
+    COLUMN_FIXTURES.write_text(
+        json.dumps(compute_model.fixture_document(), indent=1) + "\n")
 
     try:
         bases, slopes, evidence = derive_mtp_draft_compute(rows)
