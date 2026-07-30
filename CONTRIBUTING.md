@@ -45,11 +45,18 @@ estimation side ever links a process spawner.
 The tuned constants are derived from the measurement dataset, not chosen:
 
 ```sh
-cargo run -p ananke-calibrate --bin emit             # regenerate tuning.json
-cargo run -p ananke-calibrate --bin emit -- --check  # CI gate: does it still follow from the data?
+cargo run -p ananke-calibrate --bin fit              # refit the compute model
+cargo run -p ananke-calibrate --bin fit -- --check   # CI gate: does the fit still follow?
+cargo run -p ananke-calibrate --bin emit             # regenerate every other constant
+cargo run -p ananke-calibrate --bin emit -- --check  # CI gate: do they still follow from the data?
 cargo run -p ananke-calibrate --bin validate         # every comparable cell, predicted against measured
 cargo run -p ananke-calibrate --bin scoreboard       # the production models
 ```
+
+`fit` before `emit`: the compute model is the one section `emit` does not write —
+it carries the committed one through, which is what lets the derivers be checked on
+their own — and several derivers reduce a residual taken over that model, so a
+refit moves the constants resting on it.
 
 ```sh
 cargo run -p ananke-calibrate --bin coverage -- --check  # is any regime measured at one point?

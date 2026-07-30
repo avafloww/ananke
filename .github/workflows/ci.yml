@@ -58,6 +58,11 @@ jobs:
       # dataset. This fails if the committed file no longer matches what the
       # data produces — which is the whole guarantee: a constant cannot drift
       # from its evidence without the drift being visible here.
+      # The compute model is fitted rather than derived, and `emit` carries it
+      # through untouched, so it needs its own gate or nothing checks it.
+      - name: Compute model matches the dataset
+        run: cargo run -q -p ananke-calibrate --bin fit -- --check
+
       - name: Tuning constants match the dataset
         run: cargo run -q -p ananke-calibrate --bin emit -- --check
 

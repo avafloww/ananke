@@ -47,7 +47,7 @@
     "default": 1692401664
   },
   "compute_model": {
-    "$comment": "One per-device compute model per (runtime, split, architecture), replacing `compute_buffer_curves`, `tensor_compute_curves` and its companion tables, and the `ik_compute_*` rates. Columns are dimensionally normalised so architectures of different width share coefficients; see scripts/calibration/compute_model.py for what each one counts and why. Coefficients are constrained non-negative because every column counts bytes of a buffer that either exists or does not. Ordered variant-guarded first.",
+    "$comment": "One per-device compute model per (runtime, split, architecture), replacing `compute_buffer_curves`, `tensor_compute_curves` and its companion tables, and the `ik_compute_*` rates. Columns are dimensionally normalised so architectures of different width share coefficients; see ananke-calibrate/src/compute_model/mod.rs for what each one counts and why. Coefficients are constrained non-negative because every column counts bytes of a buffer that either exists or does not. Ordered variant-guarded first.",
     "columns": [
       "flat",
       "head_flat",
