@@ -882,68 +882,139 @@ MASK_BYTES_PER_TOKEN_PAIR = 2
 
 
 
+def _resident_weight_mib(record: dict) -> float:
+    """Model weights this cell reported holding, host and device together."""
+    parsed = record["parsed"]
+    total = float(parsed.get("cpu_model_mib") or 0.0)
+    for index in range(8):
+        total += float(parsed.get(f"gpu{index}_model_mib") or 0.0)
+    for context in parsed.get("contexts", []):
+        for buffers in context["buffers"].values():
+            total += float(buffers.get("model") or 0.0)
+    return total
+
+
+def _same_resident_weights(left: dict, right: dict, tolerance: float = 0.01) -> bool:
+    a, b = _resident_weight_mib(left), _resident_weight_mib(right)
+    if not a or not b:
+        return True
+    return abs(a - b) / max(a, b) <= tolerance
+
+
+def query_head_count(parsed: dict) -> int:
+    """Query heads, falling back to `n_embd / key_length` where the GGUF omits them.
+
+    Not every architecture writes `attention.head_count`: laguna carries only
+    `head_count_kv`, so a term built on the query head count silently evaluated to
+    zero and left 9218 MiB of unfused score matrix unreserved. Where the count has
+    to be inferred, any error in it is absorbed by the per-architecture rate — the
+    two only ever appear as a product — so the fallback costs accuracy in the
+    *attribution*, not in the reservation.
+    """
+    if parsed.get("n_head"):
+        return parsed["n_head"]
+    arch = parsed.get("arch", "")
+    kv = parsed.get("gguf_kv") or {}
+    n_embd = kv.get(f"{arch}.embedding_length") or parsed.get("n_embd") or 0
+    head_dim = (kv.get(f"{arch}.attention.key_length")
+                or parsed.get("n_embd_head_k") or 0)
+    return n_embd // head_dim if head_dim else 0
+
+
 def derive_no_flash_attn_score(rows: list[dict]) -> str:
     """What an unfused attention pass costs per head, per cache token, per batch
     token, by architecture.
 
     With flash attention off the graph materialises the score matrix instead of
     consuming it tile by tile. Paired against each cell's own flash-attention-on
-    sibling — same model, context, batch, split, cards, and slot count — the
-    extra comes to one f32 per (head, cache token, batch token) for every dense
-    and MoE architecture measured: 3.8 to 4.9 bytes across gemma3, gemma4,
-    lfm2, llama, qwen3, qwen35, qwen35moe, and talkie.
+    sibling — same model, context, batch, split, cards, and slot count — the extra
+    comes to about one f32 per (head, cache token, batch token) for every dense and
+    MoE architecture measured.
 
-    deepseek4 measures 0.04. MLA shares one latent across heads, so there is no
-    per-head score row to materialise, and the near-zero is the real answer
-    rather than an outlier — which is why this is a table. The constant it
-    replaces charged every architecture 8 bytes per head and halved that for
-    MLA, over-reserving dense models twofold and deepseek4 a hundredfold.
+    deepseek4 measures far less. MLA shares one latent across heads, so there is no
+    per-head score row to materialise, and the near-zero is the real answer rather
+    than an outlier — which is why this is a table.
 
-    Pairing is what makes the rate come out at an f32. Reading the
-    flash-attention-off figure whole instead attributes the compute buffer the
-    run would have had anyway to this term, which inflates it most at the short
-    contexts where that baseline is the larger share.
+    Paired on the **driver total**, not on the breakdown's `compute` column. The
+    column misses the `unaccounted` remainder that grows with it, which understated
+    gemma4 by 20 to 40%, and it does not exist at all under ik — so every ik cell
+    was silently skipped, which is how laguna came to have no entry despite being
+    the largest single miss in the set.
     """
-    paired: dict[tuple, tuple[float, int, str]] = {}
+    paired: dict[tuple, tuple[int, dict]] = {}
     for record in rows:
         factors, parsed = record["factors"], record["parsed"]
-        devices = [d for d in parsed.get("devices", []) if d["compute_mib"]]
-        if not devices or not parsed.get("n_head"):
+        total = record["rss"].get("gpu_used_mib")
+        if not total or not parsed.get("arch"):
             continue
         key = (parsed["arch"], factors["model"], factors["ctx"],
                factors["ubatch"] or 512, factors["kv_type"],
                factors["split"] or "layer", factors["gpus"],
                factors["parallel"], bool(factors["kv_unified"]),
-               factors["flash_attn"])
-        paired.setdefault(key, (max(d["compute_mib"] for d in devices),
-                                parsed["n_head"], factors["label"]))
+               factors["runtime"], factors["n_cpu_moe"] or 0,
+               bool(factors["spec_type"]), factors["ngl"],
+               bool(factors["embeddings"]), bool(factors["mmproj"]),
+               bool(factors["served"]), factors["flash_attn"])
+        paired.setdefault(key, (total, record))
     per_arch: dict[str, list[float]] = defaultdict(list)
-    for key, (compute, heads, _label) in paired.items():
+    detail: dict[str, list[str]] = defaultdict(list)
+    for key, (total, record) in paired.items():
         if key[-1] != "off":
             continue
         sibling = paired.get(key[:-1] + ("on",))
         if sibling is None:
             continue
-        arch, _model, ctx, batch = key[0], key[1], key[2], key[3]
+        parsed = record["parsed"]
+        heads = query_head_count(parsed)
+        if not heads:
+            continue
+        arch, ctx, batch = key[0], key[2], key[3]
         streams = 1 if key[8] else max(1, key[7] or 1)
         n_kv = ctx // streams
-        per_arch[arch].append(
-            (compute - sibling[0]) * 1024 ** 2 / (heads * n_kv * batch))
+        cards = max(1, len([g for g in key[6].split(",") if g]))
+        # Both halves must have loaded the same weights onto the same devices.
+        # The key pins every factor that should decide placement, but placement
+        # is an outcome rather than a factor — an `auto` expert offload can land
+        # differently between two runs — and a mismatch there lands entirely in
+        # this delta. Two cells disagreed by more than 8 GiB of resident weight
+        # and read as 23.1 and 11.6 bytes an entry against the 3.7 to 4.2 their
+        # own siblings at other batches show.
+        if not _same_resident_weights(record, sibling[1]):
+            continue
+        # Charged to every spanned card, as the graph is built on each.
+        per_device = (total - sibling[0]) / cards
+        if per_device <= 0:
+            continue
+        entries = heads * n_kv * min(n_kv, batch)
+        per_arch[arch].append(per_device * 1024 ** 2 / entries)
+        detail[arch].append(f"{key[9]} ctx{ctx} ub{batch}")
     if not per_arch:
         raise ValueError("no flash-attention-off cell has an on sibling")
     _NO_FA_SCORE.clear()
     for arch, values in per_arch.items():
-        _NO_FA_SCORE[arch] = max(1, math.ceil(max(values)))
+        # The largest, so no configuration of a measured architecture is left
+        # short: this term is worth thousands of MiB and under-reserving it OOMs.
+        #
+        # Stored in *hundredths* of a byte. Rounding up to a whole byte was the
+        # last source of systematic over-reservation in the set: qwen35's pairs
+        # sit between 3.3 and 4.2, and charging the 5 that `ceil` gives inflates a
+        # term worth thousands of MiB by a fifth, which is the whole of the +6.7%
+        # its worst cell showed.
+        _NO_FA_SCORE[arch] = max(1, math.ceil(max(values) * 100))
     return (
-        "paired against each cell's own flash-attention-on sibling: "
-        + ", ".join(f"{a} {v}" for a, v in sorted(_NO_FA_SCORE.items()))
-        + " bytes per (head x cache token x batch token). An f32 score for "
-        "every dense and MoE architecture; deepseek4's MLA shares one latent "
-        "across heads and measures 0.04, rounded up to the 1-byte floor. "
-        "Proportionality in batch is exact — gemma3 measures 2459 MiB at ub 512 "
-        "and 9884 at 2048 — and in context, and it follows one stream's share "
-        "of the cache, not the whole budget: gemma3 at four slots measures what "
-        "one slot measures at a quarter the context."
+        "paired against each cell's own flash-attention-on sibling on the driver "
+        "total: "
+        + ", ".join(f"{a} {v / 100:.2f} ({len(per_arch[a])} pair(s))"
+                    for a, v in sorted(_NO_FA_SCORE.items()))
+        + " bytes per (head x cache token x batch token), stored in hundredths "
+        "and charged per spanned "
+        "card. About an f32 for every dense and MoE architecture; deepseek4's MLA "
+        "shares one latent across heads and needs far less. Proportionality in "
+        "batch and in context is exact, and it follows one stream's share of the "
+        "cache rather than the whole budget: gemma3 at four slots measures what "
+        "one slot measures at a quarter the context. laguna's GGUF omits "
+        "`attention.head_count`, so its head count is inferred from "
+        "`embedding_length / key_length` and its rate absorbs any error in that."
     )
 
 
@@ -2582,7 +2653,7 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
             "by_arch": dict(sorted(_TABLE_LESS.items())),
         }
     if _NO_FA_SCORE:
-        document["no_flash_attn_score_bytes"] = {
+        document["no_flash_attn_score_centibytes"] = {
             "$comment": "Bytes of unfused attention score matrix per (head x "
                         "cache token x batch token), by architecture. One f32 "
                         "for every dense and MoE architecture measured; "

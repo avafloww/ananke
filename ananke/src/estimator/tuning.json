@@ -709,20 +709,21 @@
     },
     "default": 65562
   },
-  "no_flash_attn_score_bytes": {
+  "no_flash_attn_score_centibytes": {
     "$comment": "Bytes of unfused attention score matrix per (head x cache token x batch token), by architecture. One f32 for every dense and MoE architecture measured; deepseek4's MLA shares one latent across heads and needs essentially none. `default` is the largest, so an unmeasured architecture over-reserves rather than OOMs. Distinct from `no_flash_attn_rates`, which is the *host* pinned buffer's rate.",
     "by_arch": {
-      "deepseek4": 1,
-      "gemma3": 5,
-      "gemma4": 5,
-      "lfm2": 5,
-      "llama": 4,
-      "qwen3": 5,
-      "qwen35": 5,
-      "qwen35moe": 4,
-      "talkie": 5
+      "deepseek4": 56,
+      "gemma3": 417,
+      "gemma4": 561,
+      "laguna": 1201,
+      "lfm2": 409,
+      "llama": 393,
+      "qwen3": 419,
+      "qwen35": 421,
+      "qwen35moe": 367,
+      "talkie": 470
     },
-    "default": 5
+    "default": 1201
   },
   "per_slot_host_bytes": {
     "$comment": "Host memory each concurrently active slot costs, by architecture. Recorded, and deliberately not charged in `host_overhead_bytes`: that figure is what the rolling correction divides an observation by, so it must model what a process holds rather than the worst case, and charging all four slots took the cells outside the band from 2 to 44. A worst-case allowance belongs in the packer's slop, beside the prompt cache.",

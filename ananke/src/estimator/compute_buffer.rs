@@ -34,7 +34,9 @@
 use crate::{
     estimator::{
         compute_model,
-        tuning::{DEFAULT_UBATCH, NO_FLASH_ATTN_SCORE_BYTES, NO_FLASH_ATTN_SCORE_BYTES_DEFAULT},
+        tuning::{
+            DEFAULT_UBATCH, NO_FLASH_ATTN_SCORE_CENTIBYTES, NO_FLASH_ATTN_SCORE_CENTIBYTES_DEFAULT,
+        },
         types::EstimatorInputs,
     },
     gguf::GgufSummary,
@@ -95,6 +97,32 @@ pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u3
         ))
 }
 
+/// Query heads, falling back to `n_embd / key_length` where the GGUF omits them.
+///
+/// Not every architecture writes `attention.head_count`: laguna carries only
+/// `head_count_kv`, and a term built on the query head count then evaluated to
+/// zero and left 9218 MiB of unfused score matrix unreserved — the largest single
+/// miss in the dataset. Where the count has to be inferred, any error in it is
+/// absorbed by the per-architecture rate, the two only ever appearing as a
+/// product, so the fallback costs accuracy in the attribution rather than in the
+/// reservation.
+fn query_head_count(summary: &GgufSummary, arch: &str) -> u64 {
+    let meta = |key: &str| {
+        summary
+            .metadata
+            .get(&smol_str::SmolStr::new(format!("{arch}.{key}")))
+            .and_then(|v| v.as_u32())
+            .map(u64::from)
+    };
+    if let Some(heads) = meta("attention.head_count").filter(|h| *h > 0) {
+        return heads;
+    }
+    match (meta("embedding_length"), meta("attention.key_length")) {
+        (Some(n_embd), Some(head_dim)) if head_dim > 0 => n_embd / head_dim,
+        _ => 0,
+    }
+}
+
 /// A per-architecture rate, or the table's default.
 fn rate(table: &[(&str, u64)], arch: &str, fallback: u64) -> u64 {
     table
@@ -125,23 +153,19 @@ fn no_flash_attn_mib(summary: &GgufSummary, context: u32, ubatch: u32, flash_att
         return 0;
     }
     let arch = summary.architecture.as_str();
-    let heads = summary
-        .metadata
-        .get(&smol_str::SmolStr::new(format!(
-            "{arch}.attention.head_count"
-        )))
-        .and_then(|v| v.as_u32())
-        .unwrap_or(0) as u64;
+    let heads = query_head_count(summary, arch);
     if heads == 0 {
         return 0;
     }
     let tokens = u64::from(context.min(ubatch));
-    let per_entry = rate(
-        NO_FLASH_ATTN_SCORE_BYTES,
+    // Hundredths of a byte per entry: rounding the rate up to a whole byte
+    // inflated a term worth thousands of MiB by up to a fifth.
+    let centibytes = rate(
+        NO_FLASH_ATTN_SCORE_CENTIBYTES,
         arch,
-        NO_FLASH_ATTN_SCORE_BYTES_DEFAULT,
+        NO_FLASH_ATTN_SCORE_CENTIBYTES_DEFAULT,
     );
-    let bytes = per_entry * heads * u64::from(context) * tokens;
+    let bytes = centibytes * heads * u64::from(context) * tokens / 100;
     (bytes / (1024 * 1024)).min(u64::from(u32::MAX)) as u32
 }
 
