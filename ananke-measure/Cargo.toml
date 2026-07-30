@@ -3,11 +3,27 @@ name = "ananke-measure"
 edition.workspace = true
 version.workspace = true
 
+[[bin]]
+name = "measure"
+path = "src/bin/measure.rs"
+
+[features]
+# The harness's in-memory fakes, so a consumer outside this crate can drive a
+# measurement without a process, a driver, or a clock.
+test-fakes = []
+
 [dependencies]
+clap.workspace = true
+flate2.workspace = true
+jiff.workspace = true
+# `socket` on top of the workspace's features: the port check binds a raw socket
+# deliberately without `SO_REUSEADDR`, which `TcpListener` always sets.
+nix = { workspace = true, features = ["socket", "net"] }
+parking_lot.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
-flate2.workspace = true
 pretty_assertions.workspace = true

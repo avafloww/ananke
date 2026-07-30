@@ -12,13 +12,17 @@
 //! - `baseline` — `RssAnon - CPU KV - (host weights, when anonymous)`. What the
 //!   process holds beyond anything the model already explains.
 //!
-//! This crate is the reading half: it turns a captured log into [`Parsed`] and
-//! describes the NDJSON record that carries it. Running a server, sampling
-//! `/proc`, and polling the driver are deliberately not here — the crate stays
-//! a pure library with no process spawner in it, and it links neither the
-//! estimator nor the packer so that measurement and estimation cannot drift
-//! into each other.
+//! Two halves. [`parse`] and [`record`] are the reading side: they turn a captured
+//! log into [`Parsed`] and describe the NDJSON record that carries it. [`harness`]
+//! is the producing side — it runs the server, samples `/proc` and the driver, and
+//! writes the row — behind its own small synchronous traits for everything outside
+//! the process.
+//!
+//! The crate links neither the estimator nor the packer, so that measurement and
+//! estimation cannot drift into each other: a constant is derived from what these
+//! rows say, and nothing here reads what the estimator would have predicted.
 
+pub mod harness;
 pub mod parse;
 pub mod record;
 
