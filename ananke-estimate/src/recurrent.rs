@@ -27,10 +27,9 @@
 //! (architecture, slots, rollback) combinations in the measurement set and
 //! fails `emit` if any of them moves.
 
-use crate::{
-    estimator::{tuning::SPEC_RECURRENT_ROLLBACK_DEPTH, types::EstimatorInputs},
-    gguf::GgufSummary,
-};
+use ananke_gguf::GgufSummary;
+
+use crate::{tuning::SPEC_RECURRENT_ROLLBACK_DEPTH, types::EstimatorInputs};
 
 /// Bytes of recurrent state llama.cpp allocates for `recurrent_layers` layers
 /// of this model under `inputs`, or 0 when the architecture carries none.
@@ -111,10 +110,10 @@ const F32_BYTES: u64 = 4;
 mod tests {
     use std::{collections::BTreeMap, path::Path};
 
+    use ananke_gguf::types::{GgufSummary, GgufValue};
     use smol_str::SmolStr;
 
     use super::*;
-    use crate::gguf::types::{GgufSummary, GgufValue};
 
     /// Qwen3.6-35B-A3B's recurrent shape, as its GGUF declares it.
     fn qwen35moe() -> GgufSummary {

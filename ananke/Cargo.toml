@@ -14,6 +14,7 @@ path = "src/lib.rs"
 [dependencies]
 ananke-api.workspace = true
 ananke-config.workspace = true
+ananke-estimate.workspace = true
 ananke-fs.workspace = true
 ananke-gguf.workspace = true
 ananke-tuning.workspace = true

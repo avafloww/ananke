@@ -1,0 +1,17 @@
+[package]
+name = "ananke-estimate"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+ananke-config.workspace = true
+ananke-fs.workspace = true
+ananke-gguf.workspace = true
+ananke-tuning.workspace = true
+regex.workspace = true
+smol_str.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

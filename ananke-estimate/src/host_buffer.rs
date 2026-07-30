@@ -40,7 +40,7 @@
 //! Both terms were measured on mainline llama.cpp. ik_llama differs — it does
 //! not map host-side weights even without `--no-mmap` — which the *observation*
 //! side handles by measuring rather than inferring; see
-//! [`crate::supervise::rolling::RollingBase::host_peak`].
+//! `RollingBase::host_peak`.
 //!
 //! Validated at production scale on the shape issue #34 was about: a
 //! DeepSeek-V4-Flash hybrid (96 GiB, `--n-cpu-moe 40`, 2 GPUs) holds **90.7
@@ -68,19 +68,18 @@
 // `build.rs` turns into compile-time constants. Each carries its evidence in
 // its own doc comment — how many models it rests on, and where it is weak.
 
-pub use crate::estimator::tuning::DEFAULT_CACHE_RAM_MB;
+use ananke_gguf::GgufSummary;
+
+pub use crate::tuning::DEFAULT_CACHE_RAM_MB;
 use crate::{
-    estimator::{
-        tuning::{
-            DEFAULT_UBATCH, GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN, IK_OP_OFFLOAD_MIN_BATCH,
-            KV_CACHE_PAD, MAINLINE_LAYER_SPLIT_MASK_COPIES, MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD,
-            MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT, MTP_HOST_MIB_PER_1K,
-            PINNED_EXTRA_BYTES, PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE,
-            PROCESS_BASE_BYTES_PER_DEVICE, PROCESS_BASE_BYTES_PER_LAYER,
-        },
-        types::EstimatorInputs,
+    tuning::{
+        DEFAULT_UBATCH, GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN, IK_OP_OFFLOAD_MIN_BATCH,
+        KV_CACHE_PAD, MAINLINE_LAYER_SPLIT_MASK_COPIES, MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD,
+        MTP_HOST_BYTES_EMBEDDED, MTP_HOST_BYTES_SEPARATE_DRAFT, MTP_HOST_MIB_PER_1K,
+        PINNED_EXTRA_BYTES, PROCESS_BASE_BYTES, PROCESS_BASE_BYTES_MOE,
+        PROCESS_BASE_BYTES_PER_DEVICE, PROCESS_BASE_BYTES_PER_LAYER,
     },
-    gguf::GgufSummary,
+    types::EstimatorInputs,
 };
 
 /// Host bytes the runtime is *predicted* to hold, excluding weights and KV.
@@ -152,9 +151,9 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
 /// What a tensor split adds to the host baseline, for this architecture.
 fn tensor_split_baseline(arch: &str) -> u64 {
     lookup(
-        crate::estimator::tuning::TENSOR_SPLIT_BASELINE,
+        crate::tuning::TENSOR_SPLIT_BASELINE,
         arch,
-        crate::estimator::tuning::TENSOR_SPLIT_BASELINE_DEFAULT,
+        crate::tuning::TENSOR_SPLIT_BASELINE_DEFAULT,
     )
 }
 
@@ -198,13 +197,10 @@ fn baseline_offset(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -> i
     if !flash_attn {
         key.push_str("@nofa");
     }
-    crate::estimator::tuning::BASELINE_OFFSET
+    crate::tuning::BASELINE_OFFSET
         .iter()
         .find(|(name, _)| *name == key)
-        .map_or(
-            crate::estimator::tuning::BASELINE_OFFSET_DEFAULT,
-            |(_, value)| *value,
-        )
+        .map_or(crate::tuning::BASELINE_OFFSET_DEFAULT, |(_, value)| *value)
 }
 
 /// Extra pinned bytes per batch token when flash attention is off.
@@ -217,9 +213,9 @@ fn baseline_offset(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -> i
 fn no_flash_attn_rate(summary: &GgufSummary, arch: &str) -> u64 {
     // Never reached on the ik path, which returns before this term.
     lookup(
-        crate::estimator::tuning::NO_FLASH_ATTN_RATES,
+        crate::tuning::NO_FLASH_ATTN_RATES,
         &variant_key(summary, arch),
-        crate::estimator::tuning::NO_FLASH_ATTN_RATE_DEFAULT,
+        crate::tuning::NO_FLASH_ATTN_RATE_DEFAULT,
     )
 }
 
@@ -234,7 +230,7 @@ fn variant_key(summary: &GgufSummary, arch: &str) -> String {
     if has_experts(summary) {
         key.push_str("+moe");
     }
-    if crate::estimator::compute_buffer::is_gemma_e_variant(summary) {
+    if crate::compute_buffer::is_gemma_e_variant(summary) {
         key.push_str("+e");
     }
     key
@@ -269,9 +265,9 @@ fn has_experts(summary: &GgufSummary) -> bool {
 pub fn slot_host_bytes(arch: &str, inputs: &EstimatorInputs<'_>) -> u64 {
     let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
     lookup(
-        crate::estimator::tuning::PER_SLOT_HOST_BYTES,
+        crate::tuning::PER_SLOT_HOST_BYTES,
         arch,
-        crate::estimator::tuning::PER_SLOT_HOST_BYTES_DEFAULT,
+        crate::tuning::PER_SLOT_HOST_BYTES_DEFAULT,
     ) * slots.saturating_sub(1)
 }
 
@@ -292,9 +288,9 @@ pub fn slot_host_bytes(arch: &str, inputs: &EstimatorInputs<'_>) -> u64 {
 pub fn checkpoint_headroom_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u64 {
     let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
     lookup(
-        crate::estimator::tuning::CHECKPOINT_HEADROOM_BYTES,
+        crate::tuning::CHECKPOINT_HEADROOM_BYTES,
         &variant_key(summary, &summary.architecture),
-        crate::estimator::tuning::CHECKPOINT_HEADROOM_DEFAULT,
+        crate::tuning::CHECKPOINT_HEADROOM_DEFAULT,
     ) * slots
 }
 
@@ -333,7 +329,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     let ubatch = inputs.ubatch.unwrap_or(DEFAULT_UBATCH).max(1) as u64;
     let n_tokens = context.min(ubatch);
 
-    // `crate::config::service_inputs::estimator_inputs` resolves `-fa auto` the way the runtime
+    // `config::service_inputs::estimator_inputs` resolves `-fa auto` the way the runtime
     // will, so an unset value here only arises in tests. Default to off there,
     // which is the larger mask.
     let flash_attn = inputs.flash_attn.unwrap_or(false);
@@ -499,7 +495,7 @@ fn mask_copies(inputs: &EstimatorInputs<'_>) -> u64 {
 /// contexts, two batch sizes, and both card counts — with two same-architecture
 /// controls that are not E-variants showing none of it.
 fn gemma_e_variant_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64) -> u64 {
-    if !crate::estimator::compute_buffer::is_gemma_e_variant(summary) {
+    if !crate::compute_buffer::is_gemma_e_variant(summary) {
         return 0;
     }
     let layers = meta_u32(summary, arch, "block_count").unwrap_or(0) as u64;
@@ -545,7 +541,7 @@ fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64, devices: u
 /// and 54, while qwen35moe is 41 on both. A single constant would either
 /// under-reserve the worst or over-reserve a single-card glm by 45 MiB.
 fn ik_moe_rate(arch: &str, devices: u32) -> u64 {
-    let table = crate::estimator::tuning::IK_MOE_RATES;
+    let table = crate::tuning::IK_MOE_RATES;
     let exact = format!("{arch}@{}", devices.max(1));
     if let Some((_, rate)) = table.iter().find(|(name, _)| *name == exact) {
         return *rate;
@@ -559,7 +555,7 @@ fn ik_moe_rate(arch: &str, devices: u32) -> u64 {
         .filter(|(name, _)| name.starts_with(&prefix))
         .map(|(_, rate)| *rate)
         .max()
-        .unwrap_or(crate::estimator::tuning::IK_MOE_RATE_DEFAULT)
+        .unwrap_or(crate::tuning::IK_MOE_RATE_DEFAULT)
 }
 
 /// Read a `{arch}.{key}` u32 from the GGUF metadata.
@@ -603,10 +599,10 @@ fn sliding_window(summary: &GgufSummary, arch: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_gguf::{GgufSummary, GgufValue};
     use smol_str::SmolStr;
 
     use super::*;
-    use crate::gguf::{GgufSummary, GgufValue};
 
     const MIB: f64 = (1024 * 1024) as f64;
 
@@ -902,9 +898,9 @@ mod tests {
     fn with_experts(mut s: GgufSummary) -> GgufSummary {
         s.tensors.insert(
             SmolStr::new("blk.0.ffn_gate_exps.weight"),
-            crate::gguf::GgufTensor {
+            ananke_gguf::GgufTensor {
                 name: SmolStr::new("blk.0.ffn_gate_exps.weight"),
-                dtype: crate::gguf::GgufType::F16,
+                dtype: ananke_gguf::GgufType::F16,
                 shape: vec![1],
                 byte_size: 2,
                 shard_idx: 0,
@@ -1068,7 +1064,7 @@ mod measured_tests {
     use ananke_config::placement::SplitMode;
 
     use super::*;
-    use crate::estimator::llama::test_support::{fake_summary, inputs};
+    use crate::llama::test_support::{fake_summary, inputs};
 
     /// Two cards under layer split replicate the masks; one card does not,
     /// and neither does tensor split, where llama.cpp fuses the devices.
@@ -1181,9 +1177,9 @@ mod measured_tests {
 /// over-reserve everything else by about 3 MiB.
 fn quantised_cache_rate(arch: &str) -> u64 {
     lookup(
-        crate::estimator::tuning::QUANTISED_CACHE_RATES,
+        crate::tuning::QUANTISED_CACHE_RATES,
         arch,
-        crate::estimator::tuning::QUANTISED_CACHE_RATE_DEFAULT,
+        crate::tuning::QUANTISED_CACHE_RATE_DEFAULT,
     )
 }
 

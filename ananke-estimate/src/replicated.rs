@@ -32,7 +32,7 @@
 //! ships none of these tensors, which is why it needs no entry to come out at
 //! zero.
 
-use crate::gguf::GgufSummary;
+use ananke_gguf::GgufSummary;
 
 /// Tensor name fragments llama.cpp replicates across a tensor split.
 ///

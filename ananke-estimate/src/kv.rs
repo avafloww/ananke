@@ -1,6 +1,6 @@
 //! KV cache bytes-per-element table.
 
-use crate::gguf::GgufType;
+use ananke_gguf::GgufType;
 
 /// Approximate bytes per element for llama.cpp's accepted
 /// `--cache-type-k` / `--cache-type-v` values.

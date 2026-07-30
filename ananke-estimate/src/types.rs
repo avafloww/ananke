@@ -70,17 +70,17 @@ pub struct EstimatorInputs<'a> {
     /// Whether the service runs with `--spec-type draft-mtp`. When set and
     /// the model carries an MTP head (`nextn_predict_layers > 0`), the
     /// estimator adds the MTP draft context's KV + compute overhead. See
-    /// [`crate::estimator::mtp`].
+    /// [`crate::mtp`].
     pub mtp: bool,
     /// Optional separate draft-model GGUF (`-md`). When `mtp` is set and
     /// this is present, the estimator reads this file's resident weights
     /// plus a draft compute buffer rather than the target model's embedded
-    /// MTP head. See [`crate::estimator::mtp`].
+    /// MTP head. See [`crate::mtp`].
     pub draft_model: Option<&'a Path>,
     /// Number of parallel slots (`-np`). Absent means llama.cpp's default
     /// of 1. With a non-unified cache this divides the KV budget per
     /// stream, which is what the host graph mask is sized against — see
-    /// [`crate::estimator::host_buffer`].
+    /// [`crate::host_buffer`].
     pub parallel: Option<u32>,
     /// Whether the child runs with flash attention (`-fa`). Absent means
     /// llama.cpp's default. Decides whether the graph's KQ mask is f16 or
@@ -92,7 +92,7 @@ pub struct EstimatorInputs<'a> {
     pub kv_unified: Option<bool>,
     /// Whether the child is served by ik_llama.cpp rather than mainline.
     /// The two forks size the pinned graph arena by measurably different
-    /// rules — see [`crate::estimator::host_buffer`].
+    /// rules — see [`crate::host_buffer`].
     pub ik_llama: bool,
     /// Whether the child runs ik_llama's DSA sparse attention (`-dsa`), which
     /// builds two additional full-cache masks on top of the ordinary one.
@@ -184,29 +184,29 @@ pub struct Estimate {
     /// this term on the secondaries, so they fill with more expert weight
     /// instead of a phantom logits buffer. Deliberately a conservative
     /// under-estimate of the real logits allocation (see
-    /// [`crate::estimator::compute_buffer::output_logits_bytes`]): subtracting less than
+    /// [`crate::compute_buffer::output_logits_bytes`]): subtracting less than
     /// the true value keeps the secondaries safe, subtracting more would
     /// under-reserve and OOM them.
     pub output_buffer_bytes: u64,
     /// Expert layers the MTP head accounted for, dropped from
     /// [`Self::expert_layers`] because ik does not load them. Non-zero only for
     /// an ik service on a model with an embedded head. See
-    /// [`crate::allocator::placement::experts_ncmoe::Ncmoe`] for why the count
+    /// `Ncmoe` for why the count
     /// matters to `-ncmoe`.
     pub mtp_head_expert_layers: u32,
     /// Weights `--split-mode tensor` holds on *every* spanned card instead of
     /// dividing: the narrow gating and shared-expert paths every shard consumes.
     /// Zero for an architecture that ships none, which is every dense model
-    /// measured. See [`crate::estimator::replicated`].
+    /// measured. See [`crate::replicated`].
     pub tensor_split_replicated_bytes: u64,
     /// Extra VRAM (bytes) for the MTP / NextN draft context when the
     /// service runs `--spec-type draft-mtp`. Zero when MTP is off or the
     /// model carries no MTP head. Reserved as a single lump on the
-    /// primary GPU by the packer. See [`crate::estimator::mtp`].
+    /// primary GPU by the packer. See [`crate::mtp`].
     pub mtp_bytes: u64,
     /// The share of [`Self::mtp_bytes`] that is model tensors read from a GGUF
     /// — non-zero only for a separate draft model. See
-    /// [`crate::estimator::mtp::mtp_weight_bytes`].
+    /// [`crate::mtp::mtp_weight_bytes`].
     pub mtp_weight_bytes: u64,
     /// The vision projector's CLIP graph buffer, beyond its weights. llama.cpp
     /// puts it on one device and says so — `[mtmd] adding N MiB to
@@ -218,7 +218,7 @@ pub struct Estimate {
     /// Host bytes the runtime is predicted to hold that are neither weights
     /// nor KV: the pinned graph arena and the process baseline. Charged to the
     /// `Cpu` slot whatever the placement, because a fully GPU-offloaded model
-    /// pays them too. See [`crate::estimator::host_buffer`].
+    /// pays them too. See [`crate::host_buffer`].
     pub host_overhead_bytes: u64,
     /// The server prompt cache's host-RAM cap (`-cram`). Reserved but not
     /// predicted — it fills with use rather than at load — so the packer
@@ -318,7 +318,7 @@ pub struct NonLayer {
     /// [`Self::token_embd_bytes`] because the E-variants' per-layer stack sits
     /// in that bucket and is *not* the head — copying it too over-reserved
     /// gemma-4-E4B by 3 GiB. See
-    /// [`crate::allocator::placement::Packer::distribute_sharded`].
+    /// `Packer::distribute_sharded`.
     pub tied_head_bytes: u64,
     /// Small tensors (norms, rope tables) lumped together.
     pub other_bytes: u64,

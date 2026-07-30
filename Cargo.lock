@@ -23,6 +23,7 @@ version = "0.2.0"
 dependencies = [
  "ananke-api",
  "ananke-config",
+ "ananke-estimate",
  "ananke-fs",
  "ananke-gguf",
  "ananke-tuning",
@@ -83,6 +84,21 @@ name = "ananke-config"
 version = "0.2.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "ananke-estimate"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "ananke-fs",
+ "ananke-gguf",
+ "ananke-tuning",
+ "regex",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "tracing",
 ]
 
 [[package]]

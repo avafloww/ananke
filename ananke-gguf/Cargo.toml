@@ -6,3 +6,6 @@ version.workspace = true
 [dependencies]
 ananke-fs.workspace = true
 smol_str.workspace = true
+
+[dev-dependencies]
+ananke-fs.workspace = true

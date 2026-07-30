@@ -2,10 +2,9 @@
 //! sparse attention (CSA) layers are the only ones with a context-scaling
 //! cache.
 
-use crate::{
-    estimator::{kv, tuning::DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16, types::EstimatorInputs},
-    gguf::GgufSummary,
-};
+use ananke_gguf::GgufSummary;
+
+use crate::{kv, tuning::DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16, types::EstimatorInputs};
 
 /// The `attention.compress_ratios` value that marks a CSA (compressed
 /// sparse attention) layer — the only layers whose KV cache scales with
@@ -52,12 +51,10 @@ pub(crate) fn deepseek4_kv_per_token(
 
 #[cfg(test)]
 mod tests {
+    use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
     use smol_str::SmolStr;
 
-    use crate::{
-        estimator::{moe::estimate::estimate, types::EstimatorInputs},
-        gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue},
-    };
+    use crate::{moe::estimate::estimate, types::EstimatorInputs};
 
     #[test]
     fn deepseek4_kv_uses_csa_layer_count_not_naive_mla() {

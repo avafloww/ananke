@@ -3,14 +3,12 @@
 
 use std::collections::BTreeMap;
 
+use ananke_gguf::GgufSummary;
 use smol_str::SmolStr;
 
 use crate::{
-    estimator::{
-        llama::kv_per_token::compute_kv_per_token,
-        types::{Estimate, EstimatorInputs, NonLayer},
-    },
-    gguf::GgufSummary,
+    llama::kv_per_token::compute_kv_per_token,
+    types::{Estimate, EstimatorInputs, NonLayer},
 };
 
 pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
@@ -30,7 +28,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     Estimate {
         weights_bytes,
         kv_per_token,
-        compute_buffer_mb: crate::estimator::compute_buffer::per_device_for(summary, inputs),
+        compute_buffer_mb: crate::compute_buffer::per_device_for(summary, inputs),
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
         mmproj_graph_bytes: 0,
@@ -104,13 +102,11 @@ pub(crate) fn layer_index(name: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_gguf::types::GgufSummary;
     use smol_str::SmolStr;
 
     use super::*;
-    use crate::{
-        estimator::llama::test_support::{fake_summary, inputs, tensor},
-        gguf::types::GgufSummary,
-    };
+    use crate::llama::test_support::{fake_summary, inputs, tensor};
 
     #[test]
     fn sums_per_layer_and_non_layer() {

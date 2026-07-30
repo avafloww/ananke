@@ -27,16 +27,15 @@
 //! 2×3090 run (peak 40858 MiB total) minus the target+mmproj estimate: the
 //! draft contributes ~400 MiB, of which ~108 MiB is weights.
 
+use ananke_gguf::GgufSummary;
+
 use crate::{
-    estimator::{
-        tuning::{
-            DRAFT_MODEL_COMPUTE_MIB, DRAFT_MODEL_COMPUTE_MIB_PER_1K, MTP_DRAFT_COMPUTE_BASE_MIB,
-            MTP_DRAFT_COMPUTE_BASE_MIB_DEFAULT, MTP_DRAFT_COMPUTE_MIB_PER_1K,
-            MTP_DRAFT_COMPUTE_MIB_PER_1K_DEFAULT, MTP_UNACCOUNTED_MIB_PER_DEVICE,
-        },
-        types::EstimatorInputs,
+    tuning::{
+        DRAFT_MODEL_COMPUTE_MIB, DRAFT_MODEL_COMPUTE_MIB_PER_1K, MTP_DRAFT_COMPUTE_BASE_MIB,
+        MTP_DRAFT_COMPUTE_BASE_MIB_DEFAULT, MTP_DRAFT_COMPUTE_MIB_PER_1K,
+        MTP_DRAFT_COMPUTE_MIB_PER_1K_DEFAULT, MTP_UNACCOUNTED_MIB_PER_DEVICE,
     },
-    gguf::GgufSummary,
+    types::EstimatorInputs,
 };
 
 /// GPU-resident weight bytes for a separate draft model: every tensor except
@@ -78,7 +77,7 @@ fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32) -> u64 {
 /// compute buffer and reads no additional tensors — its layers are resident as
 /// part of the target model regardless.
 ///
-/// The packer charges this part as [`crate::allocator::placement::Charge`]'s
+/// The packer charges this part as `Charge`'s
 /// weights so it reaches `gpu_weight_bytes`, which the host-pool observation
 /// subtracts from a measured RSS peak. Left as runtime, the draft's weights
 /// would inflate every host sample of an MTP service.
@@ -146,7 +145,7 @@ pub fn mtp_overhead_bytes(
     let value_length = meta_attn_u32(summary, arch, "value_length").unwrap_or(0) as u64;
     // The MTP draft context always uses f16 for its KV cache, independent of
     // the main cache type.
-    let bytes_per_element = crate::estimator::kv::kv_bytes_per_element("f16");
+    let bytes_per_element = crate::kv::kv_bytes_per_element("f16");
     let kv_bytes = nextn
         * n_kv_heads
         * (((key_length + value_length) as f64) * bytes_per_element) as u64
@@ -163,13 +162,13 @@ pub fn mtp_overhead_bytes(
 /// This is the draft context's own graph. Two other things MTP costs are
 /// modelled elsewhere and must not be added here, or they are counted twice:
 /// the recurrent module's speculative rollback copies, which
-/// [`crate::estimator::recurrent`] scales by `parallel x (rs_seq + 1)` and which
+/// [`crate::recurrent`] scales by `parallel x (rs_seq + 1)` and which
 /// account for most of the driver delta's growth with the slot count (188 MiB at
 /// one slot against 754 at four, on Qwen3.6-35B-A3B), and the main context's own
 /// compute, which the unified compute model covers.
 ///
 /// The same two terms as the main context's — see
-/// [`crate::estimator::compute_buffer::tensor_split_per_device`] — because it
+/// [`crate::compute_buffer::tensor_split_per_device`] — because it
 /// is the same kind of graph over one layer instead of all of them: an f16 KQ
 /// mask of two bytes per (batch token, cache token), plus a flat count of
 /// hidden-width f32 intermediates per batch token.
@@ -226,10 +225,10 @@ fn meta_attn_u32(summary: &GgufSummary, arch: &str, key: &str) -> Option<u32> {
 mod tests {
     use std::{collections::BTreeMap, path::Path};
 
+    use ananke_gguf::types::{GgufSummary, GgufValue};
     use smol_str::SmolStr;
 
     use super::*;
-    use crate::gguf::types::{GgufSummary, GgufValue};
 
     fn qwen35_summary(arch: &str, nextn: u32, kv_heads: u32) -> GgufSummary {
         let mut metadata = BTreeMap::new();
@@ -400,7 +399,7 @@ mod tests {
     /// shape): a `token_embd.weight` kept on CPU plus the GPU-resident
     /// remainder, with `total_tensor_bytes` summing both.
     fn draft_summary(token_embd_mib: u64, gpu_weight_mib: u64) -> GgufSummary {
-        use crate::gguf::types::{GgufTensor, GgufType};
+        use ananke_gguf::types::{GgufTensor, GgufType};
         let mut tensors = BTreeMap::new();
         let mk = |name: &str, bytes: u64| GgufTensor {
             name: SmolStr::new(name),

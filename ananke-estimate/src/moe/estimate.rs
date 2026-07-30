@@ -4,15 +4,13 @@
 
 use std::collections::BTreeMap;
 
+use ananke_gguf::GgufSummary;
 use smol_str::SmolStr;
 
 use crate::{
-    estimator::{
-        llama::{collect_non_layer, layer_index},
-        moe::{deepseek4::deepseek4_kv_per_token, mla::mla_kv_per_token},
-        types::{Estimate, EstimatorInputs, ExpertKind, ExpertTensor},
-    },
-    gguf::GgufSummary,
+    llama::{collect_non_layer, layer_index},
+    moe::{deepseek4::deepseek4_kv_per_token, mla::mla_kv_per_token},
+    types::{Estimate, EstimatorInputs, ExpertKind, ExpertTensor},
 };
 
 pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
@@ -75,9 +73,9 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     } else if arch == "glm-dsa" {
         mla_kv_per_token(summary, arch, n_layers, inputs)
     } else if has_full_attention_interval {
-        crate::estimator::hybrid::kv_for_hybrid(summary, arch, n_layers, inputs)
+        crate::hybrid::kv_for_hybrid(summary, arch, n_layers, inputs)
     } else {
-        crate::estimator::llama::compute_kv_per_token(summary, arch, n_layers, inputs)
+        crate::llama::compute_kv_per_token(summary, arch, n_layers, inputs)
     };
 
     let expert_layers: Vec<u32> = per_layer_exp
@@ -93,7 +91,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     Estimate {
         weights_bytes,
         kv_per_token,
-        compute_buffer_mb: crate::estimator::compute_buffer::per_device_for(summary, inputs),
+        compute_buffer_mb: crate::compute_buffer::per_device_for(summary, inputs),
         mtp_bytes: 0,
         mtp_weight_bytes: 0,
         mmproj_graph_bytes: 0,
@@ -143,10 +141,9 @@ mod tests {
     fn qwen35moe_kv_scales_with_full_attention_interval() {
         use std::path::Path;
 
-        use crate::{
-            estimator::types::EstimatorInputs,
-            gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue},
-        };
+        use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
+
+        use crate::types::EstimatorInputs;
 
         let mut tensors = std::collections::BTreeMap::new();
         for layer in 0..8u32 {
@@ -270,12 +267,10 @@ mod tests {
     fn itemises_expert_tensors_with_full_per_layer() {
         use std::path::Path;
 
+        use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
         use smol_str::SmolStr;
 
-        use crate::{
-            estimator::types::EstimatorInputs,
-            gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue},
-        };
+        use crate::types::EstimatorInputs;
 
         let mut tensors = std::collections::BTreeMap::new();
         for layer in 0..3u32 {
@@ -376,10 +371,9 @@ mod tests {
         // a scalar `head_count_kv` — the array must not leak into the KV term.
         use std::path::Path;
 
-        use crate::{
-            estimator::types::EstimatorInputs,
-            gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue},
-        };
+        use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
+
+        use crate::types::EstimatorInputs;
 
         let n_layers = 48u32;
         let mut tensors = std::collections::BTreeMap::new();

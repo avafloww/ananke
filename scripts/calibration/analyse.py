@@ -32,7 +32,7 @@ import compute_model  # noqa: E402  (needs the path insertion above)
 
 DATA = Path(__file__).parent / "data" / "measurements.ndjson"
 TUNING_JSON = Path(__file__).parents[2] / "ananke-tuning/tuning.json"
-COLUMN_FIXTURES = Path(__file__).parents[2] / "ananke/tests/fixtures/compute_columns.json"
+COLUMN_FIXTURES = Path(__file__).parents[2] / "ananke-estimate/tests/fixtures/compute_columns.json"
 
 
 def load(path: Path) -> list[dict]:

@@ -6,15 +6,13 @@
 
 use std::collections::BTreeMap;
 
+use ananke_gguf::GgufSummary;
 use smol_str::SmolStr;
 
 use crate::{
-    estimator::{
-        compute_buffer,
-        llama::{collect_non_layer, collect_per_layer},
-        types::{Estimate, EstimatorInputs},
-    },
-    gguf::GgufSummary,
+    compute_buffer,
+    llama::{collect_non_layer, collect_per_layer},
+    types::{Estimate, EstimatorInputs},
 };
 
 /// Default mamba.ssm.state_size when the model metadata omits it. Matches the

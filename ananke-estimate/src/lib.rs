@@ -16,14 +16,11 @@ mod replicated;
 pub mod tuning;
 pub mod types;
 
+use ananke_fs::Fs;
+use ananke_gguf::{self, GgufSummary};
 use smol_str::SmolStr;
 use tracing::{info, warn};
 pub use types::{Estimate, EstimatorInputs, ExpertKind, ExpertTensor, NonLayer};
-
-use crate::{
-    gguf::{self, GgufSummary},
-    system::Fs,
-};
 
 /// One per-architecture family, paired with the `general.architecture`
 /// values it accepts and the function that produces an `Estimate` for
@@ -62,7 +59,7 @@ const FAMILIES: &[Family] = &[
 /// Failure modes from [`estimate_from_path`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EstimatorError {
-    /// `gguf::read` failed (bad magic, IO error, unsupported dtype, …).
+    /// `ananke_gguf::read` failed (bad magic, IO error, unsupported dtype, …).
     /// The inner string is the reader's own diagnostic.
     GgufRead {
         path: std::path::PathBuf,
@@ -131,7 +128,7 @@ pub fn estimate_with_summary(
     fs: &dyn Fs,
     inputs: &EstimatorInputs<'_>,
 ) -> Result<(GgufSummary, Estimate), EstimatorError> {
-    let summary = gguf::read(fs, inputs.model).map_err(|e| EstimatorError::GgufRead {
+    let summary = ananke_gguf::read(fs, inputs.model).map_err(|e| EstimatorError::GgufRead {
         path: inputs.model.to_path_buf(),
         cause: e.to_string(),
     })?;
@@ -155,7 +152,7 @@ pub fn estimate_with_summary(
     // applies uniformly to whichever family dispatched above rather than
     // living in each one.
     let draft_summary = match inputs.draft_model {
-        Some(path) if inputs.mtp => match gguf::read(fs, path) {
+        Some(path) if inputs.mtp => match ananke_gguf::read(fs, path) {
             Ok(s) => Some(s),
             Err(e) => {
                 warn!(
@@ -216,7 +213,7 @@ pub fn estimate_with_summary(
     // not, and only the former belongs in the tally the host-pool observation
     // subtracts.
     if let Some(mmproj) = inputs.mmproj {
-        match gguf::read(fs, mmproj) {
+        match ananke_gguf::read(fs, mmproj) {
             Ok(proj) => {
                 est.weights_bytes = est.weights_bytes.saturating_add(proj.total_tensor_bytes);
                 est.non_layer.other_bytes = est
@@ -231,7 +228,7 @@ pub fn estimate_with_summary(
 
     // Weights a tensor split holds on every card rather than dividing. Read from
     // the tensor table, so it is zero for an architecture without them — which is
-    // every dense model measured. See [`crate::estimator::replicated`].
+    // every dense model measured. See [`crate::replicated`].
     est.tensor_split_replicated_bytes = replicated::tensor_split_replicated_bytes(&summary);
 
     Ok((summary, est))
@@ -295,10 +292,10 @@ pub fn dispatch(
 mod tests {
     use std::path::Path;
 
+    use ananke_gguf::types::{GgufSummary, GgufValue};
     use smol_str::SmolStr;
 
     use super::*;
-    use crate::gguf::types::{GgufSummary, GgufValue};
 
     fn inputs_for<'a>(empty_override: &'a [String]) -> EstimatorInputs<'a> {
         EstimatorInputs {

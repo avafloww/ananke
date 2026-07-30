@@ -1,10 +1,9 @@
 //! KV cache sizing for llama-family models, including the SWA and shared-KV
 //! variants (Gemma 2/3/4, LFM2).
 
-use crate::{
-    estimator::{kv, recurrent, types::EstimatorInputs},
-    gguf::GgufSummary,
-};
+use ananke_gguf::GgufSummary;
+
+use crate::{kv, recurrent, types::EstimatorInputs};
 
 /// Hardcoded sliding-window group length for architectures where llama.cpp
 /// knows the pattern but the GGUF doesn't expose it. Gemma 2 / Gemma 3 use
@@ -222,17 +221,15 @@ pub(crate) fn compute_kv_per_token(
 
 #[cfg(test)]
 mod tests {
+    use ananke_gguf::types::{GgufSummary, GgufValue};
     use smol_str::SmolStr;
 
     use crate::{
-        estimator::{
-            llama::{
-                estimate::estimate,
-                test_support::{fake_summary, inputs, tensor},
-            },
-            types::EstimatorInputs,
+        llama::{
+            estimate::estimate,
+            test_support::{fake_summary, inputs, tensor},
         },
-        gguf::types::{GgufSummary, GgufValue},
+        types::EstimatorInputs,
     };
 
     #[test]
@@ -289,7 +286,7 @@ mod tests {
             shards: vec!["/fake".into()],
         };
 
-        assert!(crate::estimator::llama::is_llama_family("lfm2"));
+        assert!(crate::llama::is_llama_family("lfm2"));
         let empty: Vec<String> = Vec::new();
         let e = estimate(&s, &inputs("f16", "f16", 16384, &empty));
         // 5 attention layers (indices 2,5,8,11,14) × 8 kv-heads ×

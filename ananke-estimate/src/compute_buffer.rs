@@ -31,15 +31,14 @@
 //! Operators can still override the whole term per service via
 //! `estimation.compute_buffer_mb`.
 
+use ananke_gguf::GgufSummary;
+
 use crate::{
-    estimator::{
-        compute_model,
-        tuning::{
-            DEFAULT_UBATCH, NO_FLASH_ATTN_SCORE_CENTIBYTES, NO_FLASH_ATTN_SCORE_CENTIBYTES_DEFAULT,
-        },
-        types::EstimatorInputs,
+    compute_model,
+    tuning::{
+        DEFAULT_UBATCH, NO_FLASH_ATTN_SCORE_CENTIBYTES, NO_FLASH_ATTN_SCORE_CENTIBYTES_DEFAULT,
     },
-    gguf::GgufSummary,
+    types::EstimatorInputs,
 };
 
 /// llama.cpp materialises the output logits (`n_vocab × n_tokens` floats)
@@ -84,8 +83,8 @@ pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u3
     }
     // The *head* card's total, which is the contract this field has always had:
     // the packer trims `output_buffer_bytes` back off every secondary. See
-    // [`crate::estimator::compute_model`] for the model itself, and
-    // [`crate::estimator::compute_model::head_extra_mib`] for the term trimmed.
+    // [`crate::compute_model`] for the model itself, and
+    // [`crate::compute_model::head_extra_mib`] for the term trimmed.
     let flash_attn = inputs.flash_attn.unwrap_or(true);
     compute_model::per_device_mib(summary, inputs)
         .saturating_add(compute_model::head_extra_mib(summary, inputs))
@@ -180,13 +179,11 @@ pub(crate) fn is_gemma_e_variant(summary: &GgufSummary) -> bool {
 mod tests {
     use std::{collections::BTreeMap, path::Path};
 
+    use ananke_config::placement::SplitMode;
+    use ananke_gguf::{GgufValue, types::GgufSummary};
     use smol_str::SmolStr;
 
     use super::*;
-    use crate::{
-        config::validate::SplitMode,
-        gguf::{GgufValue, types::GgufSummary},
-    };
 
     /// The measured-coverage burden sits with
     /// `tests/estimator_matches_measurements.rs`, which walks every cell in the
@@ -330,9 +327,9 @@ mod tests {
         let mut e = sized_summary("gemma4", 4096);
         e.tensors.insert(
             SmolStr::new("per_layer_token_embd.weight"),
-            crate::gguf::types::GgufTensor {
+            ananke_gguf::types::GgufTensor {
                 name: SmolStr::new("per_layer_token_embd.weight"),
-                dtype: crate::gguf::types::GgufType::F16,
+                dtype: ananke_gguf::types::GgufType::F16,
                 shape: vec![256, 4096],
                 byte_size: 2 * 256 * 4096,
                 shard_idx: 0,

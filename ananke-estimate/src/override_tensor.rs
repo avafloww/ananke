@@ -12,14 +12,12 @@
 
 use std::collections::BTreeMap;
 
+use ananke_config::placement::DeviceSlot;
+use ananke_gguf::GgufSummary;
 use regex::Regex;
 use tracing::warn;
 
-use crate::{
-    config::DeviceSlot,
-    estimator::{llama::layer_index, moe::expert_kind, types::Estimate},
-    gguf::GgufSummary,
-};
+use crate::{llama::layer_index, moe::expert_kind, types::Estimate};
 
 #[derive(Debug)]
 pub struct OverrideRule {
@@ -170,14 +168,11 @@ pub fn parse_and_apply(estimate: &mut Estimate, summary: &GgufSummary, rules: &[
 
 #[cfg(test)]
 mod tests {
+    use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType};
     use smol_str::SmolStr;
 
     use super::*;
-    use crate::{
-        config::DeviceSlot,
-        estimator::types::{Estimate, NonLayer},
-        gguf::types::{GgufSummary, GgufTensor, GgufType},
-    };
+    use crate::types::{Estimate, NonLayer};
 
     fn tensor(name: &str, bytes: u64) -> GgufTensor {
         GgufTensor {

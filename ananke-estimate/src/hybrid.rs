@@ -12,16 +12,14 @@
 
 use std::collections::BTreeMap;
 
+use ananke_gguf::GgufSummary;
 use smol_str::SmolStr;
 
 use crate::{
-    estimator::{
-        compute_buffer, kv,
-        llama::{collect_non_layer, collect_per_layer},
-        recurrent,
-        types::{Estimate, EstimatorInputs},
-    },
-    gguf::GgufSummary,
+    compute_buffer, kv,
+    llama::{collect_non_layer, collect_per_layer},
+    recurrent,
+    types::{Estimate, EstimatorInputs},
 };
 
 /// Architectures that mix attention with recurrent SSM layers (no MoE).
@@ -96,7 +94,7 @@ pub fn kv_for_hybrid(
     // The remaining layers carry recurrent state, which llama.cpp allocates
     // alongside the KV cache and reports in the same "context" bucket. Its
     // size follows from the model's `ssm.*` metadata — see
-    // [`crate::estimator::recurrent`].
+    // [`crate::recurrent`].
     let recurrent_layers = span as u64 - kv_layer_count;
     let state = recurrent::state_bytes(summary, arch, recurrent_layers, inputs);
 
@@ -148,8 +146,9 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
 mod tests {
     use std::path::Path;
 
+    use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
+
     use super::*;
-    use crate::gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
 
     fn fake_hybrid_summary(arch: &str, n_layers: u32, interval: Option<u32>) -> GgufSummary {
         let mut tensors = std::collections::BTreeMap::new();

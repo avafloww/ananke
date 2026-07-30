@@ -25,16 +25,14 @@
 //! average: the average times the card count is the same total either way.
 
 use ananke_config::placement::SplitMode;
+use ananke_gguf::GgufSummary;
 
 use crate::{
-    estimator::{
-        tuning::{
-            COMPUTE_MODEL, COMPUTE_MODEL_DEFAULT, ComputeCoefficients, DEFAULT_UBATCH,
-            IK_ATTENTION_CHUNK, MAINLINE_LAYER_SPLIT_MASK_COPIES,
-        },
-        types::EstimatorInputs,
+    tuning::{
+        COMPUTE_MODEL, COMPUTE_MODEL_DEFAULT, ComputeCoefficients, DEFAULT_UBATCH,
+        IK_ATTENTION_CHUNK, MAINLINE_LAYER_SPLIT_MASK_COPIES,
     },
-    gguf::GgufSummary,
+    types::EstimatorInputs,
 };
 
 /// The design row for one device, in the units the fitted coefficients expect.
@@ -118,7 +116,7 @@ impl Columns {
             ubatch,
             n_kv: f64::from(inputs.context / inputs.streams().max(1)),
             ctx: f64::from(inputs.context),
-            quantised: crate::estimator::host_buffer::quantised_kv(inputs),
+            quantised: crate::host_buffer::quantised_kv(inputs),
             head_share,
             n_vocab,
             n_embd,
@@ -221,7 +219,7 @@ fn coefficients_for(
         SplitMode::Layer => "layer",
     };
     let runtime = inputs.ik_llama.then_some("ik");
-    let matches = |entry: &&'static crate::estimator::tuning::ComputeEntry| {
+    let matches = |entry: &&'static crate::tuning::ComputeEntry| {
         entry.archs.contains(&arch) && entry.variant == variant && entry.split == split
     };
     COMPUTE_MODEL
@@ -255,7 +253,7 @@ fn mask_copies(inputs: &EstimatorInputs<'_>) -> u32 {
 /// The variant discriminator, where one architecture string covers models whose
 /// graphs differ.
 fn variant_of(summary: &GgufSummary) -> Option<&'static str> {
-    crate::estimator::compute_buffer::is_gemma_e_variant(summary).then_some("gemma_e")
+    crate::compute_buffer::is_gemma_e_variant(summary).then_some("gemma_e")
 }
 
 /// MiB, rounded away from zero: a reservation short by a byte is still short.
@@ -308,7 +306,7 @@ mod tests {
             mask_copies: u32,
         }
 
-        let raw = include_str!("../../tests/fixtures/compute_columns.json");
+        let raw = include_str!("../tests/fixtures/compute_columns.json");
         let fixtures: Fixtures = serde_json::from_str(raw).expect("fixture parses");
 
         // The declared order is part of the contract: a coefficient vector is

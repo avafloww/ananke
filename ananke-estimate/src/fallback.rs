@@ -2,15 +2,13 @@
 
 use std::collections::BTreeMap;
 
+use ananke_gguf::GgufSummary;
 use smol_str::SmolStr;
 use tracing::warn;
 
 use crate::{
-    estimator::{
-        compute_buffer,
-        types::{Estimate, EstimatorInputs, NonLayer},
-    },
-    gguf::GgufSummary,
+    compute_buffer,
+    types::{Estimate, EstimatorInputs, NonLayer},
 };
 
 /// Multiplier applied to the GGUF's on-disk tensor bytes as a rough

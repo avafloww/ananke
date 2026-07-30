@@ -1,10 +1,9 @@
 //! KV cache sizing for MLA (multi-head latent attention) architectures
 //! (glm-dsa), which carry no V cache at all.
 
-use crate::{
-    estimator::{kv, types::EstimatorInputs},
-    gguf::GgufSummary,
-};
+use ananke_gguf::GgufSummary;
+
+use crate::{kv, types::EstimatorInputs};
 
 /// Fallback `attention.key_length` for MLA archs whose quant dropped the
 /// key: kv_lora_rank (512) + rope dims (64), the GLM-5 / DeepSeek-V3
@@ -97,12 +96,10 @@ const INDEXER_CACHE_BYTES_PER_ELEMENT: u64 = 2;
 
 #[cfg(test)]
 mod tests {
+    use ananke_gguf::types::{GgufSummary, GgufValue};
     use smol_str::SmolStr;
 
-    use crate::{
-        estimator::{moe::estimate::estimate, types::EstimatorInputs},
-        gguf::types::{GgufSummary, GgufValue},
-    };
+    use crate::{moe::estimate::estimate, types::EstimatorInputs};
 
     #[test]
     fn glm_dsa_kv_is_key_only_and_excludes_nextn_layers() {
@@ -183,7 +180,7 @@ mod tests {
     fn glm_dsa_prices_the_sparse_attention_indexer_cache() {
         use std::path::Path;
 
-        use crate::gguf::types::{GgufTensor, GgufType};
+        use ananke_gguf::types::{GgufTensor, GgufType};
 
         let mut metadata = std::collections::BTreeMap::new();
         for (key, value) in [

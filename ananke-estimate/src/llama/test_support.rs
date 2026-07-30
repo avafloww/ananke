@@ -5,12 +5,10 @@
 
 use std::path::Path;
 
+use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
 use smol_str::SmolStr;
 
-use crate::{
-    estimator::types::EstimatorInputs,
-    gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue},
-};
+use crate::types::EstimatorInputs;
 
 pub fn tensor(name: &str, bytes: u64) -> GgufTensor {
     GgufTensor {
