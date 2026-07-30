@@ -41,9 +41,16 @@ Each cell is tagged with the questions it answers:
 | `flash-attention` | flash attention off across both context and batch, which one point could not distinguish from a baseline shift |
 | `slot-batch` | the slot rules at a second batch size, since both feed terms that scale with the batch |
 | `concurrency` | the per-slot cost, across architectures rather than the one that has a series |
-| `holdout` | the operator's real service configurations, **held out of every fit** |
+| `holdout` | the operator's real service configurations, predicted before they were measured |
 
-`holdout` is the honesty check. Everything else is in-sample.
+`holdout` was the honesty check once, when those cells were first run against a
+prediction made in advance. It is not a standing one: `emit` fits every `ok` row,
+so the holdout is in the fitting set and the scoreboard's drift is in-sample. That
+is a deliberate trade — three of the four `mmproj` cells are holdout cells, and
+excluding them costs a real constant more than the figure is worth. The
+out-of-sample number is meant to come from leave-one-model-out cross-validation,
+which costs no extra measurement and is not yet implemented; see the analysis
+protocol in `PLAN.md`.
 
 The last four tags exist because of a mistake worth not repeating. A term
 measured at a single point in some axis looks flat in that axis, and three

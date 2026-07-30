@@ -269,11 +269,23 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
     cells
 }
 
-/// The operator's real service configurations, held out of every fit.
+/// The operator's real service configurations, predicted before they were
+/// measured.
 ///
-/// Every accuracy figure quoted before these was in-sample. These are the
-/// configurations the daemon actually runs; predicting them before measuring is
-/// the only test that says whether the model generalises.
+/// The prediction-before-measurement is the honest part and it happened once, at
+/// the moment these were first run. It does not survive into the fit: `emit` takes
+/// every `ok` row, so these cells are in the fitting set like any other, and the
+/// scoreboard's drift is an in-sample figure.
+///
+/// Deliberately, because they carry evidence nothing else has — 3 of the 4 mmproj
+/// cells, including the larger vision configuration. Holding them back drops
+/// `MMPROJ_GRAPH_BYTES` from 260 MiB to 147 MiB by leaving one configuration to fit
+/// two degrees of freedom, which is a worse estimator bought with a cleaner story.
+///
+/// The out-of-sample figure is supposed to come from leave-one-model-out
+/// cross-validation instead — see the analysis protocol in `PLAN.md` — which costs
+/// no extra measurement and is not yet implemented. Until it is, there is no
+/// generalisation number here, and the scoreboard should not be read as one.
 pub fn holdout(lib: &Library) -> Vec<Factors> {
     let g4 = model("gemma4-31b-qat");
     let q27 = model("qwen36-27b");
