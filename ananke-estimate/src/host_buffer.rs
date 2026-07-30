@@ -101,13 +101,16 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
     // two, and four slots, and 240, 274, 341 across ctx 32768, 65536, and
     // 131072. The flat constants these replace were wrong in shape, and so in
     // opposite directions at the ends of that range.
-    let mtp = match (inputs.mtp, inputs.draft_model.is_some()) {
-        (true, true) => MTP_HOST_BYTES_SEPARATE_DRAFT,
-        (true, false) => MTP_HOST_BYTES_EMBEDDED,
-        (false, _) => 0,
-    };
     let mtp = if inputs.mtp {
-        mtp + MTP_HOST_MIB_PER_1K * u64::from(inputs.context) / 1024 * 1024 * 1024
+        let base = if inputs.draft_model.is_some() {
+            MTP_HOST_BYTES_SEPARATE_DRAFT
+        } else {
+            MTP_HOST_BYTES_EMBEDDED
+        };
+        // Multiply before dividing: the rate is per 1024 tokens, and a context
+        // that is not a whole multiple of that still pays for the remainder.
+        let context_mib = MTP_HOST_MIB_PER_1K * u64::from(inputs.context) / 1024;
+        base + context_mib * 1024 * 1024
     } else {
         0
     };
