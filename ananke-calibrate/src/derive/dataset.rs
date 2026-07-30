@@ -67,7 +67,11 @@ pub fn latest_per_cell(rows: &[Record]) -> Vec<Record> {
     let keep: std::collections::BTreeSet<usize> = newest.into_values().collect();
     // Order preserved from the input, so an analysis that walks the dataset sees
     // it in measurement order rather than hash order.
-    rows.iter().enumerate().filter(|(i, _)| keep.contains(i)).map(|(_, r)| r.clone()).collect()
+    rows.iter()
+        .enumerate()
+        .filter(|(i, _)| keep.contains(i))
+        .map(|(_, r)| r.clone())
+        .collect()
 }
 
 /// How much of the dataset predates the runtime that is installed now.
@@ -104,7 +108,11 @@ pub fn report_stale_builds(rows: &[Record]) -> Vec<String> {
             .map(|(build, _)| *build)
             .expect("the map is non-empty");
         let current = builds[newest].len();
-        let stale: usize = builds.iter().filter(|(b, _)| **b != newest).map(|(_, v)| v.len()).sum();
+        let stale: usize = builds
+            .iter()
+            .filter(|(b, _)| **b != newest)
+            .map(|(_, v)| v.len())
+            .sum();
         out.push(format!(
             "{runtime}: {stale} of {} cells predate the newest build {newest}; their \
              terms are calibrated against a program that is no longer installed",
@@ -143,7 +151,10 @@ pub fn check_runtime_builds(rows: &[Record], tolerance: f64) -> Result<()> {
         let Some(cell) = record.cell.as_deref() else {
             continue;
         };
-        by_cell.entry(cell).or_default().insert(&record.provenance.runtime_sha256, used);
+        by_cell
+            .entry(cell)
+            .or_default()
+            .insert(&record.provenance.runtime_sha256, used);
     }
     let mut disagreed = Vec::new();
     for (cell, readings) in &by_cell {

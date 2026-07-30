@@ -53,7 +53,11 @@ pub fn layer_split_copies(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         return Err(DeriveError::no_data("no mainline layer-split cells"));
     }
     consensus_default(&multiples, "layer-split mask multiple")?;
-    let single_median = if singles.is_empty() { 0.0 } else { median(&singles) };
+    let single_median = if singles.is_empty() {
+        0.0
+    } else {
+        median(&singles)
+    };
     Ok(Scalar {
         value: py_round(median(&multiples)),
         evidence: format!(
@@ -96,10 +100,16 @@ pub fn offload_min_batch(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         let excess_per_token = (arena - terms.total()) * 1048576.0 / tokens as f64;
         let ratio = (tokens * used) as f64 / experts as f64;
         cells += 1;
-        if excess_per_token > 1024.0 { on.push(ratio) } else { off.push(ratio) }
+        if excess_per_token > 1024.0 {
+            on.push(ratio)
+        } else {
+            off.push(ratio)
+        }
     }
     if on.is_empty() || off.is_empty() {
-        return Err(DeriveError::no_data("the threshold is not bracketed by the dataset"));
+        return Err(DeriveError::no_data(
+            "the threshold is not bracketed by the dataset",
+        ));
     }
     let worst_on = on.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let first_off = off.iter().copied().fold(f64::INFINITY, f64::min);
@@ -151,11 +161,15 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         ));
     }
     if points.is_empty() {
-        return Err(DeriveError::no_data("no mainline tensor-split hybrid cells"));
+        return Err(DeriveError::no_data(
+            "no mainline tensor-split hybrid cells",
+        ));
     }
     let rates: Vec<f64> = points.iter().map(|(_, r)| *r).collect();
-    let shapes: BTreeSet<(String, i64)> =
-        points.iter().map(|(a, r)| (a.clone(), py_round_tenths(*r))).collect();
+    let shapes: BTreeSet<(String, i64)> = points
+        .iter()
+        .map(|(a, r)| (a.clone(), py_round_tenths(*r)))
+        .collect();
     let detail = shapes
         .iter()
         .map(|(arch, tenths)| format!("{arch} {:.1}/unit", *tenths as f64 / 10.0))
@@ -227,7 +241,9 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
         });
     }
     if points.is_empty() {
-        return Err(DeriveError::no_data("no ik MoE cells below the offload threshold"));
+        return Err(DeriveError::no_data(
+            "no ik MoE cells below the offload threshold",
+        ));
     }
     // Keyed by card count as well as architecture. glm-dsa measures 28.0 per unit
     // on one card and 42.8 on two at *identical* placement — both its offload
@@ -244,12 +260,18 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
             .filter(|p| p.arch == *arch && p.cards == *cards)
             .map(|p| p.rate)
             .collect();
-        consensus_default(&group, &format!("ik MoE rate for {arch} on {cards} card(s)"))?;
+        consensus_default(
+            &group,
+            &format!("ik MoE rate for {arch} on {cards} card(s)"),
+        )?;
     }
     let archs: BTreeSet<&str> = points.iter().map(|p| p.arch.as_str()).collect();
     for arch in &archs {
-        let group: Vec<f64> =
-            points.iter().filter(|p| p.arch == *arch).map(|p| p.rate).collect();
+        let group: Vec<f64> = points
+            .iter()
+            .filter(|p| p.arch == *arch)
+            .map(|p| p.rate)
+            .collect();
         if let Err(error) = consensus_default(&group, &format!("ik MoE rate for {arch}")) {
             // glm-dsa measures 28.0 per unit on one card and 42.8 on two, at
             // identical expert placement, each figure exact within its group. The
@@ -266,7 +288,10 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
             }
         }
     }
-    let per_unit = points.iter().map(|p| p.rate).fold(f64::NEG_INFINITY, f64::max);
+    let per_unit = points
+        .iter()
+        .map(|p| p.rate)
+        .fold(f64::NEG_INFINITY, f64::max);
     let mut by_key: BTreeMap<String, f64> = BTreeMap::new();
     for point in &points {
         let key = format!("{}@{}", point.arch, point.cards);

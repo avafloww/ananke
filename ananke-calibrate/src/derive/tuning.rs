@@ -25,7 +25,9 @@ const IK_MOE_DEFAULT: i64 = 54;
 
 impl Tuning {
     pub fn parse(text: &str) -> Result<Self, serde_json::Error> {
-        Ok(Self { document: serde_json::from_str(text)? })
+        Ok(Self {
+            document: serde_json::from_str(text)?,
+        })
     }
 
     /// The document itself, for `emit` to mutate and write back.

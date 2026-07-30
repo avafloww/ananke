@@ -62,7 +62,11 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
     let unified = factors.kv_unified;
     let ik = factors.runtime_is_ik();
 
-    let n_kv = if ik || unified || slots == 1 { ctx } else { ctx / slots };
+    let n_kv = if ik || unified || slots == 1 {
+        ctx
+    } else {
+        ctx / slots
+    };
     let n_kv = pad(n_kv, KV_CACHE_PAD);
     let tokens = factors.tokens();
     let width = if factors.flash_attn_on() { 2 } else { 4 };
@@ -83,7 +87,11 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
     let swa = u64::from(parsed.n_swa.unwrap_or(0));
     // mainline sizes the second mask to the window plus the batch; ik sizes it to
     // the whole context, which is why an SWA model costs it so much more.
-    let swa_rows = if ik { n_kv } else { pad(swa + tokens, KV_CACHE_PAD) };
+    let swa_rows = if ik {
+        n_kv
+    } else {
+        pad(swa + tokens, KV_CACHE_PAD)
+    };
     // Three window masks when several slots share one cache, matching
     // `host_buffer::pinned_graph_bytes`. This model went on charging one after
     // the estimator was changed, which is the same drift that left the ik MoE
@@ -94,8 +102,16 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
     // this replaces came from a sweep taken entirely at ubatch 512, where a
     // 1024-token window spans two batches; at 2048 the same configuration
     // measures 2, differing by exactly one mask.
-    let swa_copies = if slots > 1 && unified && !ik { 1 + swa.div_ceil(tokens).min(2) } else { 1 };
-    let swa_mask = if swa != 0 { swa_copies * swa_rows * tokens * width } else { 0 };
+    let swa_copies = if slots > 1 && unified && !ik {
+        1 + swa.div_ceil(tokens).min(2)
+    } else {
+        1
+    };
+    let swa_mask = if swa != 0 {
+        swa_copies * swa_rows * tokens * width
+    } else {
+        0
+    };
 
     // Two f32 hidden-state buffers on mainline, one on ik.
     let n_embd = u64::from(parsed.n_embd.unwrap_or(0));
@@ -160,7 +176,11 @@ pub fn check_arena_model(
         }
         let terms = arena_terms(record, true, tuning);
         let cards = factors.cards_or(1);
-        let copies = if cards > 1 && !factors.runtime_is_ik() { 4.0 } else { 1.0 };
+        let copies = if cards > 1 && !factors.runtime_is_ik() {
+            4.0
+        } else {
+            1.0
+        };
         let tokens = factors.tokens() as f64;
         // Never on ik: `pinned_graph_bytes` returns before this term, so letting
         // the table's default apply here would compare against a model the
@@ -180,8 +200,7 @@ pub fn check_arena_model(
         } else {
             0.0
         };
-        let modelled =
-            copies * (terms.masks() + no_fa) + terms.hidden + quantised + e_variant;
+        let modelled = copies * (terms.masks() + no_fa) + terms.hidden + quantised + e_variant;
         let error = (arena - modelled).abs();
         let arch = parsed.arch.clone().unwrap_or_else(|| "None".to_string());
         let entry = worst.entry(arch).or_insert((0.0, String::new()));

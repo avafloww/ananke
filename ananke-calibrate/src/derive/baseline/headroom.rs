@@ -1,0 +1,262 @@
+//! Two terms that are *reserved* rather than charged.
+//!
+//! `host_overhead_bytes` is what the rolling correction divides an observation by, so
+//! it has to model what a process actually holds. A service that never sees a long
+//! prompt, or never has four slots busy at once, would otherwise read as a large
+//! over-reservation and clamp unreachably — so these belong in the packer's slop,
+//! beside the prompt cache, and are recorded here rather than folded into the
+//! baseline.
+
+use std::collections::BTreeMap;
+
+use crate::{
+    derive::{
+        Table,
+        error::{DeriveError, Result},
+        shape::{CHECKPOINT_MIN_STEP, variant_key},
+        stats::{OUTLIER_TOLERANCE, check_no_outlier_dominates, py_round},
+    },
+    record::Record,
+};
+
+/// Host memory each *concurrently active* slot costs, by architecture.
+///
+/// Idle slots are free. The same model at `parallel` 1, 2, and 4 with a single
+/// sequential probe holds the same anonymous memory at every one; it is a slot that
+/// actually serves a request that allocates, which fits the first-use prefill step
+/// being per-slot rather than per-process. A reservation cannot know how many will
+/// be busy, so it charges all of them.
+///
+/// Measured per architecture because they disagree by two orders of magnitude —
+/// about 165 MiB per slot on qwen35, 89 on gemma3, and 3 on llama — and a single
+/// value taken from the one architecture that had a series would have over-reserved
+/// llama by half a gigabyte at four slots. Nothing the estimator already reads
+/// predicts the spread: it is monotonic in layer count over these three but far too
+/// steep to be a layer term, and unrelated to hidden size, KV-head count, or
+/// vocabulary.
+///
+/// The arena does not move at all across the series, so this is a baseline term and
+/// not an arena one.
+pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
+    // Every factor that would otherwise be measured alongside the slot count.
+    // `soak` belongs here: it grows the prompt over six rounds and costs memory of
+    // its own, so pooling a soak-free single-request cell with a soaked concurrent
+    // one measures both at once — which put gemma3 at 211 MiB per slot against the
+    // 89 its own series shows. `parallel` deliberately does not: an idle slot costs
+    // nothing, so a cell with four slots and one request is a valid one-slot
+    // reading, and excluding it would drop every series whose slot count moves
+    // alongside its concurrency.
+    type Key = (String, String, u32, u32, String, String, String, bool, u32);
+    let mut groups: BTreeMap<Key, BTreeMap<u32, i64>> = BTreeMap::new();
+    for record in rows {
+        let (parsed, factors) = (&record.parsed, &record.factors);
+        if !factors.served || factors.bench || factors.has_spec() {
+            continue;
+        }
+        if factors.is_hybrid() {
+            continue;
+        }
+        let Some(arch) = parsed.arch.clone().filter(|a| !a.is_empty()) else {
+            continue;
+        };
+        let key: Key = (
+            arch.clone(),
+            factors.runtime.clone(),
+            factors.ctx,
+            factors.ubatch.unwrap_or(0),
+            factors.gpus.clone(),
+            factors.split_or_layer().to_string(),
+            factors.kv_type.clone().unwrap_or_default(),
+            factors.kv_unified,
+            factors.soak.unwrap_or(0),
+        );
+        let owned = record.rss_kb("rss_anon_kb") * 1024;
+        let concurrency = factors.concurrency.unwrap_or(1).max(1);
+        // The lowest reading at each point: a higher one means the process had done
+        // more, and the difference being measured is the slot count.
+        groups
+            .entry(key)
+            .or_default()
+            .entry(concurrency)
+            .and_modify(|held| *held = (*held).min(owned))
+            .or_insert(owned);
+    }
+
+    let mut by_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    for (key, points) in &groups {
+        if points.len() < 2 {
+            continue;
+        }
+        // Taken against the lowest point and maximised, so the rate covers *every*
+        // measured concurrency rather than just the largest. gemma3 holds 378, 467,
+        // and 568 MiB at one, two, and four: the endpoint average is 63 MiB per
+        // slot, which under-reserves the two-slot point by 26, while the worst
+        // interval gives 89 and covers both.
+        let lo = *points.keys().next().expect("non-empty");
+        let worst = points
+            .iter()
+            .filter(|(c, _)| **c > lo)
+            .map(|(c, value)| (value - points[&lo]) as f64 / f64::from(c - lo))
+            .fold(f64::NEG_INFINITY, f64::max);
+        by_arch.entry(key.0.clone()).or_default().push(worst);
+    }
+    if by_arch.is_empty() {
+        return Err(DeriveError::no_data(
+            "no architecture measured at two concurrency levels",
+        ));
+    }
+    for (arch, group) in &by_arch {
+        check_no_outlier_dominates(
+            group,
+            &format!("per-slot host bytes for {arch}"),
+            OUTLIER_TOLERANCE,
+        )?;
+    }
+    let table: BTreeMap<String, i64> = by_arch
+        .iter()
+        .map(|(arch, group)| {
+            let worst = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            (arch.clone(), py_round(worst).max(0))
+        })
+        .collect();
+    let detail = table
+        .iter()
+        .map(|(arch, value)| format!("{arch} {:.0} MiB/slot", *value as f64 / 1048576.0))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(Table {
+        by_arch: table,
+        evidence: format!(
+            "anonymous memory against the number of concurrent requests, all else \
+             equal: {detail}. Idle slots cost nothing — the same models at parallel 1, \
+             2, and 4 with one sequential probe read the same — so it is the active \
+             slot that allocates. Charged for every slot, since a reservation cannot \
+             know how many will be busy."
+        ),
+    })
+}
+
+/// What a real prompt adds over the campaign's probe, by architecture.
+///
+/// llama.cpp's server checkpoints a slot's state so a prompt can be rewound, spaced
+/// by `--checkpoint-min-step` (8192 tokens). The campaign's probe is four tokens, so
+/// every baseline cell holds one checkpoint at most; a service serving real prompts
+/// holds more.
+///
+/// How many more depends on the attention. The flag's other name is
+/// `--swa-checkpoints`, and a sliding-window model needs checkpoints to rewind its
+/// window, so it keeps far more of them: gemma-4-31B-QAT measures 524 MiB at the
+/// probe and 2138 at a 16384-token prompt, against Qwen3.6-27B's 778 and 928.
+///
+/// Reserved rather than charged, like the prompt cache and the per-slot cost.
+/// `host_overhead_bytes` is what the rolling correction divides an observation by,
+/// so it has to model what a process holds; a service that never sees a long prompt
+/// would otherwise read as a 1.6 GiB over-reservation and clamp unreachably.
+pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table> {
+    let mut matched: BTreeMap<CheckpointKey, BTreeMap<bool, i64>> = BTreeMap::new();
+    for record in rows {
+        let factors = &record.factors;
+        if record.status != "ok" || !factors.served {
+            continue;
+        }
+        if factors.bench || factors.has_spec() || factors.is_hybrid() {
+            continue;
+        }
+        if factors.ngl != Some(99) {
+            continue;
+        }
+        let key = CheckpointKey {
+            variant: variant_key(record, false),
+            runtime: factors.runtime.clone(),
+            ctx: factors.ctx,
+            ubatch: factors.ubatch.unwrap_or(0),
+            gpus: factors.gpus.clone(),
+            split: factors.split_or_layer().to_string(),
+            kv_type: factors.kv_type.clone().unwrap_or_default(),
+            parallel: factors.parallel.unwrap_or(0),
+            flash_attn: factors.flash_attn.clone().unwrap_or_default(),
+            soak: factors.soak.unwrap_or(0),
+            concurrency: factors.concurrency.unwrap_or(0),
+            cram: factors.cram.unwrap_or(0),
+            no_mmap: factors.no_mmap,
+        };
+        // The threshold is the checkpoint spacing, not any prompt longer than the
+        // default: a 256- or 1024-token prompt still makes one checkpoint.
+        let steady = factors.probe_prompt_tokens.unwrap_or(4) >= CHECKPOINT_MIN_STEP;
+        let owned = record.owned_mib();
+        matched
+            .entry(key)
+            .or_default()
+            .entry(steady)
+            .and_modify(|held| *held = (*held).max(owned))
+            .or_insert(owned);
+    }
+
+    let mut by_arch: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    for (key, pair) in &matched {
+        if pair.len() == 2 {
+            let steady = pair[&true];
+            let probe = pair[&false];
+            by_arch
+                .entry(key.variant.clone())
+                .or_default()
+                .push((steady - probe).max(0));
+        }
+    }
+    if by_arch.is_empty() {
+        return Err(DeriveError::no_data("no probe/steady-state pairs"));
+    }
+    for (arch, group) in &by_arch {
+        let values: Vec<f64> = group.iter().map(|v| *v as f64).collect();
+        check_no_outlier_dominates(
+            &values,
+            &format!("checkpoint headroom for {arch}"),
+            OUTLIER_TOLERANCE,
+        )?;
+    }
+    let table: BTreeMap<String, i64> = by_arch
+        .iter()
+        .map(|(arch, group)| {
+            (
+                arch.clone(),
+                group.iter().copied().max().unwrap_or(0) * 1024 * 1024,
+            )
+        })
+        .collect();
+    let detail = table
+        .iter()
+        .map(|(arch, value)| format!("{arch} {} MiB", value / 1024 / 1024))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(Table {
+        by_arch: table,
+        evidence: format!(
+            "measured as the difference between a cell with a prompt past the \
+             8192-token checkpoint spacing and its short-probe twin, matched on every \
+             other factor: {detail}. Sliding-window architectures dominate, the flag \
+             being named --swa-checkpoints for that reason."
+        ),
+    })
+}
+
+/// Every factor that moves host memory, so the only difference left between a pair
+/// is the prompt length.
+///
+/// Omitting `soak`, `concurrency`, and `cram` pooled a soaked, cache-enabled cell at
+/// 3467 MiB with the plain ones and drove gemma3's difference negative.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CheckpointKey {
+    variant: String,
+    runtime: String,
+    ctx: u32,
+    ubatch: u32,
+    gpus: String,
+    split: String,
+    kv_type: String,
+    parallel: u32,
+    flash_attn: String,
+    soak: u32,
+    concurrency: u32,
+    cram: u32,
+    no_mmap: bool,
+}

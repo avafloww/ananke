@@ -17,7 +17,11 @@ pub fn median(values: &[f64]) -> f64 {
     let mut sorted: Vec<f64> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).expect("measurements are never NaN"));
     let n = sorted.len();
-    if n % 2 == 1 { sorted[n / 2] } else { (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0 }
+    if n % 2 == 1 {
+        sorted[n / 2]
+    } else {
+        (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    }
 }
 
 /// Reduce measurements to one number, refusing when they disagree.
@@ -38,12 +42,7 @@ pub fn median(values: &[f64]) -> f64 {
 /// zero: a term whose median is 0.1 and whose values span 21 reads as 218%
 /// disagreement while being 21 units wide. Where the caller knows what "small"
 /// means in its own units, it says so.
-pub fn consensus(
-    values: &[f64],
-    name: &str,
-    tolerance: f64,
-    absolute_floor: f64,
-) -> Result<f64> {
+pub fn consensus(values: &[f64], name: &str, tolerance: f64, absolute_floor: f64) -> Result<f64> {
     if values.is_empty() {
         return Err(DeriveError::no_data(format!("{name}: no measurements")));
     }
@@ -156,7 +155,11 @@ pub fn format_g(value: f64, precision: usize) -> String {
     let exponent: i32 = exponent.parse().expect("the exponent is an integer");
     if exponent < -4 || exponent >= significant as i32 {
         let sign = if exponent < 0 { '-' } else { '+' };
-        format!("{}e{sign}{:02}", strip_trailing_zeros(mantissa), exponent.abs())
+        format!(
+            "{}e{sign}{:02}",
+            strip_trailing_zeros(mantissa),
+            exponent.abs()
+        )
     } else {
         let decimals = (significant as i32 - 1 - exponent).max(0) as usize;
         strip_trailing_zeros(&format!("{value:.decimals$}"))
@@ -194,7 +197,10 @@ mod tests {
 
     #[test]
     fn consensus_accepts_a_tight_group_and_refuses_a_split_one() {
-        assert_eq!(consensus_default(&[100.0, 101.0, 102.0], "tight").unwrap(), 101.0);
+        assert_eq!(
+            consensus_default(&[100.0, 101.0, 102.0], "tight").unwrap(),
+            101.0
+        );
         let error = consensus_default(&[28.0, 42.8], "split").unwrap_err();
         assert!(error.to_string().contains("they do not agree"), "{error}");
         assert!(error.to_string().contains("28 to 42.8"), "{error}");
@@ -217,7 +223,9 @@ mod tests {
 
     #[test]
     fn outlier_check_refuses_a_lone_winner() {
-        assert!(check_no_outlier_dominates(&[239.0, 243.0, 240.0], "ok", OUTLIER_TOLERANCE).is_ok());
+        assert!(
+            check_no_outlier_dominates(&[239.0, 243.0, 240.0], "ok", OUTLIER_TOLERANCE).is_ok()
+        );
         assert!(
             check_no_outlier_dominates(&[239.0, 243.0, 1632.0], "bad", OUTLIER_TOLERANCE).is_err()
         );

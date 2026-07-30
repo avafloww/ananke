@@ -42,8 +42,11 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
             continue;
         }
         let terms = arena_terms(record, true, tuning);
-        let copies =
-            if factors.cards_or(1) > 1 && factors.split_or_layer() == "layer" { 4.0 } else { 1.0 };
+        let copies = if factors.cards_or(1) > 1 && factors.split_or_layer() == "layer" {
+            4.0
+        } else {
+            1.0
+        };
         let residual = arena - (copies * terms.masks() + terms.hidden);
         let tokens = factors.tokens() as f64;
         let per = residual * 1048576.0 / (f64::from(parsed.n_layer.unwrap_or(0)) * tokens);
@@ -51,14 +54,22 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
         // boundary is nowhere near either. A cell between them is not an E-variant
         // reading and not a control; it is a sign the filter is wrong, and
         // `consensus` will say so rather than averaging it in.
-        if per > 500.0 { residuals.push(per) } else { controls.push(per) }
+        if per > 500.0 {
+            residuals.push(per)
+        } else {
+            controls.push(per)
+        }
     }
     if residuals.is_empty() {
         return Err(DeriveError::no_data("no gemma4 E-variant cells"));
     }
     consensus_default(&residuals, "gemma E-variant per-layer term")?;
     let middle = median(&residuals);
-    let control = if controls.is_empty() { 0.0 } else { median(&controls) };
+    let control = if controls.is_empty() {
+        0.0
+    } else {
+        median(&controls)
+    };
     Ok(Scalar {
         value: py_round(middle),
         evidence: format!(
@@ -135,24 +146,41 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table)> {
         // hybrid does not replicate, and treating one as though it did put
         // qwen35moe's rate at both 133 and 532.
         let hybrid = key.n_cpu_moe != 0;
-        let copies = if cards > 1 && key.split == "layer" && !hybrid { 4.0 } else { 1.0 };
+        let copies = if cards > 1 && key.split == "layer" && !hybrid {
+            4.0
+        } else {
+            1.0
+        };
         let rate = (quantised - f16) * 1048576.0 / tokens / copies;
         rates.push(rate);
-        by_arch.entry(archs[&key.model_key].clone()).or_default().push(rate);
+        by_arch
+            .entry(archs[&key.model_key].clone())
+            .or_default()
+            .push(rate);
     }
     if rates.is_empty() {
-        return Err(DeriveError::no_data("no cells differing only in cache type"));
+        return Err(DeriveError::no_data(
+            "no cells differing only in cache type",
+        ));
     }
     // Per architecture, because they differ by a factor of forty and charging the
     // worst to all costs ~3 MiB of over-prediction on every quantised cell.
     for (arch, group) in &by_arch {
-        consensus(group, &format!("quantised-cache rate for {arch}"), 0.05, 0.0)?;
+        consensus(
+            group,
+            &format!("quantised-cache rate for {arch}"),
+            0.05,
+            0.0,
+        )?;
     }
     let table = Table {
         by_arch: by_arch
             .iter()
             .map(|(arch, group)| {
-                (arch.clone(), py_round(group.iter().copied().fold(f64::NEG_INFINITY, f64::max)))
+                (
+                    arch.clone(),
+                    py_round(group.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
+                )
             })
             .collect(),
         evidence: String::new(),
@@ -252,7 +280,11 @@ pub fn no_flash_attn_rates(
             continue;
         }
         let terms = arena_terms(record, true, tuning);
-        let cards = if factors.gpus.is_empty() { 1 } else { factors.gpus.split(',').count() };
+        let cards = if factors.gpus.is_empty() {
+            1
+        } else {
+            factors.gpus.split(',').count()
+        };
         // A hybrid does not replicate the mask across cards — the same exception
         // the quantised-cache rate needs, and leaving it out here would put every
         // hybrid architecture's rate wildly negative and drop it from the table,
@@ -271,15 +303,15 @@ pub fn no_flash_attn_rates(
         if parsed.per_layer_token_embd.unwrap_or(false) {
             extra += e_variant_rate * f64::from(parsed.n_layer.unwrap_or(0)) * tokens / 1048576.0;
         }
-        if factors.kv_type.as_deref() != Some("f16") {
-            if let Some(quant) = quant_rates.filter(|table| !table.is_empty()) {
-                let arch = parsed.arch.as_deref().unwrap_or("None");
-                let rate = quant
-                    .get(arch)
-                    .copied()
-                    .unwrap_or_else(|| quant.values().copied().max().unwrap_or(0));
-                extra += rate as f64 * tokens / 1048576.0;
-            }
+        if factors.kv_type.as_deref() != Some("f16")
+            && let Some(quant) = quant_rates.filter(|table| !table.is_empty())
+        {
+            let arch = parsed.arch.as_deref().unwrap_or("None");
+            let rate = quant
+                .get(arch)
+                .copied()
+                .unwrap_or_else(|| quant.values().copied().max().unwrap_or(0));
+            extra += rate as f64 * tokens / 1048576.0;
         }
         let residual = arena - (copies * terms.masks() + terms.hidden) - extra;
         // Per device copy: the term is replicated under a layer split the same way
@@ -292,12 +324,19 @@ pub fn no_flash_attn_rates(
             .push(residual * 1048576.0 / tokens / copies);
     }
     if by_arch.is_empty() {
-        return Err(DeriveError::no_data("no mainline cells with flash attention off"));
+        return Err(DeriveError::no_data(
+            "no mainline cells with flash attention off",
+        ));
     }
     for (arch, group) in &by_arch {
         // 4 KiB per token: below that the term is under a megabyte at the largest
         // batch measured, which is not worth splitting a group over.
-        consensus(group, &format!("no-flash-attention rate for {arch}"), 0.10, 4096.0)?;
+        consensus(
+            group,
+            &format!("no-flash-attention rate for {arch}"),
+            0.10,
+            4096.0,
+        )?;
     }
     // Negative rates mean the current constant over-charges that architecture;
     // clamping at zero keeps the term from *subtracting* pinned memory, which no

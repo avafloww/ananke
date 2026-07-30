@@ -389,6 +389,15 @@ impl Factors {
         u64::from(self.ctx).min(u64::from(self.ubatch.unwrap_or(0)))
     }
 
+    /// The physical batch, with llama.cpp's default named where the cell did not
+    /// set one. Zero reads as absent, as it does on the Python side.
+    pub fn ubatch_or_default(&self) -> u32 {
+        match self.ubatch.unwrap_or(0) {
+            0 => 512,
+            value => value,
+        }
+    }
+
     pub fn flash_attn_on(&self) -> bool {
         self.flash_attn.as_deref() == Some("on")
     }

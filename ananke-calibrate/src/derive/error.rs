@@ -34,15 +34,24 @@ pub struct DeriveError {
 
 impl DeriveError {
     pub fn no_data(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::NoData, message: message.into() }
+        Self {
+            kind: ErrorKind::NoData,
+            message: message.into(),
+        }
     }
 
     pub fn disagreement(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::Disagreement, message: message.into() }
+        Self {
+            kind: ErrorKind::Disagreement,
+            message: message.into(),
+        }
     }
 
     pub fn malformed(message: impl Into<String>) -> Self {
-        Self { kind: ErrorKind::Malformed, message: message.into() }
+        Self {
+            kind: ErrorKind::Malformed,
+            message: message.into(),
+        }
     }
 
     pub fn kind(&self) -> ErrorKind {

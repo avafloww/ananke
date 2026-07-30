@@ -74,7 +74,11 @@ pub fn query_head_count(parsed: &Parsed) -> u64 {
         0 => i64::from(parsed.n_embd_head_k.unwrap_or(0)),
         value => value,
     };
-    if head_dim == 0 { 0 } else { (n_embd / head_dim).max(0) as u64 }
+    if head_dim == 0 {
+        0
+    } else {
+        (n_embd / head_dim).max(0) as u64
+    }
 }
 
 /// Model weights this cell reported holding, host and device together.
@@ -144,7 +148,11 @@ pub fn table_less_compute(record: &Record) -> Option<f64> {
     // A negative remainder means the buffer lines and the driver disagree about
     // what is on the cards — a partial offload the parse cannot attribute — and
     // is not a compute-buffer measurement.
-    if remainder > 0.0 { Some(remainder / devices) } else { None }
+    if remainder > 0.0 {
+        Some(remainder / devices)
+    } else {
+        None
+    }
 }
 
 /// Per-context device-side buffer sums for one cell, in MiB.
@@ -169,7 +177,9 @@ pub fn device_context_sums(record: &Record) -> Vec<ContextSums> {
                 .clone()
                 .map(|(_, b)| b.get("rs").copied().unwrap_or(0.0))
                 .sum(),
-            compute: device.map(|(_, b)| b.get("compute").copied().unwrap_or(0.0)).sum(),
+            compute: device
+                .map(|(_, b)| b.get("compute").copied().unwrap_or(0.0))
+                .sum(),
         };
         // Python compares whole dicts, so a repeat only collapses when all three
         // sums match; the check is against every earlier entry, not just the last.
