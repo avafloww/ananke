@@ -13,10 +13,12 @@ use std::sync::Arc;
 
 #[cfg(any(test, feature = "test-fakes"))]
 pub use crate::harness::sys::{
-    clock::FakeClock, gpu::FakeGpu, http::FakeHttp, procfs::FakeProcFs, spawn::FakeSpawner,
+    clock::FakeClock, files::FakeFiles, gpu::FakeGpu, http::FakeHttp, procfs::FakeProcFs,
+    spawn::FakeSpawner,
 };
 pub use crate::harness::sys::{
     clock::{Clock, SystemClock},
+    files::{Files, LocalFiles},
     gpu::{GpuSampler, NvidiaSmi},
     http::{Http, LoopbackHttp},
     procfs::{LocalProcFs, ProcFs},
@@ -24,6 +26,7 @@ pub use crate::harness::sys::{
 };
 
 mod clock;
+mod files;
 mod gpu;
 mod http;
 mod procfs;
@@ -36,6 +39,7 @@ pub struct Deps {
     pub procfs: Arc<dyn ProcFs>,
     pub gpu: Arc<dyn GpuSampler>,
     pub http: Arc<dyn Http>,
+    pub files: Arc<dyn Files>,
 }
 
 impl Deps {
@@ -46,6 +50,7 @@ impl Deps {
             procfs: Arc::new(LocalProcFs),
             gpu: Arc::new(NvidiaSmi),
             http: Arc::new(LoopbackHttp),
+            files: Arc::new(LocalFiles),
         }
     }
 }
@@ -59,6 +64,7 @@ pub struct Fakes {
     pub procfs: Arc<FakeProcFs>,
     pub gpu: Arc<FakeGpu>,
     pub http: Arc<FakeHttp>,
+    pub files: Arc<FakeFiles>,
 }
 
 #[cfg(any(test, feature = "test-fakes"))]
@@ -70,7 +76,14 @@ impl Fakes {
             procfs: Arc::new(procfs),
             gpu: Arc::new(gpu),
             http: Arc::new(http),
+            files: Arc::new(FakeFiles::new()),
         }
+    }
+
+    /// Start with a dataset, or any other file, already in place.
+    pub fn with_files(mut self, files: FakeFiles) -> Self {
+        self.files = Arc::new(files);
+        self
     }
 
     pub fn deps(&self) -> Deps {
@@ -80,6 +93,7 @@ impl Fakes {
             procfs: self.procfs.clone(),
             gpu: self.gpu.clone(),
             http: self.http.clone(),
+            files: self.files.clone(),
         }
     }
 }

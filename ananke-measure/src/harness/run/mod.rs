@@ -107,10 +107,17 @@ pub fn measure_cells(
     options: &Options,
     observer: &mut dyn FnMut(usize, Completed),
 ) -> Result<Summary, Error> {
-    run_cells(&Deps::local(), cells, options, observer)
+    measure_cells_with(&Deps::local(), cells, options, observer)
 }
 
-pub(crate) fn run_cells(
+/// As [`measure_cells`], against a given set of outside-world implementations.
+///
+/// Public because the observer contract above is a contract *with a driver*, and a
+/// driver cannot check that it holds — that a cell is reported exactly once, after
+/// its row is on disk — without substituting the world. `ananke-calibrate`'s
+/// campaign is that driver, and until this existed the only thing standing behind
+/// the contract was a reading of the loop.
+pub fn measure_cells_with(
     deps: &Deps,
     cells: &[Factors],
     options: &Options,
@@ -119,7 +126,7 @@ pub(crate) fn run_cells(
     let done = if options.remeasure {
         Default::default()
     } else {
-        dataset::already_measured(&options.out)?
+        dataset::already_measured(deps.files.as_ref(), &options.out)?
     };
     let mut summary = Summary::default();
     for (index, factors) in cells.iter().enumerate() {
@@ -146,7 +153,7 @@ pub(crate) fn run_cells(
                 host::hardware(deps),
                 Outcome::failed(Status::SkippedInsufficientMemory),
             );
-            dataset::append(&options.out, &skipped)?;
+            dataset::append(deps.files.as_ref(), &options.out, &skipped)?;
             summary.skipped += 1;
             observer(index, Completed::Skipped);
             continue;
@@ -167,7 +174,7 @@ pub(crate) fn run_cells(
             Run::Measured(measurement) => {
                 let status = measurement.status;
                 println!("{}", describe(&measurement));
-                dataset::append(&options.out, &measurement)?;
+                dataset::append(deps.files.as_ref(), &options.out, &measurement)?;
                 if status == Status::Ok {
                     summary.measured += 1;
                     observer(index, Completed::Measured);
@@ -247,7 +254,7 @@ fn measure(deps: &Deps, factors: &Factors, id: &str, options: &Options) -> Run {
             };
             let mut outcome = Outcome::failed(status);
             outcome.log_tail = tail(&child.log(), TAIL_LINES);
-            outcome.log = archive(&log_path, options);
+            outcome.log = archive(deps, &log_path, options);
             return finish(outcome);
         }
     };
@@ -269,17 +276,17 @@ fn measure(deps: &Deps, factors: &Factors, id: &str, options: &Options) -> Run {
         parsed,
         rss: rss_summary(&sampler, final_reading, load_seconds),
         log_tail: String::new(),
-        log: archive(&log_path, options),
+        log: archive(deps, &log_path, options),
         trace: sampler.trace().to_vec(),
         checkpoints,
     })
 }
 
-fn archive(log_path: &Path, options: &Options) -> String {
+fn archive(deps: &Deps, log_path: &Path, options: &Options) -> String {
     options
         .archive_dir
         .as_deref()
-        .map(|archive_dir| dataset::archive_log(log_path, archive_dir))
+        .map(|archive_dir| dataset::archive_log(deps.files.as_ref(), log_path, archive_dir))
         .unwrap_or_default()
 }
 
@@ -320,4 +327,191 @@ fn describe(measurement: &crate::record::Record) -> String {
 fn flush() {
     use std::io::Write;
     let _ = std::io::stdout().flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        harness::sys::{FakeFiles, FakeGpu, FakeHttp, FakeProcFs, FakeSpawner, Fakes},
+        record::Runtime,
+    };
+
+    const OUT: &str = "data/measurements.ndjson";
+
+    /// Every cell is reported exactly once, in order, and always after its row is
+    /// on disk.
+    ///
+    /// This is the contract `ananke-calibrate`'s campaign commits against: it
+    /// commits from inside the observer, so a cell reported early would commit a
+    /// half-written line and a cell reported twice would put an empty commit in the
+    /// history. Reported *late* — after the next spawn — would be worse still,
+    /// because the commit would then race a running server's log.
+    ///
+    /// The rows are counted at each notification rather than at the end, which is
+    /// what makes this an ordering assertion instead of a tally.
+    #[test]
+    fn each_cell_is_reported_once_and_after_its_row_lands() {
+        let fakes = fakes(FakeProcFs::new().with_available_gib(1.0));
+        let deps = fakes.deps();
+        let cells = [cell("a"), cell("b"), cell("c")];
+
+        let mut seen = Vec::new();
+        let summary = measure_cells_with(&deps, &cells, &options(), &mut |index, completed| {
+            seen.push((index, completed, fakes.files.lines(OUT).len()));
+        })
+        .expect("the fakes do not fail");
+
+        // Refused by the gate: 1 GiB available against a 30 GiB headroom. Each
+        // refusal still writes a row saying so.
+        assert_eq!(
+            seen,
+            [
+                (0, Completed::Skipped, 1),
+                (1, Completed::Skipped, 2),
+                (2, Completed::Skipped, 3),
+            ]
+        );
+        assert_eq!(summary.skipped, 3);
+        assert_eq!(summary.measured, 0);
+    }
+
+    /// A cell that already has a row is reported without being measured again.
+    ///
+    /// The skip happens before the gate, so this path touches nothing at all — it
+    /// is the one a resumed campaign spends most of its time in.
+    #[test]
+    fn an_already_measured_cell_is_reported_and_not_rerun() {
+        let measured = cell("a");
+        let existing = format!(
+            r#"{{"cell":"{}","status":"ok","factors":{{}}}}"#,
+            cell::cell_id(&measured)
+        );
+        let fakes = fakes(FakeProcFs::new().with_available_gib(1.0))
+            .with_files(FakeFiles::new().with_file(OUT, format!("{existing}\n")));
+        let deps = fakes.deps();
+
+        let mut seen = Vec::new();
+        let summary = measure_cells_with(
+            &deps,
+            &[measured, cell("b")],
+            &options(),
+            &mut |index, completed| seen.push((index, completed)),
+        )
+        .expect("the fakes do not fail");
+
+        assert_eq!(
+            seen,
+            [(0, Completed::Skipped), (1, Completed::Skipped)],
+            "both are skipped, for different reasons"
+        );
+        assert_eq!(
+            fakes.files.lines(OUT).len(),
+            2,
+            "the already-measured cell appends nothing; the gate-refused one appends its row"
+        );
+        assert_eq!(summary.skipped, 2);
+    }
+
+    /// A swap abort reports nothing for the cell it stopped on, or for any after.
+    ///
+    /// Nothing is recorded for an aborted cell — the process was stopped part-way,
+    /// so what it held is not a measurement — and the observer follows the record.
+    /// A driver counting notifications must therefore never see a total that
+    /// outruns the dataset, which is what would let it commit a claim to more rows
+    /// than exist.
+    #[test]
+    fn an_aborted_run_reports_nothing_for_the_cell_it_stopped_on() {
+        // Available memory clears the gate; swap then grows past the limit on every
+        // reading, which is what the watchdog stops on.
+        // The server has to still be loading for the watchdog to get a reading: it
+        // samples while waiting for /health, and a server that answers on the first
+        // poll is past the point where swap could stop it.
+        let fakes = Fakes::new(
+            FakeSpawner::new(),
+            FakeProcFs::new()
+                .with_available_gib(1024.0)
+                .with_swap_growth_gib(8.0),
+            FakeGpu::new(),
+            FakeHttp::new().loading_for(4),
+        );
+        let deps = fakes.deps();
+
+        let mut seen = Vec::new();
+        let summary = measure_cells_with(
+            &deps,
+            &[cell("a"), cell("b")],
+            &options(),
+            &mut |index, completed| seen.push((index, completed)),
+        )
+        .expect("an abort is a summary, not an error");
+
+        assert!(
+            seen.is_empty(),
+            "nothing was measured, so nothing is reported"
+        );
+        assert!(summary.aborted_on_swap.is_some(), "the watchdog stopped it");
+        assert_eq!(
+            fakes.files.lines(OUT).len(),
+            0,
+            "and no row was written for the cell it stopped on"
+        );
+    }
+
+    /// `--force` skips the gate, and a cell that loads is reported as measured.
+    #[test]
+    fn a_cell_that_loads_is_reported_as_measured() {
+        let fakes = fakes(FakeProcFs::new().with_available_gib(1.0));
+        let deps = fakes.deps();
+        let options = Options {
+            force: true,
+            ..options()
+        };
+
+        let mut seen = Vec::new();
+        let summary = measure_cells_with(&deps, &[cell("a")], &options, &mut |index, completed| {
+            seen.push((index, completed, fakes.files.lines(OUT).len()));
+        })
+        .expect("the fakes do not fail");
+
+        assert_eq!(seen, [(0, Completed::Measured, 1)]);
+        assert_eq!(summary.measured, 1);
+    }
+
+    /// The fake world, with a given `/proc`. The spawner, the driver, and the HTTP
+    /// surface are at their defaults: a server that starts, answers `/health`, and
+    /// exits when told.
+    ///
+    /// `host::provenance` still shells out for the binary's version string — the
+    /// module doc carves that out — so a measured cell runs `<binary> --version`
+    /// and takes `?` when there is no such binary. It decides nothing here.
+    fn fakes(procfs: FakeProcFs) -> Fakes {
+        Fakes::new(FakeSpawner::new(), procfs, FakeGpu::new(), FakeHttp::new())
+    }
+
+    fn options() -> Options {
+        Options {
+            out: PathBuf::from(OUT),
+            log_dir: PathBuf::from("logs"),
+            // No archiving: the log path never exists under the fakes, so archiving
+            // would only be a test of `archive_log`'s tolerance of that.
+            archive_dir: None,
+            port: 18099,
+            load_timeout: Duration::from_secs(1800),
+            headroom_gib: 30.0,
+            swap_limit_gib: 4.0,
+            force: false,
+            remeasure: false,
+        }
+    }
+
+    fn cell(label: &str) -> Factors {
+        Factors {
+            label: label.to_owned(),
+            model: format!("/models/{label}.gguf"),
+            runtime: Runtime::Mainline,
+            ctx: 32768,
+            ..Default::default()
+        }
+    }
 }

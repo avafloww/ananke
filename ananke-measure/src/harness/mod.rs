@@ -15,10 +15,14 @@
 //!
 //! The outside world is behind the traits in [`sys`], with an in-memory
 //! implementation of each, so every decision the harness makes is testable without
-//! a process, a driver, a socket, or a wall-clock wait. What is deliberately *not*
-//! tested that way is the shell in [`run`] that orders the phases and the probing
-//! in [`host`] that shells out for the box's identity; both are thin, and neither
-//! decides anything.
+//! a process, a driver, a socket, a file, or a wall-clock wait. The one thing still
+//! reached for directly is the probing in [`host`] that shells out for the box's
+//! identity, which decides nothing.
+//!
+//! That includes the shell in [`run`], which was exempted here for longer than it
+//! should have been. It orders the phases and does not decide much, but the order
+//! *is* the contract a driver commits against — a cell is reported once, after its
+//! row is on disk — and "thin" is not a reason to leave a contract unchecked.
 
 pub mod cli;
 
@@ -30,7 +34,7 @@ pub mod cli;
 pub use crate::harness::{
     cell::cell_id,
     error::Error,
-    run::{Completed, Options, Summary, measure_cells},
+    run::{Completed, Options, Summary, measure_cells, measure_cells_with},
 };
 
 mod cell;
@@ -41,10 +45,8 @@ mod json;
 mod maintain;
 mod run;
 
-/// Public only under `test-fakes`, so a consumer outside this crate can drive a
-/// measurement against the in-memory implementations; private otherwise, because
-/// the trait seams are an implementation detail of the harness rather than an API.
-#[cfg(feature = "test-fakes")]
+/// The trait seams themselves, because [`measure_cells_with`] takes them: a driver
+/// substitutes the world to check the contract it depends on. The in-memory
+/// implementations inside stay behind `test-fakes` — the seams are API, the fakes
+/// are a test aid.
 pub mod sys;
-#[cfg(not(feature = "test-fakes"))]
-mod sys;

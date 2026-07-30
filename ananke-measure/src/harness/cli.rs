@@ -20,7 +20,7 @@ use crate::harness::{
     error::Error,
     maintain,
     run::{self, Options},
-    sys::Deps,
+    sys::{Deps, Files},
 };
 
 /// The port the campaign has always used. Deliberately not 8080: a cell must not
@@ -95,17 +95,22 @@ pub fn main() -> ExitCode {
 }
 
 fn dispatch(args: Args) -> Result<ExitCode, Error> {
+    let deps = Deps::local();
     if args.retire_stale_builds {
-        return retire(&args.out);
+        return retire(deps.files.as_ref(), &args.out);
     }
     if args.reparse {
-        return reparse(&args.out, &args.archive_dir);
+        return reparse(deps.files.as_ref(), &args.out, &args.archive_dir);
     }
     let Some(plan) = args.plan.as_deref() else {
         eprintln!("measure: --plan is required unless --reparse or --retire-stale-builds is given");
         return Ok(ExitCode::FAILURE);
     };
-    let cells = cell::load_plan(&std::fs::read_to_string(plan).map_err(Error::io)?)?;
+    let plan_text = deps
+        .files
+        .read(plan)
+        .ok_or_else(|| Error::io(std::io::Error::from(std::io::ErrorKind::NotFound)))?;
+    let cells = cell::load_plan(&String::from_utf8_lossy(&plan_text))?;
     let options = Options {
         out: args.out,
         log_dir: args.log_dir,
@@ -119,7 +124,7 @@ fn dispatch(args: Args) -> Result<ExitCode, Error> {
     };
     // No observer: the standalone binary measures one plan and reports at the end.
     // `campaign` is the driver that wants per-cell notice.
-    let summary = run::run_cells(&Deps::local(), &cells, &options, &mut |_, _| {})?;
+    let summary = run::measure_cells_with(&deps, &cells, &options, &mut |_, _| {})?;
     println!(
         "{} measured, {} skipped, {} without a measurement",
         summary.measured, summary.skipped, summary.failed
@@ -133,10 +138,10 @@ fn dispatch(args: Args) -> Result<ExitCode, Error> {
     })
 }
 
-fn reparse(out: &Path, archive_dir: &Path) -> Result<ExitCode, Error> {
-    let lines = dataset::read_lines(out)?;
+fn reparse(files: &dyn Files, out: &Path, archive_dir: &Path) -> Result<ExitCode, Error> {
+    let lines = dataset::read_lines(files, out)?;
     let (rewritten, report) = maintain::reparse(&lines, &|log| {
-        dataset::read_archived_log(&archive_dir.join(log))
+        dataset::read_archived_log(files, &archive_dir.join(log))
     });
     if rewritten == lines {
         println!(
@@ -145,7 +150,7 @@ fn reparse(out: &Path, archive_dir: &Path) -> Result<ExitCode, Error> {
         );
         return Ok(ExitCode::SUCCESS);
     }
-    dataset::write_lines(out, &rewritten)?;
+    dataset::write_lines(files, out, &rewritten)?;
     println!(
         "reparsed {} records ({} unchanged, {} without an archived log)",
         report.rewritten, report.unchanged, report.skipped
@@ -153,14 +158,14 @@ fn reparse(out: &Path, archive_dir: &Path) -> Result<ExitCode, Error> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn retire(out: &Path) -> Result<ExitCode, Error> {
-    let lines = dataset::read_lines(out)?;
+fn retire(files: &dyn Files, out: &Path) -> Result<ExitCode, Error> {
+    let lines = dataset::read_lines(files, out)?;
     let (rewritten, report) = maintain::retire_stale_builds(&lines, STALE_TOLERANCE);
     for (arch, build) in &report.builds {
         println!("retired {arch} rows measured under {build}");
     }
     if rewritten != lines {
-        dataset::write_lines(out, &rewritten)?;
+        dataset::write_lines(files, out, &rewritten)?;
     }
     println!("{} row(s) marked stale-runtime", report.retired);
     Ok(ExitCode::SUCCESS)

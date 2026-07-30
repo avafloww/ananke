@@ -23,6 +23,7 @@ use crate::harness::{
     dataset,
     json::splice_member,
     maintain::{reparse, retire_stale_builds},
+    sys::LocalFiles,
 };
 
 /// The campaign's own figure, from `measure.py --retire-stale-builds`.
@@ -32,7 +33,9 @@ const RETIRED_ROWS: usize = 14;
 fn reparsing_the_campaign_leaves_every_record_byte_identical() {
     let lines = campaign();
     let logs = data_dir().join("logs");
-    let (out, report) = reparse(&lines, &|log| dataset::read_archived_log(&logs.join(log)));
+    let (out, report) = reparse(&lines, &|log| {
+        dataset::read_archived_log(&LocalFiles, &logs.join(log))
+    });
 
     // Named per line rather than asserted in bulk, because a single disagreement
     // is a finding about the parser and the log it came from.
@@ -87,7 +90,7 @@ fn retiring_reselects_exactly_the_rows_the_campaign_retired() {
 }
 
 fn campaign() -> Vec<String> {
-    dataset::read_lines(&data_dir().join("measurements.ndjson"))
+    dataset::read_lines(&LocalFiles, &data_dir().join("measurements.ndjson"))
         .expect("the campaign's measurements are checked in")
 }
 
