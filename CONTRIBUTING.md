@@ -53,13 +53,23 @@ cargo run -p ananke-calibrate --bin validate         # every comparable cell, pr
 cargo run -p ananke-calibrate --bin scoreboard       # the production models
 ```
 
-The Python under `scripts/calibration/` is being retired as these land. What is
-still Python is the *harness* — spawning llama-server, sampling `/proc` and
-`nvidia-smi`, planning sweeps — and `dump_estimates.py`/`coverage.py`. The
-analysis, the fitting, and both accuracy reports are Rust, and each was verified
-against the Python it replaced: `validate` reproduces its 229 cells and skip tally,
-`scoreboard` its seven models to within 1 MiB, the fitter its coefficients to
-1.5e-16, and `emit` its whole document.
+```sh
+cargo run -p ananke-calibrate --bin coverage -- --check  # is any regime measured at one point?
+```
+
+The analysis half is Rust and the Python is gone. Each piece was verified against
+the Python it replaced before that Python was deleted: `validate` reproduces its 229
+cells and skip tally, `scoreboard` its seven models to within 1 MiB, the fitter its
+coefficients to 1.5e-16, `emit` its whole document byte for byte, and `coverage` its
+table but for one stale label. The oracles survive as tests — 31 derive tests against
+`tuning.json`, 604 archived logs against the recorded parses, and a fitter fixture —
+so the checks did not leave with the code.
+
+What is still Python is the **harness**: `measure.py` and `measure_one.py` spawn
+llama-server and sample `/proc` and `nvidia-smi`, `plan.py` generates sweeps, and
+`dump_estimates.py` prints a table for eyeballing. `ananke-measure` holds the log
+*parser* those write through, so the record schema has one definition; the
+spawning, sampling, and planning are the remaining port.
 
 One rule for anything added here. Where a derivation pairs two cells, or reads a
 config, the key must pin **every** factor that could differ, and the reader should

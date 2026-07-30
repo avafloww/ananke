@@ -1337,10 +1337,10 @@ def retire_stale_builds(out: Path, tolerance: float = 0.02) -> int:
 
     Retired rows keep their data and their archived log; only `status` changes,
     to `stale-runtime`. That is deliberately the same gate every consumer
-    already applies — `analyse.py`, `validate.py`, and the estimator's
-    integration tests all take `status == "ok"` — so none of them needs to learn
-    about builds, and one that forgets is looking at a status it understands
-    rather than being silently wrong.
+    already applies — `ananke-calibrate`'s derivers and reports, and the
+    estimator's integration tests, all take `status == "ok"` — so none of them
+    needs to learn about builds, and one that forgets is looking at a status it
+    understands rather than being silently wrong.
     """
     records = [json.loads(line) for line in out.read_text().splitlines()
                if line.strip()]
