@@ -72,6 +72,21 @@ pub fn schedule(campaign: &Campaign, lib: &Library) -> Vec<Factors> {
     cells
 }
 
+/// Where this run's schedule is written.
+///
+/// The tracked `plan.json` is the *whole* campaign's schedule, and it is one of the
+/// paths a data commit is scoped to. A filtered run therefore writes its schedule to
+/// the log directory instead: `--only laguna` writing the tracked file would replace
+/// four hundred cells with thirty and then commit the truncation under a message
+/// about measurements, leaving no sign in the history that the plan had been
+/// narrowed rather than regenerated.
+pub fn schedule_path(campaign: &Campaign) -> PathBuf {
+    match campaign.only {
+        None => campaign.plan.clone(),
+        Some(_) => campaign.log_dir.join("plan.json"),
+    }
+}
+
 /// Measure the schedule, committing the dataset as it fills.
 pub fn run(campaign: &Campaign, cells: &[Factors], vcs: &dyn Vcs) -> Result<Summary, String> {
     let options = Options {
@@ -238,6 +253,23 @@ mod tests {
         assert!(laguna.len() < all.len());
         assert!(laguna.iter().all(|c| c.label.contains("laguna")));
         assert!(nothing.is_empty());
+    }
+
+    /// A filtered run does not write the tracked schedule.
+    ///
+    /// `plan.json` is committed with the data, so a `--only` run that wrote it would
+    /// commit a truncated plan under a message about measurements.
+    #[test]
+    fn a_filtered_run_writes_its_schedule_elsewhere() {
+        let full = fixture();
+        assert_eq!(schedule_path(&full), full.plan);
+
+        let filtered = Campaign {
+            only: Some("laguna".to_string()),
+            ..fixture()
+        };
+        assert_ne!(schedule_path(&filtered), filtered.plan);
+        assert!(schedule_path(&filtered).starts_with(&filtered.log_dir));
     }
 
     fn fixture() -> Campaign {

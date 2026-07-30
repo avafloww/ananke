@@ -83,16 +83,18 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if let Some(parent) = campaign.plan.parent()
+    // The schedule is written before anything runs, so a reader of a campaign in
+    // flight can see what it intends and not only what it has done. A filtered run
+    // writes it outside the committed data; see `campaign::schedule_path`.
+    let plan_path = campaign::schedule_path(&campaign);
+    if let Some(parent) = plan_path.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {
         eprintln!("creating {}: {e}", parent.display());
         return ExitCode::from(2);
     }
-    // The schedule is written before anything runs, so a reader of a campaign in
-    // flight can see what it intends and not only what it has done.
-    if let Err(e) = std::fs::write(&campaign.plan, ananke_calibrate::plan::to_json(&cells)) {
-        eprintln!("writing {}: {e}", campaign.plan.display());
+    if let Err(e) = std::fs::write(&plan_path, ananke_calibrate::plan::to_json(&cells)) {
+        eprintln!("writing {}: {e}", plan_path.display());
         return ExitCode::from(2);
     }
 
