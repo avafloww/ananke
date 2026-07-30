@@ -6,9 +6,9 @@
 //! previously capped the GPU breakdown at two devices and made adding a factor
 //! a schema migration.
 //!
-//! This is the writer's half only. The sampling that fills `trace`,
-//! `checkpoints`, and `rss` still lives in the Python harness, so the types
-//! here describe what it writes rather than producing it.
+//! This is the schema only. What fills `trace`, `checkpoints`, and `rss` is
+//! [`crate::harness`], which samples them; the types here describe the row rather
+//! than producing it, so a reader of the dataset needs none of the harness.
 
 use std::collections::BTreeMap;
 
@@ -83,7 +83,7 @@ pub enum Status {
 /// The struct carries `#[serde(default)]` because a record written before a
 /// factor existed simply does not spell it: the cell identity deliberately
 /// excludes defaulted fields, so adding one has to stay free.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Factors {
     pub label: String,
@@ -186,7 +186,7 @@ impl Default for Factors {
 
 /// Which llama.cpp the cell was measured against. The two forks size the graph
 /// arena by different rules, so the fork is a factor rather than a detail.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Runtime {
     Mainline,
