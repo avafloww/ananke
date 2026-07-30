@@ -178,6 +178,10 @@ export function ServiceRow({
 /// it is short of memory on one card. The total remains the fallback for a
 /// placement that names no device, which is the same condition that leaves
 /// `footprint_bytes` unset.
+///
+/// Hidden below `sm`, as the single total it replaces was. Three devices at
+/// `w-[15ch]` is 45 characters against a name that is already truncating, so on
+/// a phone the row would spend its second line on a list clipped mid-figure.
 function Footprint({ svc }: { svc: ServiceSummary }) {
   const { t } = useTranslation();
   const devices = svc.footprint_devices ?? [];
@@ -192,7 +196,7 @@ function Footprint({ svc }: { svc: ServiceSummary }) {
   if (devices.length === 0) {
     if (svc.footprint_bytes == null) return null;
     return (
-      <span className="truncate font-mono text-xs text-tertiary">
+      <span className="hidden truncate font-mono text-xs text-tertiary sm:block">
         {formatBytes(svc.footprint_bytes)}
         {needed}
       </span>
@@ -204,7 +208,7 @@ function Footprint({ svc }: { svc: ServiceSummary }) {
   // aligns the columns at the cost of pulling the pair apart. Whole cells of a
   // uniform width put every row's second device at the same offset just as well.
   return (
-    <span className="flex items-baseline overflow-hidden font-mono text-xs text-tertiary">
+    <span className="hidden items-baseline overflow-hidden font-mono text-xs text-tertiary sm:flex">
       {devices.map((dev, index) => (
         <span key={dev.device} className="flex shrink-0 items-baseline">
           {index > 0 && (
