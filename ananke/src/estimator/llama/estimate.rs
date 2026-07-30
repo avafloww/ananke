@@ -81,6 +81,15 @@ pub(crate) fn collect_non_layer(summary: &GgufSummary) -> NonLayer {
             _ => nl.other_bytes += tensor.byte_size,
         }
     }
+    // Only meaningful once every tensor has been seen: the table is the output
+    // head exactly when the model ships no head of its own.
+    if nl.output_head_bytes == 0 {
+        nl.tied_head_bytes = summary
+            .tensors
+            .get("token_embd.weight")
+            .map(|t| t.byte_size)
+            .unwrap_or(0);
+    }
     nl
 }
 

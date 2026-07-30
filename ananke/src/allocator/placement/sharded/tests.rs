@@ -92,6 +92,7 @@ fn tensor_split_shards_output_head_and_mtp_across_gpus() {
         non_layer: NonLayer {
             output_head_bytes: output_head,
             token_embd_bytes: token_embd,
+            tied_head_bytes: 0,
             other_bytes: other,
         },
         override_tensor_bytes: BTreeMap::new(),
@@ -172,6 +173,9 @@ fn a_tied_head_is_copied_onto_the_cards_only_when_sharded() {
         non_layer: NonLayer {
             output_head_bytes: output_head,
             token_embd_bytes: token_embd,
+            // `collect_non_layer` sets this to `token_embd.weight`'s size
+            // exactly when the model ships no head of its own.
+            tied_head_bytes: if output_head == 0 { token_embd } else { 0 },
             other_bytes: 0,
         },
         override_tensor_bytes: BTreeMap::new(),

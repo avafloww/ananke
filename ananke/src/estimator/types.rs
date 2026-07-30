@@ -416,14 +416,21 @@ impl ExpertKind {
 pub struct NonLayer {
     /// Output head — attributed to GPU 0 if any GPU used, else CPU.
     pub output_head_bytes: u64,
-    /// Token embeddings. llama.cpp keeps them on the CPU backend — with one
-    /// exception, which [`Self::output_head_bytes`] being zero identifies: a
-    /// tied-embedding model has no separate output head, so this table *is* the
-    /// head. Under a tensor split spanning more than one device that matmul is
-    /// sharded, and a CPU-resident weight cannot be, so llama.cpp keeps a
-    /// second, GPU-resident copy split across the cards. The CPU copy stays
-    /// too. See [`crate::allocator::placement::Packer::distribute_sharded`].
+    /// Token embeddings — always on CPU. Includes Gemma 4 E-variants'
+    /// `per_layer_token_embd.weight` stack, which llama.cpp keeps there too.
     pub token_embd_bytes: u64,
+    /// `token_embd.weight` alone, and only for a model that ties it to the
+    /// output head — zero whenever [`Self::output_head_bytes`] is non-zero.
+    ///
+    /// A tied model has no separate head, so this table *is* the head. Under a
+    /// tensor split spanning more than one device that matmul is sharded, and a
+    /// CPU-resident weight cannot be, so llama.cpp keeps a second GPU-resident
+    /// copy split across the cards while the CPU copy stays. Distinct from
+    /// [`Self::token_embd_bytes`] because the E-variants' per-layer stack sits
+    /// in that bucket and is *not* the head — copying it too over-reserved
+    /// gemma-4-E4B by 3 GiB. See
+    /// [`crate::allocator::placement::Packer::distribute_sharded`].
+    pub tied_head_bytes: u64,
     /// Small tensors (norms, rope tables) lumped together.
     pub other_bytes: u64,
 }

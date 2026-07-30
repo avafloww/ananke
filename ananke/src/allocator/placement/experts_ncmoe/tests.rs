@@ -316,6 +316,7 @@ fn deepseek4_like_auto_fits_two_24gib_cards() {
         non_layer: NonLayer {
             output_head_bytes: 414 * MIB,
             token_embd_bytes: 414 * MIB,
+            tied_head_bytes: 0,
             other_bytes: 0,
         },
         override_tensor_bytes: BTreeMap::new(),

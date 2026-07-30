@@ -170,8 +170,8 @@ impl<'a> Packer<'a> {
         // Qwen3-4B 305 against 304, gemma-3-27B 1108 against 1103. Every model
         // that ships its own `output.weight` — magidonia, talkie, Qwen3.6-27B —
         // holds no more under one split than the other.
-        let tied_head_copy = if non_layer.output_head_bytes == 0 && gpus.len() > 1 {
-            non_layer.token_embd_bytes
+        let tied_head_copy = if gpus.len() > 1 {
+            non_layer.tied_head_bytes
         } else {
             0
         };

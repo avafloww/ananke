@@ -53,6 +53,7 @@ pub fn estimate_fallback(summary: &GgufSummary, context: u32) -> Estimate {
         non_layer: NonLayer {
             output_head_bytes: 0,
             token_embd_bytes: 0,
+            tied_head_bytes: 0,
             other_bytes: 0,
         },
         override_tensor_bytes: BTreeMap::new(),
