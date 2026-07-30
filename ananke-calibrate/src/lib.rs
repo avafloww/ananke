@@ -1,6 +1,7 @@
 pub mod campaign;
 pub mod compute_model;
 pub mod coverage;
+pub mod crossval;
 pub mod derive;
 pub mod models;
 pub mod plan;

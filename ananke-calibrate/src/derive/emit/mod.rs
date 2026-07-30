@@ -325,9 +325,12 @@ pub fn emit_check(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
 }
 
 /// One deriver per scalar constant, in the order the Python declares them.
-type ScalarDeriver = fn(&[Record], &Tuning) -> Result<Scalar>;
+pub type ScalarDeriver = fn(&[Record], &Tuning) -> Result<Scalar>;
 
-fn derivers() -> Vec<(&'static str, ScalarDeriver)> {
+/// Public so [`crate::crossval`] can refit each of them on a subset: a fold has to
+/// run the same deriver the shipped constant came from, or it is validating
+/// something else.
+pub fn derivers() -> Vec<(&'static str, ScalarDeriver)> {
     vec![
         ("MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD", |rows, tuning| {
             graph::mainline_tensor_moe(rows, tuning)

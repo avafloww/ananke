@@ -54,7 +54,32 @@ cargo run -p ananke-calibrate --bin scoreboard       # the production models
 ```sh
 cargo run -p ananke-calibrate --bin coverage -- --check  # is any regime measured at one point?
 cargo run -p ananke-calibrate --bin estimates            # every model's estimate, broken down
+cargo run -p ananke-calibrate --bin crossval             # how well does each constant generalise?
 ```
+
+`validate` and `scoreboard` are **in-sample**. Every `ok` row feeds the fit,
+including the `holdout` question's — deliberately, since three of the four `mmproj`
+cells are holdout cells and excluding them costs a real constant more than the
+honesty of the figure is worth. So the drift they report says the model describes
+the data, not that it predicts a model it has never seen.
+
+`crossval` is the figure that does. For each constant it refits from every model
+but one and compares against what that model's own cells say, which costs no extra
+measurement. What it finds: the structural constants generalise essentially
+perfectly — `MAINLINE_LAYER_SPLIT_MASK_COPIES` is 4 for every one of six models
+held out in turn, `SPEC_RECURRENT_ROLLBACK_DEPTH` likewise, `PROCESS_BASE_BYTES_PER_DEVICE`
+within 1.2% — while the terms resting on one or two models do not, `MMPROJ_GRAPH_BYTES`
+worst at 77%. Four constants cannot be cross-validated at all, because removing
+their single supporting model leaves nothing to fit; they are model-specific fits
+wearing an architecture constant's name, which `PLAN.md` predicted and the tool now
+names.
+
+Read its percentages against the absolute column beside them. That 77% is 108 MiB
+on an estimate of ~44 GiB, and the constant is charged flat at the worst of its two
+vision configurations, so it over-reserves rather than OOMs. A constant's error is
+not its estimate's error. It is not a CI gate for that reason — `--check` exists,
+but a threshold that passes today would be measuring the campaign's model coverage
+rather than the estimator's quality.
 
 The whole loop is Rust: the sweep generator, the harness, the driver, the
 derivers, and the gates. Each piece was verified against the Python it replaced
