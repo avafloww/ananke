@@ -115,7 +115,7 @@ def skip_reason(record: dict, known_models: set[str]) -> str | None:
 
 def run_estimate(argv: list[str]) -> dict | None:
     result = subprocess.run(
-        ["cargo", "run", "-q", "--example", "estimate", "--", *argv],
+        ["cargo", "run", "-q", "-p", "ananke-placement", "--example", "estimate", "--", *argv],
         cwd=REPO, capture_output=True, text=True, timeout=300,
     )
     start = result.stdout.find("{")
@@ -149,7 +149,7 @@ def main() -> int:
     # path list `dump_estimates.py` reads is the authority on what resolves.
     known_models = {m for m in known_models if Path(m).exists()}
 
-    subprocess.run(["cargo", "build", "-q", "--example", "estimate"],
+    subprocess.run(["cargo", "build", "-q", "-p", "ananke-placement", "--example", "estimate"],
                    cwd=REPO, check=True)
 
     skipped: Counter[str] = Counter()

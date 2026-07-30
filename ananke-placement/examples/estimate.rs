@@ -34,29 +34,19 @@
 //! that does not fit on the GPUs.
 //!
 //! Unknown architectures now hard-reject by default; pass `--allow-fallback`
-//! to accept the coarse fallback (see `ananke::estimator::fallback`).
+//! to accept the coarse fallback (see `ananke_estimate::fallback`).
 
-use std::{collections::BTreeMap, path::PathBuf, process};
+use std::{path::PathBuf, process};
 
-use ananke::{
-    allocator::placement::pack_demand,
-    config::{
-        parse::{EstimationConfig, SamplingConfig},
-        validate::{
-            AllocationMode, AutoRestartSettings, DeviceReserves, Filters, HealthSettings,
-            IkSettings, Lifecycle, OffloadMode, PlacementPolicy, Runtime, ServiceConfig, SplitMode,
-            TemplateConfig,
-        },
-    },
+use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode};
+use ananke_estimate::{self as estimator, EstimatorInputs};
+use ananke_fs::LocalFs;
+use ananke_placement::{
+    Corrections,
     devices::{CpuSnapshot, DeviceSnapshot, GpuSnapshot},
-    estimator::{self, EstimatorInputs},
-    system::LocalFs,
-    tracking::rolling::Corrections,
+    pack_demand,
 };
-use ananke_api::shared::Modality;
-use ananke_config::docs::DEFAULT_START_QUEUE_DEPTH;
 use serde_json::json;
-use smol_str::SmolStr;
 
 struct Args {
     model: PathBuf,
@@ -219,100 +209,25 @@ fn parse_args() -> Args {
     }
 }
 
-/// Build a minimal `ServiceConfig` for the packer, carrying only the fields
-/// the packer reads: name, placement policy, split mode, GPU allow list, and
-/// the llama-cpp config (model path, expert offload, etc.).
-fn build_service_config(args: &Args) -> ServiceConfig {
-    use ananke::config::validate::LlamaCppConfig;
-
-    let placement_policy = if args.expert_offload.is_enabled() {
-        PlacementPolicy::Hybrid
-    } else {
-        PlacementPolicy::GpuOnly
-    };
-    let expert_offload = args.expert_offload;
-    let gpu_allow: Vec<u32> = (0..args.visible_devices).collect();
-    ServiceConfig {
-        name: SmolStr::new("estimate-example"),
-        port: 0,
-        private_port: 0,
-        lifecycle: Lifecycle::OnDemand,
-        priority: 50,
-        health: HealthSettings {
-            http_path: None,
-            timeout_ms: 5000,
-            probe_interval_ms: 200,
+/// The placement the packer needs: policy, split mode, the GPU allow list, and
+/// the expert-offload decision.
+///
+/// Before the packer took a distilled `PlacementInputs` this had to fabricate an
+/// entire `ServiceConfig` — health settings, drain timeouts, an event-bus-backed
+/// tracking block — none of which placement reads.
+fn build_placement(args: &Args) -> PlacementInputs {
+    PlacementInputs {
+        policy: if args.expert_offload.is_enabled() {
+            PlacementPolicy::Hybrid
+        } else {
+            PlacementPolicy::GpuOnly
         },
-        placement_override: BTreeMap::new(),
-        placement_policy,
-        gpu_allow,
         split_mode: args.split_mode,
-        tensor_split_weights: None,
-        gpu_headroom_mb: 0,
-        reserves: std::sync::Arc::new(DeviceReserves::default()),
-        filters: Filters::default(),
-        idle_timeout_ms: 60000,
-        drain_timeout_ms: 1000,
-        extended_stream_drain_ms: 1000,
-        max_request_duration_ms: 5000,
-        auto_restart: AutoRestartSettings::disabled(),
-        allocation_mode: AllocationMode::None,
-        openai_compat: true,
-        description: None,
-        modality: Modality::Chat,
-        start_queue_depth: DEFAULT_START_QUEUE_DEPTH,
-        extra_args: Vec::new(),
-        env: BTreeMap::new(),
-        env_inherit: true,
-        tracking: ananke::config::TrackingSettings::default(),
-        metadata: ananke_api::shared::AnankeMetadata::new(),
-        template_config: TemplateConfig::LlamaCpp(Box::new(LlamaCppConfig {
-            runtime: if args.ik_llama {
-                Runtime::IkLlama(IkSettings {
-                    mla: None,
-                    dsa: args.ik_dsa,
-                    attn_max_batch: None,
-                    runtime_repack: false,
-                })
-            } else {
-                Runtime::default()
-            },
-            model: args.model.clone(),
-            mmproj: args.mmproj.clone(),
-            context: Some(args.context),
-            n_gpu_layers: None,
-            expert_offload,
-            flash_attn: args.flash_attn,
-            cache_type_k: args.cache_type_k.as_ref().map(SmolStr::new),
-            cache_type_v: args.cache_type_v.as_ref().map(SmolStr::new),
-            mmap: None,
-            mlock: None,
-            parallel: args.parallel,
-            spec_type: args.mtp.then(|| SmolStr::new("draft-mtp")),
-            spec_draft_n_max: None,
-            draft_model: args.draft_model.clone(),
-            kv_unified: args.kv_unified,
-            cache_idle_slots: None,
-            cache_ram_mb: args.cache_ram_mb,
-            metrics: None,
-            slots: None,
-            batch_size: None,
-            ubatch_size: args.ubatch,
-            threads: None,
-            threads_batch: None,
-            numa: None,
-            jinja: None,
-            chat_template_file: None,
-            override_tensor: args.override_tensor.clone(),
-            sampling: SamplingConfig::default(),
-            estimation: EstimationConfig {
-                compute_buffer_mb: args.compute_buffer_mb,
-                safety_factor: None,
-                allow_fallback: args.allow_fallback.then_some(true),
-            },
-            binary: PathBuf::from("llama-server"),
-            launcher: None,
-        })),
+        gpu_allow: (0..args.visible_devices).collect(),
+        expert_offload: args.expert_offload,
+        ik_llama: args.ik_llama,
+        override_tensor: args.override_tensor.clone(),
+        ..PlacementInputs::named("estimate-example")
     }
 }
 
@@ -435,14 +350,9 @@ fn main() {
     });
 
     if args.pack {
-        let svc = build_service_config(&args);
+        let placement = build_placement(&args);
         let snapshot = build_snapshot(&args);
-        match pack_demand(
-            &estimate,
-            &ananke::config::service_inputs::placement_inputs(&svc),
-            &snapshot,
-            Corrections::NEUTRAL,
-        ) {
+        match pack_demand(&estimate, &placement, &snapshot, Corrections::NEUTRAL) {
             Ok(packed) => {
                 let allocation: serde_json::Map<_, _> = packed
                     .allocation

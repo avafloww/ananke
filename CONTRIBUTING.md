@@ -16,8 +16,9 @@ The backend's crates, leaves first:
 | `ananke-tuning` | `tuning.json` and the build script that turns it into constants | — |
 | `ananke-config` | config defaults, the descriptor table the docs are generated from, and the placement vocabulary (`SplitMode`, `DeviceSlot`) | — |
 | `ananke-estimate` | the VRAM estimator and the design-column contract the fitter shares | the four above |
+| `ananke-placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate` |
 | `ananke-api` | the DTOs that cross the wire to the frontend | — |
-| `ananke` | the daemon: packer, supervision, HTTP surface | all of the above |
+| `ananke` | the daemon: supervision, scheduling, HTTP surface, the NVML probe | all of the above |
 | `anankectl` | the CLI | `ananke-api` |
 
 The split is for compile times as much as for structure. `ananke`'s build script
@@ -25,13 +26,22 @@ runs the frontend's `npm run build`, so anything sharing that script pays for a
 UI rebuild on every change — which is why `tuning.json` lives in its own crate:
 regenerating the estimator's constants during a calibration campaign is the
 inner loop of that work, and it now costs a few seconds instead of a UI build.
-The estimator followed for the same reason and now builds in about a second on
-its own. Extending the seam to the packer is the remaining step, after which the
-calibration tooling can depend on the estimate and the placement without
-depending on the daemon.
+The estimator and then the packer followed for the same reason, and with them the
+`estimate` example — so no part of the calibration loop builds the UI any more.
+`scripts/calibration/{validate,scoreboard,dump_estimates}.py` invoke
+`cargo run -p ananke-placement --example estimate`, and none of them needs
+`ANANKE_SKIP_FRONTEND_BUILD`.
 
-`ananke` re-exports `gguf`, `estimator`, and `system::fs`, so `crate::gguf::…`
-and `crate::estimator::…` paths inside the daemon are unchanged by the split.
+`ananke` re-exports `gguf`, `estimator`, `allocator::placement`, `system::fs`, and
+`tracking::rolling::Corrections`, so `crate::…` paths inside the daemon are
+unchanged by the split.
+
+Getting the estimator and the packer out took a real decoupling rather than a file
+move. Both had taken a whole `ServiceConfig`; both now take a distilled input
+struct — `EstimatorInputs` and `PlacementInputs` — built by free functions in
+`ananke::config::service_inputs`. Reading a service config is the daemon's
+business; estimating and packing are pure functions over the fields they actually
+need. Prefer that shape for anything else that wants to come out.
 
 ### Platform scope
 

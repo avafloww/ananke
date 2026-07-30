@@ -8,3 +8,8 @@ ananke-config.workspace = true
 ananke-estimate.workspace = true
 smol_str.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+ananke-fs.workspace = true
+ananke-gguf.workspace = true
+serde_json.workspace = true

@@ -124,6 +124,9 @@ version = "0.2.0"
 dependencies = [
  "ananke-config",
  "ananke-estimate",
+ "ananke-fs",
+ "ananke-gguf",
+ "serde_json",
  "smol_str",
  "tracing",
 ]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dump estimator output for every model in the TOML config.
 
-Runs ``cargo run --example estimate`` against each model defined in
+Runs ``cargo run -p ananke-placement --example estimate`` against each model defined in
 ``models.toml`` with the flags the example supports, then post-processes
 the JSON to report the per-device allocation alongside the raw estimate.
 
@@ -108,7 +108,7 @@ def build_estimate_args(cfg: ModelConfig) -> list[str]:
     """Build the argument list for `cargo run --example estimate`."""
     model_path = LLM_DIR / cfg.model
     args = [
-        "cargo", "run", "--example", "estimate", "--",
+        "cargo", "run", "-p", "ananke-placement", "--example", "estimate", "--",
         "--model", str(model_path),
         "--context", str(cfg.context),
         "--active-devices", str(cfg.active_devices),
@@ -283,7 +283,7 @@ def main() -> int:
     # Build the estimate example once.
     print("Building estimate example...", file=sys.stderr)
     build = subprocess.run(
-        ["cargo", "build", "--example", "estimate"],
+        ["cargo", "build", "-p", "ananke-placement", "--example", "estimate"],
         cwd=REPO, capture_output=True, text=True, timeout=300,
     )
     if build.returncode != 0:
