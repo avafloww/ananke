@@ -30,8 +30,9 @@
 use crate::{
     estimator::{
         tuning::{
-            DRAFT_MODEL_COMPUTE_MIB, DRAFT_MODEL_COMPUTE_MIB_PER_1K, MTP_BASE_OVERHEAD_MIB,
-            MTP_KV_INTERCEPT_MIB, MTP_PER_SLOT_OVERHEAD_MIB,
+            DEFAULT_UBATCH, DRAFT_MODEL_COMPUTE_MIB, DRAFT_MODEL_COMPUTE_MIB_PER_1K,
+            MTP_COMPUTE_INTERMEDIATES, MTP_COMPUTE_INTERMEDIATES_DEFAULT,
+            TENSOR_MASK_BYTES_PER_TOKEN_PAIR,
         },
         types::EstimatorInputs,
     },
@@ -127,35 +128,69 @@ pub fn mtp_overhead_bytes(
     }
     let context = inputs.context as u64;
 
-    // The MTP overhead decomposes into three terms:
+    // llama.cpp states this cost itself, and states it in two parts:
     //
-    // 1. KV: the raw modelled KV (`nextn × kv_heads × (kl+vl) × 2 × context`)
-    //    plus a constant intercept (graph setup cost). This is a single
-    //    unified draft context — llama.cpp creates one MTP context, not one
-    //    per slot. The slope is read from the GGUF metadata so each
-    //    architecture gets its own KV size (qwen35 has 4 KV heads, qwen35moe
-    //    has 2, so their MTP KV differs by 2×).
+    //     [spec] estimated memory usage of MTP context is N MiB
     //
-    // 2. Per-slot overhead: a constant non-KV cost each slot adds (graph
-    //    intermediates and sampler state), measured at 367 MiB for the 27B.
+    // is exactly the draft cache's *physical* size plus **one** device's share
+    // of that context's compute buffer — verified to the second decimal on all
+    // 13 measured MTP cells, across two architectures, four contexts, and slot
+    // counts 1, 2, and 4. So the two terms are modelled separately, because
+    // they land differently: the cache is split across the spanned devices
+    // while the compute buffer is built on each of them.
     //
-    // 3. Base overhead: a slot-independent cost (graph and CUDA context),
-    //    measured at 584 MiB for the 27B.
-    //
-    // Total: `per_slot_kv + per_slot_overhead × slots + base_overhead`.
-    let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
+    // Neither term scales with the slot count. There is one MTP context, not
+    // one per slot, and its cache covers the whole context budget however that
+    // budget is divided: `mtpslot-*-mtp-np{1,2,4}` all report the same figure.
     let key_length = meta_attn_u32(summary, arch, "key_length").unwrap_or(0) as u64;
     let value_length = meta_attn_u32(summary, arch, "value_length").unwrap_or(0) as u64;
     // The MTP draft context always uses f16 for its KV cache, independent of
     // the main cache type.
     let bytes_per_element = crate::estimator::kv::kv_bytes_per_element("f16");
-    let raw_kv_per_token =
-        nextn * n_kv_heads * (((key_length + value_length) as f64) * bytes_per_element) as u64;
-    let per_slot_kv_bytes = MTP_KV_INTERCEPT_MIB * 1024 * 1024 + raw_kv_per_token * context;
-    let per_slot_overhead_bytes = MTP_PER_SLOT_OVERHEAD_MIB * 1024 * 1024;
-    let base_overhead_bytes = MTP_BASE_OVERHEAD_MIB * 1024 * 1024;
-    per_slot_kv_bytes + per_slot_overhead_bytes * slots + base_overhead_bytes
+    let kv_bytes = nextn
+        * n_kv_heads
+        * (((key_length + value_length) as f64) * bytes_per_element) as u64
+        * context;
+    let devices = u64::from(inputs.visible_devices.max(1));
+    kv_bytes + devices * draft_compute_share_bytes(summary, arch, inputs)
 }
+
+/// One device's share of the MTP draft context's compute buffer.
+///
+/// The same two terms as the main context's — see
+/// [`crate::estimator::compute_buffer::tensor_split_per_device`] — because it
+/// is the same kind of graph over one layer instead of all of them: an f16 KQ
+/// mask of two bytes per (batch token, cache token), plus a flat count of
+/// hidden-width f32 intermediates per batch token.
+///
+/// The mask term is what makes this grow with context at all, and it accounts
+/// for the growth exactly: Qwen3.6-27B's share net of the mask is 68 MiB at
+/// contexts 65536, 131072, and 360448 alike, and Qwen3.6-35B-A3B's is 40 MiB
+/// at 65536 and 524288. Both sit ~30 and ~4 MiB higher at ctx 32768, so the
+/// per-architecture count is taken from the worst cell and over-reserves the
+/// long contexts by that much.
+fn draft_compute_share_bytes(
+    summary: &GgufSummary,
+    arch: &str,
+    inputs: &EstimatorInputs<'_>,
+) -> u64 {
+    let n_embd = summary
+        .metadata
+        .get(&*format!("{arch}.embedding_length"))
+        .and_then(|v| v.as_u32())
+        .map(u64::from)
+        .unwrap_or(0);
+    let intermediates = MTP_COMPUTE_INTERMEDIATES
+        .iter()
+        .find(|(a, _)| *a == arch)
+        .map(|(_, v)| *v)
+        .unwrap_or(MTP_COMPUTE_INTERMEDIATES_DEFAULT);
+    let batch = u64::from(inputs.ubatch.unwrap_or(DEFAULT_UBATCH).max(1));
+    let n_kv = u64::from(inputs.context / inputs.streams().max(1));
+    batch * (intermediates * n_embd * F32_BYTES + TENSOR_MASK_BYTES_PER_TOKEN_PAIR * n_kv)
+}
+
+const F32_BYTES: u64 = 4;
 
 fn meta_u32(summary: &GgufSummary, arch: &str, key: &str) -> Option<u32> {
     summary
@@ -260,69 +295,82 @@ mod tests {
         );
     }
 
+    /// Both production embedded-MTP cells, against what llama.cpp itself said
+    /// the context would cost.
+    ///
+    /// `[spec] estimated memory usage of MTP context is N MiB` is the draft
+    /// cache's physical size plus **one** device's compute share, so a two-card
+    /// span pays the reported figure plus a second copy of the share. That is
+    /// the whole model, and these are the only two configurations it has been
+    /// measured against at production scale.
     #[test]
-    fn qwen35_27b_matches_measured() {
-        // 27B: nextn=1, 4 KV heads, 256+256, f16 draft cache, ctx 262144.
-        let s = qwen35_summary("qwen35", 1, 4);
+    fn embedded_head_reproduces_the_runtimes_own_figure() {
+        // (arch, kv heads, n_embd, context, slots, reported MiB, cache MiB)
+        let cells = [
+            // prod-qwen36-27b: `is 1652.02 MiB`, of which 1408 is the cache.
+            ("qwen35", 4u32, 5120u32, 360448u32, 2u32, 1652u64, 1408u64),
+            // prod-qwen36-35b-a3b: `is 1320.02 MiB`, of which 1024 is cache.
+            ("qwen35moe", 2, 2048, 524288, 2, 1320, 1024),
+        ];
         let empty: Vec<String> = Vec::new();
-        let got = mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty));
-        assert_eq!(got / (1024 * 1024), expected_total_mib(&s, 262144, 1));
+        for (arch, kv_heads, n_embd, context, slots, reported, cache) in cells {
+            let mut s = qwen35_summary(arch, 1, kv_heads);
+            s.metadata.insert(
+                SmolStr::new(format!("{arch}.embedding_length")),
+                GgufValue::U32(n_embd),
+            );
+            let mut i = inputs(context, true, &empty);
+            i.parallel = Some(slots);
+            i.visible_devices = 2;
+            let mib = mtp_overhead_bytes(&s, None, &i) / (1024 * 1024);
+
+            // The cache term is exact: `nextn x heads x (kl + vl) x 2 x ctx`.
+            let modelled_cache = u64::from(kv_heads) * 512 * 2 * u64::from(context) / (1024 * 1024);
+            assert_eq!(modelled_cache, cache, "{arch} draft cache");
+
+            // One share is `reported - cache`; two cards pay it twice.
+            let share = reported - cache;
+            assert!(
+                mib >= cache + 2 * share,
+                "{arch}: {mib} MiB must cover the cache plus both cards' \
+                 {share} MiB share"
+            );
+            assert!(
+                mib <= cache + 2 * share + 64,
+                "{arch}: {mib} MiB over-reserves against {} MiB",
+                cache + 2 * share
+            );
+        }
     }
 
     #[test]
     fn uses_f16_draft_cache_not_main_cache_type() {
-        // The MTP KV is sized from the measured affine model, not from the
-        // main cache type. The q8_0 main cache must not halve the MTP term.
+        // The draft context always caches in f16. A q8_0 *main* cache — which
+        // `inputs` sets — must not shrink this term.
         let s = qwen35_summary("qwen35", 1, 4);
         let empty: Vec<String> = Vec::new();
         let mib = mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty)) / (1024 * 1024);
-        assert_eq!(mib, expected_total_mib(&s, 262144, 1));
+        // nextn 1 x 4 heads x (256 + 256) x 2 bytes x 262144 = 1024 MiB of
+        // cache alone, which a q8_0 rate would have cut to 544.
+        assert!(mib >= 1024, "the draft cache must be priced at f16: {mib}");
     }
 
+    /// One MTP context, not one per slot. Its cache covers the whole context
+    /// budget however that budget is divided, and llama.cpp reports the same
+    /// figure at one, two, and four slots — the `mtpslot-*-mtp-np{1,2,4}` cells
+    /// all read 258.02 MiB for the 27B.
     #[test]
-    fn qwen35moe_35b_doubled_context() {
-        // 35B-A3B: nextn=1, 2 KV heads, ctx 524288 (the doubled deploy).
-        let s = qwen35_summary("qwen35moe", 1, 2);
-        let empty: Vec<String> = Vec::new();
-        let mib = mtp_overhead_bytes(&s, None, &inputs(524288, true, &empty)) / (1024 * 1024);
-        assert_eq!(mib, expected_total_mib(&s, 524288, 1));
-    }
-
-    /// The total MTP overhead the formula should produce, in MiB.
-    ///
-    /// `per_slot_kv + per_slot_overhead × slots + base_overhead`, where
-    /// `per_slot_kv = intercept + raw_kv_per_token × ctx`. The raw KV is
-    /// `nextn × kv_heads × (kl + vl) × 2` (f16).
-    fn expected_total_mib(summary: &GgufSummary, context: u64, slots: u64) -> u64 {
-        let arch = summary.architecture.as_str();
-        let nextn = meta_u32(summary, arch, "nextn_predict_layers").unwrap_or(0) as u64;
-        let n_kv_heads = meta_attn_u32(summary, arch, "head_count_kv").unwrap_or(0) as u64;
-        let key_length = meta_attn_u32(summary, arch, "key_length").unwrap_or(0) as u64;
-        let value_length = meta_attn_u32(summary, arch, "value_length").unwrap_or(0) as u64;
-        let bytes_per_element = crate::estimator::kv::kv_bytes_per_element("f16");
-        let raw_kv_per_token =
-            nextn * n_kv_heads * (((key_length + value_length) as f64) * bytes_per_element) as u64;
-        let per_slot_kv = MTP_KV_INTERCEPT_MIB + raw_kv_per_token * context / (1024 * 1024);
-        per_slot_kv + MTP_PER_SLOT_OVERHEAD_MIB * slots + MTP_BASE_OVERHEAD_MIB
-    }
-
-    #[test]
-    fn overhead_scales_with_slots() {
-        // The total MTP overhead grows with the slot count: the per-slot KV
-        // and per-slot overhead are each charged once per slot. The base is
-        // constant. Measured at 992, 1444, 2376 MiB for the 27B at np 1/2/4.
+    fn overhead_does_not_scale_with_slots() {
         let s = qwen35_summary("qwen35", 1, 4);
         let empty: Vec<String> = Vec::new();
         let at = |slots: u32| {
             let mut i = inputs(262144, true, &empty);
             i.parallel = Some(slots);
             i.kv_unified = Some(true);
-            mtp_overhead_bytes(&s, None, &i) / (1024 * 1024)
+            mtp_overhead_bytes(&s, None, &i)
         };
-        // The per-slot increment is constant.
-        let delta_1_to_2 = at(2) - at(1);
-        let delta_2_to_4 = at(4) - at(2);
-        assert_eq!(delta_2_to_4, delta_1_to_2 * 2);
+        assert_eq!(at(1), at(2));
+        assert_eq!(at(1), at(4));
     }
 
     /// Build a separate-draft GGUF summary (Gemma 4's `gemma4-assistant`

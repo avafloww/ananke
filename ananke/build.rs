@@ -157,6 +157,13 @@ fn generate_tuning_constants() {
     ));
     out.push_str(&generate_rate_table(
         &parsed,
+        "mtp_compute_intermediates",
+        "MTP_COMPUTE_INTERMEDIATES",
+        "MTP_COMPUTE_INTERMEDIATES_DEFAULT",
+        "n_embd-wide f32 graph intermediates the MTP draft context holds live per\n/// batch token, by architecture.",
+    ));
+    out.push_str(&generate_rate_table(
+        &parsed,
         "tensor_compute_intermediates",
         "TENSOR_COMPUTE_INTERMEDIATES",
         "TENSOR_COMPUTE_INTERMEDIATES_DEFAULT",

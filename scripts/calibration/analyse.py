@@ -1007,6 +1007,63 @@ def derive_tensor_quantised(rows: list[dict]) -> str:
     )
 
 
+def derive_mtp_compute_intermediates(rows: list[dict]) -> str:
+    """The MTP draft context's compute buffer, in the same shape as the main one.
+
+    llama.cpp states the whole cost itself:
+
+        [spec] estimated memory usage of MTP context is N MiB
+
+    is the draft cache's *physical* size plus **one** device's share of that
+    context's compute buffer — which the per-context parse confirms to the
+    second decimal on every measured cell. So the compute share is read off
+    that line rather than fitted from a with/without driver delta, which is how
+    the constants this replaces came to absorb the speculatively-replicated
+    recurrent state and then double-count it.
+
+    The share has the main model's two terms: an f16 KQ mask of two bytes per
+    (batch token, cache token), and a flat count of hidden-width f32
+    intermediates per batch token. Net of the mask the remainder is genuinely
+    flat — 68 MiB for qwen35 at contexts 65536, 131072, and 360448 alike, 40
+    for qwen35moe at 65536 and 524288 — so only the count is derived.
+    """
+    per_arch: dict[str, list[tuple[float, str]]] = defaultdict(list)
+    for record in rows:
+        factors, parsed = record["factors"], record["parsed"]
+        reported = parsed.get("mtp_context_mib") or 0
+        nextn = parsed.get("nextn_predict_layers") or 0
+        n_embd = parsed.get("n_embd") or 0
+        if not reported or not nextn or not n_embd:
+            continue
+        # The MTP context is the one whose cache spans exactly the head's
+        # layers and which has no recurrent module of its own.
+        pool = next((kv for context in parsed.get("contexts", [])
+                     for kv in context["kv_pools"]
+                     if kv["layers"] == nextn and not context.get("rs_pool")), None)
+        if pool is None:
+            continue
+        batch = factors["ubatch"] or 512
+        streams = 1 if factors["kv_unified"] else max(1, factors["parallel"] or 1)
+        share = (reported - pool["total_mib"]) * 1024 ** 2
+        mask = MASK_BYTES_PER_TOKEN_PAIR * (factors["ctx"] // streams) * batch
+        per_arch[parsed["arch"]].append(
+            ((share - mask) / batch / (n_embd * 4), factors["label"]))
+    if not per_arch:
+        raise ValueError("no cell reports an MTP context size")
+    _MTP_INTERMEDIATES.clear()
+    for arch, values in per_arch.items():
+        _MTP_INTERMEDIATES[arch] = max(0, math.ceil(max(v for v, _ in values)))
+    return (
+        "from llama.cpp's own `estimated memory usage of MTP context` line, "
+        "net of the draft cache it includes and of the f16 KQ mask: "
+        + ", ".join(f"{a} {v}" for a, v in sorted(_MTP_INTERMEDIATES.items()))
+        + " n_embd-wide f32 intermediates per batch token. Worst cell per "
+        "architecture; the remainder is flat in context above ctx 32768 and "
+        "~30 MiB (qwen35) and ~4 MiB (qwen35moe) higher at it, so the long "
+        "contexts over-reserve by that much."
+    )
+
+
 def derive_tensor_shadow(rows: list[dict]) -> str:
     """VRAM each device holds that llama.cpp cannot attribute, by architecture.
 
@@ -1433,11 +1490,6 @@ KINDS = {
     "PROCESS_BASE_BYTES_MOE": "reachable",
     "PINNED_EXTRA_BYTES": "reachable",
     "DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16": "reachable",
-    # Fitted against the slot sweep the first campaign's design confounded.
-    "MTP_KV_INTERCEPT_MIB": "derived",
-    "MTP_KV_SLOPE_BYTES_PER_TOKEN": "derived",
-    "MTP_PER_SLOT_OVERHEAD_MIB": "derived",
-    "MTP_BASE_OVERHEAD_MIB": "derived",
     "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": "derived",
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": "derived",
     # Has data, but the fit is contested and the value is held.
@@ -1866,6 +1918,7 @@ def _mtp_pairs(rows: list[dict], draft: bool) -> list[tuple[str, int, int, dict]
     return out
 
 
+_MTP_INTERMEDIATES: dict[str, int] = {}
 _TENSOR_INTERMEDIATES: dict[str, int] = {}
 _TENSOR_QUANTISED: dict[str, int] = {}
 _TENSOR_SHADOW: dict[str, int] = {}
@@ -2145,10 +2198,6 @@ DERIVERS = {
     "PROCESS_BASE_BYTES_PER_DEVICE": derive_per_device_bytes,
     "MAINLINE_LAYER_SPLIT_MASK_COPIES": derive_layer_split_copies,
     "IK_OP_OFFLOAD_MIN_BATCH": derive_offload_min_batch,
-    "MTP_KV_INTERCEPT_MIB": derive_mtp_kv_intercept,
-    "MTP_KV_SLOPE_BYTES_PER_TOKEN": derive_mtp_kv_slope,
-    "MTP_PER_SLOT_OVERHEAD_MIB": derive_mtp_per_slot_overhead,
-    "MTP_BASE_OVERHEAD_MIB": derive_mtp_base_overhead,
     "QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN": derive_quantised_kv_compute,
     "DRAFT_MODEL_COMPUTE_MIB_PER_1K": derive_draft_compute_slope,
     "MTP_HOST_BYTES_EMBEDDED": derive_mtp_host_embedded,
@@ -2337,7 +2386,8 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
         derive_per_slot_bytes(rows)
     except (ValueError, KeyError, ZeroDivisionError, StatisticsError) as error:
         failed.append(f"per-slot host bytes: cannot derive — {error}")
-    for name, table_deriver in (("tensor compute intermediates", derive_tensor_intermediates),
+    for name, table_deriver in (("MTP compute intermediates", derive_mtp_compute_intermediates),
+                                ("tensor compute intermediates", derive_tensor_intermediates),
                                 ("tensor quantised-cache rates", derive_tensor_quantised),
                                 ("tensor per-device shadow", derive_tensor_shadow)):
         try:
@@ -2462,6 +2512,18 @@ def emit(rows: list[dict], path: Path, check: bool) -> int:
                         "belongs in the packer's slop, beside the prompt cache.",
             "default": max(_PER_SLOT.values()),
             "by_arch": dict(sorted(_PER_SLOT.items())),
+        }
+    if _MTP_INTERMEDIATES:
+        document["mtp_compute_intermediates"] = {
+            "$comment": "n_embd-wide f32 graph intermediates the MTP draft "
+                        "context holds live per batch token, by architecture. "
+                        "Its whole per-device compute share is `ubatch x (this "
+                        "x n_embd x 4 + 2 x n_kv)`, the same shape as the main "
+                        "context's, and the total MTP cost is the draft "
+                        "cache's physical size plus this share on every "
+                        "spanned device.",
+            "default": max(_MTP_INTERMEDIATES.values()),
+            "by_arch": dict(sorted(_MTP_INTERMEDIATES.items())),
         }
     if _TENSOR_INTERMEDIATES:
         document["tensor_compute_intermediates"] = {
