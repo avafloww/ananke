@@ -30,6 +30,10 @@ pub struct Record {
     pub hardware: Hardware,
     #[serde(default)]
     pub provenance: Provenance,
+    /// Path to the captured runtime log, quoted in a disagreement message so a
+    /// failing cell can be opened rather than merely counted.
+    #[serde(default)]
+    pub log: Option<String>,
 }
 
 /// The configuration the cell was measured under. One field per knob the
@@ -72,6 +76,40 @@ pub struct Factors {
     pub embeddings: bool,
     #[serde(default)]
     pub served: bool,
+    /// A benchmark cell runs a whole agentic workload, so its host figures
+    /// include the prompt cache and several rounds of growth. Every host
+    /// deriver excludes them.
+    #[serde(default)]
+    pub bench: bool,
+    /// `--no-mmap` reads the weights into anonymous memory instead of mapping
+    /// them, which moves them into the counter the host derivers read. Cells
+    /// that set it are excluded from any term that models overhead rather than
+    /// weights.
+    #[serde(default)]
+    pub no_mmap: bool,
+    /// ik_llama's run-time repack, which forces `--no-mmap`.
+    #[serde(default)]
+    pub rtr: bool,
+    #[serde(default)]
+    pub numa: Option<String>,
+    /// How many rounds the probe grew its prompt over. It costs memory of its
+    /// own, so it belongs in every pairing key.
+    #[serde(default)]
+    pub soak: Option<u32>,
+    /// How many requests the probe issued at once. The per-slot host term is
+    /// measured against this rather than against `parallel`, since an idle slot
+    /// costs nothing.
+    #[serde(default)]
+    pub concurrency: Option<u32>,
+    /// How long the probe's prompt was. Past `CHECKPOINT_MIN_STEP` the process
+    /// holds more than one context checkpoint, which is a different steady
+    /// state and not what the baseline terms model.
+    #[serde(default)]
+    pub probe_prompt_tokens: Option<u32>,
+    /// Raw extra runtime arguments, searched for flags the record schema has no
+    /// field of its own for (ik's `-dsa`).
+    #[serde(default)]
+    pub extra: Vec<String>,
 }
 
 /// What the harness read back out of the runtime's own logs.
@@ -98,6 +136,60 @@ pub struct Parsed {
     /// route to a per-device figure where there is no breakdown table.
     #[serde(default)]
     pub contexts: Vec<Context>,
+    /// The pinned graph arena llama.cpp reports as its `CUDA_Host compute
+    /// buffer size`, in MiB. Absent for a cell whose log did not print it.
+    #[serde(default)]
+    pub arena_mib: Option<f64>,
+    #[serde(default)]
+    pub n_layer: Option<u32>,
+    /// The sliding-attention window, zero on a model without one.
+    #[serde(default)]
+    pub n_swa: Option<u32>,
+    #[serde(default)]
+    pub n_expert: Option<u32>,
+    #[serde(default)]
+    pub n_expert_used: Option<u32>,
+    /// Query heads. Absent where the GGUF omits `attention.head_count`, which
+    /// is why `query_head_count` has a fallback.
+    #[serde(default)]
+    pub n_head: Option<u32>,
+    #[serde(default)]
+    pub n_head_kv: Option<u32>,
+    #[serde(default)]
+    pub n_embd_head_k: Option<u32>,
+    #[serde(default)]
+    pub n_embd_head_v: Option<u32>,
+    /// Weights the runtime placed on the host, in MiB.
+    #[serde(default)]
+    pub cpu_model_mib: Option<f64>,
+    /// The GGUF's own metadata, verbatim. Every value in the dataset is an
+    /// integer, but it is kept as `Value` so a string-valued key cannot make a
+    /// record unreadable.
+    #[serde(default)]
+    pub gguf_kv: BTreeMap<String, serde_json::Value>,
+    /// llama.cpp's `[mtmd] adding N MiB to fit_params_target` figure, per
+    /// device name. It covers the projector's weights *and* its graph.
+    #[serde(default)]
+    pub mmproj_reserved_mib: BTreeMap<String, f64>,
+    /// The summed `clip_model_loader` tensor sizes, which is what isolates the
+    /// graph term out of the reservation above.
+    #[serde(default)]
+    pub mmproj_tensor_bytes: Option<u64>,
+    #[serde(default)]
+    pub clip_image_size: Option<u32>,
+    #[serde(default)]
+    pub clip_n_merge: Option<u32>,
+    /// llama.cpp's `[spec] estimated memory usage of MTP context is N MiB`.
+    #[serde(default)]
+    pub mtp_context_mib: Option<f64>,
+    /// `{arch}.nextn_predict_layers`: how many trailing blocks the embedded MTP
+    /// head spans.
+    #[serde(default)]
+    pub nextn_predict_layers: Option<u32>,
+    /// Everything the schema above does not name, which is how the per-card
+    /// `gpu{index}_model_mib` columns are reached without eight fields.
+    #[serde(flatten)]
+    pub other: BTreeMap<String, serde_json::Value>,
 }
 
 /// One row of llama.cpp's memory breakdown table.
@@ -125,6 +217,47 @@ pub struct Device {
 pub struct Context {
     #[serde(default)]
     pub buffers: BTreeMap<String, BTreeMap<String, f64>>,
+    /// The attention caches this context allocated, one entry per span of
+    /// layers sharing a pool.
+    #[serde(default)]
+    pub kv_pools: Vec<KvPool>,
+    /// The recurrent-state module, on a hybrid or recurrent model. A context
+    /// creates at most one.
+    #[serde(default)]
+    pub rs_pool: Option<RsPool>,
+}
+
+/// One `llama_kv_cache` pool, as the load log summarises it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct KvPool {
+    #[serde(default)]
+    pub total_mib: f64,
+    /// How many layers the pool spans — not necessarily how many allocate.
+    #[serde(default)]
+    pub layers: u32,
+    #[serde(default)]
+    pub seqs: u32,
+}
+
+/// One `llama_memory_recurrent` module, as the load log summarises it.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RsPool {
+    #[serde(default)]
+    pub total_mib: f64,
+    /// The span the module covers. The attention layers inside it do not
+    /// allocate, so this is larger than the number of recurrent layers.
+    #[serde(default)]
+    pub layers: u32,
+    #[serde(default)]
+    pub seqs: u32,
+    /// llama.cpp's `n_rs_seq`: extra copies held so a speculative draft can be
+    /// rolled back. Zero without speculative decoding.
+    #[serde(default)]
+    pub rs_seq: u32,
+    #[serde(default)]
+    pub r_mib: f64,
+    #[serde(default)]
+    pub s_mib: f64,
 }
 
 /// The machine the cell ran on.
@@ -147,9 +280,33 @@ pub struct Provenance {
     /// correctly for that format and avoids a date dependency.
     #[serde(default)]
     pub measured_at_utc: String,
+    /// The runtime binary's digest. A cell id hashes the *factors*, and the
+    /// binary is not one of them, so this is the only thing that distinguishes
+    /// two readings of one configuration taken under different builds.
+    #[serde(default)]
+    pub runtime_sha256: String,
 }
 
 impl Record {
+    /// One `rss` sample, in KiB, absent reading as zero the way the Python does.
+    pub fn rss_kb(&self, key: &str) -> i64 {
+        self.rss.get(key).and_then(|v| v.as_i64()).unwrap_or(0)
+    }
+
+    /// Host memory the process *owns*, in bytes.
+    ///
+    /// `RssAnon + RssShmem`, not `VmRSS`: `cudaMallocHost` is accounted as
+    /// shmem, and `RssFile` is the mapped GGUF, which llama.cpp populates and
+    /// then leaves resident as clean reclaimable pages.
+    pub fn owned_bytes(&self) -> i64 {
+        (self.rss_kb("rss_anon_kb") + self.rss_kb("rss_shmem_kb")) * 1024
+    }
+
+    /// The same figure in whole MiB, truncated.
+    pub fn owned_mib(&self) -> i64 {
+        (self.rss_kb("rss_anon_kb") + self.rss_kb("rss_shmem_kb")) / 1024
+    }
+
     /// The driver's total for the whole process, in MiB.
     pub fn gpu_used_mib(&self) -> Option<u64> {
         self.rss.get("gpu_used_mib").and_then(|v| v.as_u64())
@@ -192,6 +349,77 @@ impl Record {
             .filter(|s| !s.is_empty())
             .filter_map(|s| s.parse().ok())
             .collect()
+    }
+}
+
+impl Factors {
+    /// The split mode, with llama.cpp's default named rather than left absent.
+    pub fn split_or_layer(&self) -> &str {
+        self.split
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("layer")
+    }
+
+    /// How many cards the cell was pinned to, with `default` for an empty pin.
+    ///
+    /// The Python spells this several ways at different call sites — an empty
+    /// `gpus` reads as one card in most and as zero in the device-scaling
+    /// deriver — so the fallback is the caller's to choose.
+    pub fn cards_or(&self, default: usize) -> usize {
+        if self.gpus.is_empty() {
+            default
+        } else {
+            self.gpus.split(',').count()
+        }
+    }
+
+    /// How many cards were named, ignoring empty entries, never below one.
+    pub fn cards_nonempty(&self) -> usize {
+        self.gpus
+            .split(',')
+            .filter(|g| !g.is_empty())
+            .count()
+            .max(1)
+    }
+
+    /// Batch tokens the graph actually processes: a context shorter than the
+    /// batch caps it.
+    pub fn tokens(&self) -> u64 {
+        u64::from(self.ctx).min(u64::from(self.ubatch.unwrap_or(0)))
+    }
+
+    pub fn flash_attn_on(&self) -> bool {
+        self.flash_attn.as_deref() == Some("on")
+    }
+
+    /// Whether any expert layers were pushed to the host. A hybrid does not
+    /// replicate the graph's masks across cards, which several derivers turn on.
+    pub fn is_hybrid(&self) -> bool {
+        self.n_cpu_moe.unwrap_or(0) != 0
+    }
+
+    pub fn has_spec(&self) -> bool {
+        self.spec_type.as_deref().is_some_and(|s| !s.is_empty())
+    }
+
+    pub fn runtime_is_ik(&self) -> bool {
+        self.runtime == "ik"
+    }
+}
+
+impl Parsed {
+    /// One card's share of the weights, from the breakdown table's own columns.
+    pub fn gpu_model_mib(&self, index: usize) -> f64 {
+        self.other
+            .get(&format!("gpu{index}_model_mib"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+    }
+
+    /// A GGUF metadata integer, absent reading as zero.
+    pub fn gguf_int(&self, key: &str) -> i64 {
+        self.gguf_kv.get(key).and_then(|v| v.as_i64()).unwrap_or(0)
     }
 }
 

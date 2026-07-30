@@ -1,7 +1,7 @@
 //! VRAM estimator — architecture-aware dispatch.
 
 pub mod compute_buffer;
-pub(crate) mod compute_model;
+pub mod compute_model;
 pub mod fallback;
 pub mod host_buffer;
 pub mod hybrid;

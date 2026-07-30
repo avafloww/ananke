@@ -103,12 +103,14 @@ impl ModelConfig {
     }
 
     /// The split this model runs under.
+    ///
+    /// Parsed with `SplitMode::from_flag` so this file's spelling of the flag and
+    /// the config validator's cannot drift.
     pub fn split(&self) -> SplitMode {
-        match self.split_mode.as_deref() {
-            Some("tensor") => SplitMode::Tensor,
-            Some("row") => SplitMode::Row,
-            _ => SplitMode::Layer,
-        }
+        self.split_mode
+            .as_deref()
+            .and_then(SplitMode::from_flag)
+            .unwrap_or(SplitMode::Layer)
     }
 
     /// How much of a mixture of experts is host-resident.

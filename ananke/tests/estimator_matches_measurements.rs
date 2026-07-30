@@ -487,9 +487,10 @@ impl Case {
                 (counted > 0).then(|| total / counted)
             })(),
             split: match factors.get("split").and_then(Value::as_str) {
-                Some("tensor") => SplitMode::Tensor,
-                Some("row") => SplitMode::Row,
-                _ => SplitMode::Layer,
+                // `from_flag` rather than a private match, so the harness's
+                // spelling and the validator's cannot drift.
+                Some(flag) => SplitMode::from_flag(flag).unwrap_or(SplitMode::Layer),
+                None => SplitMode::Layer,
             },
         })
     }

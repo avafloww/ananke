@@ -135,12 +135,15 @@ pub fn snapshot(record: &Record) -> DeviceSnapshot {
     snapshot_for(&record.gpu_ids(), &capacities)
 }
 
+/// The split this cell ran under.
+///
+/// Parsed with `SplitMode::from_flag`, the same function the config validator
+/// uses, so the harness's spelling and the daemon's cannot drift. An absent or
+/// unrecognised value means the runtime's own default.
 fn split_mode(split: Option<&str>) -> SplitMode {
-    match split {
-        Some("tensor") => SplitMode::Tensor,
-        Some("row") => SplitMode::Row,
-        _ => SplitMode::Layer,
-    }
+    split
+        .and_then(SplitMode::from_flag)
+        .unwrap_or(SplitMode::Layer)
 }
 
 /// A key identifying the configuration, so repeats of one cell are counted once.
