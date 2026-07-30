@@ -52,11 +52,20 @@ pub struct ClassCorrection {
     pub samples: u32,
     /// Count of consecutive samples with |mean-1.0| > 0.3.
     pub drift_samples: u32,
-    /// Set when this pool's state came from an OOM-retry bump rather than an
-    /// observation. Such a pool is trusted immediately (that is the point of
-    /// the bump) but is *not* evidence, so the first run that survives to a
-    /// clean drain wipes it — see [`RollingTable::clear_synthetic`].
-    pub synthetic: bool,
+    /// What this pool held before an OOM-retry bump overwrote it, when one
+    /// has. The bump is trusted immediately (that is the point of it) but is
+    /// *not* evidence, so the first run that survives to a clean drain puts
+    /// this back — see [`RollingTable::clear_oom_bump`].
+    pub before_bump: Option<Learned>,
+}
+
+/// The observed part of a [`ClassCorrection`], kept aside so an OOM-retry
+/// bump can be undone without taking a pool's real samples with it.
+#[derive(Debug, Clone, Copy)]
+pub struct Learned {
+    pub mean: f64,
+    pub samples: u32,
+    pub drift_samples: u32,
 }
 
 impl Default for ClassCorrection {
@@ -65,7 +74,7 @@ impl Default for ClassCorrection {
             mean: 1.0,
             samples: 0,
             drift_samples: 0,
-            synthetic: false,
+            before_bump: None,
         }
     }
 }
@@ -145,8 +154,8 @@ impl RollingTable {
         self.inner.read().get(name).copied().unwrap_or_default()
     }
 
-    /// Inject a synthetic 1.4× correction into both pools after an OOM kill,
-    /// to force the next placement to reserve more memory before retrying.
+    /// Raise both pools to a 1.4× correction after an OOM kill, to force the
+    /// next placement to reserve more memory before retrying.
     ///
     /// The trigger is a SIGKILL shortly after spawn — the kernel OOM killer or
     /// a cgroup limit, so a host-RAM verdict — but the signal doesn't say which
@@ -157,47 +166,64 @@ impl RollingTable {
     /// failure, and a service whose host pool is unmeasurable is still a
     /// service the kernel just killed for using too much host memory.
     ///
-    /// What makes that safe is [`Self::clear_synthetic`]: the bump is marked as
-    /// not-an-observation and the first run that survives to a clean drain
-    /// removes it, so a pool that never records a real sample cannot hold the
-    /// synthetic factor forever.
+    /// Set rather than averaged in. Folding a 1.4 ratio through [`Self::update`]
+    /// divides it by the sample count, so the pool that most needs the nudge —
+    /// one with a long history of accurate runs behind a configuration change —
+    /// is exactly the one that would barely move.
+    ///
+    /// What makes that safe is [`Self::clear_oom_bump`]: the observed state is
+    /// kept aside, and the first run that survives to a clean drain puts it
+    /// back, so a pool cannot hold a bump it never earned.
     pub fn bump_for_oom_retry(&self, name: &SmolStr) {
-        // A ratio of 1.4 signals the estimator was 40% short, which is the
+        // A factor of 1.4 signals the estimator was 40% short, which is the
         // maximum useful nudge before triggering the drift warning path.
-        for class in [MemoryClass::Vram, MemoryClass::Host] {
-            self.update(name, class, 140, 100);
-        }
-        // The OOM bump must take effect on the immediate retry, so promote the
-        // sample count past the trust gate even if this is the service's first
-        // observation. Without this, `effective()` would ignore the bump until
-        // two more real samples landed — defeating the retry nudge.
+        const OOM_BUMP: f64 = 1.4;
         let mut guard = self.inner.write();
-        if let Some(entry) = guard.get_mut(name) {
-            for class in [MemoryClass::Vram, MemoryClass::Host] {
-                let c = entry.class_mut(class);
-                c.samples = c.samples.max(MIN_TRUSTED_SAMPLES);
-                c.synthetic = true;
-            }
+        let entry = guard.entry(name.clone()).or_default();
+        for class in [MemoryClass::Vram, MemoryClass::Host] {
+            let c = entry.class_mut(class);
+            // Only the first bump of a run records the state to restore. A
+            // second one before any clean drain must not overwrite it with the
+            // first bump's own output, which would make the bump permanent.
+            c.before_bump.get_or_insert(Learned {
+                mean: c.mean,
+                samples: c.samples,
+                drift_samples: c.drift_samples,
+            });
+            // `max`, because a pool that has already learned it is more than
+            // 40% short must not be talked back down to 40%.
+            c.mean = c.mean.max(OOM_BUMP);
+            // The bump must take effect on the immediate retry, so promote the
+            // sample count past the trust gate even if this is the service's
+            // first observation. Without this, `effective()` would ignore the
+            // bump until two more real samples landed.
+            c.samples = c.samples.max(MIN_TRUSTED_SAMPLES);
         }
     }
 
-    /// Drop any pool whose state came from an OOM bump rather than an
-    /// observation, returning it to neutral.
+    /// Undo an OOM bump, returning each pool to what it had observed.
     ///
     /// Called when a run reaches a clean drain, which is the evidence the bump
     /// was waiting for: the larger reservation worked. Keeping it past that
     /// point would pledge 40% more memory than the service needs for the rest
     /// of the daemon's life — and for a pool that records no real samples,
     /// nothing would ever dilute it.
-    pub fn clear_synthetic(&self, name: &SmolStr) {
+    ///
+    /// Restoring rather than resetting is the difference between a bump costing
+    /// nothing and a bump costing a service its history. A pool that had learned
+    /// it runs 35% over, then took one OOM, would otherwise come back neutral
+    /// and have to relearn the same 35% through three more gated runs.
+    pub fn clear_oom_bump(&self, name: &SmolStr) {
         let mut guard = self.inner.write();
         let Some(entry) = guard.get_mut(name) else {
             return;
         };
         for class in [MemoryClass::Vram, MemoryClass::Host] {
             let c = entry.class_mut(class);
-            if c.synthetic {
-                *c = ClassCorrection::default();
+            if let Some(learned) = c.before_bump.take() {
+                c.mean = learned.mean;
+                c.samples = learned.samples;
+                c.drift_samples = learned.drift_samples;
             }
         }
     }
@@ -382,10 +408,10 @@ mod tests {
     }
 
     /// The bump is a response to a failure, not evidence, so the first run
-    /// that survives to a clean drain removes it. Without this the synthetic
-    /// 1.4 would pledge 40% extra for the daemon's remaining life — and in a
-    /// pool that records no real samples (a service whose host side the daemon
-    /// declines to learn from), nothing would ever dilute it.
+    /// that survives to a clean drain undoes it. Without this the 1.4 would
+    /// pledge 40% extra for the daemon's remaining life — and in a pool that
+    /// records no real samples (a service whose host side the daemon declines
+    /// to learn from), nothing would ever dilute it.
     #[test]
     fn a_clean_run_clears_the_oom_bump() {
         let t = RollingTable::new();
@@ -393,16 +419,16 @@ mod tests {
         t.bump_for_oom_retry(&svc);
         assert!(t.get(&svc).host.effective() > 1.0);
 
-        t.clear_synthetic(&svc);
+        t.clear_oom_bump(&svc);
         let rc = t.get(&svc);
         for c in [rc.vram, rc.host] {
             assert_eq!(c.effective(), 1.0);
             assert_eq!(c.samples, 0);
-            assert!(!c.synthetic);
+            assert!(c.before_bump.is_none());
         }
     }
 
-    /// Clearing must not touch a pool that learned honestly.
+    /// Clearing must not touch a pool that never took a bump.
     #[test]
     fn clearing_spares_real_samples() {
         let t = RollingTable::new();
@@ -411,9 +437,71 @@ mod tests {
             t.update(&svc, MemoryClass::Vram, 130, 100);
         }
         let learned = t.get(&svc).vram.mean;
-        t.clear_synthetic(&svc);
+        t.clear_oom_bump(&svc);
         assert_eq!(t.get(&svc).vram.mean, learned);
         assert_eq!(t.get(&svc).vram.samples, MIN_TRUSTED_SAMPLES);
+    }
+
+    /// Clearing a bump restores what the pool had learned, rather than
+    /// resetting it.
+    ///
+    /// A service that has learned it runs 35% over its estimate, then takes a
+    /// single OOM kill, must not come out of the retry neutral: it would go
+    /// back to reserving the amount that OOM'd it and have to relearn the same
+    /// 35% through three more gated runs.
+    #[test]
+    fn a_cleared_bump_gives_back_the_pool_it_overwrote() {
+        let t = RollingTable::new();
+        let svc = SmolStr::new("demo");
+        for _ in 0..10 {
+            t.update(&svc, MemoryClass::Vram, 135, 100);
+        }
+        let learned = t.get(&svc).vram;
+        assert!(learned.mean > 1.3);
+
+        t.bump_for_oom_retry(&svc);
+        // Two bumps before any clean drain: the second must not record the
+        // first's output as the state to go back to.
+        t.bump_for_oom_retry(&svc);
+        t.clear_oom_bump(&svc);
+
+        let after = t.get(&svc).vram;
+        assert_eq!(after.mean, learned.mean);
+        assert_eq!(after.samples, learned.samples);
+        assert_eq!(after.drift_samples, learned.drift_samples);
+    }
+
+    /// The bump is set, not averaged in.
+    ///
+    /// Folding a 1.4 ratio through `update` divides it by the sample count, so
+    /// a service with a long history of accurate runs — the case where a
+    /// configuration change has just moved the true footprint — would move by
+    /// a few percent when it needs to move by forty.
+    #[test]
+    fn the_bump_is_not_diluted_by_history() {
+        let t = RollingTable::new();
+        let svc = SmolStr::new("demo");
+        for _ in 0..50 {
+            t.update(&svc, MemoryClass::Vram, 100, 100);
+        }
+        assert_eq!(t.get(&svc).vram.mean, 1.0);
+
+        t.bump_for_oom_retry(&svc);
+        assert_eq!(t.get(&svc).vram.effective(), 1.4);
+    }
+
+    /// A pool already above the bump is left where it is: it has observed that
+    /// it needs more than 40% extra, and the bump must not talk it back down.
+    #[test]
+    fn the_bump_never_lowers_a_pool() {
+        let t = RollingTable::new();
+        let svc = SmolStr::new("demo");
+        for _ in 0..MIN_TRUSTED_SAMPLES {
+            t.update(&svc, MemoryClass::Host, 150, 100);
+        }
+        assert_eq!(t.get(&svc).host.mean, 1.5);
+        t.bump_for_oom_retry(&svc);
+        assert_eq!(t.get(&svc).host.mean, 1.5);
     }
 
     /// A correction above 1.0 must round up: truncating a scaled byte count is

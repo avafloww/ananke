@@ -68,8 +68,10 @@ impl RunLoop {
         if samples.run_was_measurable {
             // The run survived to a clean drain, so an earlier OOM bump has
             // its answer: the larger reservation worked, and holding it would
-            // over-pledge for the rest of the daemon's life.
-            self.deps.rolling.clear_synthetic(name);
+            // over-pledge for the rest of the daemon's life. Before the
+            // update, so this run's observation folds into the pool the bump
+            // was hiding rather than into the bump.
+            self.deps.rolling.clear_oom_bump(name);
         }
 
         match samples.vram {
