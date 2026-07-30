@@ -105,6 +105,7 @@ fn parse_args() -> Args {
     let mut cache_ram_mb: Option<u32> = None;
     let mut split_mode = SplitMode::Layer;
     let mut visible_devices: u32 = 1;
+    let mut visible_devices_given = false;
     let mut ik_llama = false;
     let mut ik_dsa = false;
     let mut expert_offload = OffloadMode::Off;
@@ -155,6 +156,7 @@ fn parse_args() -> Args {
             }
             "--visible-devices" => {
                 visible_devices = it.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+                visible_devices_given = true;
             }
             "--ik-llama" => ik_llama = true,
             "--ik-dsa" => ik_dsa = true,
@@ -181,8 +183,12 @@ fn parse_args() -> Args {
         eprintln!("--model is required");
         process::exit(2);
     };
-    // A tensor or row split implies multiple visible devices.
-    if split_mode != SplitMode::Layer && visible_devices == 1 {
+    // A tensor or row split usually implies multiple visible devices, so default
+    // to two — but never override an explicit count. llama.cpp accepts
+    // `--split-mode tensor` on a single card, and the dataset holds such cells;
+    // silently estimating them as two-card charged them a second device's share
+    // of every per-device term.
+    if split_mode != SplitMode::Layer && !visible_devices_given {
         visible_devices = 2;
     }
     Args {
