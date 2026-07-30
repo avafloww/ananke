@@ -55,6 +55,7 @@ cargo run -p ananke-calibrate --bin scoreboard       # the production models
 
 ```sh
 cargo run -p ananke-calibrate --bin coverage -- --check  # is any regime measured at one point?
+cargo run -p ananke-calibrate --bin estimates            # every model's estimate, broken down
 ```
 
 The analysis half is Rust and the Python is gone. Each piece was verified against
@@ -66,10 +67,16 @@ table but for one stale label. The oracles survive as tests — 31 derive tests 
 so the checks did not leave with the code.
 
 What is still Python is the **harness**: `measure.py` and `measure_one.py` spawn
-llama-server and sample `/proc` and `nvidia-smi`, `plan.py` generates sweeps, and
-`dump_estimates.py` prints a table for eyeballing. `ananke-measure` holds the log
-*parser* those write through, so the record schema has one definition; the
-spawning, sampling, and planning are the remaining port.
+llama-server and sample `/proc` and `nvidia-smi`, and `plan.py` generates sweeps.
+`ananke-measure` holds the log *parser* those write through, so the record schema
+has one definition either way.
+
+The harness does not reuse the daemon's `system::ProcessSpawner`, deliberately.
+That trait is async and coupled to the supervisor's `SpawnConfig` — built for
+long-lived supervised children with pdeathsig and log capture. The harness spawns
+one process, waits for it to load, samples, and kills it. Its own small synchronous
+traits with in-memory fakes fit that shape; borrowing the supervisor's would be
+over-fitting, and would drag tokio into a crate that has no other use for it.
 
 One rule for anything added here. Where a derivation pairs two cells, or reads a
 config, the key must pin **every** factor that could differ, and the reader should
