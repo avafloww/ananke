@@ -1,6 +1,6 @@
 [workspace]
-members = ["ananke", "anankectl", "ananke-api", "ananke-calibrate", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-placement", "ananke-tuning", "scripts/xtask"]
-default-members = ["ananke", "anankectl", "ananke-api", "ananke-calibrate", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-placement", "ananke-tuning"]
+members = ["ananke", "anankectl", "ananke-api", "ananke-calibrate", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-measure", "ananke-placement", "ananke-tuning", "scripts/xtask"]
+default-members = ["ananke", "anankectl", "ananke-api", "ananke-calibrate", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-measure", "ananke-placement", "ananke-tuning"]
 resolver = "2"
 
 [workspace.package]
@@ -15,6 +15,7 @@ ananke-config = { path = "ananke-config" }
 ananke-estimate = { path = "ananke-estimate" }
 ananke-fs = { path = "ananke-fs" }
 ananke-gguf = { path = "ananke-gguf" }
+ananke-measure = { path = "ananke-measure" }
 ananke-placement = { path = "ananke-placement" }
 ananke-tuning = { path = "ananke-tuning" }
 
@@ -74,3 +75,4 @@ pretty_assertions = "1"
 proptest = "1"
 tempfile = "3"
 tokio-stream = "0.1"
+flate2 = "1"
