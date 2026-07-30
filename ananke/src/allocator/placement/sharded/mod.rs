@@ -27,24 +27,32 @@ impl<'a> Packer<'a> {
         layers.sort_unstable();
         let total = layers.len() as u32;
 
-        // `--n-cpu-moe N` offloads the expert tensors of the N tail-most
-        // expert layers to a CPU-mapped buffer; the corresponding attention
-        // tensors stay on GPU for every layer — confirmed by production
-        // measurements on Qwen3.6-35B-A3B (n_cpu_moe=40, 41 expert layers):
-        // physical GPU model = 2 × 1431 = 2862 MiB ≈ all attention (1837) +
-        // 1 expert layer (568) + output head (242) + nextn tensors (~215).
-        // `Layers(n)` honours the layer count; `Auto` offloads the trailing
-        // surplus that does not fit the combined GPU pool.
-        let n_cpu = match self.offload_mode {
+        // `--n-cpu-moe N` moves the expert tensors of blocks `[0, N)` — the
+        // *leading* ones — to a CPU-mapped buffer, while every block's attention
+        // tensors stay on GPU. The load log names each tensor it moves, and they
+        // start at `blk.0` for Qwen3.6-35B-A3B (`--n-cpu-moe 40`: blocks 0-39)
+        // and at `blk.1` for laguna (`--n-cpu-moe 39`, block 0 dense: blocks
+        // 1-38) — so `N` bounds *blocks*, not expert layers.
+        //
+        // Which end matters whenever the quant gives later blocks wider experts:
+        // laguna's trailing 39 come to 43188 MiB against the leading 38's 41496,
+        // and taking the wrong end left its cards 1692 MiB short.
+        //
+        // Confirmed on Qwen3.6-35B-A3B's production cell: physical GPU model
+        // = 2 × 1431 = 2862 MiB ≈ all attention (1837) + the one retained
+        // block's experts (568) + output head (242) + nextn tensors (~215).
+        //
+        // `Layers(n)` honours the block bound; `Auto` offloads every expert
+        // layer, since this path has no per-card budget to fit a suffix against.
+        let cutoff = match self.offload_mode {
             OffloadMode::Off => 0,
-            OffloadMode::Layers(n) => n.min(total),
-            OffloadMode::Auto => total,
+            OffloadMode::Layers(n) => n,
+            OffloadMode::Auto => layers.last().map(|l| l + 1).unwrap_or(0),
         };
-        let keep = total - n_cpu;
 
         let mut offloaded = 0u64;
-        for (i, &l) in layers.iter().enumerate() {
-            if (i as u32) >= keep {
+        for &l in &layers {
+            if l < cutoff {
                 let b = self.expert_bytes_by_layer[&l];
                 self.charge(DeviceSlot::Cpu, b, Charge::Weights);
                 self.expert_offload_cpu_bytes += b;
@@ -52,7 +60,7 @@ impl<'a> Packer<'a> {
                 offloaded += b;
             }
         }
-        (n_cpu, offloaded)
+        (cutoff.min(total), offloaded)
     }
 
     /// Tensor/row split: shard the whole model across every spanned GPU in

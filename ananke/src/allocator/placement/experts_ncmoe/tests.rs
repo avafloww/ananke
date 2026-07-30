@@ -73,10 +73,17 @@ fn expert_offload_auto_no_offload_when_everything_fits() {
     assert!(packed.args.override_tensor.is_empty());
 }
 
-/// `expert_offload = N` offloads exactly the N tail-most expert layers to
-/// CPU even on a roomy card, via `--n-cpu-moe N` (not per-tensor `-ot`).
+/// `expert_offload = N` offloads exactly the expert layers of blocks `[0, N)`
+/// to CPU even on a roomy card, via `--n-cpu-moe N` (not per-tensor `-ot`).
+///
+/// The *leading* blocks, matching what llama.cpp does: its load log names each
+/// tensor it moves, and they run `blk.0`-`blk.39` for Qwen3.6-35B-A3B at
+/// `--n-cpu-moe 40` and `blk.1`-`blk.38` for laguna at 39 (whose block 0 is
+/// dense). Taking the wrong end matters whenever the quant widens later blocks'
+/// experts — laguna's trailing 39 come to 43188 MiB against the leading 38's
+/// 41496.
 #[test]
-fn expert_offload_layers_n_offloads_tail_layers() {
+fn expert_offload_layers_n_offloads_leading_layers() {
     let e = moe_estimate(10, 100, 100); // fits easily
     let snap = snapshot(&[24]);
     let alloc = AllocationTable::new();
@@ -85,12 +92,12 @@ fn expert_offload_layers_n_offloads_tail_layers() {
     assert_eq!(
         packed.args.ngl,
         Some(NGL_OFFLOAD_ALL),
-        "attention stays on GPU; -ncmoe pulls the trailing experts back"
+        "attention stays on GPU; -ncmoe pulls the leading experts back"
     );
     assert_eq!(
         packed.args.n_cpu_moe,
         Some(3),
-        "offload the 3 tail expert layers"
+        "offload the experts of blocks 0..3"
     );
     assert_eq!(packed.expert_offload_layers, 3);
     // 3 layers × 3 experts × 100 MiB.
@@ -99,6 +106,57 @@ fn expert_offload_layers_n_offloads_tail_layers() {
         packed.args.override_tensor.is_empty(),
         "no per-tensor -ot, got {:?}",
         packed.args.override_tensor
+    );
+}
+
+/// Which end is offloaded, pinned where it is observable: give the trailing
+/// blocks wider experts than the leading ones and the two directions produce
+/// different byte totals.
+///
+/// This is laguna's shape — its quant stores later blocks' experts wider — and
+/// it is why the direction mattered enough to notice: the trailing 39 come to
+/// 43188 MiB against the leading 38's 41496, and offloading the wrong end left
+/// its cards 1692 MiB short of what they held.
+#[test]
+fn the_offloaded_end_is_the_leading_one_when_layer_sizes_differ() {
+    // Blocks 0-4 carry 100 MiB experts, blocks 5-9 carry 300 MiB.
+    let n_layers = 10u32;
+    let mut per_layer = Vec::new();
+    let mut experts = Vec::new();
+    for layer in 0..n_layers {
+        let exp_mb = if layer < 5 { 100 } else { 300 };
+        per_layer.push((100 + 3 * exp_mb) * MIB);
+        for kind in [ExpertKind::Gate, ExpertKind::Up, ExpertKind::Down] {
+            experts.push(ExpertTensor {
+                layer,
+                kind,
+                bytes: exp_mb * MIB,
+            });
+        }
+    }
+    let e = Estimate {
+        weights_bytes: per_layer.iter().sum(),
+        expert_layers: (0..n_layers).collect(),
+        expert_tensors: Some(experts),
+        per_layer_bytes: Some(per_layer),
+        ..moe_estimate(1, 0, 0)
+    };
+    let packed = pack(
+        &e,
+        &moe_svc(OffloadMode::Layers(4)),
+        &snapshot(&[24]),
+        &AllocationTable::new(),
+    )
+    .unwrap();
+
+    assert_eq!(packed.args.n_cpu_moe, Some(4));
+    assert_eq!(packed.expert_offload_layers, 4);
+    // Blocks 0-3: 4 layers × 3 experts × 100 MiB. The trailing four would be
+    // three times that, which is what makes the assertion mean something.
+    assert_eq!(
+        packed.expert_offload_bytes,
+        12 * 100 * MIB,
+        "the leading blocks' experts, not the trailing blocks'"
     );
 }
 

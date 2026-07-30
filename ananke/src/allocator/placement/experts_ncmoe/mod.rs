@@ -1,4 +1,4 @@
-//! Phase B of the expert-aware path: deciding how many trailing expert
+//! Phase B of the expert-aware path: deciding how many leading expert
 //! *layers* to offload to CPU as whole units via `--n-cpu-moe`, after
 //! [`crate::allocator::placement::experts_nonexpert`] has pinned every
 //! layer's non-expert weight to a GPU.
@@ -16,7 +16,7 @@ use crate::{
 };
 
 impl<'a> Packer<'a> {
-    /// Phase B: offload the trailing surplus expert *layers* to CPU as whole
+    /// Phase B: offload the leading surplus expert *layers* to CPU as whole
     /// units and record `--n-cpu-moe N`, letting the runtime split the
     /// GPU-resident experts across cards itself.
     ///
@@ -27,13 +27,20 @@ impl<'a> Packer<'a> {
     /// llama.cpp's `GGML_SCHED_MAX_SPLIT_INPUTS` graph-split limit, a hard
     /// abort at load. `--n-cpu-moe` keeps whole layers together, avoiding both.
     ///
-    /// `-ncmoe` offloads the *last* `N` MoE layers, so the retained set is
-    /// always a leading prefix. `Auto` picks the smallest `N` that lets the
-    /// leading expert layers fit the combined GPU pool (what remains after
-    /// non-expert weights + KV + compute headroom were reserved); `Layers(n)`
-    /// uses `n` directly and fails with [`PackError::ManualExpertsDoNotFit`]
-    /// if the retained experts still overflow. Whole layers spilled in Phase A
-    /// already carry their experts in the CPU lump and are skipped here.
+    /// `--n-cpu-moe N` offloads the expert tensors of blocks `[0, N)` — the
+    /// *leading* ones — so the retained set is a trailing suffix. The load log
+    /// names every tensor it moves, and they start at `blk.1` for laguna
+    /// (`--n-cpu-moe 39`, block 0 dense: blocks 1-38) and at `blk.0` for
+    /// Qwen3.6-35B-A3B (`--n-cpu-moe 40`: blocks 0-39). Note that `N` counts
+    /// *blocks*, not expert layers, so a model with leading dense blocks
+    /// offloads fewer expert layers than `N`.
+    ///
+    /// `Auto` picks the smallest `N` that lets the trailing expert layers fit
+    /// the combined GPU pool (what remains after non-expert weights + KV +
+    /// compute headroom were reserved); `Layers(n)` uses `n` directly and fails
+    /// with [`PackError::ManualExpertsDoNotFit`] if the retained experts still
+    /// overflow. Whole layers spilled in Phase A already carry their experts in
+    /// the CPU lump and are skipped here.
     pub(crate) fn distribute_experts_ncmoe(&mut self) -> Result<(), PackError> {
         let mut layers: Vec<u32> = self
             .expert_bytes_by_layer
@@ -42,7 +49,6 @@ impl<'a> Packer<'a> {
             .filter(|l| !self.spilled_layers.contains(l))
             .collect();
         layers.sort_unstable();
-        let total = layers.len() as u32;
 
         // Combined GPU budget for experts across all allowed cards; the runtime
         // balances the layer split, so account against the pool, not per-card.
@@ -54,31 +60,35 @@ impl<'a> Packer<'a> {
             .map(|g| self.gpu_remaining.get(g).copied().unwrap_or(0))
             .sum();
 
-        let n_cpu = match self.offload_mode {
-            OffloadMode::Layers(n) => n.min(total),
+        // The block index the offload stops below — the value that goes to
+        // `--n-cpu-moe`, not a count of expert layers.
+        let cutoff = match self.offload_mode {
+            OffloadMode::Layers(n) => n,
+            // The retained set is a trailing suffix, so the greedy walk runs
+            // from the last block down and the cutoff is the lowest block it
+            // could keep. Keeping nothing means offloading every expert layer,
+            // which is one past the highest.
             OffloadMode::Auto => {
                 let mut used = 0u64;
-                let mut keep = 0u32;
-                for &l in &layers {
+                let mut lowest_kept = layers.last().map(|l| l + 1).unwrap_or(0);
+                for &l in layers.iter().rev() {
                     let cost = self.vram_cost(self.expert_bytes_by_layer[&l]);
-                    if used.saturating_add(cost) <= pool {
-                        used += cost;
-                        keep += 1;
-                    } else {
+                    if used.saturating_add(cost) > pool {
                         break;
                     }
+                    used += cost;
+                    lowest_kept = l;
                 }
-                total - keep
+                lowest_kept
             }
             OffloadMode::Off => 0,
         };
-        let keep = total - n_cpu;
 
-        // Trailing `n_cpu` expert layers → CPU; leading `keep` stay on GPU.
+        // Expert layers below the cutoff → CPU; the rest stay on GPU.
         let mut gpu_expert_bytes = 0u64;
-        for (i, &l) in layers.iter().enumerate() {
+        for &l in &layers {
             let b = self.expert_bytes_by_layer[&l];
-            if (i as u32) < keep {
+            if l >= cutoff {
                 gpu_expert_bytes += b;
             } else {
                 self.charge(DeviceSlot::Cpu, b, Charge::Weights);
@@ -86,6 +96,7 @@ impl<'a> Packer<'a> {
                 self.expert_offload_cpu_layers.insert(l);
             }
         }
+        let n_cpu = self.expert_offload_cpu_layers.len() as u32;
         // Corrected, to match `pool` and the per-card charges below.
         let gpu_expert_cost = self.vram_cost(gpu_expert_bytes);
 
@@ -133,9 +144,11 @@ impl<'a> Packer<'a> {
         // layer-split shape — no `--n-cpu-moe 0`, and `ngl` stays the layer
         // count — so a fully-resident MoE looks identical to a non-MoE fit.
         if n_cpu > 0 {
-            self.n_cpu_moe = Some(n_cpu);
+            // The *cutoff*, not the count: `--n-cpu-moe` names a block bound,
+            // and on a model with leading dense blocks the two differ.
+            self.n_cpu_moe = Some(cutoff);
             // `-ngl 999` puts all layers on GPU; `-ncmoe` then pulls the
-            // trailing experts back to CPU and the runtime owns the cross-GPU
+            // leading experts back to CPU and the runtime owns the cross-GPU
             // split.
             self.fallback_on_gpu = true;
         }
