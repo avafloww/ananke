@@ -183,9 +183,11 @@ impl<'a> Packer<'a> {
     }
 
     /// Step 1: seed per-device bytes with non-layer tensors + override_tensor
-    /// attributions. Token embeddings go to CPU; output head + residual
-    /// "other" tensors ride with the first allowed GPU (or CPU if there is no
-    /// GPU). override_tensor has its own pre-computed map from the estimator.
+    /// attributions. Token embeddings are CPU-mapped; the output head — or, on
+    /// a tied-embedding model, the embedding table serving as one — plus the
+    /// residual "other" tensors ride with the first allowed GPU (or CPU if
+    /// there is no GPU). override_tensor has its own pre-computed map from the
+    /// estimator.
     pub(crate) fn seed_non_layer(&mut self) {
         let non_layer = self.estimate.non_layer.clone();
 
@@ -197,12 +199,22 @@ impl<'a> Packer<'a> {
             Some(head) => DeviceSlot::Gpu(head),
             None => DeviceSlot::Cpu,
         };
-        if non_layer.output_head_bytes > 0 {
-            self.charge(
-                head_target.clone(),
-                non_layer.output_head_bytes,
-                Charge::Weights,
-            );
+        // A tied model's table is GPU-resident *as well as* CPU-mapped: it is
+        // the output head, and the logits are computed on the device. Measured
+        // across every no-offload mainline cell, the GPU model buffer comes to
+        // the whole GGUF for a tied model — lfm2 359 MiB, Qwen3-4B 2759,
+        // gemma-3-27B 15773, gemma-4-31B-QAT 16471 — and to the GGUF *less*
+        // the table for one that ships its own head: talkie 10774 against
+        // 11037, magidonia 15539 against 15980, Qwen3.6-27B 18563 against
+        // 19397. Charging it to the CPU alone under-reserved every tied model
+        // by the table's whole size, 6-8% of its weights.
+        //
+        // Only `token_embd.weight`; a Gemma 4 E-variant's
+        // `per_layer_token_embd.weight` stack stays on the CPU, which is why
+        // `tied_head_bytes` is not the whole `token_embd_bytes` bucket.
+        let gpu_head_bytes = non_layer.output_head_bytes + non_layer.tied_head_bytes;
+        if gpu_head_bytes > 0 {
+            self.charge(head_target.clone(), gpu_head_bytes, Charge::Weights);
         }
         if non_layer.other_bytes > 0 {
             self.charge(head_target, non_layer.other_bytes, Charge::Weights);

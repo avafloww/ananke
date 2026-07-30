@@ -170,12 +170,24 @@ impl<'a> Packer<'a> {
         // Qwen3-4B 305 against 304, gemma-3-27B 1108 against 1103. Every model
         // that ships its own `output.weight` — magidonia, talkie, Qwen3.6-27B —
         // holds no more under one split than the other.
-        let tied_head_copy = if gpus.len() > 1 {
-            non_layer.tied_head_bytes
-        } else {
-            0
-        };
-        let tied_head_shares = integer_shares(tied_head_copy, &tensor_split, ratio_sum);
+        // One copy always — it is the output head, and the logits are computed
+        // on the device (see [`Packer::seed_non_layer`]) — and a *second* once
+        // the split actually spans cards, because the head's matmul is then
+        // sharded and a CPU-resident weight cannot be. At one card a tensor
+        // split allocates exactly what a layer split does for every model
+        // measured, which is what says the second copy is caused by sharding
+        // rather than by the split mode.
+        //
+        // Two cards, measured against the same model on one: gemma-4-31B-QAT
+        // 17232 MiB against 16471 for a 756 MiB table, Qwen3-4B 3064 against
+        // 2759 for 304, gemma-3-27B 16880 against 15773 for 1103. Every model
+        // that ships its own `output.weight` holds the same under either split.
+        let tied_copies = if gpus.len() > 1 { 2 } else { 1 };
+        let tied_head_shares = integer_shares(
+            non_layer.tied_head_bytes * tied_copies,
+            &tensor_split,
+            ratio_sum,
+        );
         let weights_shares = integer_shares(per_layer_sum, &tensor_split, ratio_sum);
         let kv_shares = integer_shares(kv_total, &tensor_split, ratio_sum);
         // The output head is model weight; the MTP draft context is a runtime

@@ -197,14 +197,16 @@ fn a_tied_head_is_copied_onto_the_cards_only_when_sharded() {
             .sum()
     };
 
-    // Tied (`output_head_bytes == 0`) across two cards: the table is charged
-    // once more, split between them.
+    // Across two cards a tied model holds the table twice — once because it is
+    // the head, once more because the sharded matmul needs its own copy —
+    // against an untied model's single `output.weight` of the same size.
     let tied = build(0);
     let untied = build(gib);
     assert_eq!(
-        gpu_total(&[24, 24], &tied) - gpu_total(&[24, 24], &untied) + gib,
+        gpu_total(&[24, 24], &tied) - gpu_total(&[24, 24], &untied),
         token_embd,
-        "a tied head must add exactly one copy of the table across the cards"
+        "a tied head across two cards must cost one table more than an \
+         equally-sized `output.weight`"
     );
     // One card shards nothing, so no copy appears — which is what the
     // single-GPU measurements show for every model in the set. Going from one
