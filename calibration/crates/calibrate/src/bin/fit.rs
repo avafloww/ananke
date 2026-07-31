@@ -10,13 +10,15 @@
 //! cargo run -p ananke-calibrate --bin fit -- --check # does the committed fit follow?
 //! ```
 //!
-//! Run it before `emit`, not after: several derivers reduce a residual taken over
-//! this model, so a refit moves the constants that rest on it.
+//! Run it *after* `emit`. The dependency is one-way: the design rows are
+//! normalised by `MAINLINE_LAYER_SPLIT_MASK_COPIES`, which `emit` derives, and no
+//! deriver reads this section back. So the pair is ordered, not iterated.
 
 use std::{path::Path, process::ExitCode};
 
 use ananke_calibrate::{
     compute_model::{collect, dataset::latest_per_cell, document_section},
+    derive::tuning::Tuning,
     record::read_ndjson,
 };
 
@@ -63,7 +65,17 @@ fn main() -> ExitCode {
         .filter(|r| r.status == "ok")
         .collect::<Vec<_>>();
     let rows = latest_per_cell(&ok);
-    let copies = ananke_estimate::tuning::MAINLINE_LAYER_SPLIT_MASK_COPIES as u32;
+    // Read from the document rather than the compiled constant of the same name.
+    // `emit` writes that constant into this file, and a compiled copy is one build
+    // behind it — which would put a `cargo build` in the middle of the pipeline and
+    // make the result depend on whether anyone remembered to run it.
+    let copies = match Tuning::parse(&tuning_text) {
+        Ok(tuning) => tuning.constant("MAINLINE_LAYER_SPLIT_MASK_COPIES", 4) as u32,
+        Err(e) => {
+            eprintln!("parsing {TUNING}: {e}");
+            return ExitCode::from(2);
+        }
+    };
     let groups = collect(&rows, copies, false);
 
     let (section, notes) = match document_section(&groups) {
