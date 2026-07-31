@@ -9,10 +9,16 @@
 //! **A constant quoted without its spread invites more confidence than the data
 //! supports.** So a deriver that reduces by median goes through
 //! [`stats::consensus`], which refuses when its cells disagree rather than
-//! averaging a real difference away, and one that reduces by maximum goes through
-//! [`stats::check_no_outlier_dominates`], which refuses when a single cell decides
-//! the value outright. Neither is defensive: between them they caught ten wrong
-//! conclusions in one campaign.
+//! averaging a real difference away. Not defensive: it caught ten wrong conclusions
+//! in one campaign.
+//!
+//! [`stats::check_no_outlier_dominates`] is the same idea for a maximum, refusing
+//! when a single cell decides the value outright — but it guards only
+//! [`baseline::headroom`] today, not every deriver that reduces by maximum. The
+//! others take a bare `max` and would not notice the contaminated pair the guard was
+//! written for. Wiring it in is worth doing and is not a no-op: several of those
+//! constants are set by their worst cell by design, so each needs its tolerance
+//! chosen rather than inherited.
 //!
 //! **A pairing key must pin every factor that could differ.** `bool(n_cpu_moe)`
 //! instead of the count paired a `--n-cpu-moe 20` cell with a `--n-cpu-moe 40` one

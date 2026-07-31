@@ -152,7 +152,7 @@ impl<'a> Packer<'a> {
         // reserved every card by a factor of the GPU count —
         // Qwen3.6-35B-A3B needs 1332 MiB *per* card where the estimate pledged
         // 685 across both. See
-        // [`ananke_estimate::compute_buffer::tensor_split_per_device`].
+        // [`ananke_estimate::compute_model`].
         let compute_per_gpu = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
         let fudge_total = ONE_LAYER_FUDGE_MULTIPLIER * (per_layer_avg + kv_total / n_layers);
 

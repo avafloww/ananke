@@ -117,9 +117,8 @@ mod tests {
 
     /// A separate draft model (`-md`) contributes real GGUF tensors, read
     /// through its own mmap and therefore resident in the process's file RSS.
-    /// They have to land in `gpu_weight_bytes`, which the host-pool
-    /// observation subtracts from a measured RSS peak — left as runtime, every
-    /// host sample of an MTP service is inflated by the draft's weights.
+    /// They belong in `gpu_weight_bytes` rather than in the runtime tally,
+    /// which is what keeps the weight and runtime totals meaning what they say.
     #[test]
     fn a_separate_draft_models_weights_are_tallied_as_weights() {
         let per_layer_bytes: Vec<u64> = (0..10).map(|_| 200 * 1024 * 1024).collect();

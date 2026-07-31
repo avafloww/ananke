@@ -1,21 +1,12 @@
 //! Per-device compute-buffer sizing.
 //!
-//! [`per_device_for`] is the entry point, and it picks between three models,
-//! because the graph a device builds depends on how the model was split across
-//! devices and on which runtime built it. Each is documented where it lives:
-//!
-//! - [`tensor_split_per_device`] — `--split-mode tensor`. Built from the model's
-//!   hyperparameters: hidden-width intermediates per batch token, an f16 KQ
-//!   mask, and a dequantisation term. Charged to *every* spanned GPU, since
-//!   llama.cpp builds the same graph on each rather than dividing one.
-//! - [`ik_layer_split_per_device`] — a layer split on ik_llama, where the fork
-//!   has been measured. Also from hyperparameters, but with a batch term that
-//!   steps by a constant per doubling above the fork's attention chunk — a shape
-//!   no affine curve can express.
-//! - [`layer_split_per_device`] — a layer split otherwise, from the fitted
-//!   per-architecture curves in `tuning.json`. This is the one remaining term
-//!   that is a curve rather than a model: `base + base_batch × k + slope ×
-//!   ctx/1024`, with `k = ubatch / 512`.
+//! [`per_device_for`] is the entry point. The three hand-fitted curves it used to
+//! pick between — one for a tensor split, one for a layer split on ik_llama, one
+//! for a layer split otherwise — are gone, replaced by the single fitted model in
+//! [`crate::compute_model`], whose design columns are dimensionally normalised so
+//! architectures of different width share coefficients. What remains here is the
+//! head-card contract: `per_device_for` returns the *head* GPU's total, and the
+//! packer trims [`crate::compute_model::head_extra_mib`] back off every secondary.
 //!
 //! An architecture gets its own curve because the overhead scales with different
 //! knobs — attention scratch grows fast with context on wide dense models,

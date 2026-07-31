@@ -78,8 +78,8 @@ fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32) -> u64 {
 /// part of the target model regardless.
 ///
 /// The packer charges this part as `Charge`'s
-/// weights so it reaches `gpu_weight_bytes`, which the host-pool observation
-/// subtracts from a measured RSS peak. Left as runtime, the draft's weights
+/// weights so it reaches `gpu_weight_bytes` rather than being tallied as a runtime
+/// allocation — the distinction the `Charge` split exists to make. Left as runtime, the draft's weights
 /// would inflate every host sample of an MTP service.
 pub fn mtp_weight_bytes(draft: Option<&GgufSummary>, inputs: &EstimatorInputs<'_>) -> u64 {
     if !inputs.mtp {
@@ -168,7 +168,7 @@ pub fn mtp_overhead_bytes(
 /// compute, which the unified compute model covers.
 ///
 /// The same two terms as the main context's — see
-/// [`crate::compute_buffer::tensor_split_per_device`] — because it
+/// [`crate::compute_model`] — because it
 /// is the same kind of graph over one layer instead of all of them: an f16 KQ
 /// mask of two bytes per (batch token, cache token), plus a flat count of
 /// hidden-width f32 intermediates per batch token.

@@ -45,9 +45,12 @@ mod json;
 mod maintain;
 mod run;
 
+/// Diagnostics for what a once-per-configuration sample cannot separate: whether a
+/// term is allocated once or accumulates with use.
+pub mod probe;
+
 /// The trait seams themselves, because [`measure_cells_with`] takes them: a driver
 /// substitutes the world to check the contract it depends on. The in-memory
 /// implementations inside stay behind `test-fakes` — the seams are API, the fakes
 /// are a test aid.
-pub mod probe;
 pub mod sys;

@@ -207,12 +207,16 @@ pub struct RollingInputs {
     /// Model tensor bytes placed on GPUs, uncorrected and excluding KV,
     /// compute buffers, and slop.
     ///
-    /// llama.cpp reads these through the GGUF's mmap, so they count against
-    /// the process's file RSS even though they live in VRAM at runtime.
-    /// Subtracting them from an observed RSS peak is what makes that peak
-    /// comparable to [`Self::uncorrected_host_bytes`] — but only when the
-    /// mapping exists; a service running `--no-mmap` stages GPU tensors
-    /// through a buffer it frees, so nothing needs subtracting there.
+    /// Reported, not consumed by the correction. llama.cpp reads these through
+    /// the GGUF's mmap, so at runtime they sit in the process's *file* RSS while
+    /// living in VRAM — and the host pool's numerator is owned memory
+    /// (`RssAnon + RssShmem`), which they never enter. Nothing subtracts this,
+    /// and an earlier design that divided a *total* RSS peak did need to.
+    ///
+    /// It stays because it is the only place the GPU-resident weight total is
+    /// available to a caller: the `estimate` example prints it, and the MTP
+    /// tests assert a separate draft's weights reach it rather than being
+    /// charged as runtime allocation.
     pub gpu_weight_bytes: u64,
     /// Model tensor bytes placed on the host, uncorrected. Gates host-pool
     /// learning: see

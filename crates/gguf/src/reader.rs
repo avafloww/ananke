@@ -88,7 +88,7 @@ pub fn read_single(fs: &dyn Fs, path: &Path) -> Result<GgufSummary, ReadError> {
             // `GgufType::from_u32` + `tensor_byte_size`.
             return Err(ReadError(format!(
                 "{}: tensor `{name}` uses unsupported GGUF dtype id {id}; \
-                 extend ananke::gguf::types::GgufType to cover it",
+                 extend ananke_gguf::types::GgufType to cover it",
                 path.display()
             )));
         }

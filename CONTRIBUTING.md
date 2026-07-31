@@ -33,7 +33,11 @@ see [`calibration/README.md`](calibration/README.md):
 That boundary is the useful one to hold in mind: `crates/tuning/tuning.json` is the
 entire interface between the two halves. Delete `calibration/` and the daemon still
 builds, runs, and estimates — what is lost is the ability to re-derive that file and
-the evidence for why each number in it is what it is. The arrow only points inward:
+the evidence for why each number in it is what it is. One exception, and it is a
+test: `ananke/tests/estimator_matches_measurements.rs` holds the shipped estimator
+against the campaign's own cells, so it reads `calibration/data` directly and
+`cargo test --workspace` wants the directory present. That is the point of the test —
+a fixture copy would drift from the dataset the constants are derived from. The arrow only points inward:
 `ananke-calibrate` runs the real estimator and packer in-process, which is what makes
 `validate` and `scoreboard` mean anything, but nothing shipped links back.
 

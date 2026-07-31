@@ -216,23 +216,18 @@ fn every_model_lands_inside_the_correction_band() {
     // runtime — which is wider than the mainline-only slice a hand analysis
     // might take, so the two do not have to agree.
     //
-    // A ratchet rather than a pass. The reachability claim — that every model
-    // lands inside the band the rolling correction can travel — is *not* true
-    // today: this many cells sit outside it, mostly under-predicted, which is
-    // the direction that OOMs. The number is recorded so it can only fall.
-    // See FINDINGS.md; closing the gap needs the host baseline refitted, not
-    // this threshold raised.
-    // Zero. It was 33 before the per-architecture baseline offset, then 5, 2,
-    // and 4 as the dataset gained cells that allocate what this figure
-    // deliberately does not model — the per-slot cost and the context
-    // checkpoints, both reserved as slop so that an ordinary service is not
-    // judged against memory it never allocates.
+    // A ratchet rather than a threshold. It was 33 before the per-architecture
+    // baseline offset, then 5, 2, and 4 as the dataset gained cells that
+    // allocate what this figure deliberately does not model — the per-slot
+    // cost and the context checkpoints, both reserved as slop so that an
+    // ordinary service is not judged against memory it never allocates.
     //
-    // Those configurations are excluded above rather than counted here, on
-    // the same argument that already excludes a hybrid's CPU-held weights, and
-    // with them out every remaining cell lands inside the band. Zero is
-    // therefore a real floor and not a tuned threshold: any regression fails
-    // on the first cell.
+    // Those configurations are excluded above rather than counted here, on the
+    // same argument that already excludes a hybrid's CPU-held weights. What
+    // remains is the population the term claims to cover, and all of it lands
+    // inside the band. Zero is therefore a real floor: any regression fails on
+    // the first cell, and the way to keep it at zero is to refit the host
+    // baseline rather than to widen this.
     const KNOWN_OUTSIDE: usize = 0;
     assert!(
         outside.len() == KNOWN_OUTSIDE,
