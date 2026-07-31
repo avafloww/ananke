@@ -169,6 +169,17 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
         )),
     }
 
+    // And the per-device baseline, which `baseline_offset` subtracts along with the
+    // rest of the process-baseline model. It takes no tuning of its own, so hoisting
+    // it costs nothing and is the difference between the offset being a residual over
+    // this run's model and over the last one's.
+    match baseline::per_device_bytes(&rows) {
+        Ok(scalar) => live.set_constant("PROCESS_BASE_BYTES_PER_DEVICE", scalar.value),
+        Err(error) => failed.push(format!(
+            "PROCESS_BASE_BYTES_PER_DEVICE: cannot derive — {error}"
+        )),
+    }
+
     let slot_scaling = mtp::mtp_slot_scaling(&rows);
 
     let mut checkpoint: Option<Table> = None;
