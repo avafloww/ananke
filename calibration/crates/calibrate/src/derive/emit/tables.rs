@@ -143,18 +143,24 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
         });
     }
     if let Some(table) = tables.ik_moe {
-        // Per architecture, because they differ and one number cannot serve all three
-        // without either under-reserving the worst or over-reserving the rest. The
-        // fallback is the worst seen, for an ik mixture of experts this dataset has
-        // never measured.
-        document["ik_moe_rates"] = json!({
-            "$comment": "Bytes per batch token per unit of hidden size for ik's \
-                         CPU-resident MoE intermediates, by architecture. `default` \
-                         applies to an architecture not listed.",
-            "default": table.worst(),
-            "by_arch": table.by_arch,
-        });
+        document["ik_moe_rates"] = ik_moe_value(table);
     }
+}
+
+/// The `ik_moe_rates` section, as both the document and the live view need it.
+///
+/// Per architecture, because they differ and one number cannot serve all three
+/// without either under-reserving the worst or over-reserving the rest. The
+/// fallback is the worst seen, for an ik mixture of experts this dataset has never
+/// measured.
+pub(super) fn ik_moe_value(table: &Table) -> Value {
+    json!({
+        "$comment": "Bytes per batch token per unit of hidden size for ik's \
+                     CPU-resident MoE intermediates, by architecture. `default` \
+                     applies to an architecture not listed.",
+        "default": table.worst(),
+        "by_arch": table.by_arch,
+    })
 }
 
 /// Tables whose values may be negative, and which `build.rs` must therefore emit

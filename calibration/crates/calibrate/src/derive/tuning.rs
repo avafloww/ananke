@@ -30,6 +30,31 @@ impl Tuning {
         })
     }
 
+    /// A view over a document being rebuilt, so a deriver reads the value this
+    /// run produced rather than the one the last run committed.
+    pub fn of(document: &Value) -> Self {
+        Self {
+            document: document.clone(),
+        }
+    }
+
+    /// Replace one constant's value, for [`Self::of`]'s caller to thread the
+    /// freshly derived figure through to the derivers that consume it.
+    pub fn set_constant(&mut self, name: &str, value: i64) {
+        if let Some(entry) = self
+            .document
+            .get_mut("constants")
+            .and_then(|c| c.get_mut(name))
+        {
+            entry["value"] = Value::from(value);
+        }
+    }
+
+    /// Replace one table, as [`Self::set_constant`] does for a scalar.
+    pub fn set_table(&mut self, name: &str, table: Value) {
+        self.document[name] = table;
+    }
+
     /// The document itself, for `emit` to mutate and write back.
     pub fn document(&self) -> &Value {
         &self.document

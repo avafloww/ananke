@@ -384,6 +384,55 @@ fn superseded_rows_are_dropped() {
     );
 }
 
+/// The output depends on the dataset, not on the document it is handed.
+///
+/// Several derivers read a constant they do not derive — the arena charges the two
+/// MoE rates, the baseline offset subtracts the whole process-baseline model — and
+/// reading those from the *committed* document made `emit` a function of (dataset,
+/// previous run). A value that moved would then take two runs to settle, with
+/// nothing to say which run you were looking at.
+///
+/// Handing it a document whose *derived* inputs are corrupted must produce the
+/// committed one regardless: each is now derived earlier in the same pass.
+///
+/// The `reachable` constants are deliberately not poisoned. Those are chosen rather
+/// than derived — picked so every model lands inside the rolling correction's clamp —
+/// so `emit` reading them from the document is reading an input, and a residual taken
+/// over a different baseline is *supposed* to differ.
+#[test]
+fn emit_ignores_the_derived_values_it_is_given() {
+    let mut poisoned = committed().clone();
+    for name in [
+        "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD",
+        "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN",
+    ] {
+        poisoned["constants"][name]["value"] = Value::from(999_999_i64);
+    }
+    poisoned["ik_moe_rates"]["default"] = Value::from(999_999_i64);
+    poisoned["ik_moe_rates"]["by_arch"] = serde_json::json!({});
+
+    let text = serde_json::to_string_pretty(&poisoned).expect("the document serialises");
+    let emitted = emit::emit(&rows(), &text).expect("emit runs against a poisoned document");
+
+    for name in ["baseline_offset", "no_flash_attn_rates", "ik_moe_rates"] {
+        assert_eq!(
+            &emitted.document[name],
+            &committed()[name],
+            "`{name}` moved when only the input document changed"
+        );
+    }
+    for name in [
+        "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD",
+        "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN",
+    ] {
+        assert_eq!(
+            emitted.document["constants"][name]["value"],
+            committed()["constants"][name]["value"],
+            "`{name}` moved when only the input document changed"
+        );
+    }
+}
+
 fn evidence(name: &str) -> &'static str {
     committed()["constants"][name]["evidence"]
         .as_str()

@@ -124,16 +124,49 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
         failed.push(format!("runtime builds: {error}"));
     }
 
-    // The dependency order is spelled out because it is load-bearing:
+    // Derivers that read a constant read it from `live`, which carries what *this*
+    // run has derived so far, not what the last one committed. Reading `committed`
+    // instead makes the output a function of (dataset, previous document): a value
+    // that moves takes a second run to settle, and nothing says which run you are
+    // looking at.
     //
-    //   no_flash_attn_rates -> baseline_offset
+    // That makes the order below load-bearing, and it is a genuine order rather than
+    // a cycle — every constant read here is derived by a pass that excludes it:
     //
-    // The latter subtracts the former's per-architecture rates, and without them it
-    // silently subtracts zero and folds a per-token arena term into a flat baseline.
+    //   ik_moe_rates, MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD  (the arena's MoE terms)
+    //     -> no_flash_attn_rates -> baseline_offset
+    //
+    // The arena charges the MoE terms when it charges anything, but both are derived
+    // with the MoE term switched off, so neither reads itself. `baseline_offset`
+    // subtracts `no_flash_attn_rates`, and without them it silently subtracts zero and
+    // folds a per-token arena term into a flat baseline.
+    let mut live = Tuning::of(&document);
+
     let mut ik_moe: Option<Table> = None;
-    match graph::ik_moe_per_nembd(&rows, &committed) {
-        Ok((_scalar, table)) => ik_moe = Some(table),
+    match graph::ik_moe_per_nembd(&rows, &live) {
+        Ok((_scalar, table)) => {
+            live.set_table("ik_moe_rates", tables::ik_moe_value(&table));
+            ik_moe = Some(table);
+        }
         Err(error) => failed.push(format!("ik MoE rates: cannot derive — {error}")),
+    }
+
+    // The arena's other MoE term, hoisted out of the scalar loop for the same reason:
+    // `no_flash_attn_rates` and `baseline_offset` both charge it through the arena.
+    match graph::mainline_tensor_moe(&rows, &live) {
+        Ok(scalar) => live.set_constant("MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD", scalar.value),
+        Err(error) => failed.push(format!(
+            "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD: cannot derive — {error}"
+        )),
+    }
+
+    // Likewise the E-variant's per-layer term: the arena subtracts it, and so does the
+    // flash-attention residual.
+    match pinned::gemma_e_per_layer_token(&rows, &live) {
+        Ok(scalar) => live.set_constant("GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN", scalar.value),
+        Err(error) => failed.push(format!(
+            "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN: cannot derive — {error}"
+        )),
     }
 
     let slot_scaling = mtp::mtp_slot_scaling(&rows);
@@ -170,7 +203,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     // *after* this one, so the term is absent from the residual the committed rates
     // were fitted against.
     let mut no_fa: Option<Table> = None;
-    match pinned::no_flash_attn_rates(&rows, &committed, None) {
+    match pinned::no_flash_attn_rates(&rows, &live, None) {
         Ok(table) => no_fa = Some(table),
         Err(error) => failed.push(format!("no-flash-attention rates: cannot derive — {error}")),
     }
@@ -178,13 +211,13 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     let mut baseline_table: Option<Table> = None;
     let empty = BTreeMap::new();
     let no_fa_rates = no_fa.as_ref().map(|t| &t.by_arch).unwrap_or(&empty);
-    match baseline::baseline_offset(&rows, &committed, no_fa_rates) {
+    match baseline::baseline_offset(&rows, &live, no_fa_rates) {
         Ok((_scalar, table)) => baseline_table = Some(table),
         Err(error) => failed.push(format!("baseline offset: cannot derive — {error}")),
     }
 
     let mut tensor_base: Option<Table> = None;
-    match baseline::tensor_split_baseline(&rows, &committed) {
+    match baseline::tensor_split_baseline(&rows, &live) {
         Ok((_scalar, table)) => tensor_base = Some(table),
         Err(error) => failed.push(format!("tensor-split baseline: cannot derive — {error}")),
     }
@@ -201,7 +234,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
             failed.push(format!("{name}: in DERIVERS but not in tuning.json"));
             continue;
         };
-        let derived = match deriver(&rows, &committed) {
+        let derived = match deriver(&rows, &live) {
             Ok(scalar) => scalar,
             Err(error) => {
                 failed.push(format!("{name}: cannot derive — {error}"));
@@ -213,6 +246,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
             changed.push(format!("{name}: {old} -> {}", derived.value));
         }
         entry["value"] = json!(derived.value);
+        live.set_constant(name, derived.value);
         entry["evidence"] = json!(derived.evidence);
         entry["kind"] = json!("derived");
         document["constants"][name] = entry;
