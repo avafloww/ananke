@@ -14,7 +14,8 @@ directories do not.
 |---|---|---|---|
 | `ananke-fs` | `crates/fs` | the `Fs` trait with its local and in-memory implementations | `parking_lot` |
 | `ananke-gguf` | `crates/gguf` | the GGUF reader, including sharded models; `dump-gguf` | `ananke-fs` |
-| `ananke-tuning` | `crates/tuning` | `tuning.json` and the build script that turns it into constants | — |
+| `ananke-tuning-schema` | `crates/tuning-schema` | the type of `tuning.json`, shared by everything that reads or writes it | `serde` |
+| `ananke-tuning` | `crates/tuning` | `tuning.json` and the build script that turns it into constants | `ananke-tuning-schema` (build) |
 | `ananke-config` | `crates/config` | config defaults, the descriptor table the docs are generated from, and the placement vocabulary (`SplitMode`, `DeviceSlot`) | — |
 | `ananke-estimate` | `crates/estimate` | the VRAM estimator and the design-column contract the fitter shares | the four above |
 | `ananke-placement` | `crates/placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate` |
@@ -29,7 +30,7 @@ see [`calibration/README.md`](calibration/README.md):
 |---|---|---|---|
 | `ananke-dataset` | `calibration/crates/dataset` | the one schema `calibration/data/measurements.ndjson` is written and read with, and the JSON writer that is part of that format | `serde`, `serde_json` |
 | `ananke-measure` | `calibration/crates/measure` | the measurement harness and its log parser | `ananke-dataset`, `regex`, `nix` |
-| `ananke-calibrate` | `calibration/crates/calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-dataset`, `ananke-measure`, `ananke-estimate`, `ananke-placement` |
+| `ananke-calibrate` | `calibration/crates/calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-dataset`, `ananke-measure`, `ananke-estimate`, `ananke-placement`, `ananke-tuning-schema` |
 
 That boundary is the useful one to hold in mind: `crates/tuning/tuning.json` is the
 entire interface between the two halves. Delete `calibration/` and the daemon still
@@ -53,6 +54,11 @@ inner loop of that work, and it now costs a few seconds instead of a UI build.
 The estimator and then the packer followed for the same reason, and with them the
 `estimate` example — so no part of the calibration loop builds the UI any more.
 No part of the calibration loop needs `ANANKE_SKIP_FRONTEND_BUILD`.
+
+`ananke-tuning-schema` is a leaf for a different reason: a build script cannot
+depend on the crate it builds, so the type of `tuning.json` — read by
+`crates/tuning`'s `build.rs`, by the derivers, by the emitter, and by the
+compute-model fitter — has to sit below all four. It is `serde` and nothing else.
 
 `ananke` re-exports `gguf`, `estimator`, `allocator::placement`, `system::fs`, and
 `tracking::rolling::Corrections`, so `crate::…` paths inside the daemon are

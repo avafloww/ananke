@@ -137,7 +137,10 @@ mod document;
 mod fit;
 mod solve;
 
-pub use document::{Entry, Fit, Section, document_section};
+// Re-exported so a reader of the fitter finds the shape it writes without
+// following it into the schema crate.
+pub use ananke_tuning_schema::compute_model::{Entry, Fit, Section};
+pub use document::document_section;
 pub use fit::{Coefficients, fit};
 pub use solve::evaluate;
 

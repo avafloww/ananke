@@ -9,6 +9,7 @@ members = [
     "crates/gguf",
     "crates/placement",
     "crates/tuning",
+    "crates/tuning-schema",
     "calibration/crates/calibrate",
     "calibration/crates/dataset",
     "calibration/crates/measure",
@@ -27,6 +28,7 @@ default-members = [
     "crates/gguf",
     "crates/placement",
     "crates/tuning",
+    "crates/tuning-schema",
     "calibration/crates/calibrate",
     "calibration/crates/dataset",
     "calibration/crates/measure",
@@ -46,6 +48,7 @@ ananke-fs = { path = "crates/fs" }
 ananke-gguf = { path = "crates/gguf" }
 ananke-placement = { path = "crates/placement" }
 ananke-tuning = { path = "crates/tuning" }
+ananke-tuning-schema = { path = "crates/tuning-schema" }
 ananke-calibrate = { path = "calibration/crates/calibrate" }
 ananke-dataset = { path = "calibration/crates/dataset" }
 ananke-measure = { path = "calibration/crates/measure" }

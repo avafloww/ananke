@@ -23,7 +23,8 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
+use ananke_tuning_schema::{Document, Kind};
+use serde_json::Number;
 
 use crate::{
     derive::{
@@ -41,46 +42,49 @@ use crate::{
 
 pub mod tables;
 
-pub use tables::{SIGNED_TABLES, check_table_signs};
+pub use tables::check_table_signs;
 
 /// What kind of thing each constant without a deriver is.
-pub const KINDS: &[(&str, &str)] = &[
+pub const KINDS: &[(&str, Kind)] = &[
     // ik_llama's `-amb` default, read from the runtime rather than fitted.
-    ("IK_ATTENTION_CHUNK", "structural"),
+    ("IK_ATTENTION_CHUNK", Kind::Structural),
     // Read from llama.cpp's source or arithmetic over the graph; not fitted.
-    ("KV_CACHE_PAD", "structural"),
-    ("TENSOR_MASK_BYTES_PER_TOKEN_PAIR", "structural"),
+    ("KV_CACHE_PAD", Kind::Structural),
+    ("TENSOR_MASK_BYTES_PER_TOKEN_PAIR", Kind::Structural),
     // A runtime's documented default, mirrored so the reservation and the runtime's
     // own cap are the same number.
-    ("DEFAULT_CACHE_RAM_MB", "policy"),
-    ("DEFAULT_UBATCH", "policy"),
+    ("DEFAULT_CACHE_RAM_MB", Kind::Policy),
+    ("DEFAULT_UBATCH", Kind::Policy),
     // Measured, but with a spread wide enough that the value is chosen so every
     // model lands inside the rolling correction's [0.8, 1.5] clamp rather than to
     // minimise error against any one of them.
-    ("PROCESS_BASE_BYTES", "reachable"),
-    ("PROCESS_BASE_BYTES_PER_LAYER", "reachable"),
-    ("PROCESS_BASE_BYTES_MOE", "reachable"),
-    ("PINNED_EXTRA_BYTES", "reachable"),
-    ("DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16", "reachable"),
-    ("QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN", "derived"),
-    ("DRAFT_MODEL_COMPUTE_MIB_PER_1K", "derived"),
+    ("PROCESS_BASE_BYTES", Kind::Reachable),
+    ("PROCESS_BASE_BYTES_PER_LAYER", Kind::Reachable),
+    ("PROCESS_BASE_BYTES_MOE", Kind::Reachable),
+    ("PINNED_EXTRA_BYTES", Kind::Reachable),
+    (
+        "DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16",
+        Kind::Reachable,
+    ),
+    ("QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN", Kind::Derived),
+    ("DRAFT_MODEL_COMPUTE_MIB_PER_1K", Kind::Derived),
     // Has data, but the fit is contested and the value is held.
-    ("DRAFT_MODEL_COMPUTE_MIB", "reachable"),
-    ("MTP_HOST_BYTES_EMBEDDED", "derived"),
-    ("MTP_HOST_BYTES_SEPARATE_DRAFT", "derived"),
-    ("MTP_HOST_MIB_PER_1K", "derived"),
+    ("DRAFT_MODEL_COMPUTE_MIB", Kind::Reachable),
+    ("MTP_HOST_BYTES_EMBEDDED", Kind::Derived),
+    ("MTP_HOST_BYTES_SEPARATE_DRAFT", Kind::Derived),
+    ("MTP_HOST_MIB_PER_1K", Kind::Derived),
     // Read straight out of llama.cpp's own `rs_seq` field.
-    ("SPEC_RECURRENT_ROLLBACK_DEPTH", "derived"),
+    ("SPEC_RECURRENT_ROLLBACK_DEPTH", Kind::Derived),
     // The worst of two measured vision configurations; see the deriver for why it is
     // not yet a rate.
-    ("MMPROJ_GRAPH_BYTES", "reachable"),
+    ("MMPROJ_GRAPH_BYTES", Kind::Reachable),
 ];
 
 /// What `emit` produced, and everything it could not.
 #[derive(Debug, Clone)]
 pub struct Emitted {
     /// The document as it should be committed.
-    pub document: Value,
+    pub document: Document,
     /// Constants whose value moved, as `NAME: old -> new`.
     pub changed: Vec<String>,
     /// Derivations that could not run. A non-empty list is a failure.
@@ -102,9 +106,7 @@ pub struct Emitted {
 /// [`crate::compute_model`], and carrying the committed section through unchanged is
 /// what lets this half be checked on its own.
 pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
-    let committed = Tuning::parse(tuning_text)
-        .map_err(|e| crate::derive::error::DeriveError::malformed(e.to_string()))?;
-    let mut document = committed.document().clone();
+    let mut document = parse(tuning_text)?;
     let mut changed = Vec::new();
     let mut failed = Vec::new();
     let mut notes = Vec::new();
@@ -147,7 +149,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     let mut ik_moe: Option<Table<ArchCardsKey>> = None;
     match graph::ik_moe_per_nembd(&rows, &live) {
         Ok((_scalar, table)) => {
-            live.set_table("ik_moe_rates", tables::ik_moe_value(&table));
+            live.set_ik_moe_rates(tables::ik_moe_rates(&table));
             ik_moe = Some(table);
         }
         Err(error) => failed.push(format!("ik MoE rates: cannot derive — {error}")),
@@ -257,8 +259,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     }
 
     for (name, deriver) in derivers() {
-        let entry = document.get("constants").and_then(|c| c.get(name)).cloned();
-        let Some(mut entry) = entry else {
+        let Some(entry) = document.constants.get_mut(name) else {
             failed.push(format!("{name}: in DERIVERS but not in tuning.json"));
             continue;
         };
@@ -269,28 +270,22 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
                 continue;
             }
         };
-        if entry.get("value").and_then(Value::as_i64) != Some(derived.value) {
-            let old = entry.get("value").cloned().unwrap_or(Value::Null);
-            changed.push(format!("{name}: {old} -> {}", derived.value));
+        if entry.value.as_i64() != Some(derived.value) {
+            changed.push(format!("{name}: {} -> {}", entry.value, derived.value));
         }
-        entry["value"] = json!(derived.value);
+        entry.value = Number::from(derived.value);
+        entry.evidence = derived.evidence;
+        entry.kind = Kind::Derived;
         thread(&mut live, name, derived.value, &mut failed);
-        entry["evidence"] = json!(derived.evidence);
-        entry["kind"] = json!("derived");
-        document["constants"][name] = entry;
     }
 
     let derived_names: Vec<&str> = derivers().iter().map(|(name, _)| *name).collect();
-    let names: Vec<String> = document["constants"]
-        .as_object()
-        .map(|map| map.keys().cloned().collect())
-        .unwrap_or_default();
-    for name in names {
+    for (name, entry) in &mut document.constants {
         if derived_names.contains(&name.as_str()) {
             continue;
         }
-        match KINDS.iter().find(|(known, _)| *known == name) {
-            Some((_, kind)) => document["constants"][&name]["kind"] = json!(kind),
+        match KINDS.iter().find(|(known, _)| known == name) {
+            Some((_, kind)) => entry.kind = *kind,
             None => failed.push(format!("{name}: no declared kind — add it to KINDS")),
         }
     }
@@ -318,7 +313,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
         },
     );
 
-    document["measurements"] = json!(rows.len());
+    document.measurements = rows.len() as u64;
     Ok(Emitted {
         document,
         changed,
@@ -370,8 +365,7 @@ pub fn emit_write(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
 /// under a constant that happened to land in the same place.
 pub fn emit_check(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     let emitted = emit(rows, tuning_text)?;
-    let committed: Value = serde_json::from_str(tuning_text)
-        .map_err(|e| crate::derive::error::DeriveError::malformed(e.to_string()))?;
+    let committed = parse(tuning_text)?;
     // A deriver that fails leaves its constant exactly as committed, so the documents
     // match and the check would otherwise pass — reporting agreement with the data
     // for a constant nothing re-derived. The failure is the finding; comparing
@@ -397,6 +391,12 @@ pub fn emit_check(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
         emitted.measurements,
         detail.join("; "),
     )))
+}
+
+/// The committed document, or the parse error as a derivation failure.
+fn parse(tuning_text: &str) -> Result<Document> {
+    serde_json::from_str(tuning_text)
+        .map_err(|e| crate::derive::error::DeriveError::malformed(e.to_string()))
 }
 
 /// One deriver per scalar constant, in the order the document declares them.

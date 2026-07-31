@@ -22,6 +22,7 @@ use ananke_calibrate::{
     record::read_ndjson,
 };
 use ananke_measure::record::Status;
+use ananke_tuning_schema::Document;
 
 const MEASUREMENTS: &str = "calibration/data/measurements.ndjson";
 const TUNING: &str = "crates/tuning/tuning.json";
@@ -52,7 +53,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let mut document: serde_json::Value = match serde_json::from_str(&tuning_text) {
+    let mut document: Document = match serde_json::from_str(&tuning_text) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("parsing {TUNING}: {e}");
@@ -110,7 +111,7 @@ fn main() -> ExitCode {
     }
 
     if check {
-        if document.get("compute_model") == Some(&section) {
+        if document.compute_model == section {
             println!("compute_model matches the dataset ({} rows)", rows.len());
             return ExitCode::SUCCESS;
         }
@@ -121,8 +122,8 @@ fn main() -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let unchanged = document.get("compute_model") == Some(&section);
-    document["compute_model"] = section;
+    let unchanged = document.compute_model == section;
+    document.compute_model = section;
     let rendered = match serde_json::to_string_pretty(&document) {
         Ok(t) => t,
         Err(e) => {

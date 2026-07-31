@@ -15,6 +15,7 @@ ananke-fs.workspace = true
 ananke-gguf.workspace = true
 ananke-measure.workspace = true
 ananke-placement.workspace = true
+ananke-tuning-schema.workspace = true
 clap.workspace = true
 jiff.workspace = true
 parking_lot.workspace = true

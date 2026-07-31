@@ -18,7 +18,7 @@ use ananke_calibrate::{
     },
     record::Record,
 };
-use serde_json::Value;
+use ananke_tuning_schema::{Document, RateTable, RateTableName};
 
 /// The dataset, de-duplicated the way `emit` does before anything reads it.
 fn rows() -> Arc<Vec<Record>> {
@@ -51,33 +51,26 @@ fn tuning() -> &'static Tuning {
     TUNING.get_or_init(|| Tuning::parse(tuning_text()).expect("tuning.json is valid JSON"))
 }
 
-fn committed() -> &'static Value {
-    static DOCUMENT: OnceLock<Value> = OnceLock::new();
+fn committed() -> &'static Document {
+    static DOCUMENT: OnceLock<Document> = OnceLock::new();
     DOCUMENT.get_or_init(|| serde_json::from_str(tuning_text()).expect("valid JSON"))
 }
 
 /// A committed scalar constant.
 fn constant(name: &str) -> i64 {
-    committed()["constants"][name]["value"]
+    committed().constants[name]
+        .value
         .as_i64()
         .unwrap_or_else(|| {
-            panic!("{name} is missing from the committed constants");
+            panic!("{name} is not an integer constant");
         })
 }
 
 /// A committed per-architecture table, `default` included under that name so a
 /// deriver's fallback is checked too.
-fn table(name: &str) -> BTreeMap<String, i64> {
-    let entry = &committed()[name];
-    let mut out: BTreeMap<String, i64> = entry["by_arch"]
-        .as_object()
-        .unwrap_or_else(|| panic!("{name} has no by_arch"))
-        .iter()
-        .map(|(arch, value)| (arch.clone(), value.as_i64().expect("an integer rate")))
-        .collect();
-    if let Some(default) = entry.get("default").and_then(Value::as_i64) {
-        out.insert("default".to_string(), default);
-    }
+fn table(name: RateTableName) -> BTreeMap<String, i64> {
+    let mut out = table_only(name);
+    out.insert("default".to_string(), committed_table(name).default);
     out
 }
 
@@ -226,13 +219,13 @@ fn mtp_unaccounted_matches() {
 #[test]
 fn ik_moe_rates_match() {
     let (_scalar, rates) = graph::ik_moe_per_nembd(&rows(), tuning()).expect("derives");
-    assert_eq!(derived(&rates), table("ik_moe_rates"));
+    assert_eq!(derived(&rates), table(RateTableName::IkMoeRates));
 }
 
 #[test]
 fn quantised_cache_rates_match() {
     let (_scalar, rates) = pinned::quantised_cache_bytes(&rows()).expect("derives");
-    assert_eq!(derived(&rates), table("quantised_cache_rates"));
+    assert_eq!(derived(&rates), table(RateTableName::QuantisedCacheRates));
 }
 
 #[test]
@@ -240,7 +233,7 @@ fn no_flash_attn_rates_match() {
     // `None` for the quantised table, matching the order `emit` runs them in — see
     // `pinned::no_flash_attn_rates`.
     let rates = pinned::no_flash_attn_rates(&rows(), tuning(), None).expect("derives");
-    assert_eq!(derived(&rates), table("no_flash_attn_rates"));
+    assert_eq!(derived(&rates), table(RateTableName::NoFlashAttnRates));
 }
 
 #[test]
@@ -250,8 +243,11 @@ fn baseline_offsets_match() {
         baseline::baseline_offset(&rows(), tuning(), &rates.by_key).expect("derives");
     // `default` is zero here rather than the worst offset: an unmeasured architecture
     // has no evidence either way, so it is not charged one.
-    assert_eq!(rendered(&offsets.by_key), table_only("baseline_offset"));
-    assert_eq!(committed()["baseline_offset"]["default"].as_i64(), Some(0));
+    assert_eq!(
+        rendered(&offsets.by_key),
+        table_only(RateTableName::BaselineOffset)
+    );
+    assert_eq!(committed().baseline_offset.default, 0);
 }
 
 /// The ordering dependency `emit` spells out, asserted rather than trusted.
@@ -265,62 +261,57 @@ fn the_baseline_offset_refuses_to_run_without_the_flash_attention_rates() {
 #[test]
 fn tensor_split_baselines_match() {
     let (_scalar, rates) = baseline::tensor_split_baseline(&rows(), tuning()).expect("derives");
-    assert_eq!(derived(&rates), table("tensor_split_baseline"));
+    assert_eq!(derived(&rates), table(RateTableName::TensorSplitBaseline));
 }
 
 #[test]
 fn per_slot_host_bytes_match() {
     let rates = baseline::per_slot_bytes(&rows()).expect("derives");
-    assert_eq!(derived(&rates), table("per_slot_host_bytes"));
+    assert_eq!(derived(&rates), table(RateTableName::PerSlotHostBytes));
 }
 
 #[test]
 fn checkpoint_headroom_matches() {
     let rates = baseline::checkpoint_headroom(&rows()).expect("derives");
-    assert_eq!(derived(&rates), table("checkpoint_headroom_bytes"));
+    assert_eq!(
+        derived(&rates),
+        table(RateTableName::CheckpointHeadroomBytes)
+    );
 }
 
 #[test]
 fn no_flash_attn_score_matches() {
     let rates = vram::no_flash_attn_score(&rows()).expect("derives");
-    assert_eq!(derived(&rates), table("no_flash_attn_score_centibytes"));
+    assert_eq!(
+        derived(&rates),
+        table(RateTableName::NoFlashAttnScoreCentibytes)
+    );
 }
 
 #[test]
 fn mtp_draft_compute_matches() {
     let fit = mtp::mtp_draft_compute(&rows()).expect("derives");
-    assert_eq!(fit.bases, table_only("mtp_draft_compute_base_mib"));
-    assert_eq!(fit.slopes, table_only("mtp_draft_compute_mib_per_1k"));
+    assert_eq!(fit.bases, table_only(RateTableName::MtpDraftComputeBaseMib));
+    assert_eq!(
+        fit.slopes,
+        table_only(RateTableName::MtpDraftComputeMibPer1k)
+    );
 }
 
 #[test]
 fn table_less_observations_match() {
     let observed = vram::table_less_observations(&rows()).expect("derives");
-    let want: BTreeMap<String, BTreeMap<String, i64>> =
-        committed()["table_less_compute_observations"]["by_arch"]
-            .as_object()
-            .expect("an object")
-            .iter()
-            .map(|(arch, points)| {
-                let inner = points
-                    .as_object()
-                    .expect("an object")
-                    .iter()
-                    .map(|(cell, value)| (cell.clone(), value.as_i64().expect("an integer")))
-                    .collect();
-                (arch.clone(), inner)
-            })
-            .collect();
-    assert_eq!(observed.by_arch, want);
+    assert_eq!(
+        observed.by_arch,
+        committed().table_less_compute_observations.by_arch
+    );
 }
 
 #[test]
 fn the_mtp_slot_series_matches() {
     assert_eq!(
         mtp::mtp_slot_scaling(&rows()),
-        committed()["mtp_slot_scaling"]["observed"]
-            .as_str()
-            .expect("a string"),
+        committed().mtp_slot_scaling.observed,
     );
 }
 
@@ -409,36 +400,52 @@ fn superseded_rows_are_dropped() {
 /// over a different baseline is *supposed* to differ.
 #[test]
 fn emit_ignores_the_derived_values_it_is_given() {
-    let mut poisoned = committed().clone();
-    for name in [
+    const POISONED: [&str; 2] = [
         "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD",
         "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN",
-    ] {
-        poisoned["constants"][name]["value"] = Value::from(999_999_i64);
+    ];
+    let mut poisoned = committed().clone();
+    for name in POISONED {
+        poisoned
+            .constants
+            .get_mut(name)
+            .expect("the constant is declared")
+            .value = serde_json::Number::from(999_999_i64);
     }
-    poisoned["ik_moe_rates"]["default"] = Value::from(999_999_i64);
-    poisoned["ik_moe_rates"]["by_arch"] = serde_json::json!({});
+    poisoned.ik_moe_rates.default = 999_999;
+    poisoned.ik_moe_rates.by_arch.clear();
 
     let text = serde_json::to_string_pretty(&poisoned).expect("the document serialises");
     let emitted = emit::emit(&rows(), &text).expect("emit runs against a poisoned document");
 
-    for name in ["baseline_offset", "no_flash_attn_rates", "ik_moe_rates"] {
-        assert_eq!(
-            &emitted.document[name],
-            &committed()[name],
-            "`{name}` moved when only the input document changed"
-        );
-    }
     for name in [
-        "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD",
-        "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN",
+        RateTableName::BaselineOffset,
+        RateTableName::NoFlashAttnRates,
+        RateTableName::IkMoeRates,
     ] {
         assert_eq!(
-            emitted.document["constants"][name]["value"],
-            committed()["constants"][name]["value"],
+            table_of(&emitted.document, name),
+            committed_table(name),
+            "`{}` moved when only the input document changed",
+            name.as_str()
+        );
+    }
+    for name in POISONED {
+        assert_eq!(
+            emitted.document.constants[name].value,
+            committed().constants[name].value,
             "`{name}` moved when only the input document changed"
         );
     }
+}
+
+/// One rate table of an arbitrary document, by name.
+fn table_of(document: &Document, name: RateTableName) -> &RateTable {
+    document
+        .rate_tables()
+        .into_iter()
+        .find_map(|(known, table)| (known == name).then_some(table))
+        .expect("every rate table is a field of the document")
 }
 
 /// A deriver that cannot run fails the gate, even though the document still matches.
@@ -460,18 +467,19 @@ fn a_deriver_that_cannot_run_fails_the_check() {
 }
 
 fn evidence(name: &str) -> &'static str {
-    committed()["constants"][name]["evidence"]
-        .as_str()
-        .unwrap_or_else(|| panic!("{name} has no evidence"))
+    &committed().constants[name].evidence
 }
 
 /// A committed table's `by_arch` alone, for the tables whose `default` is not the
 /// worst measured value.
-fn table_only(name: &str) -> BTreeMap<String, i64> {
-    committed()[name]["by_arch"]
-        .as_object()
-        .unwrap_or_else(|| panic!("{name} has no by_arch"))
-        .iter()
-        .map(|(arch, value)| (arch.clone(), value.as_i64().expect("an integer")))
-        .collect()
+fn table_only(name: RateTableName) -> BTreeMap<String, i64> {
+    committed_table(name).by_arch.clone()
+}
+
+fn committed_table(name: RateTableName) -> &'static RateTable {
+    committed()
+        .rate_tables()
+        .into_iter()
+        .find_map(|(known, table)| (known == name).then_some(table))
+        .expect("every rate table is a field of the document")
 }

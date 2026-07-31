@@ -98,6 +98,7 @@ dependencies = [
  "ananke-gguf",
  "ananke-measure",
  "ananke-placement",
+ "ananke-tuning-schema",
  "clap",
  "flate2",
  "jiff",
@@ -193,6 +194,15 @@ dependencies = [
 name = "ananke-tuning"
 version = "0.2.0"
 dependencies = [
+ "ananke-tuning-schema",
+ "serde_json",
+]
+
+[[package]]
+name = "ananke-tuning-schema"
+version = "0.2.0"
+dependencies = [
+ "serde",
  "serde_json",
 ]
 

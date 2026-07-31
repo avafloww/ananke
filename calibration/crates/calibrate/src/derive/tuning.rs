@@ -11,7 +11,8 @@
 
 use std::{fmt, marker::PhantomData};
 
-use serde_json::Value;
+use ananke_tuning_schema::{Document, RateTable};
+use serde_json::Number;
 
 use crate::derive::{
     error::DeriveError,
@@ -21,7 +22,7 @@ use crate::derive::{
 /// The committed tuning document, as the derivers see it.
 #[derive(Debug, Clone)]
 pub struct Tuning {
-    document: Value,
+    document: Document,
 }
 
 /// A constant the document does not declare. Its own type rather than a
@@ -52,9 +53,6 @@ impl From<UnknownConstant> for DeriveError {
     }
 }
 
-/// ik's per-architecture MoE rate to fall back on before the table exists.
-const IK_MOE_DEFAULT: i64 = 54;
-
 impl Tuning {
     pub fn parse(text: &str) -> Result<Self, serde_json::Error> {
         Ok(Self {
@@ -64,7 +62,7 @@ impl Tuning {
 
     /// A view over a document being rebuilt, so a deriver reads the value this
     /// run produced rather than the one the last run committed.
-    pub fn of(document: &Value) -> Self {
+    pub fn of(document: &Document) -> Self {
         Self {
             document: document.clone(),
         }
@@ -79,23 +77,19 @@ impl Tuning {
     pub fn set_constant(&mut self, name: &str, value: i64) -> Result<(), UnknownConstant> {
         let entry = self
             .document
-            .get_mut("constants")
-            .and_then(|c| c.get_mut(name))
+            .constants
+            .get_mut(name)
             .ok_or_else(|| UnknownConstant {
                 name: name.to_string(),
             })?;
-        entry["value"] = Value::from(value);
+        entry.value = Number::from(value);
         Ok(())
     }
 
-    /// Replace one table, as [`Self::set_constant`] does for a scalar.
-    pub fn set_table(&mut self, name: &str, table: Value) {
-        self.document[name] = table;
-    }
-
-    /// The document itself, for `emit` to mutate and write back.
-    pub fn document(&self) -> &Value {
-        &self.document
+    /// Replace the ik MoE rate table, as [`Self::set_constant`] does for a
+    /// scalar. The one table a deriver reads back within a run.
+    pub fn set_ik_moe_rates(&mut self, table: RateTable) {
+        self.document.ik_moe_rates = table;
     }
 
     pub fn constant(&self, name: &str) -> Option<i64> {
@@ -104,10 +98,9 @@ impl Tuning {
 
     pub fn constant_f64(&self, name: &str) -> Option<f64> {
         self.document
-            .get("constants")
-            .and_then(|c| c.get(name))
-            .and_then(|e| e.get("value"))
-            .and_then(Value::as_f64)
+            .constants
+            .get(name)
+            .and_then(|entry| entry.value.as_f64())
     }
 
     /// [`Self::constant_f64`] for the reader whose model is wrong without the
@@ -128,7 +121,7 @@ impl Tuning {
     /// ik's MoE rate table, keyed `{arch}@{cards}` as
     /// [`crate::derive::graph::ik_moe_per_nembd`] writes it.
     pub fn ik_moe_rates(&self) -> RateTableView<'_, ArchCardsKey> {
-        RateTableView::new(self.document.get("ik_moe_rates"), IK_MOE_DEFAULT)
+        RateTableView::new(&self.document.ik_moe_rates)
     }
 
     /// The ik MoE rate the arena model charges, looked up by architecture alone
@@ -159,39 +152,29 @@ impl Tuning {
 
 /// One committed rate table, read at the vocabulary its rows are keyed by.
 ///
-/// The document is JSON, so nothing in it distinguishes a table keyed by
-/// architecture from one keyed `{arch}@{cards}`, and a lookup at the wrong
-/// vocabulary quietly takes `default`. `K` is the reader stating which it is, so
-/// the mismatch has to be written on purpose.
+/// The document does not distinguish a table keyed by architecture from one
+/// keyed `{arch}@{cards}`, and a lookup at the wrong vocabulary quietly takes
+/// `default`. `K` is the reader stating which it is, so the mismatch has to be
+/// written on purpose.
 pub struct RateTableView<'a, K> {
-    entry: Option<&'a Value>,
-    fallback: i64,
+    table: &'a RateTable,
     key: PhantomData<fn(&K)>,
 }
 
 impl<'a, K: fmt::Display> RateTableView<'a, K> {
-    /// The rate for one key, or the table's `default`, or the caller's fallback
-    /// where the document declares no table at all.
+    /// The rate for one key, or the table's `default`.
     pub fn rate(&self, key: &K) -> i64 {
-        self.entry
-            .and_then(|table| table.get("by_arch"))
-            .and_then(|rows| rows.get(key.to_string()))
-            .and_then(Value::as_i64)
-            .unwrap_or_else(|| self.default())
+        self.table.rate(&key.to_string())
     }
 
     /// What an unlisted key inherits.
     pub fn default(&self) -> i64 {
-        self.entry
-            .and_then(|table| table.get("default"))
-            .and_then(Value::as_i64)
-            .unwrap_or(self.fallback)
+        self.table.default
     }
 
-    fn new(entry: Option<&'a Value>, fallback: i64) -> Self {
+    fn new(table: &'a RateTable) -> Self {
         Self {
-            entry,
-            fallback,
+            table,
             key: PhantomData,
         }
     }
@@ -205,8 +188,11 @@ const MAINLINE_TENSOR_MOE_DEFAULT: i64 = 57;
 mod tests {
     use super::*;
 
+    /// The committed document. [`Tuning`] parses the whole of it, so a
+    /// hand-written fragment would be a second and laxer schema.
     fn document() -> Tuning {
-        Tuning::parse(r#"{"constants": {"KNOWN": {"value": 7}}}"#).expect("the document parses")
+        Tuning::parse(include_str!("../../../../../crates/tuning/tuning.json"))
+            .expect("the committed document parses")
     }
 
     /// The defect this file exists to close: a name the document does not declare
@@ -234,10 +220,10 @@ mod tests {
     fn setting_a_declared_constant_writes_it() {
         let mut tuning = document();
         tuning
-            .set_constant("KNOWN", 9)
+            .set_constant("KV_CACHE_PAD", 9)
             .expect("the name is declared");
-        assert_eq!(tuning.constant("KNOWN"), Some(9));
-        assert_eq!(tuning.required_f64("KNOWN"), Ok(9.0));
+        assert_eq!(tuning.constant("KV_CACHE_PAD"), Some(9));
+        assert_eq!(tuning.required_f64("KV_CACHE_PAD"), Ok(9.0));
     }
 
     #[test]

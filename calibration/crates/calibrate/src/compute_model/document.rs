@@ -4,46 +4,9 @@ use std::collections::BTreeMap;
 
 use ananke_config::placement::SplitMode;
 use ananke_estimate::compute_model::{Columns, Scalars};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use ananke_tuning_schema::compute_model::{Entry, Fit, Section};
 
 use crate::compute_model::{Coefficients, Group, Groups, Row, evaluate, fit};
-
-/// The `compute_model` section as `tuning.json` carries it. Named fields and
-/// strict on both sides, so a key this crate stops writing — or one a hand-edit
-/// adds — is a parse error rather than a silently dropped term.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Section {
-    #[serde(rename = "$comment")]
-    pub comment: String,
-    /// The design columns, in the order the coefficients are declared against.
-    pub columns: Vec<String>,
-    pub entries: Vec<Entry>,
-    /// What an architecture nobody has measured falls back to.
-    pub default: Fit,
-}
-
-/// One fitted (runtime, split, architecture) entry.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Entry {
-    pub archs: Vec<String>,
-    pub variant: Option<String>,
-    /// `None` for mainline, so the common case reads as an absent guard rather
-    /// than as a runtime the estimator has to match by name.
-    pub runtime: Option<String>,
-    pub split: String,
-    pub coefficients: BTreeMap<String, f64>,
-    pub evidence: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Fit {
-    pub coefficients: BTreeMap<String, f64>,
-    pub evidence: String,
-}
 
 /// The `compute_model` section for `tuning.json`, and per-group coverage notes.
 ///
@@ -52,7 +15,7 @@ pub struct Fit {
 /// The `default` entry pools every mainline layer-split observation, so an
 /// unmeasured architecture falls back to data rather than to whichever entry
 /// happened to be listed first.
-pub fn document_section(groups: &Groups) -> Result<(Value, Vec<String>), String> {
+pub fn document_section(groups: &Groups) -> Result<(Section, Vec<String>), String> {
     let mut ordered: Vec<(&Group, &[Row])> = groups.iter().collect();
     // Largest group first, then by key. `variant` sorts `None` before `Some`,
     // which only ever decides ties the row counts already separate.
@@ -83,9 +46,6 @@ pub fn document_section(groups: &Groups) -> Result<(Value, Vec<String>), String>
             .count();
         entries.push(Entry {
             archs: vec![key.arch.clone()],
-            variant: key.variant.map(str::to_owned),
-            runtime: (key.runtime != "mainline").then(|| key.runtime.clone()),
-            split: key.split.as_flag().to_owned(),
             coefficients: rounded(&coefficients),
             evidence: format!(
                 "non-negative weighted least squares over {} per-device \
@@ -93,6 +53,9 @@ pub fn document_section(groups: &Groups) -> Result<(Value, Vec<String>), String>
                 points.len(),
                 worst * 100.0
             ),
+            runtime: (key.runtime != "mainline").then(|| key.runtime.clone()),
+            split: key.split.as_flag().to_owned(),
+            variant: key.variant.map(str::to_owned),
         });
         notes.push(format!(
             "{label}: {} rows, {outside} outside +/-5%, worst {:.1}%",
@@ -129,7 +92,6 @@ pub fn document_section(groups: &Groups) -> Result<(Value, Vec<String>), String>
                   does not. Ordered variant-guarded first."
             .to_string(),
         columns: column_names(),
-        entries,
         default: Fit {
             coefficients: rounded(&coefficients),
             evidence: format!(
@@ -139,10 +101,9 @@ pub fn document_section(groups: &Groups) -> Result<(Value, Vec<String>), String>
                 worst * 100.0
             ),
         },
+        entries,
     };
-    serde_json::to_value(section)
-        .map(|value| (value, notes))
-        .map_err(|e| format!("serialising the compute model: {e}"))
+    Ok((section, notes))
 }
 
 /// The column names, in the order `tuning.json` declares them.

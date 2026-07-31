@@ -1,8 +1,8 @@
 [package]
-name = "ananke-tuning"
+name = "ananke-tuning-schema"
 edition.workspace = true
 version.workspace = true
 
-[build-dependencies]
-ananke-tuning-schema.workspace = true
+[dependencies]
+serde.workspace = true
 serde_json.workspace = true

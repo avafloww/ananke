@@ -132,14 +132,12 @@ fn the_pooled_default_reproduces_the_fixture() {
 /// one), the rounding, the `runtime: null` convention for mainline, and the
 /// evidence strings — every part of the section a reader trusts.
 ///
-/// Both sides go through [`Section`], which is `deny_unknown_fields`, so a key
-/// gained or lost on either side fails here rather than being compared as absent.
+/// Both sides are [`Section`], which is `deny_unknown_fields`, so a key gained or
+/// lost on either side fails here rather than being compared as absent.
 #[test]
 fn the_section_matches_the_committed_one() {
     let (groups, fixture) = load();
     let (section, notes) = document_section(&groups).expect("the section builds");
-    let section: Section =
-        serde_json::from_value(section).expect("the emitted section parses strictly");
     assert_eq!(notes, fixture.notes, "the coverage notes diverged");
     assert_eq!(
         section.columns, fixture.section.columns,
