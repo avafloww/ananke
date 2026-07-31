@@ -92,7 +92,6 @@ pub struct CpuSnapshot {
 
 impl DeviceSnapshot {
     pub fn free_bytes(&self, slot: &DeviceSlot) -> Option<u64> {
-        use DeviceSlot;
         match slot {
             DeviceSlot::Cpu => self.cpu.as_ref().map(|c| c.available_bytes),
             DeviceSlot::Gpu(id) => self.gpus.iter().find(|g| g.id == *id).map(|g| g.free_bytes),
@@ -100,7 +99,6 @@ impl DeviceSnapshot {
     }
 
     pub fn total_bytes(&self, slot: &DeviceSlot) -> Option<u64> {
-        use DeviceSlot;
         match slot {
             DeviceSlot::Cpu => self.cpu.as_ref().map(|c| c.total_bytes),
             DeviceSlot::Gpu(id) => self

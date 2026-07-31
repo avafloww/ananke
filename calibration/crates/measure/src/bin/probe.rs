@@ -18,7 +18,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use ananke_measure::harness::{
-    probe::{Options, Question, probe, render},
+    probe::{Options, Question, plan::plan as plan_stages, probe, render},
     sys::Deps,
 };
 use clap::Parser;
@@ -78,7 +78,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let stages = ananke_measure::harness::probe::plan::plan(&questions);
+    let stages = plan_stages(&questions);
     println!(
         "{} server load(s), each a fresh process — the step being hunted happens once",
         stages.len()
