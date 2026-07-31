@@ -24,7 +24,6 @@
 use std::collections::BTreeMap;
 
 use ananke_tuning_schema::{Document, Kind};
-use serde_json::Number;
 
 use crate::{
     derive::{
@@ -273,7 +272,13 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
         if entry.value.as_i64() != Some(derived.value) {
             changed.push(format!("{name}: {} -> {}", entry.value, derived.value));
         }
-        entry.value = Number::from(derived.value);
+        match entry.value.with_derived(derived.value) {
+            Ok(value) => entry.value = value,
+            Err(error) => {
+                failed.push(format!("{name}: {error}"));
+                continue;
+            }
+        }
         entry.evidence = derived.evidence;
         entry.kind = Kind::Derived;
         thread(&mut live, name, derived.value, &mut failed);

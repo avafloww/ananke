@@ -3,7 +3,6 @@
 use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Number;
 
 use crate::{
     compute_model::Section,
@@ -46,75 +45,98 @@ pub struct Document {
 }
 
 /// One scalar constant: the value the estimator compiles in, and its warrant.
+///
+/// Not `deny_unknown_fields`, because serde cannot combine that with the
+/// flattened value. An unrecognised key is instead caught by `emit --check`,
+/// which compares whole documents: a key this drops does not come back out.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Constant {
     pub doc: String,
     pub evidence: String,
     pub kind: Kind,
-    /// The Rust type the generated constant takes.
-    #[serde(rename = "type")]
-    pub ty: Type,
-    /// Kept as a JSON number so an integer does not acquire a decimal point on
-    /// the way back out, which is the difference between `4` and `4.0` in the
-    /// generated source. Read it through [`Constant::typed`], which is the only
-    /// place the declared type and the written number are checked against each
-    /// other.
-    pub value: Number,
+    /// The declared type and the number, as one thing. JSON has a single
+    /// number type, so the tag chooses between `u32` and `u64` and decides
+    /// whether the generated literal carries a decimal point.
+    #[serde(flatten)]
+    pub value: ConstantValue,
 }
 
-/// A constant's value, as the type its entry declares.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A constant's value, tagged with the Rust type the generator emits for it.
+///
+/// Adjacently tagged, which is the `{"type": …, "value": …}` pair the document
+/// already spells. A number that is not its declared type fails to parse.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "lowercase")]
 pub enum ConstantValue {
     U32(u32),
     U64(u64),
     F64(f64),
 }
 
-/// A declared type and a written number that do not agree.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValueMismatch {
-    pub declared: Type,
-    pub written: String,
-}
-
-impl fmt::Display for ValueMismatch {
+impl fmt::Display for ConstantValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "read {} as {}", self.written, self.declared.as_str())
+        match self {
+            Self::U32(v) => write!(f, "{v}"),
+            Self::U64(v) => write!(f, "{v}"),
+            Self::F64(v) => write!(f, "{v}"),
+        }
     }
 }
 
-impl std::error::Error for ValueMismatch {}
+/// A derived number that does not fit the type its constant declares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoesNotFit {
+    pub declared: &'static str,
+    pub value: i64,
+}
 
-impl Constant {
-    /// The value as the type the entry declares, or the disagreement.
+impl fmt::Display for DoesNotFit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "derived {} does not fit {}", self.value, self.declared)
+    }
+}
+
+impl std::error::Error for DoesNotFit {}
+
+impl ConstantValue {
+    /// The number as a float, whatever type it declares. Readers that only
+    /// need its magnitude — a residual, a rate — do not care which it is.
+    pub fn as_f64(self) -> f64 {
+        match self {
+            Self::U32(v) => f64::from(v),
+            Self::U64(v) => v as f64,
+            Self::F64(v) => v,
+        }
+    }
+
+    /// The number, where the declared type is one that holds an integer.
+    pub fn as_i64(self) -> Option<i64> {
+        match self {
+            Self::U32(v) => Some(i64::from(v)),
+            Self::U64(v) => i64::try_from(v).ok(),
+            Self::F64(_) => None,
+        }
+    }
+
+    /// The same declared type, carrying a freshly derived number.
     ///
-    /// JSON has one number type, so `type` is not a restatement of `value`: it
-    /// chooses between `u32` and `u64`, and decides whether the generated
-    /// literal carries a decimal point. Nothing but this checks that the two
-    /// describe the same number.
-    pub fn typed(&self) -> Result<ConstantValue, ValueMismatch> {
-        let mismatch = || ValueMismatch {
-            declared: self.ty,
-            written: self.value.to_string(),
-        };
-        match self.ty {
-            Type::U32 => self
-                .value
-                .as_u64()
-                .and_then(|v| u32::try_from(v).ok())
-                .map(ConstantValue::U32)
-                .ok_or_else(mismatch),
-            Type::U64 => self
-                .value
-                .as_u64()
-                .map(ConstantValue::U64)
-                .ok_or_else(mismatch),
-            Type::F64 => self
-                .value
-                .as_f64()
-                .map(ConstantValue::F64)
-                .ok_or_else(mismatch),
+    /// Keeping the variant is what stops a re-derivation from quietly changing
+    /// the type the generator emits, and range-checks the number against it.
+    pub fn with_derived(self, value: i64) -> Result<Self, DoesNotFit> {
+        let fits = |declared| DoesNotFit { declared, value };
+        match self {
+            Self::U32(_) => u32::try_from(value).map(Self::U32).map_err(|_| fits("u32")),
+            Self::U64(_) => u64::try_from(value).map(Self::U64).map_err(|_| fits("u64")),
+            Self::F64(_) => Ok(Self::F64(value as f64)),
+        }
+    }
+
+    /// The Rust type the generated constant takes.
+    pub fn type_name(self) -> &'static str {
+        match self {
+            Self::U32(_) => "u32",
+            Self::U64(_) => "u64",
+            Self::F64(_) => "f64",
         }
     }
 }
@@ -132,15 +154,6 @@ pub enum Kind {
     /// Measured, but chosen so every model stays inside the rolling
     /// correction's clamp rather than to minimise error.
     Reachable,
-}
-
-/// The type of a generated constant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Type {
-    U32,
-    U64,
-    F64,
 }
 
 impl Document {
@@ -172,46 +185,32 @@ impl Document {
     }
 }
 
-impl Type {
-    /// The type as the generated source spells it.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Type::U32 => "u32",
-            Type::U64 => "u64",
-            Type::F64 => "f64",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Every committed constant's declared type agrees with the number written
-    /// beside it. A disagreement generates Rust that does not compile, which is
-    /// a worse place to find out than here.
+    /// The committed document round-trips byte for byte.
+    ///
+    /// Two things at once. Every constant's declared type agrees with the
+    /// number beside it, or parsing fails. And a key this schema does not model
+    /// would be dropped on the way through and show up as a difference here —
+    /// which is the guarantee `deny_unknown_fields` would give, except that
+    /// serde cannot combine it with the flattened value.
     #[test]
-    fn every_committed_constant_reads_as_the_type_it_declares() {
+    fn the_committed_document_round_trips() {
         let text = include_str!("../../tuning/tuning.json");
         let document: Document = serde_json::from_str(text).expect("the document parses");
-        for (name, constant) in &document.constants {
-            if let Err(error) = constant.typed() {
-                panic!("{name}: {error}");
-            }
-        }
         assert!(!document.constants.is_empty(), "the document has constants");
+        let out = serde_json::to_string_pretty(&document).expect("serialises") + "\n";
+        assert_eq!(out, text, "the document did not survive a round trip");
     }
 
-    /// A float declared as an integer is caught, rather than truncating.
+    /// A number that is not its declared type fails to parse, rather than
+    /// reaching the generator and producing Rust that will not compile.
     #[test]
     fn a_number_that_is_not_its_declared_type_is_refused() {
-        let constant = Constant {
-            doc: String::new(),
-            evidence: String::new(),
-            kind: Kind::Derived,
-            ty: Type::U64,
-            value: serde_json::Number::from_f64(4.5).expect("finite"),
-        };
-        assert!(constant.typed().is_err());
+        let entry = r#"{"doc":"d","evidence":"e","kind":"derived","type":"u64","value":4.5}"#;
+        let error = serde_json::from_str::<Constant>(entry).expect_err("4.5 is not a u64");
+        assert!(error.to_string().contains("u64"), "{error}");
     }
 }

@@ -12,7 +12,6 @@
 use std::{fmt, marker::PhantomData};
 
 use ananke_tuning_schema::{Document, RateTable};
-use serde_json::Number;
 
 use crate::derive::{
     error::DeriveError,
@@ -82,7 +81,12 @@ impl Tuning {
             .ok_or_else(|| UnknownConstant {
                 name: name.to_string(),
             })?;
-        entry.value = Number::from(value);
+        entry.value = entry
+            .value
+            .with_derived(value)
+            .map_err(|error| UnknownConstant {
+                name: format!("{name}: {error}"),
+            })?;
         Ok(())
     }
 
@@ -100,7 +104,7 @@ impl Tuning {
         self.document
             .constants
             .get(name)
-            .and_then(|entry| entry.value.as_f64())
+            .map(|entry| entry.value.as_f64())
     }
 
     /// [`Self::constant_f64`] for the reader whose model is wrong without the

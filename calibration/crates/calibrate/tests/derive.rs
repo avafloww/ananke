@@ -406,11 +406,14 @@ fn emit_ignores_the_derived_values_it_is_given() {
     ];
     let mut poisoned = committed().clone();
     for name in POISONED {
-        poisoned
+        let entry = poisoned
             .constants
             .get_mut(name)
-            .expect("the constant is declared")
-            .value = serde_json::Number::from(999_999_i64);
+            .expect("the constant is declared");
+        entry.value = entry
+            .value
+            .with_derived(999_999)
+            .expect("999999 fits both of these");
     }
     poisoned.ik_moe_rates.default = 999_999;
     poisoned.ik_moe_rates.by_arch.clear();

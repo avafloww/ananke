@@ -44,10 +44,7 @@ fn generate_tuning_constants() {
     for (name, spec) in &document.constants {
         // A float literal has to keep its decimal point to be a float in Rust,
         // and an integer must not gain one.
-        let value = match spec
-            .typed()
-            .unwrap_or_else(|error| panic!("{name}: {error}"))
-        {
+        let value = match spec.value {
             ConstantValue::F64(f) if f.fract() == 0.0 => format!("{f:.1}"),
             ConstantValue::F64(f) => f.to_string(),
             ConstantValue::U32(v) => v.to_string(),
@@ -63,7 +60,7 @@ fn generate_tuning_constants() {
         }
         out.push_str(&format!(
             "pub const {name}: {} = {value};\n\n",
-            spec.ty.as_str()
+            spec.value.type_name()
         ));
     }
 

@@ -21,6 +21,6 @@ mod document;
 mod tables;
 
 pub use crate::{
-    document::{Constant, ConstantValue, Document, Kind, Type, ValueMismatch},
+    document::{Constant, ConstantValue, Document, DoesNotFit, Kind},
     tables::{RateTable, RateTableName, SlotScaling, TableLessObservations},
 };
