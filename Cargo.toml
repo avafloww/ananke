@@ -1,6 +1,34 @@
 [workspace]
-members = ["ananke", "anankectl", "ananke-api", "ananke-calibrate", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-measure", "ananke-placement", "ananke-tuning", "scripts/xtask"]
-default-members = ["ananke", "anankectl", "ananke-api", "ananke-calibrate", "ananke-config", "ananke-estimate", "ananke-fs", "ananke-gguf", "ananke-measure", "ananke-placement", "ananke-tuning"]
+members = [
+    "ananke",
+    "anankectl",
+    "crates/api",
+    "crates/config",
+    "crates/estimate",
+    "crates/fs",
+    "crates/gguf",
+    "crates/placement",
+    "crates/tuning",
+    "calibration/crates/calibrate",
+    "calibration/crates/measure",
+    "xtask",
+]
+# `xtask` is excluded so a bare `cargo build` does not build it. Pass `--workspace`
+# to every check regardless: omitting it drops xtask from linting too, which is how
+# it once accumulated eight unnoticed warnings.
+default-members = [
+    "ananke",
+    "anankectl",
+    "crates/api",
+    "crates/config",
+    "crates/estimate",
+    "crates/fs",
+    "crates/gguf",
+    "crates/placement",
+    "crates/tuning",
+    "calibration/crates/calibrate",
+    "calibration/crates/measure",
+]
 resolver = "2"
 
 [workspace.package]
@@ -9,15 +37,15 @@ version = "0.2.0"
 
 [workspace.dependencies]
 # Internal crates
-ananke-api = { path = "ananke-api" }
-ananke-calibrate = { path = "ananke-calibrate" }
-ananke-config = { path = "ananke-config" }
-ananke-estimate = { path = "ananke-estimate" }
-ananke-fs = { path = "ananke-fs" }
-ananke-gguf = { path = "ananke-gguf" }
-ananke-measure = { path = "ananke-measure" }
-ananke-placement = { path = "ananke-placement" }
-ananke-tuning = { path = "ananke-tuning" }
+ananke-api = { path = "crates/api" }
+ananke-config = { path = "crates/config" }
+ananke-estimate = { path = "crates/estimate" }
+ananke-fs = { path = "crates/fs" }
+ananke-gguf = { path = "crates/gguf" }
+ananke-placement = { path = "crates/placement" }
+ananke-tuning = { path = "crates/tuning" }
+ananke-calibrate = { path = "calibration/crates/calibrate" }
+ananke-measure = { path = "calibration/crates/measure" }
 
 # Async + HTTP
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "process", "time", "fs", "sync"] }

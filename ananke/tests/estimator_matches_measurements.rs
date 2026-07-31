@@ -1,6 +1,6 @@
 //! Check the estimator against the measurement dataset.
 //!
-//! `scripts/calibration/data/measurements.ndjson` records what real
+//! `calibration/data/measurements.ndjson` records what real
 //! `llama-server` processes actually held, on real hardware, across every
 //! model and flag combination the calibration campaign covered. These tests
 //! replay it: each record's `parsed` block carries the model's shape, so a
@@ -526,7 +526,7 @@ fn load() -> Vec<Value> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("workspace root")
-        .join("scripts/calibration/data/measurements.ndjson");
+        .join("calibration/data/measurements.ndjson");
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     raw.lines()
