@@ -110,31 +110,9 @@ impl Default for Factors {
 }
 
 /// Which llama.cpp the cell was measured against. The two forks size the graph
-/// arena by different rules, so the fork is a factor rather than a detail.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Runtime {
-    #[default]
-    Mainline,
-    Ik,
-}
-
-impl Runtime {
-    /// How the fork is spelled in the record, in a cell's label, and in every
-    /// report keyed on it — deliberately the same word in all three.
-    pub fn name(self) -> &'static str {
-        match self {
-            Runtime::Mainline => "mainline",
-            Runtime::Ik => "ik",
-        }
-    }
-}
-
-impl fmt::Display for Runtime {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.name())
-    }
-}
+/// arena by different rules, so the fork is a factor rather than a detail — and
+/// the same fork marker the daemon's runtime config carries.
+pub use ananke_config::runtime::Runtime;
 
 /// What `-fa` was set to, which decides whether the attention pass is fused.
 ///

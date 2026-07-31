@@ -18,8 +18,8 @@ pub use validate::{
     AllocationMode, AutoRestartSettings, CommandConfig, DaemonSettings, DeviceReserves, DeviceSlot,
     EffectiveConfig, ErrorRateTrigger, ErrorStatusClass, Filters, GenerationStallTrigger,
     HealthSettings, IkSettings, Lifecycle, LlamaCppConfig, NumaStrategy, OffloadMode, PeriodicMode,
-    PeriodicTrigger, PlacementPolicy, Runtime, ServiceConfig, SpecCollapseTrigger, SplitMode,
-    Template, TemplateConfig, TrackingSettings, TtftStallTrigger, validate,
+    PeriodicTrigger, PlacementPolicy, Runtime, RuntimeConfig, ServiceConfig, SpecCollapseTrigger,
+    SplitMode, Template, TemplateConfig, TrackingSettings, TtftStallTrigger, validate,
 };
 
 /// Load, parse, merge, validate, and preflight a config file from disk.

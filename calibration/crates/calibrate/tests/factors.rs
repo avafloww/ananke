@@ -233,8 +233,8 @@ fn the_thread_count_does_not_move_the_arena() {
         let Some(threads) = thread_count(&record.factors.label) else {
             continue;
         };
-        let arena = record.parsed.arena_mib;
-        if arena <= 0.0 {
+        let arena_mib = record.parsed.arena_mib;
+        if arena_mib <= 0.0 {
             continue;
         }
         sweeps
@@ -244,7 +244,7 @@ fn the_thread_count_does_not_move_the_arena() {
                 record.factors.ubatch,
             ))
             .or_default()
-            .push((threads, arena));
+            .push(ArenaAt { threads, arena_mib });
     }
 
     let comparable: Vec<_> = sweeps
@@ -259,17 +259,17 @@ fn the_thread_count_does_not_move_the_arena() {
         sweeps.keys().collect::<Vec<_>>()
     );
     for ((model, ctx, ubatch), points) in comparable {
-        let counts: BTreeSet<u32> = points.iter().map(|(threads, _)| *threads).collect();
+        let counts: BTreeSet<u32> = points.iter().map(|point| point.threads).collect();
         assert!(
             counts.len() >= 2,
             "{model} ctx {ctx} ub {ubatch}: the same thread count repeated is not a \
              sweep, got {points:?}"
         );
-        let first = points[0].1;
-        for (threads, arena) in points {
+        let first = points[0].arena_mib;
+        for &ArenaAt { threads, arena_mib } in points {
             assert!(
-                (arena - first).abs() < 0.01,
-                "{model} ctx {ctx} ub {ubatch}: the arena moved to {arena} MiB at \
+                (arena_mib - first).abs() < 0.01,
+                "{model} ctx {ctx} ub {ubatch}: the arena moved to {arena_mib} MiB at \
                  {threads} threads, from {first} — the thread count is not the inert \
                  factor this claims"
             );
@@ -281,8 +281,13 @@ fn the_thread_count_does_not_move_the_arena() {
 /// context, and the micro-batch.
 type Configuration<'a> = (&'a str, u32, u32);
 
-/// A thread count and the arena measured at it, in MiB.
-type ArenaAt = (u32, f64);
+/// A thread count and the arena measured at it.
+#[derive(Debug, Clone, Copy)]
+struct ArenaAt {
+    threads: u32,
+    /// The graph arena at that thread count, in MiB.
+    arena_mib: f64,
+}
 
 /// The thread count a sweep cell's label ends in.
 fn thread_count(label: &str) -> Option<u32> {

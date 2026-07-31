@@ -12,7 +12,7 @@ use crate::config::{
     parse::{EstimationConfig, SamplingConfig},
     validate::{
         AllocationMode, AutoRestartSettings, DeviceReserves, DeviceSlot, Filters, HealthSettings,
-        Lifecycle, NumaStrategy, OffloadMode, PlacementPolicy, Runtime, SplitMode, Template,
+        Lifecycle, NumaStrategy, OffloadMode, PlacementPolicy, RuntimeConfig, SplitMode, Template,
         TrackingSettings,
     },
 };
@@ -161,8 +161,8 @@ impl TemplateConfig {
 #[derive(Debug, Clone)]
 pub struct LlamaCppConfig {
     /// Serving runtime (mainline vs ik_llama.cpp fork with its
-    /// validated knobs). See [`Runtime`].
-    pub runtime: Runtime,
+    /// validated knobs). See [`RuntimeConfig`].
+    pub runtime: RuntimeConfig,
     pub model: PathBuf,
     pub mmproj: Option<PathBuf>,
     pub context: Option<u32>,

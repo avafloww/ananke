@@ -16,7 +16,7 @@ directories do not.
 | `ananke-gguf` | `crates/gguf` | the GGUF reader, including sharded models; `dump-gguf` | `ananke-fs` |
 | `ananke-tuning-schema` | `crates/tuning-schema` | the type of `tuning.json`, shared by everything that reads or writes it | `serde` |
 | `ananke-tuning` | `crates/tuning` | `tuning.json` and the build script that turns it into constants | `ananke-tuning-schema` (build) |
-| `ananke-config` | `crates/config` | config defaults, the descriptor table the docs are generated from, and the placement vocabulary (`SplitMode`, `DeviceSlot`) | — |
+| `ananke-config` | `crates/config` | config defaults, the descriptor table the docs are generated from, and the placement vocabulary (`SplitMode`, `DeviceSlot`), and the fork marker (`Runtime`) | — |
 | `ananke-estimate` | `crates/estimate` | the VRAM estimator and the design-column contract the fitter shares | the four above |
 | `ananke-placement` | `crates/placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate` |
 | `ananke-api` | `crates/api` | the DTOs that cross the wire to the frontend | — |

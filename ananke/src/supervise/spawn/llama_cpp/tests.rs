@@ -51,7 +51,7 @@ fn renders_core_flags() {
 
 #[test]
 fn renders_ik_runtime_flags() {
-    use crate::config::{IkSettings, Runtime};
+    use crate::config::{IkSettings, RuntimeConfig};
     let mut svc = base_service();
     let mut placement = BTreeMap::new();
     placement.insert(DeviceSlot::Gpu(0), 24576);
@@ -59,7 +59,7 @@ fn renders_ik_runtime_flags() {
     svc.placement_override = placement;
     {
         let lc = expect_llama_cpp(&mut svc);
-        lc.runtime = Runtime::IkLlama(IkSettings {
+        lc.runtime = RuntimeConfig::Ik(IkSettings {
             mla: Some(1),
             dsa: true,
             attn_max_batch: Some(512),

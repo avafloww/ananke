@@ -59,7 +59,7 @@ pub(crate) use port_pool::{PrivatePortAllocator, PrivatePortRange};
 pub(crate) use restart_triggers::{
     validate_error_rate, validate_generation_stall, validate_spec_collapse, validate_ttft_stall,
 };
-pub use runtime::{IkSettings, NumaStrategy, OffloadMode, Runtime};
+pub use runtime::{IkSettings, NumaStrategy, OffloadMode, Runtime, RuntimeConfig};
 pub(crate) use service_validation::validate_service;
 pub use split_mode::SplitMode;
 pub use tracking::TrackingSettings;
