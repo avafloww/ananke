@@ -88,7 +88,7 @@ pub struct SlotScaling {
 /// hand-held value's justification cannot go stale.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ObservationTable {
+pub struct TableLessObservations {
     #[serde(rename = "$comment")]
     pub comment: String,
     pub by_arch: BTreeMap<String, BTreeMap<String, i64>>,

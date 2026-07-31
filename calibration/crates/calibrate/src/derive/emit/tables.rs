@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeMap, fmt};
 
-use ananke_tuning_schema::{Document, ObservationTable, RateTable, SlotScaling};
+use ananke_tuning_schema::{Document, RateTable, SlotScaling, TableLessObservations};
 
 use crate::derive::{
     NestedTable, Table,
@@ -102,7 +102,7 @@ pub(super) fn write_tables(document: &mut Document, tables: Tables<'_>) {
         );
     }
     if let Some(table) = tables.table_less {
-        document.table_less_compute_observations = ObservationTable {
+        document.table_less_compute_observations = TableLessObservations {
             comment: "Per-device `compute + unaccounted` for architectures whose \
                       runtime prints no memory-breakdown table, recovered from the \
                       driver total less the weights and the context. Recorded, not \

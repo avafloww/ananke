@@ -7,7 +7,7 @@ use serde_json::Number;
 
 use crate::{
     compute_model::Section,
-    tables::{ObservationTable, RateTable, RateTableName, SlotScaling},
+    tables::{RateTable, RateTableName, SlotScaling, TableLessObservations},
 };
 
 /// `tuning.json`, whole.
@@ -41,7 +41,7 @@ pub struct Document {
     pub no_flash_attn_score_centibytes: RateTable,
     pub per_slot_host_bytes: RateTable,
     pub quantised_cache_rates: RateTable,
-    pub table_less_compute_observations: ObservationTable,
+    pub table_less_compute_observations: TableLessObservations,
     pub tensor_split_baseline: RateTable,
 }
 

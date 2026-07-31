@@ -24,7 +24,7 @@
 
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::IgnoredAny};
 
 use crate::{
     harness::{
@@ -68,7 +68,7 @@ pub(crate) fn exercise(
         vec!["word"; factors.probe_prompt_tokens as usize].join(" ")
     };
     let warmup = [message(Role::User, &prompt)];
-    post_json::<_, serde_json::Value>(
+    post_json::<_, IgnoredAny>(
         deps.http.as_ref(),
         port,
         "/v1/chat/completions",
@@ -94,7 +94,7 @@ pub(crate) fn exercise(
                 let http = deps.http.clone();
                 let request = &request;
                 scope.spawn(move || {
-                    post_json::<_, serde_json::Value>(
+                    post_json::<_, IgnoredAny>(
                         http.as_ref(),
                         port,
                         "/v1/chat/completions",
@@ -123,7 +123,7 @@ fn embeddings(deps: &Deps, factors: &Factors, port: u16, pid: u32) -> Vec<Checkp
     let mut checkpoints = Vec::new();
     for round in 0..rounds {
         let input = format!("calibration probe {round} {}", "token ".repeat(64));
-        post_json::<_, serde_json::Value>(
+        post_json::<_, IgnoredAny>(
             deps.http.as_ref(),
             port,
             "/v1/embeddings",
