@@ -342,6 +342,14 @@ mod tests {
         record::RssSnapshot,
     };
 
+    /// A recorded request body, as JSON, for an assertion that wants one field.
+    /// The request type borrows its messages, so it cannot be deserialised
+    /// owned — and a test checking a single key does not need it to be.
+    fn sent(fakes: &Fakes, index: usize) -> serde_json::Value {
+        let requests = fakes.http.requests();
+        serde_json::from_str(&requests[index].1).expect("the body is JSON")
+    }
+
     fn reply(prompt_tokens: u64, completion_tokens: u64) -> serde_json::Value {
         serde_json::json!({
             "choices": [{"message": {"content": "here is some code"}}],
@@ -383,11 +391,12 @@ mod tests {
         let requests = fakes.http.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].0, "/v1/chat/completions");
+        let first = sent(&fakes, 0);
         assert_eq!(
-            requests[0].1["messages"][0]["content"],
+            first["messages"][0]["content"],
             serde_json::json!("Count to twenty.")
         );
-        assert_eq!(requests[0].1["max_tokens"], serde_json::json!(64));
+        assert_eq!(first["max_tokens"], serde_json::json!(64));
     }
 
     #[test]
@@ -399,7 +408,7 @@ mod tests {
         };
         let mut watchdog = SwapWatchdog::start(fakes.procfs.as_ref(), 4.0);
         exercise(&fakes.deps(), &factors, 18099, 1, &mut watchdog);
-        let prompt = fakes.http.requests()[0].1["messages"][0]["content"]
+        let prompt = sent(&fakes, 0)["messages"][0]["content"]
             .as_str()
             .expect("the prompt is a string")
             .to_owned();
@@ -426,9 +435,8 @@ mod tests {
         // conversation so far: system, then user/assistant per completed turn.
         let requests = fakes.http.requests();
         assert_eq!(requests.len(), 4);
-        let last = requests[3].1["messages"]
-            .as_array()
-            .expect("messages is a list");
+        let fourth = sent(&fakes, 3);
+        let last = fourth["messages"].as_array().expect("messages is a list");
         assert_eq!(last.len(), 1 + 2 * 2 + 1);
         assert_eq!(last[2]["role"], serde_json::json!("assistant"));
     }

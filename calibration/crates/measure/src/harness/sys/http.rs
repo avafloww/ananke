@@ -36,13 +36,7 @@ pub trait Http: Send + Sync {
     /// go through [`post_json`] instead. This stays `Value`-shaped because
     /// `Deps` holds `Http` as `Arc<dyn Http>`, and a generic method would make
     /// the trait non-object-safe.
-    fn post(
-        &self,
-        port: u16,
-        path: &str,
-        body: &serde_json::Value,
-        timeout: Duration,
-    ) -> Option<serde_json::Value>;
+    fn post(&self, port: u16, path: &str, body: &str, timeout: Duration) -> Option<String>;
 }
 
 /// Serialize `body`, `POST` it, and decode the reply as `Res` — the typed
@@ -59,9 +53,9 @@ pub fn post_json<Req: Serialize, Res: DeserializeOwned>(
     body: &Req,
     timeout: Duration,
 ) -> Option<Res> {
-    let body = serde_json::to_value(body).ok()?;
+    let body = serde_json::to_string(body).ok()?;
     let reply = http.post(port, path, &body, timeout)?;
-    serde_json::from_value(reply).ok()
+    serde_json::from_str(&reply).ok()
 }
 
 pub struct LoopbackHttp;
@@ -89,17 +83,10 @@ impl Http for LoopbackHttp {
             .is_some_and(|response| response.status == 200)
     }
 
-    fn post(
-        &self,
-        port: u16,
-        path: &str,
-        body: &serde_json::Value,
-        timeout: Duration,
-    ) -> Option<serde_json::Value> {
+    fn post(&self, port: u16, path: &str, body: &str, timeout: Duration) -> Option<String> {
         // A failed probe still leaves the process measurable, so a refusal or a
         // timeout is `None` rather than an error that ends the cell.
-        let response = request(port, "POST", path, Some(&body.to_string()), timeout)?;
-        serde_json::from_str(&response.body).ok()
+        request(port, "POST", path, Some(body), timeout).map(|response| response.body)
     }
 }
 
@@ -191,11 +178,10 @@ fn dechunk(body: &str) -> String {
 /// A server that is whatever a test says: busy or free, loading for a scripted
 /// number of polls, and replying with canned bodies.
 ///
-/// Recorded requests and canned replies stay `serde_json::Value`: `FakeHttp`
-/// implements the same `Value`-shaped [`Http::post`] every real transport
-/// does, so a fake for that seam legitimately stores the wire form rather
-/// than a caller's typed request or response. This is not the `Value` cluster
-/// [`post_json`] exists to remove.
+/// Requests are recorded as the bodies they were sent as, which is what the
+/// seam carries. A test that wants to assert on one deserialises it into the
+/// type it expects the caller to have sent — a stronger check than indexing a
+/// key, since it also proves the body parses as that type.
 #[cfg(any(test, feature = "test-fakes"))]
 pub struct FakeHttp {
     inner: parking_lot::Mutex<FakeHttpState>,
@@ -208,8 +194,8 @@ struct FakeHttpState {
     /// How many `/health` polls come back unhealthy before the server answers.
     unhealthy_polls: u32,
     polls: u32,
-    replies: std::collections::VecDeque<serde_json::Value>,
-    requests: Vec<(String, serde_json::Value)>,
+    replies: std::collections::VecDeque<String>,
+    requests: Vec<(String, String)>,
 }
 
 #[cfg(any(test, feature = "test-fakes"))]
@@ -250,15 +236,24 @@ impl FakeHttp {
         self
     }
 
-    pub fn with_reply(self, reply: serde_json::Value) -> Self {
-        self.inner.lock().replies.push_back(reply);
+    /// Script a reply. Takes anything serialisable so a test can hand over the
+    /// response type the caller will parse, rather than spelling its JSON.
+    pub fn with_reply(self, reply: impl serde::Serialize) -> Self {
+        let body = serde_json::to_string(&reply).expect("the scripted reply serialises");
+        self.inner.lock().replies.push_back(body);
         self
     }
 
-    /// Every request made, so an assertion can check what the probe actually
-    /// asked for.
-    pub fn requests(&self) -> Vec<(String, serde_json::Value)> {
+    /// Every request made, as the body it was sent as.
+    pub fn requests(&self) -> Vec<(String, String)> {
         self.inner.lock().requests.clone()
+    }
+
+    /// The nth request, parsed as the type the caller should have sent.
+    pub fn request_as<T: serde::de::DeserializeOwned>(&self, index: usize) -> Option<T> {
+        let state = self.inner.lock();
+        let (_, body) = state.requests.get(index)?;
+        serde_json::from_str(body).ok()
     }
 }
 
@@ -274,15 +269,9 @@ impl Http for FakeHttp {
         state.polls > state.unhealthy_polls
     }
 
-    fn post(
-        &self,
-        _port: u16,
-        path: &str,
-        body: &serde_json::Value,
-        _timeout: Duration,
-    ) -> Option<serde_json::Value> {
+    fn post(&self, _port: u16, path: &str, body: &str, _timeout: Duration) -> Option<String> {
         let mut state = self.inner.lock();
-        state.requests.push((path.to_owned(), body.clone()));
+        state.requests.push((path.to_owned(), body.to_owned()));
         // The last scripted reply repeats, so a soak of forty turns does not
         // need forty entries.
         match state.replies.len() {
