@@ -1,7 +1,7 @@
 //! Deriving the estimator's tuned constants from the measurement dataset.
 //!
 //! One function per constant, each a reduction over the record list, plus
-//! `emit` to write `ananke-tuning/tuning.json` and `emit_check` to verify the
+//! `emit` to write `crates/tuning/tuning.json` and `emit_check` to verify the
 //! committed one still matches the data.
 //!
 //! Two rules run through all of it, and both were learned by getting them wrong.

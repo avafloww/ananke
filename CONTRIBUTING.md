@@ -7,21 +7,37 @@ The repository contains two main components:
 
 Both components share the general conventions below. The Rust- and TypeScript-specific sections that follow apply to their respective trees.
 
-The backend's crates, leaves first:
+The backend's crates, leaves first. Package names keep the `ananke-` prefix; the
+directories do not.
 
-| crate | holds | depends on |
-|---|---|---|
-| `ananke-fs` | the `Fs` trait with its local and in-memory implementations | `parking_lot` |
-| `ananke-gguf` | the GGUF reader, including sharded models; `dump-gguf` | `ananke-fs` |
-| `ananke-tuning` | `tuning.json` and the build script that turns it into constants | — |
-| `ananke-config` | config defaults, the descriptor table the docs are generated from, and the placement vocabulary (`SplitMode`, `DeviceSlot`) | — |
-| `ananke-estimate` | the VRAM estimator and the design-column contract the fitter shares | the four above |
-| `ananke-placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate` |
-| `ananke-measure` | the measurement harness, its log parser, and the NDJSON record schema | `serde`, `regex`, `nix` |
-| `ananke-calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-measure`, `ananke-estimate`, `ananke-placement` |
-| `ananke-api` | the DTOs that cross the wire to the frontend | — |
-| `ananke` | the daemon: supervision, scheduling, HTTP surface, the NVML probe | all of the above |
-| `anankectl` | the CLI | `ananke-api` |
+| crate | path | holds | depends on |
+|---|---|---|---|
+| `ananke-fs` | `crates/fs` | the `Fs` trait with its local and in-memory implementations | `parking_lot` |
+| `ananke-gguf` | `crates/gguf` | the GGUF reader, including sharded models; `dump-gguf` | `ananke-fs` |
+| `ananke-tuning` | `crates/tuning` | `tuning.json` and the build script that turns it into constants | — |
+| `ananke-config` | `crates/config` | config defaults, the descriptor table the docs are generated from, and the placement vocabulary (`SplitMode`, `DeviceSlot`) | — |
+| `ananke-estimate` | `crates/estimate` | the VRAM estimator and the design-column contract the fitter shares | the four above |
+| `ananke-placement` | `crates/placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate` |
+| `ananke-api` | `crates/api` | the DTOs that cross the wire to the frontend | — |
+| `ananke` | `ananke` | the daemon: supervision, scheduling, HTTP surface, the NVML probe | all of the above |
+| `anankectl` | `anankectl` | the CLI | `ananke-api` |
+
+Two more live under `calibration/crates/`, because nothing shipped links them —
+see [`calibration/README.md`](calibration/README.md):
+
+| crate | path | holds | depends on |
+|---|---|---|---|
+| `ananke-measure` | `calibration/crates/measure` | the measurement harness, its log parser, and the NDJSON record schema | `serde`, `regex`, `nix` |
+| `ananke-calibrate` | `calibration/crates/calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-measure`, `ananke-estimate`, `ananke-placement` |
+
+That boundary is the useful one to hold in mind: `crates/tuning/tuning.json` is the
+entire interface between the two halves. Delete `calibration/` and the daemon still
+builds, runs, and estimates — what is lost is the ability to re-derive that file and
+the evidence for why each number in it is what it is. The arrow only points inward:
+`ananke-calibrate` runs the real estimator and packer in-process, which is what makes
+`validate` and `scoreboard` mean anything, but nothing shipped links back.
+
+`xtask` sits at the root beside the products it builds.
 
 The split is for compile times as much as for structure. `ananke`'s build script
 runs the frontend's `npm run build`, so anything sharing that script pays for a
@@ -42,27 +58,29 @@ estimation side ever links a process spawner.
 
 ### Calibration
 
-The tuned constants are derived from the measurement dataset, not chosen:
+The tuned constants in `crates/tuning/tuning.json` are derived from a measurement
+dataset, not chosen. Every one carries its evidence in its own doc comment, and CI
+regenerates the document and compares, so a value cannot drift from the data that
+justifies it without the drift showing up as a diff.
 
-```sh
-cargo run -p ananke-calibrate --bin fit              # refit the compute model
-cargo run -p ananke-calibrate --bin fit -- --check   # CI gate: does the fit still follow?
-cargo run -p ananke-calibrate --bin emit             # regenerate every other constant
-cargo run -p ananke-calibrate --bin emit -- --check  # CI gate: do they still follow from the data?
-cargo run -p ananke-calibrate --bin validate         # every comparable cell, predicted against measured
-cargo run -p ananke-calibrate --bin scoreboard       # the production models
-```
+**[`calibration/README.md`](calibration/README.md) is the workflow** — how to add a
+model, run the campaign, refit, and decide whether to trust the result. It is the
+single source of truth for the loop; what follows is why the code is arranged the
+way it is, which is a separate question from how to run it.
 
-`fit` before `emit`: the compute model is the one section `emit` does not write —
-it carries the committed one through, which is what lets the derivers be checked on
-their own — and several derivers reduce a residual taken over that model, so a
-refit moves the constants resting on it.
+The nine binaries split three ways. `plan` and `campaign` schedule and drive the
+measurement; `fit` and `emit` turn the dataset into constants; `coverage`,
+`validate`, `scoreboard`, `crossval`, and `estimates` say whether the result is
+worth shipping. Only the first four produce anything, and only `fit --check`,
+`emit --check`, and `coverage --check` gate the build.
 
-```sh
-cargo run -p ananke-calibrate --bin coverage -- --check  # is any regime measured at one point?
-cargo run -p ananke-calibrate --bin estimates            # every model's estimate, broken down
-cargo run -p ananke-calibrate --bin crossval             # how well does each constant generalise?
-```
+`fit` and `emit` are separate operations in a fixed order: `emit` first, then
+`fit`. `emit` derives `MAINLINE_LAYER_SPLIT_MASK_COPIES`, which `fit` reads to
+normalise its design rows; nothing `emit` derives reads the fitted model back. Both
+read `tuning.json` at runtime rather than the constants compiled from it, so the
+order is the only requirement — no rebuild in the middle, and no iteration. Two
+gates rather than one because they fail for different reasons, and which half moved
+is the first thing you want to know.
 
 `validate` and `scoreboard` are **in-sample**. Every `ok` row feeds the fit,
 including the `holdout` question's — deliberately, since three of the four `mmproj`
@@ -78,8 +96,8 @@ held out in turn, `SPEC_RECURRENT_ROLLBACK_DEPTH` likewise, `PROCESS_BASE_BYTES_
 within 1.2% — while the terms resting on one or two models do not, `MMPROJ_GRAPH_BYTES`
 worst at 77%. Four constants cannot be cross-validated at all, because removing
 their single supporting model leaves nothing to fit; they are model-specific fits
-wearing an architecture constant's name, which `PLAN.md` predicted and the tool now
-names.
+wearing an architecture constant's name, which `calibration/docs/plan.md` predicted
+and the tool now names.
 
 Read its percentages against the absolute column beside them. That 77% is 108 MiB
 on an estimate of ~44 GiB, and the constant is charged flat at the worst of its two
@@ -88,89 +106,13 @@ not its estimate's error. It is not a CI gate for that reason — `--check` exis
 but a threshold that passes today would be measuring the campaign's model coverage
 rather than the estimator's quality.
 
-The whole loop is Rust: the sweep generator, the harness, the driver, the
-derivers, and the gates. Each piece is pinned to what the campaign recorded rather
-than to its own output — 31 derive tests against `tuning.json`, 604 archived logs
-against the parses taken from them at the time, a fitter fixture, and the plan
-schedule as a captured fixture. A change to any of them has to say what it changed
-and why, because the committed artefact disagrees first.
+Each piece is pinned to what the campaign recorded rather than to its own output —
+31 derive tests against `tuning.json`, 604 archived logs against the parses taken
+from them at the time, a fitter fixture, and the plan schedule as a captured
+fixture. A change to any of them has to say what it changed and why, because the
+committed artefact disagrees first.
 
-The **harness** is Rust too, as `ananke-measure`'s `measure` binary. It spawns
-llama-server with a cell's flags, waits for `/health`, probes it, samples
-`/proc/<pid>/status` and `nvidia-smi` on the daemon's own two-second cadence, and
-appends one NDJSON record; it also holds the two maintenance passes over an
-existing dataset.
-
-```sh
-cargo run -p ananke-measure --bin measure -- --plan plan.json --out data/measurements.ndjson
-cargo run -p ananke-measure --bin measure -- --out data/measurements.ndjson --reparse
-cargo run -p ananke-measure --bin measure -- --out data/measurements.ndjson --retire-stale-builds
-```
-
-Both passes rewrite only the lines they change, which makes them checkable against
-the checked-in campaign: `--reparse` over it is a byte-for-byte no-op (the parser
-already reproduces all 604 recorded blocks), and `--retire-stale-builds` reselects
-exactly the 14 rows the campaign retired. Two operational hazards shape its
-defaults: the pre-flight fit gate weighs the *model file*, which over-charges a
-heavily expert-offloaded cell (GLM-5.2's file is 205 GiB and its process peaks at
-187), so it stays a `--force` away rather than being loosened; and the swap watchdog
-is always on, because a hybrid that overcommits thrashes the box rather than failing
-cleanly, and it tripped twice on GLM.
-
-The **sweep generator** is Rust as well, as `ananke-calibrate`'s `plan` binary:
-
-```sh
-cargo run -p ananke-calibrate --bin plan -- curves    # one question's cells
-cargo run -p ananke-calibrate --bin plan -- all       # every question, disturbance-ordered
-```
-
-It emits `ananke_measure::record::Factors` — the same type the harness's `--plan`
-reader deserializes, so the two halves cannot drift in the way a shared JSON shape
-would. All 22 questions and the merged `all` schedule are held against a captured
-fixture. A cell's identity is structural equality over the whole factor set with
-only the label and purpose blanked, rather than a hash of its non-default fields:
-there is no field list for a factor to go missing from, which is the failure this
-campaign hit four times.
-
-The sort key carries no `thp` term — that factor was removed when the build turned
-out to reject `--use-thp`. `data/plan.json` is a regenerated capture of `plan all`;
-regenerate it rather than hand-editing it, since the harness's reader rejects an
-unknown field by name rather than dropping it.
-
-Re-running the whole campaign from nothing therefore takes: `plan` for the
-schedule, `campaign` to drive `measure` over it, then `fit` and `emit` to turn the
-dataset back into constants, with `coverage`, `validate`, `scoreboard`, and
-`crossval` to say whether the result is worth trusting.
-
-The **driver** is `ananke-calibrate`'s `campaign` binary, with `progress` reading
-the dataset alongside it:
-
-```sh
-cargo run -p ananke-calibrate --bin campaign                # every cell, cheapest order
-cargo run -p ananke-calibrate --bin campaign -- --dry-run   # print the schedule and stop
-cargo run -p ananke-calibrate --bin campaign -- --only laguna
-cargo run -p ananke-calibrate --bin progress -- --watch     # how far it has got
-```
-
-The campaign owns the loop and the harness reports each cell as it finishes, so a
-data commit lands only at a cell boundary, where there is no half-written line. A
-committer polling from a second process is simpler and is what this replaces, but it
-can land a commit mid-append. Measurement still knows nothing about version control:
-the harness has no idea git exists, and `campaign::git` is the only place the two
-meet. Commits stay scoped to the data paths, so an overnight run cannot sweep up
-whatever else happens to be staged.
-
-`progress` keys on **cell identity** rather than filenames. Globbing for
-`data/<phase>.ndjson` is the arrangement it replaces: the campaign stopped writing
-those files when it consolidated to one dataset, and the phase names had stopped
-being questions, so every row read `0/?` against 643 records and nothing noticed
-because nothing checked. There is now a test asserting the real dataset reports real
-progress.
-
-`probe_host_growth.py` sits alongside as a standalone diagnostic, separating a
-one-off allocation from one that accumulates with use.
-
-The harness does not reuse the daemon's `system::ProcessSpawner`, deliberately.
+The **harness** deliberately does not reuse the daemon's `system::ProcessSpawner`.
 That trait is async and coupled to the supervisor's `SpawnConfig` — built for
 long-lived supervised children with pdeathsig and log capture. The harness spawns
 one process, waits for it to load, samples, and kills it. Its own small synchronous
@@ -186,7 +128,8 @@ ordering — a cell is reported once, after its row is on disk — and an orderi
 only worth stating if something checks it. `campaign::run_with` runs the whole
 driver against the in-memory world for that reason. Splitting the driver across two
 processes would put that seam beyond the reach of any test, which is exactly where
-a mid-append commit comes from.
+a mid-append commit comes from. Commits stay scoped to the data paths, so an
+overnight run cannot sweep up whatever else happens to be staged.
 
 One rule for anything added here. Where a derivation pairs two cells, or reads a
 config, the key must pin **every** factor that could differ, and the reader should
@@ -300,7 +243,7 @@ Today the shared DTOs live in the `ananke-api` crate (hand-written, consumed by 
 - Always use the Oxford comma.
 - Don't omit articles ("a", "an", "the"). Write "the file has a newer version" not "file has newer version".
 - Comments describe the present state. Reserve past-tense narration for the rare case where history explains a standing "why".
-- Keep the user-facing docs in sync with code changes. The source of truth for config defaults is the `DEFAULT_*` constants in `ananke-config/src/docs.rs` and `ananke-config/src/defaults.rs`; the source of truth for config struct fields is `ananke/src/config/parse.rs` and `ananke/src/config/validate.rs`. When you add, remove, rename, or change the default of a config field, update the descriptor table in `ananke_config::docs::all_sections()` and run `cargo xtask gen-config-docs` to regenerate `docs/configuration.md`. CI enforces this with `--check`. Likewise, changes to service states or the management/OpenAI API surface should be reflected in `docs/api.md` (run `cargo xtask gen-api-docs` to regenerate). Treat a code change that touches these areas as incomplete until the docs are updated.
+- Keep the user-facing docs in sync with code changes. The source of truth for config defaults is the `DEFAULT_*` constants in `crates/config/src/docs.rs` and `crates/config/src/defaults.rs`; the source of truth for config struct fields is `ananke/src/config/parse.rs` and `ananke/src/config/validate.rs`. When you add, remove, rename, or change the default of a config field, update the descriptor table in `ananke_config::docs::all_sections()` and run `cargo xtask gen-config-docs` to regenerate `docs/configuration.md`. CI enforces this with `--check`. Likewise, changes to service states or the management/OpenAI API surface should be reflected in `docs/api.md` (run `cargo xtask gen-api-docs` to regenerate). Treat a code change that touches these areas as incomplete until the docs are updated.
 
 ### Code organization
 
@@ -437,13 +380,13 @@ When a new model family ships with a `general.architecture` value that ananke do
 
    The output shows the architecture name, block count, tensor categories, and every attention-related metadata key. This is the ground truth for what the estimator needs to read.
 
-2. **Choose the right family module.** The estimator dispatches on `general.architecture` through the family modules in `ananke/src/estimator/`. Each module's `*_FAMILY` constant lists the architectures it covers, and the module docs and per-entry comments describe the tensor layouts and metadata quirks already handled. Read those alongside the dump from step 1, and pick the module whose expectations the new architecture's tensors and metadata actually match — the existing entries are worked examples of what "matching" looks like.
+2. **Choose the right family module.** The estimator dispatches on `general.architecture` through the family modules in `crates/estimate/src/`. Each module's `*_FAMILY` constant lists the architectures it covers, and the module docs and per-entry comments describe the tensor layouts and metadata quirks already handled. Read those alongside the dump from step 1, and pick the module whose expectations the new architecture's tensors and metadata actually match — the existing entries are worked examples of what "matching" looks like.
 
 3. **Register and test.**
 
    a. Add the architecture name to the chosen family's `*_FAMILY` constant, with a comment describing the quirks it brings.
 
-   b. If the architecture needs a custom compute-buffer tuning curve, add a match arm in `ananke/src/estimator/compute_buffer.rs::tuning_for()`. The formula is `base + slope * (ctx / 1024)` MiB per device. Derive the curve like this:
+   b. If the architecture needs a custom compute-buffer tuning curve, add a match arm in `crates/estimate/src/compute_buffer.rs::tuning_for()`. The formula is `base + slope * (ctx / 1024)` MiB per device. Derive the curve like this:
 
    - Sweep `llama-server -m <model> -c <ctx> -ngl 99` over a few context lengths, pinning one card with `CUDA_VISIBLE_DEVICES=0`. For an embedding model, add `--embeddings` (the modality implies the same flag in production); the calibration is otherwise identical.
    - Read each run's process VRAM from `nvidia-smi --query-compute-apps=pid,used_memory`. Match the row to the server's actual pid and wait for each server to fully exit before the next run — a leftover server silently wins the port bind and you measure the same process at every "ctx".
@@ -461,7 +404,7 @@ When a new model family ships with a `general.architecture` value that ananke do
 ### Host-side memory
 
 The GPU compute-buffer curves above describe VRAM. The host side is modelled
-separately in `ananke/src/estimator/host_buffer.rs`, and the two are not
+separately in `crates/estimate/src/host_buffer.rs`, and the two are not
 interchangeable — for a long time the `Cpu` slot was charged the GPU-calibrated
 `compute_buffer_mb`, a number derived entirely from `nvidia-smi` readings and
 never measured against a host backend.
@@ -584,7 +527,7 @@ over-reservation.
 
 When a service sets `spec_type = "draft-mtp"`, llama.cpp enables multi-token-prediction speculative decoding. For models that ship an embedded MTP head (`{arch}.nextn_predict_layers > 0` — e.g. Qwen 3.6's `qwen35` and `qwen35moe`), this needs *no separate draft model*: llama.cpp creates a second context against the same target model whose KV cache covers only the trailing `nextn_predict_layers` block(s) — the dense-attention MTP head — using the draft cache types (f16 by default, independent of `--cache-type-*`). No extra weights load, because the nextn-layer tensors are resident regardless.
 
-`ananke/src/estimator/mtp.rs` models this as `nextn × head_count_kv × (key_length + value_length) × 2 (f16) × context` for the KV term, plus a roughly constant `MTP_COMPUTE_MIB` compute buffer. The estimator computes it once in `estimate_with_summary` (architecture-independent — it reads the metadata directly), stores it on `Estimate::mtp_bytes`, and the packer reserves it as a single lump on the primary GPU (`Packer::seed_mtp_overhead`). The compute constant is calibrated against llama.cpp's own `[spec] estimated memory usage of MTP context is N MiB` log line; re-derive it the same way (run `llama-server … --spec-type draft-mtp`, read the figure, subtract the modelled KV) if a new MTP arch lands with a materially different curve.
+`crates/estimate/src/mtp.rs` models this as `nextn × head_count_kv × (key_length + value_length) × 2 (f16) × context` for the KV term, plus a roughly constant `MTP_COMPUTE_MIB` compute buffer. The estimator computes it once in `estimate_with_summary` (architecture-independent — it reads the metadata directly), stores it on `Estimate::mtp_bytes`, and the packer reserves it as a single lump on the primary GPU (`Packer::seed_mtp_overhead`). The compute constant is calibrated against llama.cpp's own `[spec] estimated memory usage of MTP context is N MiB` log line; re-derive it the same way (run `llama-server … --spec-type draft-mtp`, read the figure, subtract the modelled KV) if a new MTP arch lands with a materially different curve.
 
 Some families ship the MTP head as a **separate draft GGUF** instead of embedding it (e.g. Gemma 4's `gemma4-assistant`, a 4-block model loaded via `-md`). Set `draft_model = "…/mtp-head.gguf"` alongside `spec_type = "draft-mtp"`; the validator requires `spec_type` whenever `draft_model` is set, and the estimator reads the draft file in `estimate_with_summary` and passes its summary to `mtp_overhead_bytes`. The draft's attention layers *share the target model's KV cache* (the load log shows `llama_kv_cache: layer 3: sharing with layer 59`), so there is no context-scaling KV term — the overhead is just the draft's GPU-resident weights (everything but the CPU-side `token_embd.weight`) plus a small `DRAFT_MODEL_COMPUTE_MIB` buffer. That constant is calibrated against the production 2×3090 Gemma 4 run: the estimator landed within ~10 MiB of the measured 40858 MiB peak. Because the cache keys on the `model` and `mmproj` paths but not the draft path, `draft_model` is folded into `EstimatorInputs::config_fingerprint` so swapping the draft GGUF invalidates a stale estimate.
 

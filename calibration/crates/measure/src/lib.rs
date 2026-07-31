@@ -1,5 +1,12 @@
-//! Read a llama-server load log into the decomposition ananke's memory
-//! constants are fitted against.
+//! Measuring one llama-server process: running it, sampling it, and reading
+//! its load log into the decomposition ananke's memory constants are fitted
+//! against.
+//!
+//! The `measure` binary spawns a server with a cell's flags, waits for it to
+//! load, probes it, samples `/proc` and `nvidia-smi`, and appends one NDJSON
+//! row. It knows nothing about what the campaign is asking or about version
+//! control; [`ananke_calibrate`] owns both. `calibration/README.md` is the
+//! workflow around it.
 //!
 //! Every memory constant in the estimator should be traceable to a row the
 //! calibration campaign produced, and a row records a *decomposition* rather

@@ -1,29 +1,107 @@
 # Memory calibration
 
 ananke predicts how much GPU and host memory a llama.cpp service will need
-before it starts one. Those predictions come from constants —
-`ananke/src/estimator/host_buffer.rs`, `compute_buffer.rs`, `mtp.rs` — and a
+before it starts one. Those predictions come from constants in
+`ananke-estimate` — `host_buffer.rs`, `compute_buffer.rs`, `mtp.rs` — and a
 constant nobody can point at data for is a guess with a decimal point.
 
-This directory measures real `llama-server` processes so every one of those
-constants has a dataset behind it, and so a later reader can refit them
-without re-deriving the method.
+This is where those constants come from: measurements of real `llama-server`
+processes, the tools that turn them into `crates/tuning/tuning.json`, and the
+record of what each one rests on.
 
-## Running it
+| | |
+|---|---|
+| `data/` | the dataset: one NDJSON row per measured cell, plus the compressed load logs |
+| `docs/findings.md` | what was measured and what it showed, written as results landed |
+| `docs/plan.md` | the campaign's original specification and what it deliberately does not establish |
+| `models.toml` | which models the scoreboard checks, and their production settings |
+| `probes/` | standalone diagnostics that answer what a single-sample harness cannot |
+
+The tools are Rust crates, not scripts: `ananke-measure` runs a cell,
+`ananke-calibrate` plans the campaign and derives the constants. This page is
+the workflow; the crates' own docs describe their internals.
+
+## The whole loop
+
+Everything below runs from the repository root.
+
+### 1. Point at your models and binaries
 
 ```sh
-cargo run -p ananke-calibrate --bin campaign               # every cell, cheapest order, committing as it goes
-cargo run -p ananke-calibrate --bin campaign -- --dry-run  # print the schedule and stop
-cargo run -p ananke-calibrate --bin campaign -- --only laguna   # cells whose label matches a substring
-cargo run -p ananke-calibrate --bin progress -- --watch    # how far it has got
+export LLM_DIR=/path/to/your/gguf/collection   # default /mnt/ssd0/ai/llm
+export MAINLINE_BIN=llama-server               # default: found on PATH
+export IK_BIN=ik-llama-server
 ```
 
-The campaign is meant to be left alone for hours. It commits every fifteen
-minutes, skips cells that will not fit in memory, and resumes where it
-stopped — a rerun re-measures only what did not complete.
+### 2. Register the model
+
+The `Model` registry in `calibration/crates/calibrate/src/plan/library.rs`. Each entry needs
+a key, a path relative to `LLM_DIR`, and the runtimes it can be served with.
+
+**`n_cpu_moe` is tuned for 2x24 GiB.** Recompute it for your cards, or the
+hybrid cells measure a regime other than the one they claim to.
+
+### 3. Measure
+
+```sh
+cargo run -p ananke-calibrate --bin campaign -- --dry-run       # print the schedule and stop
+cargo run -p ananke-calibrate --bin campaign                    # every cell, cheapest order
+cargo run -p ananke-calibrate --bin campaign -- --only laguna   # cells whose label matches a substring
+cargo run -p ananke-calibrate --bin progress -- --watch         # from another shell
+```
+
+The campaign is meant to be left alone for hours. It commits as it goes, skips
+cells that will not fit in memory, and resumes where it stopped — a rerun
+re-measures only what did not complete.
 
 **Nothing else may use the GPUs while it runs.** A second process changes both
 the free-memory figures and the timings.
+
+### 4. Turn the dataset back into constants
+
+```sh
+cargo run -p ananke-calibrate --bin emit   # every constant but the compute model
+cargo run -p ananke-calibrate --bin fit    # the compute model
+```
+
+`emit` first. It derives `MAINLINE_LAYER_SPLIT_MASK_COPIES`, which `fit` reads
+to normalise its design rows, and nothing `emit` derives reads the fitted model
+back — so the pair is ordered, and runs once. Both read `tuning.json` directly
+rather than the constants compiled from it, so there is no rebuild in between.
+
+Check the result:
+
+```sh
+cargo run -p ananke-calibrate --bin emit -- --check
+cargo run -p ananke-calibrate --bin fit -- --check
+```
+
+CI runs both, so a document that has drifted from its dataset fails the build.
+
+### 5. Decide whether to trust it
+
+```sh
+cargo run -p ananke-calibrate --bin coverage -- --check  # is any regime measured at one point?
+cargo run -p ananke-calibrate --bin validate             # every comparable cell, predicted against measured
+cargo run -p ananke-calibrate --bin scoreboard           # the production models
+cargo run -p ananke-calibrate --bin crossval             # how well does each constant generalise?
+cargo run -p ananke-calibrate --bin estimates            # every model's estimate, broken down
+```
+
+`coverage --check` is the one that fails builds, and the one worth reading
+first: it asks, per constant, how many distinct points exist along each axis
+its rule depends on. A term measured at a single point along an axis looks flat
+in that axis, which is how this campaign produced several wrong constants.
+
+`validate` and `scoreboard` are **in-sample** — every `ok` row feeds the fit, so
+they say the model describes the data, not that it predicts a model it has
+never seen. `crossval` is the figure that does: it refits each constant from
+every model but one.
+
+### 6. Commit
+
+`tuning.json` and the dataset, together. The constant and its evidence are one
+change.
 
 ## Questions, and why they are not a schedule
 
@@ -50,7 +128,7 @@ is a deliberate trade — three of the four `mmproj` cells are holdout cells, an
 excluding them costs a real constant more than the figure is worth. The
 out-of-sample number is meant to come from leave-one-model-out cross-validation,
 which costs no extra measurement and is not yet implemented; see the analysis
-protocol in `PLAN.md`.
+protocol in `docs/plan.md`.
 
 The last four tags exist because of a mistake worth not repeating. A term
 measured at a single point in some axis looks flat in that axis, and three
@@ -81,7 +159,7 @@ export MAINLINE_BIN=llama-server               # default: found on PATH
 export IK_BIN=ik-llama-server
 ```
 
-Then edit the `Model` registry in `ananke-calibrate/src/plan/library.rs` to name the models you actually have. Each
+Then edit the `Model` registry in `calibration/crates/calibrate/src/plan/library.rs` to name the models you actually have. Each
 entry needs a `key`, a path relative to `LLM_DIR`, and the runtimes it can be
 served with. **`n_cpu_moe` is tuned for 2x24 GiB** — recompute it for your
 cards, or the hybrid cells will not be measuring the regime they claim to.
@@ -102,7 +180,7 @@ load log kept gzipped alongside in `data/logs/`. Records from earlier,
 narrower schemas are kept in `data/legacy/` rather than merged, since they
 lack fields the current ones carry.
 
-- `schema` — bump `SCHEMA` in `ananke-measure/src/record.rs` whenever the shape changes. `1` was flat
+- `schema` — bump `SCHEMA` in `calibration/crates/measure/src/record.rs` whenever the shape changes. `1` was flat
   CSV-era rows; `2` added nesting, hardware, and traces; `3` added the generic
   per-device breakdown, per-process GPU memory, and model identity.
 - `provenance` — when, where, which binary, which model, which ananke revision.
@@ -136,13 +214,14 @@ lack fields the current ones carry.
 - **Check the CPU governor.** `powersave` on `acpi-cpufreq` halves CPU-bound
   throughput; it is recorded in `hardware` for exactly this reason.
 
-See `PLAN.md` for the complete specification: every constant this campaign
+See `docs/plan.md` for the complete specification: every constant this campaign
 derives, the cells that determine it, the analysis protocol, and an explicit
 list of what it does not establish.
 
 ## Architectures this campaign cannot calibrate
 
-`compute_buffer.rs` carries tuning curves for nineteen architectures. The
+`ananke-estimate`'s `compute_buffer.rs` carries tuning curves for nineteen
+architectures. The
 model library reaches nine of them. These ten have **no model here at all**,
 so their curves are inherited from whoever first fitted them and are not
 re-derivable from this dataset:
@@ -169,11 +248,11 @@ a term allocated once from one that accumulates with use. `probe_host_growth.py`
 varies one thing at a time against a fresh server and reports the series:
 
 ```sh
-python probe_host_growth.py maps    qwen36-27b gemma3-27b   # where it lives
-python probe_host_growth.py growth  qwen36-27b              # leak or prompt cache
-python probe_host_growth.py prefill qwen36-27b              # what triggers it
+python probes/probe_host_growth.py maps    qwen36-27b gemma3-27b   # where it lives
+python probes/probe_host_growth.py growth  qwen36-27b              # leak or prompt cache
+python probes/probe_host_growth.py prefill qwen36-27b              # what triggers it
 ```
 
 These load real models and read real memory, so run them one at a time against
-an idle machine. What they settled is in FINDINGS.md under "The per-model
-residual is a first-request step".
+an idle machine. What they settled is in `docs/findings.md` under "The
+per-model residual is a first-request step".

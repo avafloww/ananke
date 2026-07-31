@@ -25,7 +25,7 @@ observation, which is why "reachability" matters more than closeness.
 
 ## The constants to be derived
 
-### `ananke/src/estimator/host_buffer.rs`
+### `crates/estimate/src/host_buffer.rs`
 
 | constant | current | what it stands for |
 |---|---|---|
@@ -47,7 +47,7 @@ The two runtimes size it by **different rules** — mainline uses
 `n_kv = ctx / parallel` and two hidden buffers; ik uses `n_kv = ctx` and one.
 The campaign must confirm both laws, not just fit a constant.
 
-### `ananke/src/estimator/compute_buffer.rs`
+### `crates/estimate/src/compute_buffer.rs`
 
 Per-architecture GPU curves of the form `base + slope * (ctx / 1024)` MiB per
 device. `deepseek4`'s slope is additionally linear in `ubatch`, because its
@@ -62,7 +62,7 @@ Architectures with a curve but **no model here**: `deepseek2`, `gemma2`,
 `qwen3vlmoe`. Their constants stay inherited and unverified. This is a stated
 limitation, not an oversight.
 
-### `ananke/src/estimator/mtp.rs`
+### `crates/estimate/src/mtp.rs`
 
 `MTP_COMPUTE_MIB` (1700), `DRAFT_MODEL_COMPUTE_MIB` (300), and the KV formula
 `nextn x head_count_kv x (key_length + value_length) x 2 x context`.
@@ -172,7 +172,7 @@ np 1 / layer split.
 ## Reproducibility on other hardware
 
 Three environment variables (`LLM_DIR`, `MAINLINE_BIN`, `IK_BIN`) and the
-`Model` registry in `ananke-calibrate/src/plan/library.rs` are the whole
+`Model` registry in `calibration/crates/calibrate/src/plan/library.rs` are the whole
 machine-specific surface.
 Records join across machines on `provenance.model_key` (repo-and-file, not
 absolute path). `n_cpu_moe` values are tuned for 2x24 GiB and must be
