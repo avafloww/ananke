@@ -354,6 +354,18 @@ pub fn emit_check(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     let emitted = emit(rows, tuning_text)?;
     let committed: Value = serde_json::from_str(tuning_text)
         .map_err(|e| crate::derive::error::DeriveError::malformed(e.to_string()))?;
+    // A deriver that fails leaves its constant exactly as committed, so the documents
+    // match and the check would otherwise pass — reporting agreement with the data
+    // for a constant nothing re-derived. The failure is the finding; comparing
+    // documents cannot see it.
+    if !emitted.failed.is_empty() {
+        return Err(crate::derive::error::DeriveError::disagreement(format!(
+            "{} constant(s) could not be derived, so the committed values were not \
+             checked against the data: {}",
+            emitted.failed.len(),
+            emitted.failed.join("; "),
+        )));
+    }
     if committed == emitted.document {
         return Ok(emitted);
     }

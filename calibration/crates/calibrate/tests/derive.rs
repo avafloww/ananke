@@ -433,6 +433,24 @@ fn emit_ignores_the_derived_values_it_is_given() {
     }
 }
 
+/// A deriver that cannot run fails the gate, even though the document still matches.
+///
+/// This is the failure `--check` is least able to see on its own: a failed deriver
+/// leaves its constant exactly as committed, so the documents compare equal and the
+/// check reports agreement with the data for a constant nothing re-derived. Emptying
+/// the dataset makes every deriver fail at once, which is the cheapest way to ask
+/// whether the failures are consulted at all.
+#[test]
+fn a_deriver_that_cannot_run_fails_the_check() {
+    let error = emit::emit_check(&[], tuning_text())
+        .expect_err("an empty dataset derives nothing, so the check must fail");
+    let message = error.to_string();
+    assert!(
+        message.contains("could not be derived"),
+        "the failure should name the derivations, not a value difference: {message}"
+    );
+}
+
 fn evidence(name: &str) -> &'static str {
     committed()["constants"][name]["evidence"]
         .as_str()
