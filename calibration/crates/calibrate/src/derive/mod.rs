@@ -4,7 +4,7 @@
 //! `emit` to write `crates/tuning/tuning.json` and `emit_check` to verify the
 //! committed one still matches the data.
 //!
-//! Two rules run through all of it, and both were learned by getting them wrong.
+//! Two rules run through all of it.
 //!
 //! **A constant quoted without its spread invites more confidence than the data
 //! supports.** So a deriver that reduces by median goes through
@@ -15,15 +15,15 @@
 //! [`stats::check_no_outlier_dominates`] is the same idea for a maximum, refusing
 //! when a single cell decides the value outright — but it guards only
 //! [`baseline::headroom`] today, not every deriver that reduces by maximum. The
-//! others take a bare `max` and would not notice the contaminated pair the guard was
-//! written for. Wiring it in is worth doing and is not a no-op: several of those
+//! others take a bare `max` and would not notice the contaminated pair the guard
+//! catches. Wiring it in is worth doing and is not a no-op: several of those
 //! constants are set by their worst cell by design, so each needs its tolerance
 //! chosen rather than inherited.
 //!
 //! **A pairing key must pin every factor that could differ.** `bool(n_cpu_moe)`
-//! instead of the count paired a `--n-cpu-moe 20` cell with a `--n-cpu-moe 40` one
-//! and spread a rate across 13935% of its median; a key missing `ngl` matched cells
-//! that had placed different weights on the GPU and reported 23.1 bytes an entry
+//! instead of the count pairs a `--n-cpu-moe 20` cell with a `--n-cpu-moe 40` one
+//! and spreads a rate across 13935% of its median; a key missing `ngl` matches
+//! cells that placed different weights on the GPU and reports 23.1 bytes an entry
 //! against a true 3.7. Where a key is built here, it names everything.
 //!
 //! One ordering dependency is real and is modelled as an argument rather than as

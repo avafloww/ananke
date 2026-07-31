@@ -2,9 +2,9 @@
 //!
 //! The block is flat rather than assembled out of `serde(flatten)` groups:
 //! flatten cannot coexist with `deny_unknown_fields`, and a key the schema fails
-//! to name has to be a parse error rather than a silently dropped column. The
-//! open `BTreeMap<String, Value>` catch-all the previous readers used is exactly
-//! how a column went missing without anyone noticing.
+//! to name has to be a parse error rather than a silently dropped column. An
+//! open `BTreeMap<String, Value>` catch-all is exactly how a column goes missing
+//! without anyone noticing.
 //!
 //! Field order is the format — see [`crate::record`].
 //!
@@ -51,9 +51,9 @@ pub struct Parsed {
     /// The hyperparameters the loader echoes, in the order it prints them.
     ///
     /// Each is the *first* occurrence, not the last: the target model loads
-    /// before any draft or projector, and last-wins recorded the draft's shape
-    /// for exactly the MTP cells whose target shape the constants are fitted
-    /// against.
+    /// before any draft or projector, so last-wins would record the draft's
+    /// shape for exactly the MTP cells whose target shape the constants are
+    /// fitted against.
     pub n_layer: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n_layer_all: Option<Vec<u64>>,

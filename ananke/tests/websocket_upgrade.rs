@@ -2,7 +2,7 @@
 //! with the upstream's `Connection: Upgrade` header verbatim and then
 //! splices bytes between the client and upstream sockets.
 //!
-//! The regression this guards against: aiohttp's WebSocket client validates
+//! The hazard: aiohttp's WebSocket client validates
 //! the response `Connection` header with exact equality (after lowercasing)
 //! against `"upgrade"`. A proxy that rewrites it to `keep-alive`,
 //! appends `keep-alive` to the list, or strips it entirely (letting hyper's

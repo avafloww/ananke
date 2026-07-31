@@ -1,12 +1,12 @@
 //! Integration test: how `GET /api/services` reports a service that cannot be
 //! placed at all.
 //!
-//! Reproduces the `deepseek-v4-flash` case from issue #29. The model is far too
-//! large for the host, so every pack fails and the placement preview names no
-//! devices. Summing that empty map reported `0 B`, which read as "this service
-//! needs no memory" — indistinguishable from a genuinely CPU-only service or
-//! one that had never been estimated. The row must instead report the model's
-//! aggregate demand, and the verdict must name the device that came up short.
+//! The `deepseek-v4-flash` case: the model is far too large for the host, so
+//! every pack fails and the placement preview names no devices. Summing that
+//! empty map gives `0 B`, which reads as "this service needs no memory" —
+//! indistinguishable from a genuinely CPU-only service or one that has never
+//! been estimated. The row must instead report the model's aggregate demand,
+//! and the verdict must name the device that came up short.
 #![cfg(feature = "test-fakes")]
 
 mod common;
@@ -97,9 +97,9 @@ async fn unplaceable_service_reports_its_demand_and_names_the_short_device() {
         "a shortfall reports less available than requested, got {shortfalls:?}"
     );
 
-    // The regression: an unplaceable service must not report 0 B. With no
-    // placement to sum, the row falls back to the estimator's demand, which is
-    // at least the ~16 GiB of weights.
+    // An unplaceable service must not report 0 B. With no placement to sum,
+    // the row falls back to the estimator's demand, which is at least the
+    // ~16 GiB of weights.
     let footprint = svc["footprint_bytes"]
         .as_u64()
         .unwrap_or_else(|| panic!("expected a footprint, got {svc}"));

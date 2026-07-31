@@ -82,7 +82,7 @@ pub fn baseline_offset(
         }
         // `--no-mmap` reads the weights into anonymous memory instead of mapping
         // them, and `host_overhead_bytes` models overhead rather than weights. One
-        // such cell put qwen3@ik's offset at 704 MiB and over-predicted every other
+        // such cell puts qwen3@ik's offset at 704 MiB and over-predicts every other
         // ik cell of that model to 0.57.
         if factors.no_mmap {
             continue;
@@ -100,23 +100,23 @@ pub fn baseline_offset(
             continue;
         }
         // Flash attention off is kept, under its own key. Pooling it with flash
-        // attention on is what put lfm2's offset at both 35 and 169 MiB, but
-        // excluding it left every such cell uncorrected — and while the bulk of the
-        // effect is the per-token arena rate, a flat baseline shift remains
-        // underneath it, small everywhere but lfm2 at +131 MiB.
+        // attention on puts lfm2's offset at both 35 and 169 MiB; excluding it
+        // leaves every such cell uncorrected — and while the bulk of the effect is
+        // the per-token arena rate, a flat baseline shift remains underneath it,
+        // small everywhere but lfm2 at +131 MiB.
         //
         // mainline and ik are separated by the key rather than by excluding one:
         // ik's residual against the same model runs from -264 to +120 MiB where
         // mainline's is -0 to +24, so the two binaries do not share a baseline.
         // Grouped per runtime, ik's resident cells are as consistent as mainline's
         // — spreads of 62 to 100 MiB against the same architectures — and simply
-        // sit 24 to 192 MiB higher. Excluding them left every ik configuration with
-        // no correction at all.
+        // sit 24 to 192 MiB higher. Excluding them would leave every ik
+        // configuration with no correction at all.
         let owned = record.owned_bytes() as f64;
         let terms = arena_terms(record, MoeCharge::On, tuning);
         let cards = factors.cards_or(1);
-        // ik does not replicate masks across cards at any count, so including its
-        // cells means the multiplier can no longer be read off the card count alone.
+        // ik does not replicate masks across cards at any count, so with its cells
+        // included the multiplier cannot be read off the card count alone.
         let copies = if cards > 1 && !factors.runtime_is_ik() {
             4.0
         } else {
@@ -132,7 +132,7 @@ pub fn baseline_offset(
                 .unwrap_or(worst_no_fa);
             // Times `copies`, matching `pinned_graph_bytes`: the term is replicated
             // per device under a layer split like the masks it sits beside.
-            // Subtracting the unreplicated figure left every flash-attention-off
+            // Subtracting the unreplicated figure leaves every flash-attention-off
             // cell over-predicted, at 0.71 to 0.78.
             rate as f64 * factors.tokens() as f64 * copies
         } else {
@@ -160,14 +160,14 @@ pub fn baseline_offset(
     // direction. The spread is reported in the evidence instead, so a wide one is
     // visible rather than silently averaged.
     //
-    // Negative offsets are charged too. The earlier rule kept only positive ones,
-    // reasoning that a negative residual means the baseline already over-covers and
-    // shaving it trades a safe over-prediction for a risk. That does not survive two
+    // Negative offsets are charged too. Keeping only the positive ones — on the
+    // reasoning that a negative residual means the baseline already over-covers, so
+    // shaving it trades a safe over-prediction for a risk — does not survive two
     // objections. The reduction is `max` — the *least* negative residual — so
     // subtracting it leaves every measured cell still over-predicted; and an
     // over-prediction is only safe while it stays inside the band the rolling
-    // correction can travel. gemma3 sat at 0.78 against a floor of 0.8, which no
-    // amount of observation can pull back, so the "safe" direction had become the
+    // correction can travel. gemma3 sits at 0.78 against a floor of 0.8, which no
+    // amount of observation can pull back, so the "safe" direction is the
     // unreachable one.
     let table: BTreeMap<VariantEnvironmentKey, i64> = by_variant
         .iter()
@@ -218,9 +218,9 @@ pub fn baseline_offset(
 /// Host baseline a tensor split costs beyond a layer split.
 ///
 /// Measured on every model that ran both, at the same context, batch, slot count
-/// and card count: between 96 and 184 MiB more. The estimator had no term for it,
-/// so every tensor-split service was under-predicted by that much — and tensor
-/// split is what the operator runs for several of them.
+/// and card count: between 96 and 184 MiB more. Without a term for it every
+/// tensor-split service is under-predicted by that much — and tensor split is what
+/// the operator runs for several of them.
 pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Table<ArchKey>)> {
     let mut pairs: BTreeMap<SplitPairKey, BTreeMap<SplitMode, Vec<f64>>> = BTreeMap::new();
     for record in rows {

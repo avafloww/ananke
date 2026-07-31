@@ -270,9 +270,8 @@ mod tests {
         )
     }
 
-    /// The battery runs end to end against the in-memory world, which is the whole
-    /// reason for porting it: the ordering rule is checkable without a GPU, a model,
-    /// or half an hour.
+    /// The battery runs end to end against the in-memory world, which is what makes
+    /// the ordering rule checkable without a GPU, a model, or half an hour.
     #[test]
     fn the_battery_runs_against_the_fakes() {
         let fakes = fakes();

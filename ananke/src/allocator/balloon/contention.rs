@@ -35,17 +35,15 @@ const OVERCOMMIT_MARGIN_BYTES: u64 = 512 * 1024 * 1024;
 /// pledges already eats into the [`OVERCOMMIT_MARGIN_BYTES`] growth
 /// headroom. Empty when there's still slack on every GPU we touch.
 ///
-/// History: this check used to read NVML `free_bytes` directly, on
-/// the theory that pledges over-state actual usage and the kernel
-/// won't OOM until physical allocation overflows. That was strictly
-/// safer but symmetrically wrong — when a balloon *wants* to grow
-/// (detected separately by `detect_growth`), peer pledges that
-/// arithmetically don't fit alongside it never get evicted until the
-/// GPU is on the literal edge of OOM. The over-firing the original
-/// formulation suffered from is now avoided by the caller's
-/// `detect_growth` gate: a stale recent-peak pledge with no actual
-/// climb in the sample window won't trigger eviction, even if the
-/// pledge sum arithmetically exceeds the GPU total.
+/// The check is arithmetic over pledges rather than over NVML
+/// `free_bytes`. Reading physical free memory is strictly safer but
+/// symmetrically wrong: when a balloon *wants* to grow (detected
+/// separately by `detect_growth`), peer pledges that arithmetically
+/// don't fit alongside it are never evicted until the GPU is on the
+/// literal edge of OOM. What keeps the arithmetic form from over-firing
+/// is the caller's `detect_growth` gate — a stale recent-peak pledge
+/// with no actual climb in the sample window won't trigger eviction,
+/// even if the pledge sum arithmetically exceeds the GPU total.
 pub(crate) fn overcommitted_gpus_for(
     service_name: &SmolStr,
     reservations: &AllocationTable,
@@ -157,10 +155,10 @@ pub(crate) fn resolve_contention(
                     peer: peer_name.clone(),
                 };
             }
-            // Both same lifecycle — fall through to the historical default:
-            // the dynamic side (us, by definition of running this resolver)
-            // yields. Avoids two persistent peers oscillating; in practice
-            // only one of them is dynamic, so this branch is rare.
+            // Both same lifecycle — the dynamic side (us, by definition of
+            // running this resolver) yields. Avoids two persistent peers
+            // oscillating; in practice only one of them is dynamic, so this
+            // branch is rare.
             _ => {
                 return ContentionAction::YieldSelf {
                     to: peer_name.clone(),
@@ -201,8 +199,8 @@ mod tests {
 
     /// Pledge sum exceeds the GPU total — `overcommitted_gpus_for`
     /// reports the GPU as over-committed regardless of what NVML says.
-    /// The historical "kernel won't OOM, so don't fire" reasoning is
-    /// preserved at the *resolver* level by the caller's
+    /// The "kernel won't OOM, so don't fire" reasoning lives at the
+    /// *resolver* level instead, in the caller's
     /// `detect_growth` gate: when the balloon's observed window isn't
     /// climbing, the resolver returns early without consulting this
     /// function. Pledge-overcommit + growth → evict; pledge-overcommit

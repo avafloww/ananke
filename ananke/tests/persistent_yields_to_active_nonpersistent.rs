@@ -2,14 +2,13 @@
 //! non-persistent peer is currently `Starting` or `Running`, rather than
 //! queueing up to evict the peer the moment it goes idle.
 //!
-//! Regression target: the persistent watcher's periodic `ensure()` would
-//! race a user-driven on-demand service's startup. The watcher fired while
-//! the pool was quiet, but by the time the supervisor ran the placement
-//! retry loop a non-persistent peer had already transitioned into
-//! `Starting` → `Running`. Because `EvictionCandidate::idle` flips to
-//! `true` for a Running peer with no in-flight requests, the queued
-//! persistent ensure immediately evicted the freshly-started peer — the
-//! exact opposite of what the watcher is trying to achieve.
+//! The race it avoids: the persistent watcher's periodic `ensure()` fires
+//! while the pool is quiet, but by the time the supervisor runs the placement
+//! retry loop a user-driven non-persistent peer has transitioned into
+//! `Starting` → `Running`. Because `EvictionCandidate::idle` flips to `true`
+//! for a Running peer with no in-flight requests, the queued persistent
+//! ensure evicts the freshly-started peer — the exact opposite of what the
+//! watcher is trying to achieve.
 //!
 //! With the yield rule in place, a persistent service's ensure returns
 //! `Unavailable` when a non-persistent peer is loading or running, and

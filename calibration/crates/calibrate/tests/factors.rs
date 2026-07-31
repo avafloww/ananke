@@ -1,12 +1,12 @@
 //! Every factor the dataset carries is either read by the calibration or listed
 //! here as deliberately unread.
 //!
-//! One `Factors` describes the JSON object now — [`ananke_dataset`]'s — but the
-//! hazard the split used to carry has not gone away with it: a factor the
-//! harness starts varying that the derivation never consults is a term fitted
-//! across cells that differ in a way the fit cannot see. Four wrong constants in
-//! this campaign came from exactly that shape, including `bool(n_cpu_moe)` in
-//! place of the count and a pairing key missing `ngl`.
+//! One `Factors` describes the JSON object — [`ananke_dataset`]'s — but a single
+//! schema does not close the hazard on its own: a factor the harness starts
+//! varying that the derivation never consults is a term fitted across cells that
+//! differ in a way the fit cannot see. Four wrong constants in this campaign came
+//! from exactly that shape, including `bool(n_cpu_moe)` in place of the count and
+//! a pairing key missing `ngl`.
 //!
 //! So the omissions are enumerated rather than implicit. Adding a factor to the
 //! schema fails this test until somebody says which list it belongs on.
@@ -87,8 +87,8 @@ const NOT_READ: &[&str] = &[
 /// The two lists together are exactly the schema's factor set.
 ///
 /// The assertion runs both ways on purpose. A factor missing from both lists is the
-/// bug this file exists to catch; a name in a list that the harness no longer has is
-/// a stale comment claiming a decision about nothing.
+/// bug this file exists to catch; a name in a list that the schema does not carry
+/// is a stale comment claiming a decision about nothing.
 #[test]
 fn every_factor_is_classified() {
     let json = serde_json::to_value(Factors::default()).expect("the factors serialise");
@@ -128,8 +128,8 @@ fn every_factor_is_classified() {
 /// - `skip_serializing_if` on a field that is `None` by default,
 /// - `flatten` on a map that is empty by default,
 /// - `skip`, which also removes the field from `cell_id` — so two cells differing
-///   only in that factor would share an identity and the second would never run,
-///   which is the `cram` bug this campaign already had once.
+///   only in that factor share an identity and the second never runs, which is
+///   what a `skip`ped `cram` does.
 ///
 /// None is present today. The check is on the source because serde attributes leave
 /// nothing at runtime to interrogate.
@@ -153,7 +153,7 @@ fn no_serde_attribute_hides_a_factor() {
 /// The key decides which measured cells are distinct, so a factor missing from it
 /// is a group of cells collapsing into one and all but the first being discarded
 /// as duplicates — silently, and in the tool that reports the estimator's
-/// accuracy. Ten omissions cost 53 comparable cells before this ran.
+/// accuracy. Ten omissions are enough to collide 53 comparable cells.
 #[test]
 fn the_validate_key_pins_every_read_factor() {
     let source = std::fs::read_to_string(VALIDATE).expect("validate's source is readable");

@@ -41,7 +41,7 @@ fn parsed_blocks_match_the_recorded_rows() {
             .expect("every status in the dataset is one this crate knows");
         // A cell that never loaded logged nothing to parse, so its `parsed` block
         // is the schema's zeroes and its log holds only the failure. The status is
-        // what says so; the block itself no longer reads as absent.
+        // what says so; the block itself does not read as absent.
         if status != Status::Ok || log.is_empty() || !data.join("logs").join(log).exists() {
             skipped += 1;
             continue;
@@ -179,9 +179,9 @@ fn compare(ours: &Value, theirs: &Value, path: &str) -> Result<(), String> {
     }
 }
 
-/// The logs are archived compressed, and were originally decoded with
-/// replacement, so a stray non-UTF-8 byte stays a replacement character here
-/// too rather than failing the read.
+/// The logs are archived compressed, and are decoded with replacement, so a
+/// stray non-UTF-8 byte stays a replacement character rather than failing the
+/// read.
 fn read_log(path: &Path) -> String {
     let mut bytes = Vec::new();
     GzDecoder::new(File::open(path).expect("the archived log opens"))

@@ -254,8 +254,8 @@ mod fake {
     ///
     /// The spawner carries a settable *inherited* environment that
     /// [`SpawnConfig::resolve_env`] layers per-service `env` overrides on
-    /// top of. Defaults to empty so existing tests (which assert on
-    /// `CUDA_VISIBLE_DEVICES` only) are unaffected. Integration tests
+    /// top of. Defaults to empty, so a test that only asserts on
+    /// `CUDA_VISIBLE_DEVICES` sees nothing else. Integration tests
     /// inject a controlled inherited env via [`set_inherited_env`] to
     /// verify end-to-end env propagation.
     pub struct FakeSpawner {

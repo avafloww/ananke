@@ -137,8 +137,8 @@ pub enum StartFailureKind {
 
 /// The full outward-visible state of a supervisor. Always synthesised from
 /// the shared [`MirroredState`] plus the handle's name — there is no separate
-/// "async snapshot" path anymore, because the supervisor's phase / run_id /
-/// pid all live in one lock-free cell that readers can inspect directly.
+/// "async snapshot" path, because the supervisor's phase / run_id / pid all
+/// live in one lock-free cell that readers can inspect directly.
 #[derive(Debug, Clone)]
 pub struct SupervisorSnapshot {
     pub name: smol_str::SmolStr,
@@ -149,9 +149,8 @@ pub struct SupervisorSnapshot {
 
 /// Shared cell holding every piece of supervisor state that is readable from
 /// outside the task. The supervisor task is the sole writer; `SupervisorHandle`
-/// is a reader. Replaced the old `ServiceState` mirror + dedicated `Snapshot`
-/// mailbox command: one source of truth instead of two locations kept in sync
-/// and one slow async path kept in parallel with one lock-free fast path.
+/// is a reader. One source of truth, rather than a `ServiceState` mirror and a
+/// `Snapshot` mailbox command kept in sync with each other.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MirroredState {
     pub(crate) state: ServiceState,

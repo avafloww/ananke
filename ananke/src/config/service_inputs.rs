@@ -103,9 +103,9 @@ pub fn extra_arg_value<'a>(extra_args: &'a [String], names: &[&str]) -> Option<&
 }
 
 /// Find a `--cache-ram` / `-cram` value an operator passed through
-/// `extra_args`. Configs predate the dedicated key and still set it this way;
-/// without this the daemon would reserve the 8 GiB default for a service that
-/// runs with the cache switched off.
+/// `extra_args`. Configs in the wild set it this way rather than through the
+/// dedicated key; without this the daemon reserves the 8 GiB default for a
+/// service that runs with the cache switched off.
 pub fn cache_ram_from_extra_args(extra_args: &[String]) -> Option<u32> {
     extra_arg_value(extra_args, CACHE_RAM_FLAGS).and_then(|v| v.parse().ok())
 }

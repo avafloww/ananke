@@ -172,8 +172,8 @@ pub fn estimate_with_summary(
     // What the head GPU holds beyond every other card, which the packer trims
     // off the secondaries. The compute model derives it — the logits buffer, the
     // head card's flat graph cost, and the expert-staging buffers a hybrid
-    // places on the primary — so it is no longer the deliberate under-estimate
-    // a bare `n_vocab x ubatch` term had to be.
+    // places on the primary — rather than approximating it with a bare
+    // `n_vocab x ubatch` term, which can only be a deliberate under-estimate.
     est.output_buffer_bytes =
         u64::from(compute_model::head_extra_mib(&summary, inputs)).saturating_mul(1024 * 1024);
 
@@ -373,8 +373,8 @@ mod tests {
 
     /// Regression: an unknown architecture with `allow_fallback = false`
     /// must return `UnknownArchitecture` rather than silently producing
-    /// the coarse fallback guess. Guards against another glm4moe-style
-    /// silent 67× under-reservation.
+    /// the coarse fallback guess. Guards against a glm4moe-style silent
+    /// 67× under-reservation.
     #[test]
     fn unknown_architecture_rejects_without_opt_in() {
         let mut metadata = std::collections::BTreeMap::new();

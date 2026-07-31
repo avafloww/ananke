@@ -73,8 +73,8 @@ pub(crate) fn collect_non_layer(summary: &GgufSummary) -> NonLayer {
             // Gemma 4's `per_layer_token_embd.weight` is a 42-slot embedding
             // stack (one per transformer block) that llama.cpp keeps on CPU
             // alongside `token_embd.weight`. For the E4B quant it's ~2.8 GiB
-            // — bucketing it as GPU-resident caused the packer to over-
-            // reserve a small single-GPU fit by ~3 GiB.
+            // — bucketing it as GPU-resident makes the packer over-reserve a
+            // small single-GPU fit by ~3 GiB.
             "token_embd.weight" | "per_layer_token_embd.weight" => {
                 nl.token_embd_bytes += tensor.byte_size
             }
@@ -178,8 +178,8 @@ mod tests {
     fn per_layer_token_embd_is_cpu_resident() {
         // Gemma 4 E-variants carry a large `per_layer_token_embd.weight`
         // tensor (2.8 GiB for E4B) that llama.cpp keeps on CPU alongside
-        // `token_embd.weight`. Bucketing it as GPU-resident caused the
-        // packer to over-reserve a single-GPU fit by ~3 GiB.
+        // `token_embd.weight`. Bucketing it as GPU-resident makes the
+        // packer over-reserve a single-GPU fit by ~3 GiB.
         let mut tensors = std::collections::BTreeMap::new();
         tensors.insert(
             SmolStr::new("token_embd.weight"),

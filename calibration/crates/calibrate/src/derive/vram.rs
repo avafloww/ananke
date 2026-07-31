@@ -1,6 +1,6 @@
 //! Device-side terms: what an unfused attention pass costs, what a vision
 //! projector's graph costs, and what the runtimes that print no breakdown table
-//! were measured holding.
+//! are measured holding.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -56,10 +56,10 @@ struct ScorePairKey {
 /// than an outlier — which is why this is a table.
 ///
 /// Paired on the **driver total**, not on the breakdown's `compute` column. The
-/// column misses the `unaccounted` remainder that grows with it, which understated
-/// gemma4 by 20 to 40%, and it does not exist at all under ik — so every ik cell was
-/// silently skipped, which is how laguna came to have no entry despite being the
-/// largest single miss in the set.
+/// column misses the `unaccounted` remainder that grows with it, which understates
+/// gemma4 by 20 to 40%, and it does not exist at all under ik — so pairing on it
+/// skips every ik cell in silence, leaving laguna, the largest single miss in the
+/// set, with no entry at all.
 pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table<ArchKey>> {
     let mut paired: BTreeMap<ScorePairKey, (u64, &Record)> = BTreeMap::new();
     for record in rows {
@@ -143,11 +143,10 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table<ArchKey>> {
     // The largest, so no configuration of a measured architecture is left short:
     // this term is worth thousands of MiB and under-reserving it OOMs.
     //
-    // Stored in *hundredths* of a byte. Rounding up to a whole byte was the last
-    // source of systematic over-reservation in the set: qwen35's pairs sit between
-    // 3.3 and 4.2, and charging the 5 that `ceil` gives inflates a term worth
-    // thousands of MiB by a fifth, which is the whole of the +6.7% its worst cell
-    // showed.
+    // Stored in *hundredths* of a byte, because rounding up to a whole byte is a
+    // systematic over-reservation: qwen35's pairs sit between 3.3 and 4.2, and
+    // charging the 5 that `ceil` gives inflates a term worth thousands of MiB by a
+    // fifth — the whole of the +6.7% its worst cell shows.
     let table: BTreeMap<ArchKey, i64> = per_arch
         .iter()
         .map(|(arch, values)| {
@@ -192,8 +191,7 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table<ArchKey>> {
 /// ```
 ///
 /// Subtracting the summed `clip_model_loader` tensor sizes isolates the graph term.
-/// It was modelled as zero, which cost 140 to 248 MiB on every vision-capable
-/// service.
+/// Modelling it as zero costs 140 to 248 MiB on every vision-capable service.
 ///
 /// Two configurations were measured, and the term is a property of the *vision*
 /// settings rather than of the language model: Qwen3.6-27B and Qwen3.6-35B-A3B have
@@ -281,8 +279,8 @@ pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
 /// `tuning.json` beside the held value they justify.
 ///
 /// Pooling them into the mainline curves is the thing not to do. The two runtimes
-/// build different graphs for the same architecture, and trying it moved four curves
-/// at once and took GLM-5.2 from -3.2% to +7.8%.
+/// build different graphs for the same architecture, and pooling them moves four
+/// curves at once and takes GLM-5.2 from -3.2% to +7.8%.
 pub fn table_less_observations(rows: &[Record]) -> Result<NestedTable> {
     let mut observed: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
     for record in rows {

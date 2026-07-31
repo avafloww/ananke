@@ -20,8 +20,8 @@ pub struct CommandArgs {
     pub override_tensor: Vec<String>,
     /// `--split-mode {row,tensor}` when the packer used a sharded
     /// (tensor-parallel) distribution. `None` keeps llama.cpp's default
-    /// (`layer`), so layer-split services emit no `--split-mode` flag and
-    /// their argv is unchanged.
+    /// (`layer`), so a layer-split service emits no `--split-mode` flag at
+    /// all.
     pub split_mode: Option<SplitMode>,
     /// `--main-gpu N` — the CUDA-visible index (after the
     /// `CUDA_VISIBLE_DEVICES` remap) that gathers intermediate results and
@@ -56,7 +56,7 @@ pub struct DeviceShortfall {
 }
 
 /// Structured packer failure modes. Each variant carries the numbers the
-/// operator needs to understand the overflow — no more string-matching
+/// operator needs to understand the overflow, so nothing has to string-match
 /// on the message to figure out what went wrong.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackError {
@@ -210,13 +210,13 @@ pub struct RollingInputs {
     /// Reported, not consumed by the correction. llama.cpp reads these through
     /// the GGUF's mmap, so at runtime they sit in the process's *file* RSS while
     /// living in VRAM — and the host pool's numerator is owned memory
-    /// (`RssAnon + RssShmem`), which they never enter. Nothing subtracts this,
-    /// and an earlier design that divided a *total* RSS peak did need to.
+    /// (`RssAnon + RssShmem`), which they never enter. Nothing subtracts this;
+    /// a numerator taken from a *total* RSS peak would have to.
     ///
-    /// It stays because it is the only place the GPU-resident weight total is
-    /// available to a caller: the `estimate` example prints it, and the MTP
-    /// tests assert a separate draft's weights reach it rather than being
-    /// charged as runtime allocation.
+    /// It is the only place the GPU-resident weight total is available to a
+    /// caller: the `estimate` example prints it, and the MTP tests assert a
+    /// separate draft's weights reach it rather than being charged as runtime
+    /// allocation.
     pub gpu_weight_bytes: u64,
     /// Model tensor bytes placed on the host, uncorrected. Gates host-pool
     /// learning: see

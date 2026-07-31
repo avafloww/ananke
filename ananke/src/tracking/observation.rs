@@ -32,11 +32,10 @@ struct ObservedState {
     /// High-water mark of GPU VRAM bytes alone, attributed across every
     /// pid in the per-service pid set. Tracked separately because the
     /// dynamic-allocation pledge models one component at a time —
-    /// pledging combined
-    /// VRAM+RSS would inflate the pledge with the python interpreter's
-    /// RSS and falsely trip the over-commit check (regression: an SDXL
-    /// inference's 8 GB VRAM + 12 GB RSS used to pledge as 20 GB on the
-    /// GPU and trigger a self-eviction that wasn't justified).
+    /// pledging combined VRAM+RSS would inflate the pledge with the python
+    /// interpreter's RSS and falsely trip the over-commit check — an SDXL
+    /// inference at 8 GB VRAM + 12 GB RSS pledges as 20 GB on the GPU and
+    /// self-evicts without justification.
     peak_vram_bytes: u64,
     /// High-water mark of host RSS alone, the mirror of `peak_vram_bytes`.
     /// Includes file-backed pages — see [`ObservationTable::read_peak_rss`].

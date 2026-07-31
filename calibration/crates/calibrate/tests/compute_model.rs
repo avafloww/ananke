@@ -20,12 +20,12 @@ use ananke_measure::record::Status;
 
 /// Relative agreement demanded of every coefficient.
 ///
-/// Far tighter than the 1e-6 the port was asked for, because the two
-/// implementations sum in the same order over the same doubles and so agree to the
-/// last bit or two of a division — the worst observed disagreement is 1.5e-16
-/// relative, on `flat`. Anything looser would let a real modelling difference
-/// through, and a failure here means one of the two is wrong rather than that the
-/// bound is mean.
+/// Far tighter than a floating-point comparison usually warrants, because the fit
+/// is a deterministic sum in a fixed order over the same doubles the fixture was
+/// captured from, and so agrees to the last bit or two of a division — the worst
+/// observed disagreement is 1.5e-16 relative, on `flat`. Anything looser would let
+/// a real modelling difference through, and a failure here means the fitter or the
+/// fixture is wrong rather than that the bound is mean.
 const TOLERANCE: f64 = 1e-9;
 
 #[derive(serde::Deserialize)]

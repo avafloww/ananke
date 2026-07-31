@@ -16,9 +16,9 @@
 //!   so every model lands inside the rolling correction's `[0.8, 1.5]` clamp rather
 //!   than to minimise error.
 //!
-//! The kinds are *declared* rather than inferred: an earlier version read the
-//! evidence text and guessed, which filed a structural fact under "reachable" and
-//! missed two constants whose review note happened to be lowercase. A constant absent
+//! The kinds are *declared* rather than inferred: reading the evidence text and
+//! guessing files a structural fact under "reachable" and misses a constant whose
+//! review note happens to be lowercase. A constant absent
 //! from [`KINDS`] is an error, so adding one forces the question of what justifies it.
 
 use std::collections::BTreeMap;
@@ -111,8 +111,8 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     let mut notes = Vec::new();
 
     // Superseded rows go first, so nothing downstream fits two programs at once. The
-    // check then runs on what survives, where a disagreement can no longer be
-    // explained by a stale duplicate and so is a real problem.
+    // check then runs on what survives, where a disagreement cannot be explained
+    // by a stale duplicate and so is a real problem.
     let before = rows.len();
     let rows = dataset::latest_per_cell(rows);
     let superseded = before - rows.len();

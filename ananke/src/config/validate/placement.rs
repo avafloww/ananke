@@ -239,9 +239,9 @@ allocation.reserve_gb = 6
         ));
     }
 
-    /// `vram_gb` / `min_vram_gb` / `max_vram_gb` were the names before the
-    /// reservation was recognised as device-neutral. Configs on disk still use
-    /// them, so they have to keep parsing to the same allocation.
+    /// `vram_gb` / `min_vram_gb` / `max_vram_gb` are device-specific aliases
+    /// for the device-neutral reservation keys. Configs on disk use them, so
+    /// they have to keep parsing to the same allocation.
     #[test]
     fn legacy_vram_gb_keys_still_parse() {
         let cfg = parse_and_merge(

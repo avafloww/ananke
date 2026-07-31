@@ -77,8 +77,8 @@ pub struct Options {
     pub force: bool,
     /// Measure a cell that already has a record. A cell id hashes the factors, so
     /// an unchanged configuration is normally skipped — but the runtime is not one
-    /// of the factors, and when it changes under you the old record describes a
-    /// different program.
+    /// of the factors, and when it changes under you the existing record describes
+    /// a different program.
     pub remeasure: bool,
 }
 
@@ -108,8 +108,7 @@ pub enum Completed {
 /// next server spawns. That boundary is the point of it: a driver that commits the
 /// dataset as the campaign runs must not do so while a record is being appended,
 /// and this is the only moment at which there is no half-written line. Committing
-/// on a timer from another process — the arrangement this replaces — has no such
-/// guarantee.
+/// on a timer from another process has no such guarantee.
 pub fn measure_cells(
     cells: &[Factors],
     options: &Options,
@@ -123,8 +122,7 @@ pub fn measure_cells(
 /// Public because the observer contract above is a contract *with a driver*, and a
 /// driver cannot check that it holds — that a cell is reported exactly once, after
 /// its row is on disk — without substituting the world. `ananke-calibrate`'s
-/// campaign is that driver, and until this existed the only thing standing behind
-/// the contract was a reading of the loop.
+/// campaign is that driver.
 pub fn measure_cells_with(
     deps: &Deps,
     cells: &[Factors],

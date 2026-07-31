@@ -7,7 +7,7 @@
 //! Nothing here is a gate. It is the tool you reach for when a number looks wrong
 //! and you want to see its parts.
 //!
-//! Two fields are easy to get wrong here, and both were:
+//! Two fields are easy to get wrong here:
 //!
 //! - `cache_ram_mb`. Dropping it from the mapping ignores gemma-4-31B-QAT's
 //!   `cache_ram_mb = 0` and applies the 8192 MiB default instead — the whole of
@@ -34,8 +34,8 @@ const GIB: f64 = MIB_F64 * 1024.0;
 
 /// One model's estimate, or why it has none.
 ///
-/// Untagged so `--json` emits the same shape `as_value` used to hand-build:
-/// no discriminant, and `why` under its JSON name `error`. `Estimated` is
+/// Untagged so `--json` emits a flat shape: no discriminant, and `why` under
+/// its JSON name `error`. `Estimated` is
 /// boxed because it is an order of magnitude larger than `Failed`, and an
 /// untagged newtype variant serializes transparently as the boxed value —
 /// the JSON is unaffected by the indirection.
@@ -53,9 +53,8 @@ enum Row {
 /// One model's fitted terms and where the packer put them.
 ///
 /// Fields are declared alphabetically because `serde_json`'s `Value` has no
-/// `preserve_order` feature here, so the hand-built `json!` output this
-/// replaces was alphabetised — a struct serializes in declaration order, so
-/// this is what reproduces it byte for byte.
+/// `preserve_order` feature here and a struct serializes in declaration order:
+/// reordering these reorders `--json`'s output.
 #[derive(Serialize)]
 struct EstimatedRow {
     #[serde(rename = "architecture")]

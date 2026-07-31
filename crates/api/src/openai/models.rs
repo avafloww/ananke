@@ -18,8 +18,8 @@ pub struct ModelListing {
     pub owned_by: &'static str,
     /// What kind of OpenAI endpoint this model serves. Non-standard
     /// OpenAI field, elided when [`Modality::Chat`] (the default), so
-    /// strict OpenAI clients see exactly what they saw before this
-    /// field landed; embedding clients can filter on it.
+    /// strict OpenAI clients never see it; embedding clients can filter
+    /// on it.
     #[serde(default, skip_serializing_if = "Modality::is_chat")]
     pub modality: Modality,
     /// Passthrough entries from `[[service]] metadata.*`. Non-standard

@@ -137,9 +137,9 @@ pub fn apply(estimate: &mut Estimate, summary: &GgufSummary, rules: &[OverrideRu
     // The fallback estimator, however, sets `per_layer_bytes = None` and
     // leaves `non_layer` all-zero — it only populates the coarse
     // `weights_bytes` number. Recomputing from zero in that case would
-    // clobber the only sensible weights estimate the fallback produced
-    // (we hit this with glm4moe + a CPU-offload regex: predicted 400 MiB
-    // vs 27 GiB observed). Instead, subtract the redirected bytes from
+    // clobber the only sensible weights estimate the fallback produced —
+    // glm4moe with a CPU-offload regex lands at 400 MiB predicted against
+    // 27 GiB observed. Instead, subtract the redirected bytes from
     // the fallback's coarse total so the remaining on-device weights
     // still account for what stays.
     if estimate.per_layer_bytes.is_some() {
@@ -284,14 +284,14 @@ mod tests {
         assert_eq!(est.weights_bytes, 2 * 1024 * 1024);
     }
 
-    /// Regression: when the architecture-specific estimator doesn't run
-    /// (e.g. glm4moe before being added to `MOE_FAMILY`), `apply` receives
+    /// Regression: when the architecture-specific estimator doesn't run —
+    /// an architecture in no family's list — `apply` receives
     /// a fallback-style estimate whose `per_layer_bytes` is `None` and
-    /// whose non-layer fields are all zero. The recompute step used to
-    /// zero `weights_bytes` in that case, leading to a 400 MiB prediction
-    /// for a 26 GiB model. Instead, it must subtract the redirected bytes
-    /// from the fallback's coarse weights total so the remaining
-    /// on-device weights are still accounted for.
+    /// whose non-layer fields are all zero. The recompute step must not
+    /// zero `weights_bytes` in that case — that gives a 400 MiB prediction
+    /// for a 26 GiB model — but subtract the redirected bytes from the
+    /// fallback's coarse weights total, so the remaining on-device weights
+    /// are still accounted for.
     #[test]
     fn preserves_fallback_weights_when_no_per_layer_breakdown() {
         let tensors = vec![

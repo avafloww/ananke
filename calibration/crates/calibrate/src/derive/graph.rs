@@ -187,8 +187,8 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         .map(|(arch, tenths)| format!("{arch} {:.1}/unit", *tenths as f64 / 10.0))
         .collect::<Vec<_>>()
         .join(", ");
-    // Named for the constant it was first written against. Renaming it would
-    // change a message the check compares.
+    // The name is load-bearing: it appears in a disagreement message `emit
+    // --check` compares against the committed document.
     consensus_default(&rates, "MTP embedded compute")?;
     Ok(Scalar {
         value: round_half_even(median(&rates)),

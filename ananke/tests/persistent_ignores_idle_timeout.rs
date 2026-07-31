@@ -2,12 +2,12 @@
 //! to Idle via the idle-timeout path, even when `last_activity` is ancient
 //! relative to `idle_timeout_ms`.
 //!
-//! Regression target: persistent services that came up without receiving
-//! traffic would idle-time-out the instant they reached Running (their
-//! `last_activity` stamp hadn't been pinged since before the spawn, so the
-//! deadline was already in the past). The Idle state transition then
-//! triggered `persistent_watcher` to re-ensure, producing an endless
-//! ~15-second spawn/idle/respawn loop visible in the journal.
+//! The hazard: a persistent service that comes up without receiving traffic
+//! idle-times-out the instant it reaches Running — its `last_activity`
+//! stamp has not been pinged since before the spawn, so the deadline is
+//! already in the past. The Idle transition then triggers
+//! `persistent_watcher` to re-ensure, producing an endless ~15-second
+//! spawn/idle/respawn loop in the journal.
 #![cfg(feature = "test-fakes")]
 
 mod common;
@@ -27,10 +27,9 @@ use tower::util::ServiceExt;
 async fn persistent_service_never_idle_times_out() {
     let mut svc = minimal_llama_service("resident", 0);
     svc.lifecycle = Lifecycle::Persistent;
-    // Deliberately short idle timeout: with the pre-fix code the service
-    // would drain ~100 ms after entering Running. The test would still
-    // expose the bug at a higher value; this just makes the assertion
-    // cheap to wait on.
+    // Deliberately short idle timeout: an unguarded service drains ~100 ms
+    // after entering Running. Any higher value exposes the same hazard; this
+    // just makes the assertion cheap to wait on.
     svc.idle_timeout_ms = 100;
 
     let h = build_harness(vec![svc]).await;

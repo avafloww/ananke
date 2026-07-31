@@ -354,7 +354,7 @@ fn generate_rate_table(generated: &Generated<'_>) -> String {
 }
 
 /// One entry, as the generated table spells it. An unsigned table cannot carry a
-/// negative, so one falls back to the table's default the way `as_u64` always did.
+/// negative, so one falls back to the table's default the way `as_u64` does.
 fn render(value: i64, signed: bool, fallback: i64) -> String {
     if signed {
         return value.to_string();

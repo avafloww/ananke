@@ -1,9 +1,9 @@
 //! The line patterns a llama-server load log is read through.
 //!
 //! Every pattern here is a transcription of what one of the two runtimes
-//! actually prints, and several carry a note about a shape that was silently
-//! mis-read before. Treat the notes as part of the pattern: each one records a
-//! measurement that came out wrong, and none of them are hypothetical.
+//! actually prints, and several carry a note about a shape that a looser pattern
+//! mis-reads in silence. Treat the notes as part of the pattern: each names a
+//! measurement that comes out wrong, and none of them are hypothetical.
 
 use std::sync::LazyLock;
 
@@ -74,7 +74,7 @@ pub(crate) static PER_LAYER_EMBD: LazyLock<Regex> =
 
 /// llama.cpp's own figure for an MTP context.
 ///
-/// It was the stated calibration source for the constants in
+/// It is the stated calibration source for the constants in
 /// `estimator/mtp.rs`, and it is reported *per context* — flat across slot
 /// counts while the real cost scales with them — so it is recorded to keep
 /// that discrepancy visible rather than to fit to.
@@ -89,16 +89,16 @@ pub(crate) static MTP: LazyLock<Regex> =
 ///
 /// A device row carries every column, and the device is *not* always named
 /// `CUDA<n>`: under `--split-mode tensor` llama.cpp fuses the cards and
-/// reports a single `Meta()` device. Keying on the CUDA name silently recorded
+/// reports a single `Meta()` device. Keying on the CUDA name silently records
 /// zeros for every tensor-split run — which is to say for every production
 /// configuration.
 ///
 /// Every separator tolerates padding: the columns are right-aligned, so a
 /// value with fewer digits than its column is preceded by more spaces. A
-/// literal single space after the first `=` silently dropped any row whose
-/// free-memory figure was narrower than its neighbour's — one card of a
-/// two-card breakdown, which left the surviving row misaligned against the
-/// other card's driver reading and turned one cell's compute target into
+/// literal single space after the first `=` silently drops any row whose
+/// free-memory figure is narrower than its neighbour's — one card of a
+/// two-card breakdown, which leaves the surviving row misaligned against the
+/// other card's driver reading and turns one cell's compute target into
 /// 2042 MiB against a true 1032.
 pub(crate) static BREAKDOWN: LazyLock<Regex> = LazyLock::new(|| {
     build(concat!(
@@ -119,15 +119,13 @@ pub(crate) static ARCH: LazyLock<Regex> = LazyLock::new(|| build(r"arch *= *([A-
 /// A server creates more than one context: the main one, a sliding-window
 /// sibling on an interleaved-SWA model, and an MTP draft context under
 /// `--spec-type draft-mtp`. Each prints its own memory pools and its own
-/// compute reserve, and a whole-log sweep collapses them — which is how the
-/// MTP context's compute buffer stayed invisible while its cost was being
-/// fitted as an opaque constant. So the log is segmented into contexts first
-/// (each ends with its `graph nodes` line) and every figure is attributed to
-/// the context that allocated it.
+/// compute reserve, and a whole-log sweep collapses them — which hides the MTP
+/// context's compute buffer inside an opaque constant. So the log is segmented
+/// into contexts first (each ends with its `graph nodes` line) and every figure
+/// is attributed to the context that allocated it.
 ///
 /// `graph splits` follows `graph nodes` on the next line, so a boundary that
-/// stopped at the latter attributed every split count to the *following*
-/// context.
+/// stops at the latter attributes every split count to the *following* context.
 pub(crate) static CONTEXT_END: LazyLock<Regex> = LazyLock::new(|| {
     build(concat!(
         r"(?m)^.*(?:sched_reserve|llama_init_from_model): graph nodes.*$",
@@ -167,7 +165,7 @@ pub(crate) static RS_POOL: LazyLock<Regex> = LazyLock::new(|| {
 /// `Meta()` is the fused device a tensor split reports, and its figure is ONE
 /// card's share. `llm_load_tensors` is ik_llama's spelling and it omits the
 /// word `model` entirely — `CUDA0 buffer size = 6992.89` — so a pattern
-/// demanding the kind recorded nothing at all for the fork, which is most of
+/// demanding the kind records nothing at all for the fork, which is most of
 /// what runs in production. The kind is taken from the stage when the line
 /// does not name one.
 pub(crate) static DEV_BUFFER: LazyLock<Regex> = LazyLock::new(|| {
@@ -185,9 +183,9 @@ pub(crate) static GRAPH_SHAPE: LazyLock<Regex> =
 ///
 /// The `fit_params_target` line is the whole per-device figure — the
 /// projector's weights *and* its CLIP graph buffer — so pairing it with the
-/// summed tensor sizes below isolates the graph term, which the estimator was
-/// modelling as zero. The two are printed on different lines and neither is
-/// derivable from the mmproj file's size (that includes GGUF framing).
+/// summed tensor sizes below isolates the graph term. The two are printed on
+/// different lines and neither is derivable from the mmproj file's size (that
+/// includes GGUF framing).
 pub(crate) static MMPROJ_RESERVED: LazyLock<Regex> = LazyLock::new(|| {
     build(r"adding ([0-9.]+) MiB to fit_params_target for device ([A-Za-z0-9_()]+)")
 });

@@ -13,8 +13,8 @@ pub const CHECKPOINT_MIN_STEP: u32 = 8192;
 /// Query heads, falling back to `n_embd / key_length` where the GGUF omits them.
 ///
 /// Not every architecture writes `attention.head_count`: laguna carries only
-/// `head_count_kv`, so a term built on the query head count silently evaluated to
-/// zero and left 9218 MiB of unfused score matrix unreserved. Where the count has
+/// `head_count_kv`, so a term built on the query head count silently evaluates to
+/// zero and leaves 9218 MiB of unfused score matrix unreserved. Where the count has
 /// to be inferred, any error in it is absorbed by the per-architecture rate — the
 /// two only ever appear as a product — so the fallback costs accuracy in the
 /// *attribution*, not in the reservation.
@@ -72,7 +72,7 @@ pub fn same_resident_weights(left: &Record, right: &Record, tolerance: f64) -> b
 }
 
 /// The default tolerance on a weight match: a percent, which is far below the
-/// 8 GiB mismatch that first exposed the need for the check.
+/// 8 GiB mismatch the check exists to catch.
 pub const WEIGHT_TOLERANCE: f64 = 0.01;
 
 /// Per-device `compute + unaccounted` for a cell with no breakdown table.

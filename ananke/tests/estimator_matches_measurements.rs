@@ -45,9 +45,8 @@ use ananke_dataset::{KvType, Record, Status, read_ndjson};
 ///
 /// All eight are under two mebibytes, and five under half of one — which is
 /// what "the arena is arithmetic, not a fit" means once every term it needs is
-/// present. Getting there took the quantised-cache term, the shared-cache
-/// window masks, and keying ik's MoE rate on the device count; before those,
-/// this list ran to 45.
+/// present — the quantised-cache term, the shared-cache window masks, and ik's
+/// MoE rate keyed on the device count.
 ///
 /// An architecture absent from here is one the dataset has not settled, and
 /// asserting exactness for it would turn an open question into a passing test.
@@ -213,11 +212,10 @@ fn every_model_lands_inside_the_correction_band() {
     // runtime — which is wider than the mainline-only slice a hand analysis
     // might take, so the two do not have to agree.
     //
-    // A ratchet rather than a threshold. It was 33 before the per-architecture
-    // baseline offset, then 5, 2, and 4 as the dataset gained cells that
-    // allocate what this figure deliberately does not model — the per-slot
-    // cost and the context checkpoints, both reserved as slop so that an
-    // ordinary service is not judged against memory it never allocates.
+    // A ratchet rather than a threshold. What pushes cells outside the band is
+    // what this figure deliberately does not model — the per-slot cost and the
+    // context checkpoints, both reserved as slop so that an ordinary service
+    // is not judged against memory it never allocates.
     //
     // Those configurations are excluded above rather than counted here, on the
     // same argument that already excludes a hybrid's CPU-held weights. What
@@ -535,13 +533,12 @@ fn compute_buffer_covers_what_the_runtime_took() {
     under.sort_by(|a, b| b.0.total_cmp(&a.0));
     // A ratchet on the model's worst under-prediction, not a safety guarantee.
     //
-    // This once asserted that *no* cell may reserve less than the runtime took.
-    // That is unsatisfiable for a model fitted for accuracy, which by
-    // construction sits below about half its observations, and the old curves
-    // met it only by raising each intercept to cover its worst point. Measured,
-    // that policy costs a +9.2% median over-reservation and puts 456 of 637
-    // observations outside +/-5% against 150 — it bought safety by being wrong
-    // everywhere, which is what the calibration campaign set out to remove.
+    // Deliberately not "no cell may reserve less than the runtime took". That
+    // is unsatisfiable for a model fitted for accuracy, which by construction
+    // sits below about half its observations; meeting it means raising each
+    // intercept to cover its worst point. Measured, that policy costs a +9.2%
+    // median over-reservation and puts 456 of 637 observations outside +/-5%
+    // against 150 — it buys safety by being wrong everywhere.
     //
     // Safety comes instead from the downstream safety factor and the rolling
     // correction, whose [0.8, 1.5] clamp absorbs a shortfall of this size on the
@@ -567,32 +564,31 @@ fn compute_buffer_covers_what_the_runtime_took() {
     );
 
     eprintln!("compute-buffer headroom (reserved / measured), worst per architecture:");
-    // Recorded ceilings, tightened when the unified compute model replaced the
-    // three mechanisms before it: talkie went from 2.0x to 1.12x, deepseek4 from
-    // 3.4x to 1.48x, qwen35moe from 3.1x to 1.37x, and every other architecture
-    // similarly, because a model with a per-token term and a head-card term no
-    // longer has to cover a batch it cannot express by inflating a flat base.
+    // Recorded ceilings. The unified compute model carries a per-token term
+    // and a head-card term, so it does not have to cover a batch it cannot
+    // express by inflating a flat base — which is what keeps most
+    // architectures inside ~1.5x.
     //
-    // gemma3 and qwen35 moved the other way, to 2.99x and 2.78x. Both maxima are
-    // flash-attention-off cells, where `no_flash_attn_mib` is added on top and is
-    // the one term still unfitted. It did not get worse; the base under it got
-    // accurate, so an unfitted term is now the whole of the error. Deriving it is
-    // what tightens these two.
+    // gemma3 and qwen35 sit higher, at 2.99x and 2.78x. Both maxima are
+    // flash-attention-off cells, where `no_flash_attn_mib` is added on top and
+    // is the one term still unfitted: the base under it is accurate, so the
+    // unfitted term is the whole of the error. Deriving it is what tightens
+    // these two.
     for (arch, headroom) in &over {
         eprintln!("  {arch:12} {headroom:6.1}x");
     }
     // How far *above* the measurement each curve sits, per architecture.
     //
     // The curves are fitted to this dataset rather than inherited, and the
-    // comparison is now like with like: compute *plus* the unaccounted
-    // remainder, from a real device rather than the fused `Meta()` that tensor
-    // split reports. Both corrections mattered — against the fused device's
-    // compute column alone these read 20-28x, which was an artifact of
-    // comparing a per-device reservation against a figure that is not one.
+    // comparison is like with like: compute *plus* the unaccounted remainder,
+    // from a real device rather than the fused `Meta()` that tensor split
+    // reports. Both halves matter — against the fused device's compute column
+    // alone these read 20-28x, an artifact of comparing a per-device
+    // reservation against a figure that is not one.
     //
     // What is left is roughly the 60% margin plus the batch-scaling constant
     // the curve's form cannot carry. The hybrids are no worse than the rest,
-    // which is the other thing the artifact had obscured.
+    // which the artifact also obscures.
     //
     // Over-reserving does not OOM, it refuses a model room it could have used,
     // so these are a ratchet: today's numbers, which may only come down.
@@ -601,37 +597,35 @@ fn compute_buffer_covers_what_the_runtime_took() {
         ("lfm2", 1.1),
         ("llama", 1.2),
         ("laguna", 1.35),
-        // Raised from 2.4 when the qwen35 curve was refitted across 48 cells
-        // rather than 38: the wider fit found a higher worst-case unaccounted
-        // remainder, so the base is larger on more evidence, not less.
+        // The qwen35moe curve is fitted across 48 cells; the wide fit finds a
+        // higher worst-case unaccounted remainder, so the base is larger on
+        // more evidence, not less.
         ("qwen35moe", 1.45),
         ("qwen35", 2.5),
-        // 3.5 rather than 2.9 because the dataset gained a single-card cell at
-        // ctx 65536, not because the curve moved — its base and slope are
-        // unchanged. gemma3's measured compute is nearly flat in context (530
-        // MiB at ctx 32768, 562 at 65536) while the curve charges about 17 MiB
-        // per 1024, so it over-reserves at long context. Wasteful, not unsafe.
+        // Driven by the single-card cell at ctx 65536 rather than by the
+        // curve: gemma3's measured compute is nearly flat in context (530 MiB
+        // at ctx 32768, 562 at 65536) while the curve charges about 17 MiB per
+        // 1024, so it over-reserves at long context. Wasteful, not unsafe.
         ("gemma3", 2.65),
         ("qwen3", 1.15),
         ("gemma4", 1.3),
-        // Not a curve error any more. Its worst cell is the one flash-attention
+        // Not a curve error. Its worst cell is the one flash-attention
         // -off run, where the estimator reserves 12066 MiB against the 2435 the
         // runtime took; with flash attention on the same configuration sits at
         // 2.4x, in line with every other architecture. The no-flash-attention
         // multiplier is unfitted here — see FINDINGS.md.
         ("deepseek4", 1.5),
     ];
-    // Recorded ceilings, tightened when the unified compute model replaced the
-    // three mechanisms before it: talkie went from 2.0x to 1.12x, deepseek4 from
-    // 3.4x to 1.48x, qwen35moe from 3.1x to 1.37x, and every other architecture
-    // similarly, because a model with a per-token term and a head-card term no
-    // longer has to cover a batch it cannot express by inflating a flat base.
+    // Recorded ceilings. The unified compute model carries a per-token term
+    // and a head-card term, so it does not have to cover a batch it cannot
+    // express by inflating a flat base — which is what keeps most
+    // architectures inside ~1.5x.
     //
-    // gemma3 and qwen35 moved the other way, to 2.99x and 2.78x. Both maxima are
-    // flash-attention-off cells, where `no_flash_attn_mib` is added on top and is
-    // the one term still unfitted. It did not get worse; the base under it got
-    // accurate, so an unfitted term is now the whole of the error. Deriving it is
-    // what tightens these two.
+    // gemma3 and qwen35 sit higher, at 2.99x and 2.78x. Both maxima are
+    // flash-attention-off cells, where `no_flash_attn_mib` is added on top and
+    // is the one term still unfitted: the base under it is accurate, so the
+    // unfitted term is the whole of the error. Deriving it is what tightens
+    // these two.
     for (arch, headroom) in &over {
         let Some((_, ceiling)) = CEILINGS.iter().find(|(a, _)| a == arch) else {
             continue;

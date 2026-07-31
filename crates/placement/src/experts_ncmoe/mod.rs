@@ -34,8 +34,8 @@ use crate::{
 /// the window is trailing.
 ///
 /// The distinction is worth 1692 MiB on laguna, whose quant widens later blocks:
-/// its leading 38 and trailing 39 differ by exactly that, which is what the
-/// one-card cells were short by while this modelled every ik service as trailing.
+/// its leading 38 and trailing 39 differ by exactly that, which is what a
+/// one-card cell falls short by if every ik service is modelled as trailing.
 ///
 /// A trailing window also swallows the MTP head. ik overrides those blocks and
 /// then never loads them, so the slots are wasted: Qwen3.6-35B-A3B at `-ncmoe 40`
@@ -121,8 +121,8 @@ impl<'a> Packer<'a> {
     /// units and record `--n-cpu-moe N`, letting the runtime split the
     /// GPU-resident experts across cards itself.
     ///
-    /// This replaces per-tensor `-ot` placement. Scattering a layer's
-    /// gate/up/down across CUDA0/CUDA1/CPU defeats the runtime's fused
+    /// Whole layers rather than per-tensor `-ot` placement: scattering a
+    /// layer's gate/up/down across CUDA0/CUDA1/CPU defeats the runtime's fused
     /// multi-threaded CPU MoE kernel (measured ~24× slower generation on
     /// ik_llama — the CPU experts fall back to a ~2-core path) and can exceed
     /// llama.cpp's `GGML_SCHED_MAX_SPLIT_INPUTS` graph-split limit, a hard

@@ -1,7 +1,7 @@
 //! Report where the dataset is too thin to have measured what it claims.
 //!
 //! See [`ananke_calibrate::coverage`] for why this exists and which four
-//! constants it was written after.
+//! constants motivate it.
 
 use std::process::ExitCode;
 

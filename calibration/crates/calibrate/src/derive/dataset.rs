@@ -50,8 +50,9 @@ pub fn instant(stamp: &str) -> Timestamp {
 /// megabyte, so a disagreement is a change in the runtime, not noise. GLM-5.2's
 /// production cell reads 38708 MiB on one build and 34978 MiB on the next.
 ///
-/// This is the only statement of the rule; the compute-model fit calls it too,
-/// having previously carried a second copy that ordered the stamps as strings.
+/// This is the only statement of the rule; the compute-model fit calls it rather
+/// than carrying a second copy, which would be free to order the stamps
+/// differently and select a different row.
 pub fn latest_per_cell(rows: &[Record]) -> Vec<Record> {
     let mut newest: BTreeMap<&str, usize> = BTreeMap::new();
     for (index, record) in rows.iter().enumerate() {
@@ -134,8 +135,8 @@ pub fn report_stale_builds(rows: &[Record]) -> Vec<String> {
 /// readings must agree. They usually do, and where they do not, the older row has
 /// to go rather than be averaged in.
 ///
-/// `runtime_sha256` is what makes this checkable, and it is the reason to keep
-/// recording it even though nothing consumed it for two campaigns.
+/// `runtime_sha256` is what makes this checkable, and is the reason to keep
+/// recording it on every row.
 pub fn check_runtime_builds(rows: &[Record], tolerance: f64) -> Result<()> {
     let mut by_cell: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
     for record in rows {

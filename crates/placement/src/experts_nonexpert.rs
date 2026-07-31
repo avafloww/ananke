@@ -69,8 +69,8 @@ impl<'a> Packer<'a> {
                 // spawns nothing, so there is no `-ngl 999` child to OOM.
                 // Without the exemption a MoE whose non-expert weight alone
                 // overflows the bare cards yields no figure at all — the same
-                // "no number for an unplaceable model" hole this reporting
-                // work exists to close, just `null` instead of `0 B`.
+                // "no number for an unplaceable model" hole `Demand` exists to
+                // close, just `null` instead of `0 B`.
                 None if self.allow_cpu
                     && (!self.expert_aware || matches!(self.mode, PackMode::Demand)) =>
                 {

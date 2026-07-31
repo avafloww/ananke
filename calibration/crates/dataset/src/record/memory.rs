@@ -5,8 +5,8 @@
 //! as `gpu{physical id}_used_mib` — in among fixed ones at the same nesting
 //! level, hence the hand-written codecs: fixed keys stay named fields, card ids
 //! are parsed out into a `BTreeMap<u32, u64>`, and anything else is an
-//! unknown-field error. The open `BTreeMap<String, Value>` both previous
-//! readers used is how a physical-versus-visible index mix-up once hid here.
+//! unknown-field error. An open `BTreeMap<String, Value>` is where a
+//! physical-versus-visible index mix-up hides.
 
 use std::{collections::BTreeMap, fmt};
 

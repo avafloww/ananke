@@ -4,7 +4,7 @@
 //! because the estimator reasons about them without knowing what a
 //! `ServiceConfig` is: how the model is split, and which slot a tensor is pinned
 //! to, are properties of the runtime invocation. `ananke::config::validate`
-//! re-exports both, so config-side paths are unchanged.
+//! re-exports both.
 
 use std::{collections::BTreeMap, fmt};
 
@@ -165,11 +165,11 @@ mod tests {
 
 /// What the packer reads about a service, distilled out of its config.
 ///
-/// The packer used to take a whole `ServiceConfig`, which tied it to the config
-/// validator and everything behind it. It needs eight fields, all of them either
-/// primitives or types declared above, so — exactly as `EstimatorInputs` does for
-/// the estimator — it takes those and nothing else. Building one from a validated
-/// config is the daemon's business; see `ananke::config::service_inputs`.
+/// The packer needs eight fields, all of them either primitives or types declared
+/// above, so — exactly as `EstimatorInputs` does for the estimator — it takes those
+/// and nothing else rather than a whole `ServiceConfig`, which would tie it to the
+/// config validator and everything behind it. Building one from a validated config
+/// is the daemon's business; see `ananke::config::service_inputs`.
 #[derive(Debug, Clone, Default)]
 pub struct PlacementInputs {
     /// Service name. Compared against the reservation table's keys, so it is the
@@ -194,7 +194,7 @@ pub struct PlacementInputs {
     /// Whether, and how far, expert tensors are moved to the host.
     pub expert_offload: OffloadMode,
     /// Explicit per-GPU shares for a sharded split, one per allowed GPU in
-    /// ascending id order. `None` gives the historical equal split.
+    /// ascending id order. `None` gives an equal split.
     pub tensor_split_weights: Option<Vec<f32>>,
     /// `override_tensor` rules the operator pinned by hand.
     pub override_tensor: Vec<String>,

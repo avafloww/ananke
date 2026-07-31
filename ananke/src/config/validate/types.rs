@@ -93,9 +93,9 @@ pub struct ServiceConfig {
     pub openai_compat: bool,
     pub description: Option<String>,
     /// What kind of model the service exposes (chat or embedding).
-    /// Default is [`Modality::Chat`] so configs and JSON shipped before
-    /// the field landed are unchanged. Embedding services opt in with
-    /// `modality = "embedding"` in their `[[service]]` block.
+    /// Defaults to [`Modality::Chat`], so a config that says nothing gets a
+    /// chat service. Embedding services opt in with `modality = "embedding"`
+    /// in their `[[service]]` block.
     pub modality: Modality,
     pub start_queue_depth: usize,
     pub extra_args: Vec<String>,

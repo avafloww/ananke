@@ -175,7 +175,7 @@ fn prefill(out: &mut String, observations: &Observations) {
                 points.entry((words, n_predict)).or_default().1 = Some(anon_mib(reading));
             }
             // The shared stage's step is also the (64, 8) point. Every growth stage
-            // now takes that same pair, so this reads the shared one specifically
+            // takes that same pair, so this reads the shared one specifically
             // rather than whichever happened to be recorded last.
             Tag::Idle if reading.stage == StageKind::Shared => {
                 points.entry((STEP_WORDS, STEP_PREDICT)).or_default().0 = Some(anon_mib(reading));

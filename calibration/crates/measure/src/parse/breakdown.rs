@@ -9,9 +9,8 @@ use crate::parse::{count, patterns};
 /// Only the *last* table is read. Recent builds print one at the
 /// parameter-fitting stage, before anything is allocated, and another once the
 /// context exists; the first is a projection and its rows would misalign
-/// `devices[index]` against the cards. Relying on the fit-stage rows' negative
-/// `unaccounted` to exclude them worked by accident and stopped working for 16
-/// cells whose projection happened to come out positive.
+/// `devices[index]` against the cards. The fit-stage rows cannot be excluded by
+/// a negative `unaccounted` instead: 16 cells' projections come out positive.
 pub(crate) fn parse_devices(text: &str) -> Vec<DeviceRow> {
     patterns::BREAKDOWN
         .captures_iter(final_table(text))

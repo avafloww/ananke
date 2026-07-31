@@ -131,9 +131,9 @@ async fn spawn_warms_estimate_cache_for_detail_endpoint() {
 
 /// A 2-GPU snapshot exercises the `visible_devices` fingerprint path: the
 /// reservation handler sets `visible_devices = snap.gpus.len() = 2`, and the
-/// management handler must do the same or its cache lookup misses. With the
-/// 0-GPU test above, both paths clamp to 1 via `.max(1)` and the test passes
-/// regardless of the management fix — this test fails without it.
+/// management handler must do the same or its cache lookup misses. The 0-GPU
+/// test above cannot catch a divergence: both paths clamp to 1 via `.max(1)`,
+/// so it passes whatever the management handler computes.
 #[tokio::test(flavor = "current_thread")]
 async fn estimate_cache_hit_with_multi_gpu_snapshot() {
     let model_path = Path::new("/fake/warmth2.gguf");

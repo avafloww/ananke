@@ -51,10 +51,9 @@ pub enum PackMode {
     /// a demand pack.
     ///
     /// This exists so the "would need" figure is produced by the packer rather
-    /// than re-derived alongside it. A second implementation of the same model
-    /// drifts: successive reviews of a hand-written aggregate found it missing
-    /// the head-vs-secondary logits trim, then the CPU-side compute buffer,
-    /// then the one-layer fudge. There is one implementation now.
+    /// than re-derived alongside it. A second implementation of the same
+    /// accounting drifts silently, dropping terms like the head-vs-secondary
+    /// logits trim, the CPU-side compute buffer, or the one-layer fudge.
     Demand,
 }
 
@@ -160,7 +159,7 @@ fn pack_inner(
     // GPUs in parallel — a fundamentally different shape from the first-fit
     // layer walk. Taken only when the service opts in, at least two GPUs are
     // available to span, and the estimator gave a per-layer breakdown to
-    // halve. Otherwise fall through to the layer path: a single-GPU "tensor
+    // shard. Otherwise fall through to the layer path: a single-GPU "tensor
     // split" is just an ordinary placement, and a fallback-arch model (no
     // per-layer detail) can't be evenly sharded.
     if packer.placement.split_mode.is_sharded()
@@ -212,10 +211,10 @@ mod tests {
 
     /// The invariant the demand figure exists to hold: against a pack that
     /// shares its capacity view, `Demand` must agree to the byte. Any
-    /// divergence means a step was skipped or double-counted, which is what a
-    /// hand-written aggregate could not rule out — successive reviews found it
-    /// missing the logits trim, the CPU-side compute buffer, and the one-layer
-    /// fudge in turn.
+    /// divergence means a step was skipped or double-counted — the class of
+    /// error a second, hand-written aggregate cannot rule out, and which the
+    /// logits trim, the CPU-side compute buffer, and the one-layer fudge are
+    /// each easy to fall into.
     ///
     /// The comparison is against `pack_optimistic` on an empty table, *not*
     /// `pack`. Strict packing clamps to `min(free, total)`, so with a card in
@@ -264,7 +263,7 @@ mod tests {
         assert_eq!(total(&demand), total(&bare));
     }
 
-    /// The case the figure was added for: a model whose host-RAM spill exceeds
+    /// The case the figure exists for: a model whose host-RAM spill exceeds
     /// the machine. The real pack fails, so there is no per-device split to
     /// sum — but demand still reports the model's size rather than nothing.
     #[test]
@@ -299,7 +298,7 @@ mod tests {
 
     /// Demand forces CPU spill on so a `GpuOnly` service still yields a figure.
     /// Without it the layer walk fails and the row falls back to reporting
-    /// nothing — the "0 B" hole this work exists to close.
+    /// nothing — the "0 B" hole `Demand` exists to close.
     #[test]
     fn demand_resolves_for_a_gpu_only_service_that_overflows_its_cards() {
         let e = trivial_estimate(60, 1024);
@@ -343,10 +342,10 @@ mod tests {
     }
 
     /// The MoE shape from issue #29. The expert-aware path refuses whole-layer
-    /// CPU spill for a real placement (the `-ngl 999` child would OOM), which
-    /// made `Demand` return `Err` and the row report nothing — reintroducing
-    /// the "no figure for an unplaceable model" hole for exactly the class of
-    /// model the issue was filed about.
+    /// CPU spill for a real placement (the `-ngl 999` child would OOM), so
+    /// without `Demand`'s exemption from that rule it returns `Err` and the row
+    /// reports nothing — the "no figure for an unplaceable model" hole, for
+    /// exactly the class of model the issue was filed about.
     ///
     /// The non-expert weight must exceed the cards' *physical total*, not
     /// merely their free bytes: `Demand` shares `Optimistic`'s `total -

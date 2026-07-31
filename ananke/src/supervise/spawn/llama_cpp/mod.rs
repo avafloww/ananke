@@ -85,9 +85,9 @@ pub(super) fn render_llama_cpp_argv(
 /// rather than one `-ot` per rule. Current llama.cpp deprecated repeated
 /// `-ot` flags and now honours **only the last one** ("argument '-ot'
 /// specified multiple times … only last value will be used"), so a
-/// per-rule emission silently dropped every rule but the last — which for
-/// the packer's synthesised MoE offload meant almost no experts actually
-/// moved off the GPU, OOMing at load. Rules never contain a comma, so the
+/// per-rule emission silently drops every rule but the last — which for
+/// the packer's synthesised MoE offload leaves almost no experts moved off
+/// the GPU, OOMing at load. Rules never contain a comma, so the
 /// join is lossless and llama.cpp parses the combined value itself.
 fn push_override_tensor(args: &mut Vec<String>, rules: &[String]) {
     if !rules.is_empty() {

@@ -1,12 +1,11 @@
 //! Per-device compute-buffer sizing.
 //!
-//! [`per_device_for`] is the entry point. The three hand-fitted curves it used to
-//! pick between — one for a tensor split, one for a layer split on ik_llama, one
-//! for a layer split otherwise — are gone, replaced by the single fitted model in
-//! [`crate::compute_model`], whose design columns are dimensionally normalised so
-//! architectures of different width share coefficients. What remains here is the
-//! head-card contract: `per_device_for` returns the *head* GPU's total, and the
-//! packer trims [`crate::compute_model::head_extra_mib`] back off every secondary.
+//! [`per_device_for`] is the entry point. The sizing itself is the single
+//! fitted model in [`crate::compute_model`], whose design columns are
+//! dimensionally normalised so architectures of different width share
+//! coefficients. What this module adds is the head-card contract:
+//! `per_device_for` returns the *head* GPU's total, and the packer trims
+//! [`crate::compute_model::head_extra_mib`] back off every secondary.
 //!
 //! An architecture gets its own curve because the overhead scales with different
 //! knobs — attention scratch grows fast with context on wide dense models,
@@ -19,7 +18,7 @@
 //! On top of whichever model applies, [`no_flash_attn_mib`] adds the score
 //! matrix an unfused attention pass materialises.
 //!
-//! Operators can still override the whole term per service via
+//! Operators can override the whole term per service via
 //! `estimation.compute_buffer_mb`.
 
 use ananke_gguf::GgufSummary;
@@ -72,8 +71,8 @@ pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u3
     if let Some(mb) = inputs.compute_buffer_mb {
         return mb;
     }
-    // The *head* card's total, which is the contract this field has always had:
-    // the packer trims `output_buffer_bytes` back off every secondary. See
+    // The *head* card's total, which is this field's contract: the packer trims
+    // `output_buffer_bytes` back off every secondary. See
     // [`crate::compute_model`] for the model itself, and
     // [`crate::compute_model::head_extra_mib`] for the term trimmed.
     let flash_attn = inputs.flash_attn.unwrap_or(true);

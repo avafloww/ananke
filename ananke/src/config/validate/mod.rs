@@ -23,8 +23,8 @@ pub mod test_fixtures;
 
 // Config-default constants live in the `ananke-config` leaf crate so the
 // xtask and CLI can reference them without pulling in the daemon's heavy
-// deps. Re-exported here so existing `use crate::config::validate::DEFAULT_*`
-// paths keep working.
+// deps. Re-exported here so they are reachable as
+// `crate::config::validate::DEFAULT_*`.
 pub use ananke_config::docs::{
     DEFAULT_AUTO_RESTART_FLAP_WINDOW_MS, DEFAULT_AUTO_RESTART_GENERATION_STALL_MS,
     DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS, DEFAULT_AUTO_RESTART_MAX_ERROR_RATE,

@@ -1,9 +1,9 @@
 //! Integration test: `PUT /api/config` that changes a service's
 //! `context` is reflected in the argv of the next child the supervisor
-//! spawns. Pre-fix, `SupervisorInit.svc` was frozen at boot, so reload
-//! edits silently bounced off already-spawned supervisors — the daemon
-//! published `config_reloaded` but the next start still used the old
-//! context. This test walks the full path: boot with context=4096,
+//! spawns. A `SupervisorInit.svc` frozen at boot makes reload edits bounce
+//! silently off already-spawned supervisors: the daemon publishes
+//! `config_reloaded` but the next start still uses the stale context.
+//! This test walks the full path: boot with context=4096,
 //! reload to context=16384, stop+start, assert the spawned child's
 //! argv contains the new `-c 16384`.
 //!

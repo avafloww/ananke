@@ -343,8 +343,8 @@ impl RunLoop {
                 grace_secs = QUEUE_BLOCKED_GRACE.as_secs(),
                 "queue grace exceeded; failing queued ensure"
             );
-            // The `message` field on `StartFailure` is now just a
-            // human-readable log breadcrumb; the wire layer renders
+            // The `message` field on `StartFailure` is a human-readable
+            // log breadcrumb only; the wire layer renders
             // off the structured `busy_peers` list inside the kind
             // and ignores this string.
             let log_message = format!(

@@ -4,17 +4,12 @@
 //! files to order the schedule, and touches neither the GPUs nor the running server
 //! nor the plan on disk.
 //!
-//! Reporting per-question progress by globbing for `data/<phase>.ndjson` is the
-//! arrangement this replaces. The campaign left that layout behind when it
-//! consolidated to one `measurements.ndjson`, and the phase names it defaulted to
-//! had stopped being questions, so every row printed `0/?` against a dataset of
-//! 643 records and had done for some time.
-//!
-//! Progress here is keyed on **cell identity** instead: each question is asked what
-//! cells it wants, each cell is named the way the harness names it, and the dataset
-//! is looked up by that name. Nothing depends on a filename, and a question that is
-//! renamed or that resweeps its cells reports correctly without anybody remembering
-//! to rename a file.
+//! Progress is keyed on **cell identity**: each question is asked what cells it
+//! wants, each cell is named the way the harness names it, and the dataset is
+//! looked up by that name. Nothing depends on a filename or on a per-question
+//! dataset — the campaign accumulates one `measurements.ndjson` — so a question
+//! that is renamed or that resweeps its cells reports correctly without anybody
+//! remembering to rename a file.
 //!
 //! A cell can belong to more than one question — that is the whole reason the
 //! campaign runs one merged schedule — so the per-question counts deliberately sum
@@ -193,9 +188,10 @@ mod tests {
 
     /// The report finds the real campaign's progress, and it is not zero.
     ///
-    /// This is the assertion the filename-globbing arrangement would have failed:
-    /// it reported `0/?` for every question against this same dataset, and nothing
-    /// noticed because nothing checked.
+    /// A stale identity function — or any coupling to something other than the cell
+    /// name — reports `0/?` for every question and looks like an idle campaign
+    /// rather than a broken report. Only an assertion against the real dataset
+    /// tells the two apart.
     #[test]
     fn the_real_dataset_reports_real_progress() {
         let report = report(&dataset(), &Library::from_env());
@@ -308,7 +304,7 @@ mod tests {
         let now = "2026-07-30T06:11:17+00:00";
         assert_eq!(minutes_between(then, now), Some(3 * 24 * 60));
 
-        // And the short case the component-reading version got right by accident.
+        // And the short case, where the total and a span's minutes component agree.
         assert_eq!(
             minutes_between("2026-07-30T06:11:17+00:00", "2026-07-30T06:41:17+00:00"),
             Some(30)
@@ -326,9 +322,9 @@ mod tests {
 
     /// A record stamped in the future has no age either.
     ///
-    /// Clamping it to zero — which the first version did — reports "0 min ago,
-    /// running" for as long as the skew lasts, which is the same wrong answer the
-    /// span-component bug gave, reached from the other direction.
+    /// Clamping it to zero would report "0 min ago, running" for as long as the
+    /// skew lasts — the same wrong answer reading a span's minutes component
+    /// gives, reached from the other direction.
     #[test]
     fn a_record_from_the_future_has_no_age() {
         assert_eq!(

@@ -169,10 +169,9 @@ pub struct EstimationConfig {
     /// isn't recognised by any per-family estimator. Defaults to `false`
     /// — unknown architectures hard-reject at config load so the
     /// operator either adds the arch to the right family list or
-    /// explicitly opts in here. The silent fallback previously masked a
-    /// 67× under-reservation on glm4moe before it was a recognised
-    /// family. (See `ananke::estimator::fallback` for the current
-    /// formula.)
+    /// explicitly opts in here. A silent fallback masks under-reservation:
+    /// glm4moe estimates 67× low without a family entry. (See
+    /// `ananke::estimator::fallback` for the formula.)
     pub allow_fallback: Option<bool>,
 }
 

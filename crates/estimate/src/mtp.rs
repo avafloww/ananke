@@ -56,9 +56,9 @@ fn draft_model_gpu_weight_bytes(draft: &GgufSummary) -> u64 {
 fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32) -> u64 {
     // The draft shares the target's KV cache — the load log shows `layer 3:
     // sharing with layer 59` — so there is no context-scaling cache term. Its
-    // *compute* scales anyway: gemma-4-31B-QAT measures a driver delta of 724,
-    // 788, and 920 MiB at ctx 32768, 65536, and 131072, where a flat constant
-    // modelled 407 at each and so under-reserved by 317 to 513 MiB.
+    // *compute* scales anyway, so the term has to as well: gemma-4-31B-QAT
+    // measures a driver delta of 724, 788, and 920 MiB at ctx 32768, 65536, and
+    // 131072, which a flat 407 MiB would under-reserve by 317 to 513 MiB.
     //
     // Flat in the slot count, unlike an embedded head: 724, 724, and 728 MiB
     // at one, two, and four slots. That is the control confirming the embedded

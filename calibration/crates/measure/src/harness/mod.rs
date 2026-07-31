@@ -19,10 +19,10 @@
 //! reached for directly is the probing in [`host`] that shells out for the box's
 //! identity, which decides nothing.
 //!
-//! That includes the shell in [`run`], which was exempted here for longer than it
-//! should have been. It orders the phases and does not decide much, but the order
-//! *is* the contract a driver commits against — a cell is reported once, after its
-//! row is on disk — and "thin" is not a reason to leave a contract unchecked.
+//! That includes the shell in [`run`]. It orders the phases and does not decide
+//! much, but the order *is* the contract a driver commits against — a cell is
+//! reported once, after its row is on disk — and "thin" is not a reason to leave a
+//! contract unchecked.
 
 pub mod cli;
 

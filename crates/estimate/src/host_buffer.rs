@@ -16,10 +16,9 @@
 //!   than an allocation: it fills with use, so it is reserved but deliberately
 //!   kept out of the rolling correction's base (see `Charge::Slop`).
 //!
-//! Before this module the `Cpu` slot was charged the GPU-calibrated
-//! `compute_buffer_mb` — a number derived from `nvidia-smi` VRAM readings and
-//! never measured against a host backend — and the other two terms were not
-//! modelled at all.
+//! The `Cpu` slot must not be charged the GPU-calibrated `compute_buffer_mb`:
+//! that number is derived from `nvidia-smi` VRAM readings and says nothing
+//! about a host backend.
 //!
 //! # Calibration
 //!
@@ -100,8 +99,8 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
     // Both shapes are flat in the slot count and linear in context at 2 MiB
     // per 1024 — measured at 239, 243, and 240 MiB for Qwen3.6-27B at one,
     // two, and four slots, and 240, 274, 341 across ctx 32768, 65536, and
-    // 131072. The flat constants these replace were wrong in shape, and so in
-    // opposite directions at the ends of that range.
+    // 131072. A flat constant is the wrong shape here, and wrong in opposite
+    // directions at the ends of that range.
     let mtp = if inputs.mtp {
         let base = if inputs.draft_model.is_some() {
             MTP_HOST_BYTES_SEPARATE_DRAFT
@@ -117,8 +116,8 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
     };
     // A tensor split costs host baseline a layer split does not — between 96
     // and 184 MiB, measured on every model that ran both at matching settings.
-    // The operator runs several services this way, and every one of them was
-    // under-predicted by that much.
+    // The operator runs several services this way, so omitting it under-predicts
+    // each of them by that much.
     let tensor_split = if inputs.visible_devices > 1
         && inputs.split_mode == ananke_config::placement::SplitMode::Tensor
     {
@@ -385,16 +384,16 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
         //
         // Measured on gemma3 and on gemma4 alike: both imply three at four
         // slots with `--kv-unified`, and one everywhere else. The condition is
-        // the shared cache and not the slot count — an earlier sweep measured
-        // gemma-4-31B-QAT at four slots with a per-slot cache and found one,
-        // which is what rules the simpler rule out.
+        // the shared cache and not the slot count: gemma-4-31B-QAT at four
+        // slots with a per-slot cache measures one, which rules the simpler
+        // rule out.
         Some(window) => {
             let shared = inputs.parallel.unwrap_or(1) > 1 && inputs.kv_unified.unwrap_or(false);
             // How many batches the window spans, plus the batch's own mask.
             //
-            // The count was 3 from a sweep taken entirely at ubatch 512, where
-            // a 1024-token window spans two batches. At 2048 the same
-            // configuration measures 2, and the difference is exactly one mask
+            // The count depends on the batch: at ubatch 512 a 1024-token
+            // window spans two batches and the count is 3, while at 2048 the
+            // same configuration measures 2 — a difference of exactly one mask
             // — 692.3 MiB against 740.0 modelled on gemma-3-27B at four
             // shared slots, where two masks give 692.0. Capped at the measured
             // range rather than extrapolated below ubatch 512.
@@ -412,11 +411,11 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     // Per token, per *device copy* — replicated under a layer split the same
     // way the masks are, and independent of the slot count.
     //
-    // An earlier reading had it divided by the stream count, from single-card
-    // points measuring 8 KiB per token against two-card cells measuring 32.
-    // That is the mask-copy factor of 4, not the slot count: cells run to
-    // settle it measure gemma3 at 128.1 KiB per token and qwen35 at 32.1 at
-    // both one slot and four, on two cards, identical to the decimal.
+    // It must not be divided by the stream count. Single-card points measure 8
+    // KiB per token against two-card cells at 32, which is the mask-copy factor
+    // of 4 rather than the slot count: gemma3 measures 128.1 KiB per token and
+    // qwen35 32.1 at both one slot and four, on two cards, identical to the
+    // decimal.
     let no_fa_extra = if flash_attn {
         0
     } else {
@@ -439,8 +438,8 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     // one device. Not under tensor split, where llama.cpp fuses the cards
     // into a single device, and not on ik at any card count. Measured at
     // 4.00-4.16 on six architectures, flat across context, batch, slot count
-    // and cache mode — so it multiplies a term that scales, and the flat
-    // "+24 MiB for a second GPU" it replaces was this evaluated at ctx 8192.
+    // and cache mode — so it multiplies a term that scales, rather than being
+    // a flat allowance (which at ctx 8192 comes to about +24 MiB).
     let masks = base_mask + indexer_masks + swa_mask + no_fa_extra;
     let masks = masks * mask_copies(inputs);
 
@@ -530,9 +529,9 @@ fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64, devices: u
     if n_tokens * used >= IK_OP_OFFLOAD_MIN_BATCH * experts {
         return 0;
     }
-    // Proportional to hidden size, not flat. The previous 81 KiB/token was
-    // this term evaluated at qwen35moe's `n_embd` of 2048 and frozen, which
-    // left GLM-5.2 — three times that hidden size — under-reserved threefold.
+    // Proportional to hidden size, not flat: a flat 81 KiB/token, which is this
+    // term at qwen35moe's `n_embd` of 2048, under-reserves GLM-5.2 — three
+    // times that hidden size — threefold.
     ik_moe_rate(arch, devices) * embedding_length(summary, arch) * n_tokens
 }
 
@@ -666,7 +665,7 @@ mod tests {
 
     /// Every point from the hardware sweep, reproduced by the model. These are
     /// the measurements the constants come from, so a change that breaks them
-    /// is a change that no longer describes the runtime.
+    /// is a change that stops describing the runtime.
     ///
     /// One measured point from the sweep.
     struct Point {
@@ -1024,11 +1023,10 @@ mod tests {
 
         // Both shapes cost more than none, and they cost *different* amounts —
         // which is the point of the assertion. Which of the two is larger is
-        // not: it was the separate draft when both were flat constants, and
-        // is the embedded head now that each is a base plus a context slope.
-        // Subtracting one from the other in a fixed order overflowed the
-        // moment that order changed, and it overflowed at compile time, so
-        // `cargo test` never reported a test failure at all.
+        // not, and must not be assumed: subtracting one from the other in a
+        // fixed order overflows the moment the order flips, and it overflows at
+        // compile time, so `cargo test` reports no test failure at all. Hence
+        // `abs_diff`.
         assert!(plain < embedded && plain < separate);
         assert_ne!(embedded, separate);
         assert_eq!(
@@ -1074,8 +1072,8 @@ mod measured_tests {
     /// and neither does tensor split, where llama.cpp fuses the devices.
     ///
     /// Measured on six architectures at 4.00-4.16, flat across context and
-    /// batch — so the difference has to scale with the mask, not sit beside
-    /// it as the flat "+24 MiB for a second GPU" it replaces did.
+    /// batch — so the difference has to scale with the mask rather than sit
+    /// beside it as a flat per-card allowance.
     #[test]
     fn layer_split_replicates_masks_but_tensor_split_does_not() {
         let summary = fake_summary();
@@ -1116,8 +1114,8 @@ mod measured_tests {
     fn each_extra_visible_device_costs_host_memory() {
         // Tensor split throughout, so the mask replication that layer split
         // triggers cannot contaminate what is meant to be a measurement of
-        // the per-device context cost alone. This test has now caught two
-        // terms leaking into that delta, which is the point of it.
+        // the per-device context cost alone. Other terms leaking into that
+        // delta is exactly what this test guards against; two already have.
         let summary = fake_summary();
         let empty: [String; 0] = [];
         // Two devices against four, not one against four: the tensor-split
@@ -1135,8 +1133,8 @@ mod measured_tests {
         assert_eq!(delta, 2 * PROCESS_BASE_BYTES_PER_DEVICE);
     }
 
-    /// The ik CPU-MoE term scales with hidden size rather than being the flat
-    /// 81 KiB/token that was this term evaluated at qwen35moe's `n_embd`.
+    /// The ik CPU-MoE term scales with hidden size rather than being a flat
+    /// 81 KiB/token, which is this term at qwen35moe's `n_embd`.
     ///
     /// The rate is per architecture, because the three ik mixtures measured
     /// differ by a third — 41, 43 and 54 — and one number would either
@@ -1161,10 +1159,9 @@ mod measured_tests {
             "three times the hidden size, three times the term"
         );
 
-        // At qwen35moe's hidden size its own rate should land near the 81 KiB
-        // the flat constant used — that model is where the flat value came
-        // from, which is the observation that showed it was a hidden-size term
-        // all along.
+        // At qwen35moe's hidden size its own rate should land near 81 KiB, the
+        // flat figure this model alone yields — agreement there is what shows
+        // the term is a hidden-size one.
         let drift = (narrow as f64 - 82_944.0).abs() / 82_944.0;
         assert!(
             drift < 0.10,

@@ -108,16 +108,14 @@ pub fn arena_terms(record: &Record, charge_moe: MoeCharge, tuning: &Tuning) -> A
     } else {
         pad(swa + tokens, KV_CACHE_PAD)
     };
-    // Three window masks when several slots share one cache, matching
-    // `host_buffer::pinned_graph_bytes`. This model went on charging one after
-    // the estimator was changed, which is the same drift that left the ik MoE
-    // rate stale — and it is why `consensus` saw a 5.27 multiple among cells that
-    // are otherwise 4.00.
+    // Several slots sharing one cache means more than one window mask, and the
+    // count has to match `host_buffer::pinned_graph_bytes`. Drift between the two
+    // does not fail here: it surfaces as `consensus` reading a 5.27 multiple among
+    // cells that are otherwise 4.00.
     //
-    // One mask per batch the window spans, plus the batch's own. The constant 3
-    // this replaces came from a sweep taken entirely at ubatch 512, where a
-    // 1024-token window spans two batches; at 2048 the same configuration
-    // measures 2, differing by exactly one mask.
+    // One mask per batch the window spans, plus the batch's own. A flat constant
+    // cannot express that — a 1024-token window spans two batches at ubatch 512
+    // and one at 2048, and the two configurations differ by exactly one mask.
     let swa_copies = if slots > 1 && unified && !ik {
         1 + swa.div_ceil(tokens).min(2)
     } else {
@@ -163,9 +161,9 @@ pub fn arena_terms(record: &Record, charge_moe: MoeCharge, tuning: &Tuning) -> A
 /// Hold this model to the same measurements the estimator is held to.
 ///
 /// `arena_terms` here and `pinned_graph_bytes` in `host_buffer.rs` are two
-/// implementations of one model, and they have drifted once already: the analysis
-/// went on modelling a single window mask after the estimator moved to three,
-/// which is what made `consensus` see a 5.27 multiple among cells that are
+/// implementations of one model, and nothing in either stops them drifting apart:
+/// an analysis modelling a single window mask against an estimator charging three
+/// surfaces only as `consensus` reading a 5.27 multiple among cells that are
 /// otherwise 4.00.
 ///
 /// Neither can be checked against the other directly across languages, but both

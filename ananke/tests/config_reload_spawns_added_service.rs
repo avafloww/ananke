@@ -1,8 +1,8 @@
 //! Integration test: `PUT /api/config` that adds a `[[service]]` block
 //! provisions the supervisor and (for persistent services) kicks it
-//! running — matching the daemon's boot loop behaviour. Pre-fix, reload
-//! was a no-op for additions: the ConfigReloaded event fired but no
-//! supervisor was spawned.
+//! running — matching the daemon's boot loop behaviour. A reload that is a
+//! no-op for additions fires the ConfigReloaded event and spawns no
+//! supervisor, which this pins against.
 //!
 //! Uses `FakeSpawner` so the assertion is on the fake child's recorded
 //! state rather than a real process lifecycle.

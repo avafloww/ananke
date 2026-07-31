@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 /// Facts that make a stale row identifiable later.
 ///
-/// Every value is a `String` even where it names a number: the harness wrote
-/// this as a string map, `model_bytes` is spelled as quoted digits in all 643
-/// committed rows, and retyping it would change the bytes.
+/// Every value is a `String` even where it names a number: `model_bytes` is
+/// spelled as quoted digits in all 643 committed rows, and retyping it would
+/// change the bytes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Provenance {

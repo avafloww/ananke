@@ -72,9 +72,9 @@ impl std::fmt::Display for MisconfiguredKind {
 }
 
 impl ReservationFailure {
-    /// Flatten to the string the proxy / OpenAI layer shows operators.
-    /// The shape matches the pre-enum behaviour so log scrapes keep
-    /// working; inspectors should match on the enum instead.
+    /// Flatten to the string the proxy / OpenAI layer shows operators. The
+    /// shape is stable so log scrapes keep working; inspectors should match
+    /// on the enum instead.
     pub(crate) fn message(self) -> String {
         match self {
             Self::Misconfigured(k) => k.to_string(),

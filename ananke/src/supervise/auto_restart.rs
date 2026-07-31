@@ -193,8 +193,8 @@ impl RunLoop {
     }
 
     /// Persist one watchdog firing to `service_restarts` so it outlives the
-    /// live WebSocket (a watchdog restart with no browser attached used to
-    /// leave nothing behind but a daemon log line).
+    /// live WebSocket: a watchdog restart with no browser attached would
+    /// otherwise leave nothing behind but a daemon log line.
     ///
     /// Awaited rather than detached: the flap-cap path records the firing
     /// that takes a service down for good and then immediately drains and

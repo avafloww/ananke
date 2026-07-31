@@ -13,8 +13,8 @@
 //! - The MTP overhead's slot dependence was confounded with context, because every
 //!   one-slot pair sat at one context and the only four-slot pair at another.
 //!
-//! Each was found by accident, late, after the constant had been in use. This turns
-//! the audit into something that runs: for every regime the estimator models, how
+//! None of those turned up on purpose. This turns the audit into something that
+//! runs, so the next one does: for every regime the estimator models, how
 //! many distinct points exist along the axes that regime's rule depends on. A regime
 //! measured at one point is reported whether or not anybody currently suspects it.
 //!

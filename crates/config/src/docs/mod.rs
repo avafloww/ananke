@@ -21,7 +21,7 @@ mod daemon;
 mod llama_cpp;
 mod service;
 
-// ── moved constants ──────────────────────────────────────────────────────
+// ── default constants ───────────────────────────────────────────────────
 
 /// Default idle-before-drain timeout for on-demand services (10 minutes).
 pub const DEFAULT_IDLE_TIMEOUT_MS: u64 = 600_000;

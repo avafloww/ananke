@@ -1,6 +1,6 @@
 //! Owns the raw TOML + parsed `EffectiveConfig` plus all disk I/O for the
-//! config file. Replaces the previous `Arc<EffectiveConfig>` held directly
-//! by `AppState`.
+//! config file. `AppState` holds this rather than an `EffectiveConfig`
+//! directly, so a reload swaps one shared value.
 
 use std::{io, path::PathBuf, sync::Arc, time::Duration};
 

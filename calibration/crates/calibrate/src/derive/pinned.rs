@@ -154,7 +154,7 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)
         let tokens = u64::from(key.ctx).min(u64::from(key.ubatch)) as f64;
         let cards = key.gpus.split(',').count();
         // Divide out the layer-split replication, so the rate is per copy — but a
-        // hybrid does not replicate, and treating one as though it did put
+        // hybrid does not replicate, and treating one as though it does puts
         // qwen35moe's rate at both 133 and 532.
         let hybrid = key.n_cpu_moe != 0;
         let copies = if cards > 1 && key.split == Some(SplitMode::Layer) && !hybrid {
@@ -220,9 +220,9 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)
 ///
 /// `no_mmap`, `rtr`, and `numa` belong here like everything else: without them a
 /// `--no-mmap` cell pairs with a mapped one and the difference in *weights* is read
-/// as a cache-type effect, which put qwen3's rate across a 6253% spread. And the
+/// as a cache-type effect, which puts qwen3's rate across a 6253% spread. And the
 /// key carries the offload *count*, not merely whether there is one — coarsened to
-/// a boolean it paired a `--n-cpu-moe 20` cell with a `--n-cpu-moe 40` one and read
+/// a boolean it pairs a `--n-cpu-moe 20` cell with a `--n-cpu-moe 40` one and reads
 /// the difference in resident weights as a cache-type effect, spreading qwen35moe's
 /// rate across 13935%.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -244,10 +244,10 @@ struct CacheTypePairKey {
 
 /// Extra pinned bytes per batch token when flash attention is off.
 ///
-/// The single constant this replaces was chosen as a representative value because
-/// the excess "is not uniform across architectures", and that is right — but the
-/// non-uniformity is a clean per-architecture rate rather than noise, which a sweep
-/// across context makes visible and a single context cannot.
+/// The excess is not uniform across architectures, but the non-uniformity is a
+/// clean per-architecture rate rather than noise — which is why this is a table
+/// and not one representative value. A sweep across context makes the rate
+/// visible; a single context cannot.
 ///
 /// What the residual over the modelled arena does *not* do is scale with context:
 /// gemma-3-27B is 64 MiB out at ctx 8192, 32768, and 131072 alike, and 256 MiB out

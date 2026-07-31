@@ -52,9 +52,9 @@ export function ServiceRow({
     : [[], []];
 
   return (
-    // `py-1.5` against the old `py-2`: the row grew a second line, so the same
-    // padding would make it half again as tall and the list would stop being
-    // scannable at a glance.
+    // `py-1.5` rather than the usual `py-2`: the row carries a second line,
+    // and the larger padding makes it half again as tall, at which point the
+    // list stops being scannable at a glance.
     <div className="flex items-center gap-3 px-4 py-1.5 transition-colors hover:bg-elevated/60">
       <button
         onClick={onToggleFavourite}

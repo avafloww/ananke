@@ -39,10 +39,9 @@ pub struct ModelsFile {
 /// One production model's configuration.
 ///
 /// `deny_unknown_fields` deliberately: a mistyped key here would otherwise be
-/// dropped in silence, and the estimate would come out confidently wrong. That is
-/// exactly what happened during the port — the file says `mtp = true` and this
-/// struct first declared `spec_type`, so MTP was ignored for three models and the
-/// scoreboard read 16% low on one of them.
+/// dropped in silence, and the estimate would come out confidently wrong. The
+/// file says `mtp = true`: a struct that declares only `spec_type` drops it,
+/// ignoring MTP for three models and reading the scoreboard 16% low on one.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelConfig {

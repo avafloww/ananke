@@ -151,7 +151,7 @@ pub async fn delete_oneshot(State(state): State<AppState>, Path(id): Path<String
     };
 
     // If the TTL watcher has already drained and released the port, skip both
-    // steps — the record was kept as a tombstone purely so callers could poll
+    // steps — the record is kept as a tombstone purely so callers can poll
     // the terminal state. Removing it here is the only side effect.
     if record.ended_at_ms.is_none() {
         if let Some(handle) = state.registry.get(&record.service_name) {

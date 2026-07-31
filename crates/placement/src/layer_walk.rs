@@ -16,10 +16,9 @@ impl<'a> Packer<'a> {
     /// spill is disabled.
     ///
     /// KV cost is folded into the per-layer fit check (`layer_bytes +
-    /// kv_per_layer`) so KV headroom accumulates alongside layers rather than
-    /// being validated in a separate post-walk pass. This lets large
-    /// long-context models span GPUs correctly while keeping small models on
-    /// the single least-busy GPU.
+    /// kv_per_layer`) so KV headroom accumulates alongside the layers it
+    /// belongs to. This lets large long-context models span GPUs correctly
+    /// while keeping small models on the single least-busy GPU.
     pub(crate) fn walk_layers(&mut self) -> Result<(), PackError> {
         self.initialise_gpu_remaining();
 
@@ -125,12 +124,12 @@ impl<'a> Packer<'a> {
     /// Step 4: compute buffer per active *GPU*, plus the host-side overhead
     /// on the CPU slot.
     ///
-    /// The two are different quantities and were once the same number: the
-    /// CPU slot used to be charged `compute_buffer_mb`, which is calibrated
-    /// against `nvidia-smi` VRAM readings and has never been measured on a
-    /// host backend. What the host actually holds is the pinned graph arena
-    /// and the prompt cache, which scale differently and exist even when every
-    /// layer is on a GPU — see [`ananke_estimate::host_buffer`].
+    /// The two are different quantities, and the CPU slot must not be charged
+    /// `compute_buffer_mb`: that is calibrated against `nvidia-smi` VRAM
+    /// readings and says nothing about a host backend. What the host holds is
+    /// the pinned graph arena and the prompt cache, which scale differently and
+    /// exist even when every layer is on a GPU — see
+    /// [`ananke_estimate::host_buffer`].
     pub(crate) fn add_compute_buffer(&mut self) {
         let compute_bytes = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
         // The output logits buffer is materialised only on the head GPU.
@@ -240,8 +239,8 @@ mod tests {
         test_support::{snapshot, svc, trivial_estimate},
     };
 
-    /// The `-ot` synthesiser collapses a tail of fully-offloaded layers into a
-    /// single grouped rule with layer and kind alternations.
+    /// A model that fits one card emits `-ngl` equal to its layer count and no
+    /// `--tensor-split`.
     #[test]
     fn single_gpu_fits() {
         let e = trivial_estimate(10, 100); // 10 layers × 100 MiB = 1 GiB
@@ -397,12 +396,11 @@ mod tests {
         assert_eq!(packed.args.ngl, Some(4));
     }
 
-    /// Regression for the 256K-context Gemma 4 31B repro: folding KV cost
-    /// into the per-layer fit check during the walk (rather than a post-walk
-    /// validation step) must still allow this model to pack across two GPUs.
-    /// The model (60 layers × 296 MB ≈ 17.8 GB weights + 11.85 GB KV) does
-    /// not fit on a single 24 GB GPU once KV is included, so the walk spills
-    /// part of it to the second GPU.
+    /// Regression for the 256K-context Gemma 4 31B repro: with KV cost folded
+    /// into the per-layer fit check, this model must still pack across two
+    /// GPUs. It (60 layers × 296 MB ≈ 17.8 GB weights + 11.85 GB KV) does not
+    /// fit on a single 24 GB GPU once KV is included, so the walk spills part
+    /// of it to the second GPU.
     #[test]
     fn long_context_moe_packs_across_two_gpus() {
         // Gemma 4 31B numbers from the live failure log: 60 layers at ~296 MB
@@ -451,8 +449,7 @@ mod tests {
 
     /// A model whose KV-inclusive layer cost overflows even a single GPU must
     /// be rejected. With KV folded into the per-layer walk cost, the walker
-    /// detects the overflow directly (LayerDoesNotFit) rather than via a
-    /// separate post-walk validation step.
+    /// detects the overflow at the layer it happens on (`LayerDoesNotFit`).
     #[test]
     fn long_context_overflows_single_gpu() {
         // 60 layers × 200 MB = 12 GB weights. kv_total at 128K tokens with

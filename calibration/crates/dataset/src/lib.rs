@@ -1,18 +1,14 @@
 //! The one schema `calibration/data/measurements.ndjson` is written and read
 //! with.
 //!
-//! The dataset had three independent descriptions of itself: the harness's
-//! write-only `Record`, the calibration tools' read-only one, and a
-//! hand-extracting `serde_json::Value` walk in the estimator's integration
-//! test. They disagreed — the two `Parsed` blocks differed by seven fields —
-//! and neither could round-trip, so a maintenance pass over the dataset had to
-//! splice raw bytes rather than re-serialise a row.
+//! One description of the dataset, shared by everything that touches it: a
+//! second, independent one drifts, and a reader that cannot round-trip forces a
+//! maintenance pass to splice raw bytes rather than re-serialise a row.
 //!
-//! This crate is the union of the two, taking the better-typed side of each
-//! disagreement, and it derives both halves of serde on every type. That makes
-//! the round-trip checkable, and [`tests/roundtrip.rs`] checks it against every
-//! committed row: a field this schema fails to model is a test failure rather
-//! than a silently dropped column.
+//! Every type here derives both halves of serde. That makes the round-trip
+//! checkable, and [`tests/roundtrip.rs`] checks it against every committed row:
+//! a field this schema fails to model is a test failure rather than a silently
+//! dropped column.
 //!
 //! [`json::to_dataset_json`] is part of the format, not of any one tool: the
 //! dataset's spacing and escaping are what a cell's identity is hashed over.

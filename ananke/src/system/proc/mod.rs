@@ -1,9 +1,9 @@
 //! Linux-only: `/proc` abstraction.
 //!
 //! `/proc` isn't really a filesystem — every read is a synthesised view
-//! of kernel state — so routing it through `Fs` made every test stage
-//! synthetic text, only to have the consumer parse it back into a
-//! semantic value. This module models the daemon's actual reads as
+//! of kernel state — so it does not go through `Fs`, which would make
+//! every test stage synthetic text only for the consumer to parse it back
+//! into a semantic value. This module models the daemon's actual reads as
 //! typed trait methods. The production impl reads `/proc` directly; the
 //! test impl takes pre-parsed values keyed by pid.
 //!

@@ -25,8 +25,8 @@ use crate::{
 /// How a separate MTP draft's compute grows with context, MiB per 1024.
 ///
 /// The draft shares the target's KV cache — the load log shows `layer 3: sharing with
-/// layer 59` — so it has no context-scaling *cache* term, and the constant covering
-/// it was flat. Its compute buffer scales anyway: gemma-4-31B-QAT measures a driver
+/// layer 59` — so it has no context-scaling *cache* term, which makes a flat
+/// constant tempting. Its compute buffer scales anyway: gemma-4-31B-QAT measures a driver
 /// delta of 724, 788, and 920 MiB at ctx 32768, 65536, and 131072, against a modelled
 /// 407 at every one.
 ///
@@ -148,9 +148,9 @@ const SLOPE_MILLI: f64 = 1000.0;
 /// cache plus the 130 MiB the load log then shows as that context's device compute —
 /// so the quantity wanted here is `reported - cache`, read straight off.
 ///
-/// What the old model got wrong was not the magnitude but the *shape*. It built the
-/// share from an f16 KQ mask over one stream's share of the context, which is wrong
-/// twice over: the draft context keeps a single cache spanning every cell, so
+/// The *shape* is what is easy to get wrong here, rather than the magnitude.
+/// Building the share from an f16 KQ mask over one stream's share of the context is
+/// wrong twice over: the draft context keeps a single cache spanning every cell, so
 /// `--parallel` does not narrow it (130.02 MiB at one, two, and four slots alike), and
 /// the width itself is far below a full mask — the share grows 0.36 MiB per 1024 tokens
 /// on qwen35 and 0.45 on qwen35moe, against the 1.00 a full `ubatch x n_kv x 2` mask

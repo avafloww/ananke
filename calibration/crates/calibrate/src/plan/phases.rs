@@ -1,4 +1,4 @@
-//! The campaign's original phases: a noise floor, a factor screen, the per-model
+//! The campaign's core phases: a noise floor, a factor screen, the per-model
 //! baseline, the context and batch curves, the fork comparison, the switched
 //! terms, and the held-out production configurations.
 //!
@@ -99,7 +99,7 @@ pub fn fork(lib: &Library) -> Vec<Factors> {
 ///
 /// Flash attention is varied here for the same reason: it changes the KQ mask
 /// element width and is the sole justification for
-/// `NO_FLASH_ATTN_BYTES_PER_TOKEN`, which no cell had ever exercised.
+/// `NO_FLASH_ATTN_BYTES_PER_TOKEN`, which no other cell exercises.
 pub fn curves(lib: &Library) -> Vec<Factors> {
     let mut cells = Vec::new();
     for m in MODELS {
@@ -193,7 +193,7 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
             });
         }
     }
-    // The vision projector, which was worth ~3 MiB in one observation.
+    // The vision projector, worth ~3 MiB in the single observation of it.
     for (label, mmproj) in [("mmproj-off", None), ("mmproj-on", g4.mmproj)] {
         cells.push(Factors {
             label: format!("{label}-g4"),
@@ -204,7 +204,7 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
             ..Factors::default()
         });
     }
-    // Offload regimes: the arena was measured invariant across them, and a host
+    // Offload regimes: the arena measures invariant across them, and a host
     // baseline with no GPU visible is a different shape entirely.
     let q4 = model("qwen3-4b");
     for regime in [
@@ -296,9 +296,9 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
         });
     }
     // The same question for the models where host memory actually matters. A 4B
-    // dense model is the one whose growth is least interesting and was the only
-    // one measured; a hybrid MoE holds tens of GiB on the host, and if it
-    // accumulates over an agent session nothing else here would see it.
+    // dense model is the one whose growth is least interesting; a hybrid MoE
+    // holds tens of GiB on the host, and if that accumulates over an agent
+    // session nothing else here would see it.
     for m in MODELS {
         if m.key == q4.key {
             continue; // Already covered by the cram pair above.
@@ -322,8 +322,8 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
 /// The operator's real service configurations, predicted before they were
 /// measured.
 ///
-/// The prediction-before-measurement is the honest part and it happened once, at
-/// the moment these were first run. It does not survive into the fit: `emit` takes
+/// The prediction-before-measurement is the honest part, and it holds only at the
+/// moment a cell is first run. It does not survive into the fit: `emit` takes
 /// every `ok` row, so these cells are in the fitting set like any other, and the
 /// scoreboard's drift is an in-sample figure.
 ///

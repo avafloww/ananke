@@ -2,8 +2,9 @@
 //!
 //! Superseding a cell by a later measurement of it is *not* here: that rule is
 //! [`crate::derive::dataset::latest_per_cell`], which the fit calls. A second copy
-//! lived here and ordered the stamps as strings, which agrees with the timestamps
-//! only while every one of them is the same fixed width at the same offset.
+//! here would be free to order the stamps as strings, which agrees with the
+//! timestamps only while every one of them is the same fixed width at the same
+//! offset.
 
 use ananke_dataset::BufferRole;
 

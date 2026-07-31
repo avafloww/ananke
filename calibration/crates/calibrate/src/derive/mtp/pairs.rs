@@ -21,10 +21,10 @@ use crate::{
 /// How far apart two halves of a pair may have been measured.
 ///
 /// Cell identity ignores the label, so a freshly-measured cell can pair with one
-/// recorded hours earlier under different machine state — which produced a
-/// *negative* delta once, a with-MTP process apparently using less VRAM than
-/// without. Repeats taken back to back reproduce to the megabyte, so the machine is
-/// not noisy; the pairing was.
+/// recorded hours earlier under different machine state — which produces a
+/// *negative* delta, a with-MTP process apparently using less VRAM than without.
+/// Repeats taken back to back reproduce to the megabyte, so the machine is not the
+/// noisy part; the pairing is.
 pub const SAME_SITTING: SignedDuration = SignedDuration::from_hours(1);
 
 /// Where the MTP head lives, which is the thing a pair is selected on.
@@ -56,7 +56,7 @@ pub struct MtpPair<'a> {
 ///
 /// `served` belongs in the identity. An idle process has not made the first-use
 /// allocations a served one has — the context checkpoint above all — so pairing
-/// across it reads that whole step as MTP overhead: one such pair showed 568 MiB of
+/// across it reads that whole step as MTP overhead: one such pair shows 568 MiB of
 /// host delta where every same-sitting served pair of the same configuration shows
 /// 239 to 243.
 pub fn mtp_pairs(rows: &[Record], shape: MtpShape) -> Vec<MtpPair<'_>> {
@@ -104,13 +104,13 @@ pub fn mtp_pairs(rows: &[Record], shape: MtpShape) -> Vec<MtpPair<'_>> {
 
 /// Does the MTP overhead depend on the slot count, at a fixed context?
 ///
-/// This is the question `MTP_COMPUTE_MIB` was held under review for, and the first
-/// campaign could not answer it: every one-slot pair sat at ctx 32768 or 65536 and
-/// the only four-slot pair at 131072, so slots and context were confounded and the
-/// four-slot pair's much larger delta had two candidate causes.
+/// This is the question `MTP_COMPUTE_MIB` is held under review for. Slots and
+/// context are easily confounded: one-slot pairs at ctx 32768 or 65536 against a
+/// four-slot pair at 131072 leave that pair's much larger delta with two candidate
+/// causes.
 ///
-/// Reported rather than fitted. A flat series across slots says the earlier "slot
-/// dependence" was the longer context and the constant can be fitted on context
+/// Reported rather than fitted. A flat series across slots says an apparent slot
+/// dependence is the longer context and the constant can be fitted on context
 /// alone; a rising one says the model needs a slot term before any value is
 /// trustworthy.
 pub fn mtp_slot_scaling(rows: &[Record]) -> String {

@@ -1,19 +1,18 @@
 //! The unified per-device compute model.
 //!
 //! One design of named columns, fitted per (runtime, split, architecture,
-//! variant), replaces what used to be three separate mechanisms: a fitted
-//! per-architecture curve for a mainline layer split, a hyperparameter model for
-//! a tensor split plus companion tables for its intermediates, quantised-cache
-//! rate, and per-device shadow, and four rate tables for ik. They were three
-//! because each was derived against a different target — llama.cpp's `compute`
-//! column plus `unaccounted`, the fused `Meta()` row's `compute` column alone,
-//! and for ik the driver total less a modelled remainder, ik printing no
-//! breakdown table at all. Three targets meant three shapes, and a cell that
-//! fell between them was covered by whichever mechanism claimed it rather than
-//! by the one that described it.
+//! variant), covers every configuration: a mainline layer split, a tensor split
+//! and its intermediates, the quantised-cache rate, the per-device shadow, and
+//! ik. Splitting these across separate mechanisms invites a separate *target*
+//! for each — llama.cpp's `compute` column plus `unaccounted`, the fused
+//! `Meta()` row's `compute` column alone, and for ik the driver total less a
+//! modelled remainder, since ik prints no breakdown table at all — and
+//! different targets mean different shapes, so a cell that falls between two of
+//! them is covered by whichever mechanism claims it rather than by the one that
+//! describes it.
 //!
-//! Here every cell is measured the same way, as what one card holds beyond its
-//! own weights and context, so all of the data constrains one model. The
+//! Every cell is measured the same way instead, as what one card holds beyond
+//! its own weights and context, so all of the data constrains one model. The
 //! columns and their coefficients live in `tuning.json`; what each column counts
 //! is documented on [`Columns`], and `ananke-calibrate`'s `compute_model` module
 //! holds the fit that produces them — including the record of what the

@@ -34,7 +34,7 @@ impl<'a> Packer<'a> {
         //
         // Which end matters whenever the quant gives later blocks wider experts:
         // laguna's trailing 39 come to 43188 MiB against the leading 38's 41496,
-        // and taking the wrong end left its cards 1692 MiB short.
+        // so taking the wrong end leaves its cards 1692 MiB short.
         //
         // Confirmed on Qwen3.6-35B-A3B's production cell: physical GPU model
         // = 2 × 1431 = 2862 MiB ≈ all attention (1837) + the one retained
@@ -80,8 +80,8 @@ impl<'a> Packer<'a> {
     /// proportional share of the layer weights, the KV cache, the output head,
     /// the MTP draft context, and the compute buffer, plus a proportional share
     /// of the one-layer fudge. The proportion is taken from
-    /// `tensor_split_weights` when set, otherwise every GPU gets the historical
-    /// equal `1/n` share. llama.cpp's tensor-parallel modes split those tensors
+    /// `tensor_split_weights` when set, otherwise every GPU gets an equal
+    /// `1/n` share. llama.cpp's tensor-parallel modes split those tensors
     /// across the spanned devices — empirically the main GPU carries no
     /// measurable output-head or MTP premium — so modelling them as a per-GPU
     /// share rather than a lump on `--main-gpu` keeps the pledge in line with
@@ -149,14 +149,13 @@ impl<'a> Packer<'a> {
         // builds the same graph on each device under a tensor split rather than
         // splitting one, and its reported compute buffer reads identically on
         // one card and on two at every context measured. Dividing it under-
-        // reserved every card by a factor of the GPU count —
-        // Qwen3.6-35B-A3B needs 1332 MiB *per* card where the estimate pledged
-        // 685 across both. See
+        // reserves every card by a factor of the GPU count — Qwen3.6-35B-A3B
+        // needs 1332 MiB *per* card against 685 pledged across both. See
         // [`ananke_estimate::compute_model`].
         let compute_per_gpu = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
         let fudge_total = ONE_LAYER_FUDGE_MULTIPLIER * (per_layer_avg + kv_total / n_layers);
 
-        // Default weights give the historical equal split; explicit weights are
+        // Default weights give an equal split; explicit weights are
         // validated to be one-per-allowed-GPU in ascending id order.
         let weights = self
             .placement
@@ -179,18 +178,7 @@ impl<'a> Packer<'a> {
         let ratio_sum: u64 = tensor_split.iter().map(|&v| v as u64).sum();
 
         // A tied-embedding model has no separate output head, so the embedding
-        // table *is* the head — and under a tensor split across more than one
-        // card that matmul is sharded, which a CPU-resident weight cannot be.
-        // llama.cpp keeps a second, GPU-resident copy split across the cards,
-        // and keeps the CPU-mapped one as well.
-        //
-        // Measured against the same model loaded on one card, where nothing is
-        // sharded and no copy appears: gemma-4-31B-QAT's two-card tensor split
-        // holds 761 MiB more than its layer split against a 756 MiB table,
-        // Qwen3-4B 305 against 304, gemma-3-27B 1108 against 1103. Every model
-        // that ships its own `output.weight` — magidonia, talkie, Qwen3.6-27B —
-        // holds no more under one split than the other.
-        // One copy always — it is the output head, and the logits are computed
+        // table *is* the head. One copy always — it is the output head, and the logits are computed
         // on the device (see [`Packer::seed_non_layer`]) — and a *second* once
         // the split actually spans cards, because the head's matmul is then
         // sharded and a CPU-resident weight cannot be. At one card a tensor
@@ -318,7 +306,7 @@ fn integer_shares(total: u64, ratio: &[u32], ratio_sum: u64) -> Vec<u64> {
 /// round to integers, and reduce by the GCD so the emitted values stay small
 /// and readable (e.g. `[2.6, 1.0]` becomes `[13, 5]`). If the reduced values do
 /// not fit in `u32`, they are scaled down further while preserving the ratio as
-/// closely as possible. This keeps the historical `vec![1, 1]` shape when the
+/// closely as possible. This keeps the `vec![1, 1]` shape when the
 /// operator does not override weights, and emits a matching integer ratio when
 /// they do.
 fn weighted_tensor_split(weights: &[f32]) -> Vec<u32> {

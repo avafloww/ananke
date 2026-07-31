@@ -46,15 +46,15 @@ pub struct ServiceSummary {
     /// enough (config-only check) to ship on every list entry.
     pub has_mmproj: Option<bool>,
     /// What kind of OpenAI endpoint the service serves. Elided from
-    /// JSON when [`Modality::Chat`] (the default) so existing chat
-    /// services emit unchanged wire bytes; embedding services explicitly
+    /// JSON when [`Modality::Chat`] (the default), so a chat service's
+    /// row carries no `modality` key; embedding services explicitly
     /// declare `modality = "embedding"` in their `[[service]]` block.
     #[serde(default, skip_serializing_if = "Modality::is_chat")]
     pub modality: Modality,
     /// Passthrough entries from `[[service]] metadata.*`. Empty when
-    /// none were set; the field is elided from JSON when the map is
-    /// empty so existing consumers see no change unless a service opts
-    /// in to metadata.
+    /// none are set, and the field is elided from JSON when the map is
+    /// empty, so the key appears only for a service that opts in to
+    /// metadata.
     #[serde(default, skip_serializing_if = "AnankeMetadata::is_empty")]
     #[schema(value_type = Object)]
     pub ananke_metadata: AnankeMetadata,

@@ -104,11 +104,10 @@ impl GpuProbe for NvmlProbe {
                             nvml_wrapper::enums::device::UsedGpuMemory::Used(b) => b,
                             nvml_wrapper::enums::device::UsedGpuMemory::Unavailable => 0,
                         };
-                        // `GpuProcess.name` is a diagnostic label — nothing
-                        // surfaces it today. We previously read `/proc/<pid>/comm`
-                        // to resolve it, which bypassed `crate::system::Fs`;
-                        // fall back to the `pid N` format the prior branch
-                        // already used when the read failed.
+                        // `GpuProcess.name` is a diagnostic label that nothing
+                        // surfaces, so it stays the `pid N` form. Resolving it
+                        // from `/proc/<pid>/comm` here would read the
+                        // filesystem behind `crate::system::Fs`'s back.
                         GpuProcess {
                             pid: p.pid,
                             used_bytes: used,

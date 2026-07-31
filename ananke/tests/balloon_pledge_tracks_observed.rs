@@ -1,8 +1,8 @@
 //! Scenario: a dynamic-allocation service's pledge in `AllocationTable` must
 //! track its recent observed usage, not stay frozen at `min_mb`. Other
-//! services' fit decisions depend on this — pre-fix a peer could see a 2 GB
-//! pledge while ComfyUI was actually using 10 GB, book the apparent
-//! headroom, then OOM at runtime.
+//! services' fit decisions depend on this — a peer that sees a 2 GB pledge
+//! while ComfyUI is actually using 10 GB books the apparent headroom and
+//! then OOMs at runtime.
 //!
 //! "Recent" is the resolver's rolling window over *current* readings, so the
 //! pledge rises with a spike and falls again once it rolls out. The
@@ -312,9 +312,9 @@ async fn pledge_does_not_emit_for_sub_threshold_drift() {
 }
 
 /// A CPU-pinned dynamic service reports no VRAM at all, so its pledge has to
-/// come from RSS. Sampling the VRAM peak read zero forever, which left the
-/// pledge frozen at `min_mb` however much host RAM the service actually took —
-/// and the packer books hybrid MoE expert spill against exactly that row.
+/// come from RSS. Sampling the VRAM peak reads zero forever, leaving the
+/// pledge frozen at `min_mb` however much host RAM the service takes — and
+/// the packer books hybrid MoE expert spill against exactly that row.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn cpu_pinned_service_pledges_from_rss() {
     let (h, _mailbox) = build_harness_on("cpu-svc", 2 * 1024, 20 * 1024, DeviceSlot::Cpu);
@@ -340,10 +340,10 @@ async fn cpu_pinned_service_pledges_from_rss() {
     let _ = h.shutdown.send(true);
 }
 
-/// The mirror image, and the regression guard for the original reason the
-/// resolver sampled VRAM alone: a GPU service's pledge must not absorb the
-/// python interpreter's RSS. An SDXL run at 6 GB VRAM + 30 GB RSS used to
-/// pledge as 36 GB and trigger an unjustified self-eviction.
+/// The mirror image, and the reason the resolver samples VRAM alone: a GPU
+/// service's pledge must not absorb the python interpreter's RSS. An SDXL
+/// run at 6 GB VRAM + 30 GB RSS would otherwise pledge as 36 GB and trigger
+/// an unjustified self-eviction.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn gpu_service_pledges_from_vram_and_ignores_rss() {
     let (h, _mailbox) = build_harness_on("gpu-svc", 2 * 1024, 20 * 1024, DeviceSlot::Gpu(0));

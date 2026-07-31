@@ -52,7 +52,7 @@ pub struct Stage {
 }
 
 /// Which stage a reading came from. The report picks readings out by this rather
-/// than by parsing the display label, which it used to do.
+/// than by parsing the display label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StageKind {
     /// Carries every question that can share one server.

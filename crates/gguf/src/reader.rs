@@ -83,8 +83,8 @@ pub fn read_single(fs: &dyn Fs, path: &Path) -> Result<GgufSummary, ReadError> {
         if let GgufType::Unknown(id) = dtype {
             // Fail loudly rather than fall back to an F16-size guess. An
             // unknown dtype means the estimator would either over- or
-            // under-reserve by a large factor, and silent fallback hid the
-            // gpt-oss MXFP4 case for weeks. Fix: add the id to
+            // under-reserve by a large factor, and a silent fallback gives
+            // no signal that it is doing so. Fix: add the id to
             // `GgufType::from_u32` + `tensor_byte_size`.
             return Err(ReadError(format!(
                 "{}: tensor `{name}` uses unsupported GGUF dtype id {id}; \
@@ -326,11 +326,11 @@ mod tests {
         assert!(err.0.contains("bad magic"));
     }
 
-    /// Unknown dtype ids must be rejected at read time. gpt-oss ships MXFP4
-    /// experts (id 39) which were silently counted as F16 before this guard,
-    /// producing ~4× over-reservations. Any dtype that doesn't fall through
-    /// `GgufType::from_u32` is treated as a config-load failure so unsupported
-    /// quants can't slip past preflight.
+    /// Unknown dtype ids must be rejected at read time: counting one as F16
+    /// misreads its size by a large factor — gpt-oss's MXFP4 experts (id 39)
+    /// by ~4×. Any dtype that doesn't fall through `GgufType::from_u32` is
+    /// treated as a config-load failure so unsupported quants can't slip past
+    /// preflight.
     #[test]
     fn rejects_unknown_dtype() {
         let mut v = Vec::<u8>::new();

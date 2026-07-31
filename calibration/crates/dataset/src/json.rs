@@ -11,8 +11,8 @@ use std::io;
 
 use serde::Serialize;
 
-/// Serialize the way every line already in the dataset was written: `", "` and
-/// `": "` separators, and non-ASCII escaped rather than emitted raw.
+/// Serialize the way every line in the dataset is written: `", "` and `": "`
+/// separators, and non-ASCII escaped rather than emitted raw.
 ///
 /// Floats go through serde_json's own shortest-round-trip writer, which agrees
 /// with the committed lines on every magnitude this dataset holds. The two
@@ -60,9 +60,8 @@ impl serde_json::ser::Formatter for DatasetFormatter {
         }
     }
 
-    /// `ensure_ascii=True` is a default it would be easy to overlook, and it
-    /// changes the bytes a hash is taken over the moment a model path is not
-    /// ASCII.
+    /// Escaping non-ASCII is easy to overlook, and emitting it raw changes the
+    /// bytes a hash is taken over the moment a model path is not ASCII.
     fn write_string_fragment<W: ?Sized + io::Write>(
         &mut self,
         writer: &mut W,
@@ -92,8 +91,8 @@ mod tests {
     #[test]
     fn dataset_separators_and_ascii_escaping() {
         let value = serde_json::json!({"a": 1, "b": [2.0, "x"], "c": "caf\u{e9}"});
-        // The accented byte comes back escaped, exactly as `ensure_ascii` writes
-        // it, because a cell's identity is hashed over these bytes.
+        // The accented byte comes back escaped, because a cell's identity is
+        // hashed over these bytes.
         assert_eq!(
             to_dataset_json(&value),
             r#"{"a": 1, "b": [2.0, "x"], "c": "caf\u00e9"}"#

@@ -1,9 +1,10 @@
 //! Reading the constants the estimator already compiles in.
 //!
-//! Several derivers need a constant they do not derive. Those were copied by
-//! hand once, and the copy went stale the moment the constant was re-derived,
-//! inflating every residual computed for an ik mixture of experts until someone
-//! noticed. `tuning.json` is read instead.
+//! Several derivers need a constant they do not derive, and they read
+//! `tuning.json` for it rather than holding a copy. A hand-copied constant goes
+//! stale the moment the real one is re-derived, and it does so quietly: the
+//! symptom is every residual computed for an ik mixture of experts coming out
+//! inflated, with nothing pointing at the copy.
 //!
 //! Absence is deliberately not papered over with one defaulting reader: a
 //! renamed or misspelled constant read as `0.0` does not stop a derivation, it
@@ -200,8 +201,8 @@ mod tests {
     }
 
     /// The defect this file exists to close: a name the document does not declare
-    /// used to be written nowhere and reported nowhere, so the ordering between
-    /// derivers dissolved into every downstream fit reading a stale value.
+    /// must not be written nowhere and reported nowhere, or the ordering between
+    /// derivers dissolves into every downstream fit reading a stale value.
     #[test]
     fn setting_an_unknown_constant_is_reported() {
         let mut tuning = document();

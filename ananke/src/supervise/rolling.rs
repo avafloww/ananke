@@ -180,9 +180,9 @@ impl RollingBase {
     /// couple of hundred MiB of shared libraries in every configuration tried.
     /// ik_llama, on the same model and the same flags, logged `CPU buffer
     /// size` and put 56 GiB of weights in anonymous memory with a mapped RSS
-    /// of 72 MiB. Trusting `mmap`/`-rtr` would have read that run's weights
-    /// into the numerator while leaving them out of the denominator — a 56 GiB
-    /// mismatch that the clamp would have turned into a 50% over-reservation.
+    /// of 72 MiB. Trusting `mmap`/`-rtr` reads such a run's weights into the
+    /// numerator while leaving them out of the denominator — a 56 GiB
+    /// mismatch the clamp turns into a 50% over-reservation.
     ///
     /// The halfway threshold is deliberately loose: the two regimes differ by
     /// orders of magnitude, not by a few percent.
@@ -279,8 +279,8 @@ mod tests {
     /// The `deepseek-v4-flash` shape: ~20 GiB of VRAM and ~105 GiB of experts
     /// in host RAM. Each pool's peak is divided by that pool's own base, so an
     /// accurate estimate converges to 1.0 on both — where a single mean over
-    /// the all-device total read the VRAM peak as a 5x over-prediction and
-    /// pinned to the 0.8 clamp floor.
+    /// the all-device total reads the VRAM peak as a 5x over-prediction and
+    /// pins to the 0.8 clamp floor.
     #[test]
     fn hybrid_converges_to_neutral_in_both_pools() {
         // 105 GiB of host bytes, of which 96 GiB is mapped expert weight and
@@ -311,10 +311,11 @@ mod tests {
     }
 
     /// A `cpu-only` service has no GPU slot, so the VRAM pool never learns —
-    /// but the host pool must, at any size. The absolute weight floor this
-    /// replaced excluded every model under 27 GiB; with a denominator that is
-    /// a genuine prediction of anonymous memory there is nothing left for a
-    /// floor to protect against, so a small model learns like a large one.
+    /// but the host pool must, at any size. There is no absolute weight floor:
+    /// one set high enough to matter would exclude every model under 27 GiB,
+    /// and with a denominator that is a genuine prediction of anonymous memory
+    /// there is nothing for a floor to protect against, so a small model learns
+    /// like a large one.
     #[test]
     fn a_small_cpu_only_service_still_learns_the_host_pool() {
         // An 11 GiB model — a 13B at Q6_K — with 9 GiB of anonymous runtime
@@ -385,10 +386,10 @@ mod tests {
     }
 
     /// A GPU-resident service holds no host *weight*, so its whole `Cpu` slot
-    /// is anonymous and is its own denominator. It learns like any other
-    /// service — where before, its slot was token embeddings plus a borrowed
-    /// GPU compute buffer, a pair no host measurement could match, and the
-    /// two pack paths disagreed about it by the whole buffer.
+    /// is anonymous and is its own denominator, so it learns like any other
+    /// service. A slot made of token embeddings plus a borrowed GPU compute
+    /// buffer would be a pair no host measurement can match, and the two pack
+    /// paths would disagree about it by the whole buffer.
     #[test]
     fn a_gpu_resident_service_learns_from_its_whole_host_slot() {
         let b = RollingBase {

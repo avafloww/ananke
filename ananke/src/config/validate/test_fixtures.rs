@@ -1,8 +1,8 @@
 //! Shared `ServiceConfig` factory and TOML scaffolding for unit tests.
 //!
-//! Centralised so individual test modules don't drift in their hand-rolled
-//! fixtures, which previously ranged over the full struct surface and had
-//! to be updated in lockstep every time a field was added.
+//! Centralised so individual test modules don't hand-roll fixtures that
+//! range over the full struct surface and have to be updated in lockstep
+//! every time a field is added.
 
 use std::{
     collections::BTreeMap,

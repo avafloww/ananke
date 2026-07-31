@@ -4,10 +4,11 @@
 //! the free GPU 2 — not the conflicted GPU 0 — and its child must inherit
 //! `CUDA_VISIBLE_DEVICES=2`.
 //!
-//! Regression: pre-fix the daemon picked `gpu_allow.first().or(snap.gpus.first())`
-//! (always GPU 0) for command-template services, and additionally fell back
-//! to `init.allocation` (built from `placement_override` only — empty for
-//! ComfyUI), so the child saw `CUDA_VISIBLE_DEVICES=""` and silently ran on CPU.
+//! Two hazards this pins. Picking `gpu_allow.first().or(snap.gpus.first())`
+//! for command-template services always lands on GPU 0 regardless of what is
+//! free; and falling back to `init.allocation` (built from
+//! `placement_override` only — empty for ComfyUI) leaves the child with
+//! `CUDA_VISIBLE_DEVICES=""`, which silently runs it on CPU.
 #![cfg(feature = "test-fakes")]
 
 mod common;
@@ -170,8 +171,8 @@ async fn comfyui_lands_on_free_gpu_when_others_busy() {
     );
 
     // Assertion 2: the spawned child inherited CUDA_VISIBLE_DEVICES=2 (the
-    // wire-protocol the ComfyUI process actually consumes). The pre-fix bug
-    // emitted `CUDA_VISIBLE_DEVICES=""` here.
+    // wire-protocol the ComfyUI process actually consumes) rather than an
+    // empty `CUDA_VISIBLE_DEVICES=""`.
     let children = h.process_spawner.children();
     let comfy_child = children
         .iter()

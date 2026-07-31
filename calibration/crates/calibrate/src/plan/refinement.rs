@@ -1,10 +1,9 @@
 //! Sweeps that turn a bracketed relationship into a measured one.
 //!
 //! The phases in [`crate::plan::phases`] establish which factors matter; these
-//! establish *how*. Several terms were claimed linear on the strength of two
-//! samples, which cannot distinguish a line through the origin from an affine
-//! one — and the difference is charged to the slope, so it grows with every
-//! extrapolation.
+//! establish *how*. Two samples cannot distinguish a line through the origin
+//! from an affine one, and the difference is charged to the slope, so it grows
+//! with every extrapolation.
 
 use ananke_config::placement::SplitMode;
 use ananke_measure::record::{Factors, FlashAttn, KvType, Runtime};
@@ -166,13 +165,13 @@ pub fn interactions(lib: &Library) -> Vec<Factors> {
 
 /// The cells the two constants held under review actually need.
 ///
-/// Both were left unchanged after the first campaign because the evidence said
-/// the current value is wrong without saying what is right.
+/// Both are left unchanged because the evidence says the shipped value is wrong
+/// without saying what is right.
 ///
 /// deepseek4's curve carries a slope of 66 MiB per 1024 tokens that the
 /// production hybrid does not show — flat across a sixteenfold range of context.
-/// But every cell measuring that was the hybrid, with 40 of 43 layers on the CPU.
-/// If the original calibration measured a GPU-resident configuration then both
+/// But every cell measuring that is the hybrid, with 40 of 43 layers on the CPU.
+/// If the calibration behind the curve measured a GPU-resident configuration then both
 /// figures are correct and the curve is being applied outside the regime it was
 /// fitted in, which is a different fix from a wrong number. Sweeping the offload
 /// axis at two contexts separates them: if VRAM climbs with context once layers
@@ -182,7 +181,7 @@ pub fn interactions(lib: &Library) -> Vec<Factors> {
 /// MTP's compute constant was fitted against llama.cpp's own `[spec]` log line,
 /// which reports a quantity four times smaller than the driver delta between
 /// paired with- and without-MTP cells. Correcting it needs those pairs at more
-/// shapes than the first campaign ran, and on both models that carry an embedded
+/// shapes than the dataset holds, and on both models that carry an embedded
 /// head, since they differ in the kv-head count the KV formula multiplies by.
 pub fn review_followup(lib: &Library) -> Vec<Factors> {
     let mut cells = Vec::new();
@@ -229,9 +228,9 @@ pub fn review_followup(lib: &Library) -> Vec<Factors> {
 
 /// Separate MTP's slot count from its context.
 ///
-/// The first campaign left `MTP_COMPUTE_MIB` under review because the paired
-/// with- and without-MTP cells disagreed with the constant by a factor of four,
-/// and the disagreement grew at `parallel = 4`. But the design cannot say that:
+/// `MTP_COMPUTE_MIB` is under review because the paired with- and without-MTP
+/// cells disagree with the constant by a factor of four, and the disagreement
+/// grows at `parallel = 4`. But the existing design cannot say that:
 /// every one-slot pair sits at ctx 32768 or 65536 and the only four-slot pair sits
 /// at 131072, so slots and context are confounded and the "slot dependence" may be
 /// nothing but the longer context.

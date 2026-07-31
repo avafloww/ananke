@@ -72,10 +72,10 @@ mod tests {
 
     #[test]
     fn deci_is_llama_family() {
-        // Regression: Nemotron-49B (arch = "deci") used to fall through to the
-        // fallback estimator which returns `per_layer_bytes = None`, breaking
-        // multi-GPU layer splits. It must be recognised as llama-family so the
-        // per-layer walk runs.
+        // Regression: Nemotron-49B (arch = "deci") must be recognised as
+        // llama-family so the per-layer walk runs. Falling through to the
+        // fallback estimator returns `per_layer_bytes = None`, which breaks
+        // multi-GPU layer splits.
         assert!(is_llama_family("deci"));
     }
 

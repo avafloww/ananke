@@ -24,9 +24,10 @@ fn main() {
 
     // Surface the metadata keys the estimator cares about — if any of
     // these are missing under the arch's canonical prefix the KV math
-    // silently collapses to zero (we hit this with nemotron's "deci"
-    // arch). Loop over whatever prefixes show up in the metadata table
-    // so the operator sees the actual keys rather than assumptions.
+    // silently collapses to zero (nemotron's "deci" arch is one that
+    // spells them elsewhere). Loop over whatever prefixes show up in the
+    // metadata table so the operator sees the actual keys rather than
+    // assumptions.
     println!();
     println!("attention + context metadata (both scalar and array shapes):");
     let prefixes_of_interest = [

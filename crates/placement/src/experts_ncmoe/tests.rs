@@ -110,9 +110,9 @@ fn expert_offload_layers_n_offloads_leading_layers() {
 /// different byte totals.
 ///
 /// This is laguna's shape — its quant stores later blocks' experts wider — and
-/// it is why the direction mattered enough to notice: the trailing 39 come to
-/// 43188 MiB against the leading 38's 41496, and offloading the wrong end left
-/// its cards 1692 MiB short of what they held.
+/// it is what makes the direction observable: the trailing 39 come to 43188 MiB
+/// against the leading 38's 41496, so offloading the wrong end leaves its cards
+/// 1692 MiB short of what they hold.
 #[test]
 fn the_offloaded_end_is_the_leading_one_when_layer_sizes_differ() {
     // Blocks 0-4 carry 100 MiB experts, blocks 5-9 carry 300 MiB.
@@ -280,9 +280,9 @@ fn expert_offload_auto_prefers_second_gpu() {
 }
 
 /// Symmetric two-GPU balance (the deepseek4 shape): tiny non-expert weight
-/// plus huge experts must spread evenly across both cards. First-fit used
-/// to pile every layer — and thus every expert's home GPU — onto gpu:0,
-/// overloading it into an `insufficient_capacity` error while gpu:1 sat idle.
+/// plus huge experts must spread evenly across both cards. First-fit piles
+/// every layer — and thus every expert's home GPU — onto gpu:0, overloading it
+/// into an `insufficient_capacity` error while gpu:1 sits idle.
 #[test]
 fn expert_offload_auto_balances_symmetric_gpus() {
     // 40 layers, 150 MiB attn + 3×700 MiB experts: ~6 GiB attention, ~84
@@ -333,9 +333,9 @@ fn expert_offload_auto_balances_symmetric_gpus() {
 
 /// Regression for the live `deepseek-v4-flash` failure: the real estimate
 /// (~96 GiB weights, 9848 MiB compute buffer, 6657 B/token KV over 131072
-/// context, 43 all-MoE layers) must auto-fit on two 24 GiB cards. Before
-/// the balance + one-layer-fudge fixes this reported
-/// `insufficient_capacity: no fit on gpu:0`.
+/// context, 43 all-MoE layers) must auto-fit on two 24 GiB cards. It is the
+/// shape that reports `insufficient_capacity: no fit on gpu:0` if the layer
+/// balance or the one-layer fudge is wrong.
 #[test]
 fn deepseek4_like_auto_fits_two_24gib_cards() {
     let n_layers = 43u32;

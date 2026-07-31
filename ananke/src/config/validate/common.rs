@@ -6,9 +6,8 @@ use std::path::PathBuf;
 
 use crate::errors::ExpectedError;
 
-/// Convert GiB (as declared by users in config) to MiB using the same
-/// truncating cast the validator has always used. Centralised so the oneshot
-/// API path and the TOML path agree on rounding.
+/// Convert GiB (as declared by users in config) to MiB. The cast truncates;
+/// centralised so the oneshot API path and the TOML path agree on rounding.
 pub fn gib_to_mib(gib: f32) -> u64 {
     (gib * 1024.0) as u64
 }

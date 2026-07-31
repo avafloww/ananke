@@ -7,14 +7,13 @@
 //! what the planner decides, since the whole point of `all` is to visit each
 //! model's cells while its weights are hot.
 //!
-//! The sort key deliberately carries no `thp` term. That factor was removed when
-//! the llama.cpp build turned out to reject `--use-thp`, and the fixture was
-//! captured without it.
+//! The sort key carries no `thp` term, deliberately: the llama.cpp build rejects
+//! `--use-thp`, so there is no such factor and the fixture holds none.
 //!
 //! `/fake/llm` is a root that does not exist, so every model reads as unreadable
 //! and the size term in the ordering is constant. That makes the fixture
 //! reproducible on any box while still exercising the merge and the whole rest of
-//! the sort key. The size term itself was checked separately against the real
+//! the sort key. The size term itself is checked separately against the real
 //! library, and the shard-summing is unit-tested in `plan::tests`.
 
 use std::{collections::BTreeMap, fs::File, io::Read, path::Path};

@@ -207,8 +207,7 @@ impl RunLoop {
                 None if snap.gpus.is_empty() => {
                     // No GPUs visible at all (typical in tests with a CPU-only
                     // snapshot). Fall back to CPU so the reservation lands
-                    // somewhere — matches the pre-fix behaviour and keeps
-                    // the test harness working.
+                    // somewhere rather than failing the pack outright.
                     crate::config::DeviceSlot::Cpu
                 }
                 None => {

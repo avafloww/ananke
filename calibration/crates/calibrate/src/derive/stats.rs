@@ -26,10 +26,10 @@ pub fn median(values: &[f64]) -> f64 {
 
 /// Reduce measurements to one number, refusing when they disagree.
 ///
-/// Every deriver in the campaign used to take a median and say nothing about the
-/// spread behind it. That is how a constant absorbs a factor nobody thought to
-/// group by: the median of a bimodal set is a number that describes none of its
-/// members, and it looks exactly like the median of a tight one.
+/// A median taken without regard for the spread behind it is how a constant
+/// absorbs a factor nobody thought to group by: the median of a bimodal set is a
+/// number that describes none of its members, and it looks exactly like the
+/// median of a tight one.
 ///
 /// Ten conclusions were drawn that way and were wrong — card count, split mode,
 /// cell label, runtime, flash-attention state, placement, architecture,
@@ -80,10 +80,10 @@ pub fn consensus_default(values: &[f64], name: &str) -> Result<f64> {
 /// maximum bounds a spread rather than hiding it — but that makes a single bad
 /// cell able to set the value outright, which is not a bound, it is an artifact.
 ///
-/// It has happened: an MTP pair matched an idle cell against a served one and
-/// drove a fitted base to 632 MiB where every honest pair of the same
-/// configuration gives 239 to 243. The absurdity is what exposed it. This
-/// catches the same shape before it needs to be absurd, by asking whether the
+/// The shape is real: an MTP pair that matches an idle cell against a served one
+/// drives a fitted base to 632 MiB where every honest pair of the same
+/// configuration gives 239 to 243. Only the absurdity of that figure exposes it.
+/// This catches the same shape before it needs to be absurd, by asking whether the
 /// winner stands far apart from the rest rather than merely above them.
 pub fn check_no_outlier_dominates(values: &[f64], name: &str, tolerance: f64) -> Result<()> {
     if values.len() < 3 {

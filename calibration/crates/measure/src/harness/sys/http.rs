@@ -10,8 +10,7 @@
 //! instead of retrying. Downstream that reads as a load failure, which is how a
 //! whole run of ik cells fails for a reason that has nothing to do with the
 //! model. Worse, a leftover server that *keeps* the bind means every later cell
-//! measures the same process at every point, which once invalidated an entire
-//! sweep.
+//! measures the same process at every point, which invalidates an entire sweep.
 
 use std::{
     io::{Read, Write},

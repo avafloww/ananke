@@ -38,12 +38,11 @@ pub fn recurrent_pools(rows: &[Record]) -> Vec<(&RsPool, &Parsed)> {
 /// which is how a pool of zero size reads.
 pub fn modelled_recurrent_mib(pool: &RsPool, parsed: &Parsed) -> Option<(f64, f64)> {
     // A convolution kernel is how an SSM block announces itself; without one the
-    // model is the shortconv shape instead. Absent and zero pick the same branch,
-    // as they did when this read defaulted to zero.
+    // model is the shortconv shape instead. Absent and zero pick the same branch.
     let (n_embd_r, n_embd_s) = match parsed.gguf("ssm.conv_kernel").unwrap_or(0) {
         d_conv if d_conv != 0 => {
-            // Every other SSM dimension must be there if the kernel was. Missing
-            // one used to read as zero and shrink the modelled state silently.
+            // Every other SSM dimension must be there if the kernel is. A missing
+            // one must not read as zero: that shrinks the modelled state silently.
             let d_inner = parsed.gguf("ssm.inner_size")?;
             let d_state = parsed.gguf("ssm.state_size")?;
             let n_group = parsed.gguf("ssm.group_count")?;

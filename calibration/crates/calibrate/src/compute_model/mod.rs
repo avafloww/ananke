@@ -1,15 +1,14 @@
 //! One per-device compute model, fitted per (runtime, split, architecture).
 //!
-//! This replaces three separate mechanisms — `compute_buffer_curves` for a
-//! mainline layer split, `tensor_compute_curves` plus its intermediates/quantised/
-//! shadow tables for a tensor split, and the four `ik_compute_*` rate tables —
-//! with a single design matrix. They were three because each was derived against
-//! a different target: llama.cpp's `compute` column plus `unaccounted` for one,
-//! the fused `Meta()` row's `compute` column alone for another, and the driver
-//! total minus a modelled remainder for ik, which prints no breakdown table at
-//! all. Three targets meant three shapes, and a cell that fell between them was
-//! covered by whichever mechanism claimed it rather than by the one that
-//! described it.
+//! One design matrix, rather than a mechanism per regime — a curve set for a
+//! mainline layer split, a second plus its intermediates/quantised/shadow tables
+//! for a tensor split, and a set of rate tables for ik. Split that way, each is
+//! derived against a different target: llama.cpp's `compute` column plus
+//! `unaccounted` for one, the fused `Meta()` row's `compute` column alone for
+//! another, and the driver total minus a modelled remainder for ik, which prints
+//! no breakdown table at all. Three targets mean three shapes, and a cell falling
+//! between them is covered by whichever mechanism claims it rather than by the one
+//! that describes it.
 //!
 //! The target here is uniform and per *device*:
 //!
@@ -44,8 +43,7 @@
 //! the one that matters most: graph intermediates are some count of hidden-width
 //! f32 buffers per batch token, so the column is `n_embd * ubatch` and the
 //! coefficient is that count times four bytes. Fitting three gemma4 widths
-//! against a shared *absolute* term is what previously left that group at 149%
-//! error.
+//! against a shared *absolute* term instead leaves that group at 149% error.
 //!
 //! ```text
 //! flat          1                            CUDA context, workspaces, graph metadata
@@ -76,12 +74,12 @@
 //! *flat*: deepseek4 on two cards holds 2359 MiB on device 0 at ctx 8192 ub 512
 //! and 2381 at ctx 32768 ub 2048, while device 1 moves from 585 to 1287 across
 //! the same pair. Without the column that asymmetry has nowhere to go and is paid
-//! for by inflating terms that do scale, which is what left the group at 65%.
+//! for by inflating terms that do scale, which leaves the group at 65%.
 //!
 //! The offload axis enters as that one boolean interaction rather than through the
 //! `n_cpu_moe` count, because the count carries no additional signal. Columns
 //! proportional to it — a flat per-offloaded-layer cost and a per-layer per-token
-//! one — were fitted and changed nothing: 151 of 633 observations outside +/-5%
+//! one — change nothing when fitted: 151 of 633 observations outside +/-5%
 //! with them and 151 without, at a marginally better median. Dropping
 //! `offload_head` instead takes qwen35moe from 11% to 71%. So the effect is real
 //! and the head card is where it lands, but it does not scale with how many layers
@@ -91,8 +89,8 @@
 //! `offload_head` exists because expert offload, not the output head, is what
 //! makes a layer split asymmetric. Qwen3.6-35B-A3B fully resident on two cards
 //! holds 428 MiB on each, while the same model under `--n-cpu-moe 40` holds
-//! visibly more on the primary — so a plain `head_flat` had to average the two and
-//! missed both by 41%. Gathering and scattering CPU-resident expert activations
+//! visibly more on the primary — so a plain `head_flat` averages the two and
+//! misses both by 41%. Gathering and scattering CPU-resident expert activations
 //! stages through the primary device, which is where the buffers land.
 //!
 //! `mask` carries its replication count rather than leaving the fit to discover
@@ -101,7 +99,7 @@
 //! `MAINLINE_LAYER_SPLIT_MASK_COPIES`, 99 layer-split cells at 4.00 against 147
 //! single-card and tensor-split cells at 1.00, flat across context, batch, slot
 //! count, and cache mode — and the caller passes that count in. Pooling the two
-//! card counts into one unreplicated column instead had the fit report 7.65 bytes
+//! card counts into one unreplicated column instead has the fit report 7.65 bytes
 //! per token-pair for a buffer whose element is an f16. With the count supplied,
 //! the coefficient is free to land on 2, which is then a check on the model rather
 //! than a parameter of it.
@@ -116,14 +114,14 @@
 //! Speculative-decoding cells are excluded because the MTP overhead has its own
 //! derived model and would otherwise be counted twice. Vision cells are excluded
 //! for the same reason: the mmproj weights and CLIP graph buffer are charged
-//! separately as `MMPROJ_GRAPH_BYTES`, and leaving them in put
+//! separately as `MMPROJ_GRAPH_BYTES`, and leaving them in puts
 //! gemma-4-31B-it-qat at 1870 MiB on its primary card against the 26B's 184 under
-//! otherwise identical settings, which the fit could only split the difference on.
+//! otherwise identical settings, which the fit can only split the difference on.
 //!
 //! Rows whose card holds no layers are excluded. A card holding no layers is not
 //! doing compute — its whole cost is the bare CUDA context, which several groups
 //! show as exactly 256 MiB — and those rows inform the per-device shadow instead.
-//! Leaving them in made the fit predict 484 MiB where the card held 256.
+//! Leaving them in makes the fit predict 484 MiB where the card holds 256.
 
 use std::collections::HashMap;
 
@@ -161,8 +159,8 @@ pub fn column_value(columns: &Columns, name: &str) -> f64 {
 /// What a single set of coefficients is fitted against.
 ///
 /// The variant is carried separately rather than folded into the architecture
-/// string. Concatenating them made `gemma4` + `e` indistinguishable from an
-/// architecture literally named `gemma4e`, and splitting it back off cost the arch
+/// string. Concatenating them makes `gemma4` + `e` indistinguishable from an
+/// architecture literally named `gemma4e`, and splitting it back off costs the arch
 /// its trailing letter.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Group {

@@ -33,7 +33,7 @@
 //! is shorthand for `expert_offload = auto`, which spills only the surplus
 //! that does not fit on the GPUs.
 //!
-//! Unknown architectures now hard-reject by default; pass `--allow-fallback`
+//! Unknown architectures hard-reject by default; pass `--allow-fallback`
 //! to accept the coarse fallback (see `ananke_estimate::fallback`).
 
 use std::{path::PathBuf, process};
@@ -176,7 +176,7 @@ fn parse_args() -> Args {
     // A tensor or row split usually implies multiple visible devices, so default
     // to two — but never override an explicit count. llama.cpp accepts
     // `--split-mode tensor` on a single card, and the dataset holds such cells;
-    // silently estimating them as two-card charged them a second device's share
+    // silently estimating them as two-card charges them a second device's share
     // of every per-device term.
     if split_mode != SplitMode::Layer && !visible_devices_given {
         visible_devices = 2;
@@ -211,10 +211,6 @@ fn parse_args() -> Args {
 
 /// The placement the packer needs: policy, split mode, the GPU allow list, and
 /// the expert-offload decision.
-///
-/// Before the packer took a distilled `PlacementInputs` this had to fabricate an
-/// entire `ServiceConfig` — health settings, drain timeouts, an event-bus-backed
-/// tracking block — none of which placement reads.
 fn build_placement(args: &Args) -> PlacementInputs {
     PlacementInputs {
         policy: if args.expert_offload.is_enabled() {

@@ -144,7 +144,7 @@ pub fn order_by_disturbance(cells: &mut [Factors], sizes: &ModelSizes) {
 /// A plan, as the harness reads it.
 ///
 /// One space of indentation rather than the usual two, matching what the harness
-/// has always been fed.
+/// is fed.
 pub fn to_json(cells: &[Factors]) -> String {
     let mut out = Vec::new();
     let mut ser = Serializer::with_formatter(&mut out, PrettyFormatter::with_indent(b" "));

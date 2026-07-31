@@ -79,9 +79,8 @@ mod tests {
         );
     }
 
-    /// Exactly at the tolerated ceiling is not a breach; the daemon has
-    /// always used a strict comparison and services are configured against
-    /// it.
+    /// Exactly at the tolerated ceiling is not a breach: the comparison is
+    /// strict, and services are configured against that boundary.
     #[test]
     fn exactly_at_the_ceiling_is_not_a_breach() {
         let c = ceiling_bytes(8 * 1024);

@@ -86,9 +86,8 @@ const VARIES_SCALE: f64 = 1e9;
 
 /// Whether a column takes more than one value across the group.
 ///
-/// Compared at nine decimals, matching the fitter this replaces: two rows whose
-/// column differs only below that are the same point as far as identifiability
-/// goes.
+/// Compared at nine decimals: two rows whose column differs only below that are
+/// the same point as far as identifiability goes.
 fn varies(points: &[Row], name: &str) -> bool {
     let distinct: BTreeSet<i64> = points
         .iter()

@@ -283,10 +283,10 @@ mod tests {
 
     #[test]
     fn idle_same_priority_is_evictable() {
-        // Regression for the "persistent Qwen blocks persistent Gemma at
-        // default priority" deadlock. Idle candidates should yield even
-        // without a strict priority advantage when the requester is also
-        // persistent (lifecycle ties don't add protection).
+        // Idle candidates yield even without a strict priority advantage
+        // when the requester is also persistent — lifecycle ties add no
+        // protection. Otherwise two persistent services at the default
+        // priority deadlock against each other.
         let cands = vec![cand_lc(
             "peer",
             70,

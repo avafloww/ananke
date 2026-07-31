@@ -1,6 +1,6 @@
-// Reusable WebSocket hook. Encapsulates the connection lifecycle that
-// was duplicated between the events WebSocket (events.ts) and the log
-// stream WebSocket (hooks.ts): connect with exponential-ish reconnect,
+// Reusable WebSocket hook. Encapsulates the connection lifecycle shared by
+// the events WebSocket (events.ts) and the log stream WebSocket (hooks.ts):
+// connect with exponential-ish reconnect,
 // onerror forces close to trigger onclose, shouldReconnect prevents
 // zombie reconnections after cleanup, and a reconnect() function allows
 // forced reconnection.

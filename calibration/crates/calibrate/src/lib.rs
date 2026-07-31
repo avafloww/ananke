@@ -7,7 +7,7 @@
 //! `coverage`, `validate`, `scoreboard`, `crossval`, and `estimates` say
 //! whether the result is worth shipping. Only the middle pair writes anything.
 //!
-//! Two rules run through the whole crate, both learned by getting them wrong.
+//! Two rules run through the whole crate.
 //! A derivation that pairs two cells must pin **every** factor that could
 //! differ between them, and a constant reduced from a group of cells must
 //! refuse when the group disagrees rather than averaging a real difference

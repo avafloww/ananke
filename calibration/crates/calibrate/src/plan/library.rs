@@ -132,8 +132,7 @@ impl Model {
     ///
     /// Returned as a `Factors` so a sweep spreads it with struct-update syntax
     /// and cannot forget a field: scattering these across the sweep functions is
-    /// how glm52 came to be planned without the DSA flags it is always served
-    /// with.
+    /// how glm52 gets planned without the DSA flags it is always served with.
     pub fn flags(&self, gpus: &str) -> Factors {
         Factors {
             extra: self.extra.iter().map(|s| (*s).to_owned()).collect(),
@@ -245,10 +244,10 @@ pub const MODELS: &[Model] = &[
     .threads(24)
     .no_mmap()
     .splits(&[SplitMode::Layer]),
-    // Every remaining llama.cpp service in the operator's config. These were
-    // absent from the registry while being served in production daily, which
-    // meant the campaign's "holdout" covered under half of what the daemon
-    // actually runs.
+    // Every remaining llama.cpp service in the operator's config. A service
+    // missing from the registry is one served in production daily and never
+    // measured, which narrows the campaign's "holdout" to under half of what the
+    // daemon actually runs.
     //
     // gemma4 MoE, 30L.
     Model::new(

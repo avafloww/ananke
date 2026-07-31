@@ -64,7 +64,7 @@ pub struct OneshotAllocation {
     pub mode: Option<String>,
     /// Static reservation in GiB. Lands on whichever device the service is
     /// placed on — host RAM for a cpu-only command service, VRAM otherwise.
-    /// The `vram_gb` alias keeps pre-rename clients working.
+    /// `vram_gb` is accepted as an alias for clients that spell it that way.
     #[serde(default, alias = "vram_gb", skip_serializing_if = "Option::is_none")]
     pub reserve_gb: Option<f32>,
     /// Dynamic minimum reservation in GiB.

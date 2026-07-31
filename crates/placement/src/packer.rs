@@ -199,7 +199,7 @@ impl<'a> Packer<'a> {
         // gemma-3-27B 15773, gemma-4-31B-QAT 16471 — and to the GGUF *less*
         // the table for one that ships its own head: talkie 10774 against
         // 11037, magidonia 15539 against 15980, Qwen3.6-27B 18563 against
-        // 19397. Charging it to the CPU alone under-reserved every tied model
+        // 19397. Charging it to the CPU alone under-reserves every tied model
         // by the table's whole size, 6-8% of its weights.
         //
         // Only `token_embd.weight`; a Gemma 4 E-variant's
@@ -250,11 +250,11 @@ impl<'a> Packer<'a> {
     /// headroom reserved here must additionally cover the *fudge* layer that
     /// `add_one_layer_fudge` adds post-walk — and that fudge is
     /// `per_layer_avg + per_layer_kv`, so both terms have to be reserved
-    /// here. Reserving only the weight term let a GPU that the walker fills
-    /// to the brim overshoot its capacity by one layer's KV (≈ the live
-    /// qwen3.6-27b "insufficient_capacity on gpu:0" by ~one `per_layer_kv`);
-    /// including `per_layer_kv` makes the post-walk total land at or below
-    /// `available`.
+    /// here. Reserving only the weight term lets a GPU that the walker fills
+    /// to the brim overshoot its capacity by one layer's KV — the live
+    /// qwen3.6-27b "insufficient_capacity on gpu:0", short by ~one
+    /// `per_layer_kv`. Including `per_layer_kv` makes the post-walk total land
+    /// at or below `available`.
     pub(crate) fn initialise_gpu_remaining(&mut self) {
         let n_layers = self.per_layer.len() as u64;
         let per_layer_avg = self.effective_layer_avg();
@@ -364,13 +364,12 @@ impl<'a> Packer<'a> {
         }
         let total: u64 = self.per_layer.iter().sum();
         // Subtract expert bytes for the expert-aware path so the fudge reflects
-        // only the non-expert weight that is pinned to a GPU as a unit. Read
-        // this from `expert_bytes_by_layer`, which persists, rather than
-        // `expert_tensors`, which `distribute_experts` drains with
-        // `mem::take` — using the latter made `add_one_layer_fudge` (which runs
-        // *after* the drain) see zero experts and reserve a full expert-inflated
-        // layer per GPU, over-committing a hybrid MoE by ~one layer's expert
-        // bytes and falsely failing the fit check.
+        // only the non-expert weight that is pinned to a GPU as a unit. The
+        // source has to be `expert_bytes_by_layer`, which stands for the whole
+        // pack: `add_one_layer_fudge` runs *after* the expert phase, so reading
+        // anything that phase consumes makes it see zero experts and reserve a
+        // full expert-inflated layer per GPU, over-committing a hybrid MoE by
+        // ~one layer's expert bytes and falsely failing the fit check.
         let total = if self.expert_aware {
             total.saturating_sub(self.expert_bytes_by_layer.values().sum::<u64>())
         } else {

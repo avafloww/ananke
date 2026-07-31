@@ -2,11 +2,11 @@
 //! dynamic service that overruns `max_reserve_gb`, but only while the overrun
 //! is *sustained*.
 //!
-//! The watchdog used to read a monotonic high-water mark, which made "spiked
-//! once" and "permanently overrunning" the same observation. The first spike
-//! latched, the service was killed, respawned, climbed back to the same spike,
-//! and was killed again — a loop nothing in the service's own behaviour could
-//! break. These tests pin the current-reading semantics that end it.
+//! These tests pin the current-reading semantics. A monotonic high-water
+//! mark would make "spiked once" and "permanently overrunning" the same
+//! observation: the first spike latches, the service is killed, respawns,
+//! climbs back to the same spike, and is killed again — a loop nothing in
+//! the service's own behaviour can break.
 //!
 //! Drives the resolver under tokio's paused clock so the
 //! `SAMPLE_INTERVAL`-driven loop can be advanced deterministically.
@@ -183,9 +183,9 @@ async fn sustained_breach_fast_kills() {
     let _ = h.shutdown.send(true);
 }
 
-/// The regression this change is for: a spike that subsides inside the grace
-/// period must leave no trace. With a high-water-mark input the spike latched
-/// and the kill landed 30 s later regardless of what the service did next.
+/// A spike that subsides inside the grace period must leave no trace. With a
+/// high-water-mark input the spike latches and the kill lands 30 s later
+/// regardless of what the service does next.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn transient_spike_above_the_ceiling_does_not_fast_kill() {
     let mut h = Harness::new("gpu-svc", 8 * 1024, DeviceSlot::Gpu(0));
@@ -207,7 +207,7 @@ async fn transient_spike_above_the_ceiling_does_not_fast_kill() {
 /// The kill/respawn loop, stated end to end. After the watchdog fires, the
 /// supervisor drains the service (dropping its row and clearing the
 /// observation) and re-ensures it; the fresh run sits under its ceiling and
-/// must survive. Pre-fix the latched peak killed it again every 30 s.
+/// must survive. A latched peak would kill it again every 30 s.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn a_service_back_under_its_ceiling_is_not_killed_again() {
     let mut h = Harness::new("gpu-svc", 8 * 1024, DeviceSlot::Gpu(0));
@@ -224,9 +224,9 @@ async fn a_service_back_under_its_ceiling_is_not_killed_again() {
 
     // The supervisor re-ensures the service, and the fresh run does exactly
     // what the first one did: a brief spike on load, then a working set well
-    // inside the ceiling. This is the step that closed the loop — the spike
-    // latched into the peak and bought another kill 30 s later, every time,
-    // forever.
+    // inside the ceiling. This is the step that closes the loop under a
+    // latching peak: the spike latches and buys another kill 30 s later,
+    // every time, forever.
     insert_row(&h.allocations, &h.svc, DeviceSlot::Gpu(0), 2 * 1024);
     h.observe(mb(12 * 1024), 0);
     h.run_ticks(3).await;

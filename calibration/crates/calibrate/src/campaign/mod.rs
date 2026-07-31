@@ -13,10 +13,9 @@
 //! The driver owns the loop and the harness reports each cell as it finishes, so
 //! a commit happens only at a cell boundary, where there is no half-written line
 //! by construction. A committer polling the dataset from beside the harness would
-//! be simpler, and is the arrangement this replaces, but it can land a commit
-//! while a record is being appended. Measurement still knows nothing about version
-//! control: the harness has no idea git exists, and this module is the only place
-//! the two meet.
+//! be simpler, but it can land a commit while a record is being appended.
+//! Measurement knows nothing about version control regardless: the harness has no
+//! idea git exists, and this module is the only place the two meet.
 
 use std::{path::PathBuf, time::Duration};
 

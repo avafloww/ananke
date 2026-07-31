@@ -2,9 +2,9 @@
 //!
 //! Several derivations measure a term as the difference between a cell with some
 //! flag and its twin without it, accumulating both halves as the dataset presents
-//! them. A `BTreeMap<bool, T>` did that job and read as `pair[&true]` at the far
-//! end: the indexing panics unless a length check the compiler cannot see has run
-//! first, and nothing on the page says which boolean means which half.
+//! them. A `BTreeMap<bool, T>` would do that job and read as `pair[&true]` at the
+//! far end: the indexing panics unless a length check the compiler cannot see has
+//! run first, and nothing on the page says which boolean means which half.
 
 /// Two readings that differ in a single flag, either half possibly unmeasured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

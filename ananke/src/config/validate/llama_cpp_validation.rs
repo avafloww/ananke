@@ -279,7 +279,8 @@ lifecycle = "persistent"
     }
     #[test]
     fn n_cpu_moe_is_rejected_as_unknown_field() {
-        // The legacy knob no longer exists; deny_unknown_fields surfaces it.
+        // `n_cpu_moe` is not a config key; deny_unknown_fields surfaces it
+        // as an error rather than dropping it in silence.
         let err = parse_toml(
             r#"
 [[service]]

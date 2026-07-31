@@ -59,9 +59,9 @@ fn tensor_split_shards_equally_across_gpus() {
 /// bytes) rides the main GPU. Measured on Qwen 3.6 27B (`--split-mode
 /// tensor`), enabling MTP added the same VRAM to *both* cards (≈1.4 GiB
 /// each), and the main GPU's only premium was the non-sharded mmproj — so
-/// the per-GPU difference must equal exactly `other_bytes`. Regression
-/// against the original lump-on-`--main-gpu` accounting, which over-pledged
-/// the main GPU by the whole output head plus the whole MTP context.
+/// the per-GPU difference must equal exactly `other_bytes`. Lumping them onto
+/// `--main-gpu` instead over-pledges that card by the whole output head plus
+/// the whole MTP context.
 #[test]
 fn tensor_split_shards_output_head_and_mtp_across_gpus() {
     let gib = 1024 * 1024 * 1024u64;

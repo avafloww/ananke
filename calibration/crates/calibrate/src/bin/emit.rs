@@ -5,7 +5,7 @@
 //!
 //! `compute_model` is written by the fitter (`ananke_calibrate::compute_model`),
 //! not here. `--check` compares the whole document including that section, so the
-//! two halves are still verified together; only the *deriving* is split.
+//! two halves are verified together; only the *deriving* is split.
 
 use std::{path::Path, process::ExitCode};
 

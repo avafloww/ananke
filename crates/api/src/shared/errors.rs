@@ -119,10 +119,10 @@ impl std::fmt::Display for ApiErrorKind {
 }
 
 impl ApiError {
-    /// Build an error with `type: "server_error"`. Kept as the
-    /// shorthand for the common case; new daemon-side code should
-    /// go through `ApiErrorCode` and rely on `From<ApiErrorCode>
-    /// for ApiError` so the kind is variant-accurate.
+    /// Build an error with `type: "server_error"`. The shorthand for
+    /// the common case; daemon-side code should go through
+    /// `ApiErrorCode` and rely on `From<ApiErrorCode> for ApiError`
+    /// so the kind is variant-accurate.
     pub fn new(code: ApiErrorCodeSlug, message: impl Into<String>) -> Self {
         Self {
             error: ApiErrorBody {

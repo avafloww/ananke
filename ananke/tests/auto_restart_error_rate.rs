@@ -297,11 +297,11 @@ async fn repeated_storms_trip_flap_cap_and_disable() {
     h.cleanup().await;
 }
 
-/// Regression: a manual re-enable after an `AutoRestartLoop` disable must
-/// grant a fresh restart budget. With `max_restarts = 1` the flap history is
-/// non-empty at disable time; without clearing it on enable, the next storm
-/// after re-enable would prune-but-still-see a full history and re-disable
-/// immediately instead of restarting.
+/// A manual re-enable after an `AutoRestartLoop` disable must grant a fresh
+/// restart budget. With `max_restarts = 1` the flap history is non-empty at
+/// disable time; unless enabling clears it, the next storm after re-enable
+/// prunes-but-still-sees a full history and re-disables immediately instead
+/// of restarting.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn reenable_after_flap_grants_fresh_restart_budget() {
     let mut svc = minimal_llama_service("alpha", 0);
@@ -386,9 +386,8 @@ async fn reenable_after_flap_grants_fresh_restart_budget() {
     }
     assert!(matches!(sup.peek_state(), ServiceState::Idle));
 
-    // Cycle 3: with the budget reset, this storm must RESTART (reach Idle),
-    // not immediately re-disable. With the bug the service would go straight
-    // back to Disabled here.
+    // Cycle 3: with the budget reset, this storm must RESTART (reach Idle)
+    // rather than going straight back to Disabled.
     let run_c = storm_and_wait(app.clone(), false).await;
     assert_ne!(run_c, run_b, "re-enable should have produced a fresh run");
     assert!(

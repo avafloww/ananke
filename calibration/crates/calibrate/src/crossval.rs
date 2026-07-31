@@ -250,8 +250,7 @@ mod tests {
             let Some(fitted) = report.full.value() else {
                 continue;
             };
-            // A constant the document does not declare has nothing to agree with;
-            // the sentinel this replaces said the same thing less directly.
+            // A constant the document does not declare has nothing to agree with.
             let Some(committed) = tuning.constant(report.constant) else {
                 continue;
             };

@@ -365,7 +365,7 @@ mod tests {
     /// `name()` reaches the server's command line and the serde rename reaches
     /// the dataset and the payload a cell's identity is hashed over. They are
     /// written apart, so a drift between them would re-hash every cell in the
-    /// campaign while the harness went on passing the old flag.
+    /// campaign while the harness went on passing the unchanged flag.
     #[test]
     fn a_factors_flag_and_its_recorded_spelling_are_the_same_word() {
         let flash = [FlashAttn::On, FlashAttn::Off, FlashAttn::Auto];

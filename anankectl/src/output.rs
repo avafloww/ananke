@@ -191,9 +191,9 @@ fn state_rank(state: &str) -> u8 {
     }
 }
 
-/// Build a borderless, dynamically-arranged table. We avoid borders so
-/// the output keeps the same visual density as the legacy plain-text
-/// tables; comfy-table still gives us auto-sizing and per-cell styling.
+/// Build a borderless, dynamically-arranged table. Borders are avoided so the
+/// output keeps the visual density of plain-text tables; comfy-table still
+/// gives us auto-sizing and per-cell styling.
 fn base_table() -> Table {
     let mut table = Table::new();
     table.load_preset(presets::NOTHING);

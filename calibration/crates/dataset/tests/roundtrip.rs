@@ -11,10 +11,9 @@
 //! and does not come out is a schema bug, and fails the run unconditionally.
 //!
 //! *Canonicity* says the schema also agrees with the committed lines on key
-//! order and number formatting. A one-time rewrite put every row in that form,
-//! so this is now a gate: a row that does not come back byte for byte fails the
-//! build, and the report says which keys, which order, and which spellings
-//! moved.
+//! order and number formatting. Every committed row is in that form, so this is
+//! a gate: a row that does not come back byte for byte fails the build, and the
+//! report says which keys, which order, and which spellings moved.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -24,7 +23,7 @@ use std::{
 use ananke_dataset::{Record, to_dataset_json};
 
 /// Whether the committed dataset is expected to be in canonical form already.
-/// True since the one-time rewrite; a row that is not is a failure, not a note.
+/// It is, so a row that is not is a failure rather than a note.
 const ROWS_MUST_BE_CANONICAL: bool = true;
 
 const DATASET: &str = include_str!("../../../data/measurements.ndjson");
@@ -97,9 +96,9 @@ fn every_row_round_trips_to_the_bytes_it_came_from() {
 /// How a re-serialised row disagrees with the committed one.
 ///
 /// The distinction that matters is between a *lost field* — a schema bug — and
-/// a reordering, a defaulted key, or a reformatting, all of which a one-time
-/// canonical rewrite settles. A row can disagree in more than one way at once,
-/// so every facet is collected rather than the first.
+/// a reordering, a defaulted key, or a reformatting, all of which a canonical
+/// rewrite of the affected rows settles. A row can disagree in more than one
+/// way at once, so every facet is collected rather than the first.
 #[derive(Default)]
 struct Difference {
     /// Paths the row carries and the writer did not emit.
@@ -179,7 +178,7 @@ impl Tally {
 /// Which objects the two spell their children in a different order inside.
 ///
 /// Reported per parent rather than as one flat "the order differs", because the
-/// answer a one-time rewrite needs is *which* blocks it touches.
+/// answer a canonical rewrite needs is *which* blocks it touches.
 fn differing_parents(before: &[String], after: &[String]) -> Vec<String> {
     let before = children(before);
     let after = children(after);

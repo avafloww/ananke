@@ -1,9 +1,9 @@
 //! Scenarios for the balloon resolver's contention path. The resolver should:
 //!
 //!   - Stay quiet while a dynamic service grows into declared headroom
-//!     the operator made room for. The original churn regression fired
-//!     on positive slope alone, fast-killed itself, then the eviction-
-//!     retry path evicted the very peer it had just yielded to.
+//!     the operator made room for. Firing on positive slope alone churns:
+//!     the service fast-kills itself, and the eviction-retry path then
+//!     evicts the very peer it just yielded to.
 //!   - Fire when the sum of pledges on a GPU the balloon holds eats
 //!     into the growth-headroom margin — even if NVML's `free_bytes`
 //!     still reports plenty of slack. Pledges are reservations; once
@@ -40,9 +40,9 @@ fn mb(n: u64) -> u64 {
 }
 
 /// Build a snapshot with a single 24 GB GPU at id 1. NVML `free_bytes`
-/// is parameterised but no longer affects the contention check (which
-/// is pledge-based since the symmetric-balloon-grows fix); tests pass
-/// it through anyway so the snapshots look realistic.
+/// is parameterised but does not affect the contention check, which is
+/// pledge-based; tests pass it through anyway so the snapshots look
+/// realistic.
 fn one_24g_gpu(free_bytes: u64) -> SharedSnapshot {
     let snap = ananke::devices::snapshotter::new_shared();
     *snap.write() = DeviceSnapshot {
@@ -180,11 +180,10 @@ fn pledge_mb(table: &Mutex<AllocationTable>, name: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// Regression for the user-reported churn: ComfyUI grew from 2 GB → 10 GB
-/// alongside Qwen's 12 GB on a 24 GB card. Total pledge 22 ≤ 24 → not
-/// over-committed. The resolver must NOT fast-kill anyone (its task must
-/// stay alive); the dynamic service grows freely into the headroom the
-/// operator declared.
+/// The churn case: ComfyUI grows from 2 GB → 10 GB alongside Qwen's 12 GB on
+/// a 24 GB card. Total pledge 22 ≤ 24 → not over-committed. The resolver must
+/// NOT fast-kill anyone (its task must stay alive); the dynamic service grows
+/// freely into the headroom the operator declared.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn growth_without_overcommit_does_not_evict() {
     // 10 GB physical free — well above OOM_MARGIN. The pledge book may
@@ -227,11 +226,10 @@ async fn growth_without_overcommit_does_not_evict() {
 /// Pledge sum exceeds the GPU total — the contention path fires
 /// regardless of what NVML reports as physically free. The dynamic
 /// on-demand service yields to the persistent peer at tied priority.
-/// Pre-fix the resolver task `return`-ed after yielding, which
-/// orphaned it for the rest of the daemon's lifetime — subsequent runs
-/// of the same service had no pledge tracking. Now the resolver re-arms
-/// (window cleared) and stays alive across the yield, so the next
-/// comfyui spawn cycle is observed correctly.
+/// The resolver re-arms (window cleared) and stays alive across the
+/// yield, so the next comfyui spawn cycle is observed. A resolver that
+/// returned after yielding would be orphaned for the rest of the
+/// daemon's lifetime, leaving subsequent runs with no pledge tracking.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn overcommit_triggers_yield_at_tied_priority_with_persistent_peer() {
     // 14 + 12 = 26 GiB pledges on a 24 GiB card → over-committed even
@@ -261,7 +259,7 @@ async fn overcommit_triggers_yield_at_tied_priority_with_persistent_peer() {
     // the supervisor but the resolver re-arms for the next spawn cycle.
     assert!(
         !is_finished(&mut h.join),
-        "resolver must stay alive after yielding; pre-fix it `return`-ed and orphaned"
+        "resolver must stay alive after yielding, or the next spawn cycle is orphaned"
     );
 
     let _ = h.shutdown.send(true);
@@ -269,20 +267,19 @@ async fn overcommit_triggers_yield_at_tied_priority_with_persistent_peer() {
 
 /// Symmetric to `growth_without_overcommit_does_not_evict`: a balloon
 /// growing into a peer's pledged territory triggers eviction even when
-/// NVML reports plenty of physical free space. Before the
-/// pledge-overcommit fix, the resolver waited for NVML's `free_bytes`
-/// to drop below 512 MiB before firing; a peer that had merely
-/// pledged-but-not-yet-allocated would silently constrain the balloon's
-/// growth ceiling far below its declared `max_reserve_gb`. Now the
-/// pledge book is the signal: once `balloon_pledge + peer_pledges +
-/// growth_margin > total`, the resolver picks a peer to evict.
+/// NVML reports plenty of physical free space. The pledge book is the
+/// signal: once `balloon_pledge + peer_pledges + growth_margin > total`,
+/// the resolver picks a peer to evict. Waiting for NVML's `free_bytes`
+/// to drop below 512 MiB instead would let a peer that has merely
+/// pledged-but-not-yet-allocated silently constrain the balloon's growth
+/// ceiling far below its declared `max_reserve_gb`.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn growing_balloon_evicts_lower_priority_peer_before_physical_oom() {
     // 24 GiB GPU; the snapshot reports 8 GiB physically free (the peer
-    // pledged but hasn't fully populated VRAM yet). Pre-fix the
-    // resolver would never fire here — 8 GiB is far above the 512 MiB
-    // OOM margin. Post-fix it fires once the pledge sum on this GPU
-    // closes within 512 MiB of the total.
+    // pledged but hasn't fully populated VRAM yet). A physical-free check
+    // would never fire here — 8 GiB is far above the 512 MiB OOM margin.
+    // The pledge check fires once the pledge sum on this GPU closes within
+    // 512 MiB of the total.
     let svc = SmolStr::new("comfy");
 
     let mut comfy_row = BTreeMap::new();

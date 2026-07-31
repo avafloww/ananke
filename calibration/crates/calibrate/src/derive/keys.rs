@@ -117,16 +117,16 @@ fn variant(record: &Record) -> String {
     let parsed = &record.parsed;
     // The literal `"None"` is a real key, and appears in no table only because
     // every cell reaching a keyed deriver has an architecture. It is spelled this
-    // way because the committed tables were keyed this way.
+    // way because the committed tables are keyed this way.
     let mut key = parsed.architecture().unwrap_or(UNNAMED).to_string();
     if parsed.n_expert != 0 {
         key.push_str(MOE_SUFFIX);
     }
     // The same discriminator `compute_buffer::is_gemma_e_variant` uses, read
-    // from the load log rather than guessed from the filename. The proxy this
-    // replaces would have disagreed with the estimator the moment an E-variant
-    // shipped under another name: the analysis would fit one curve while the
-    // estimator selected a different one.
+    // from the load log rather than guessed from the filename. A filename proxy
+    // would disagree with the estimator the moment an E-variant shipped under
+    // another name: the analysis would fit one curve while the estimator
+    // selected a different one.
     if parsed.per_layer_token_embd {
         key.push_str(E_VARIANT_SUFFIX);
     }

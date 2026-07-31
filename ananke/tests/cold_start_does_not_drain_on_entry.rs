@@ -1,4 +1,4 @@
-//! Regression: when a cold-start `Ensure` promotes the service from Idle to
+//! When a cold-start `Ensure` promotes the service from Idle to
 //! Running, the idle-timeout arm in `run_running_loop` must not fire on the
 //! very first tick. If it does, the child is SIGTERM'd before the caller's
 //! proxied request can reach it.
@@ -13,10 +13,10 @@
 //!
 //! The handler refreshes the stamp via `state.activity.ping(...)` only after
 //! `await_ensure` returns, so the correctness of the first idle-timeout
-//! evaluation depends on task-scheduling order — which is not a correctness
-//! guarantee. Observed in production: Apr 23, supervisor logged
+//! evaluation would otherwise depend on task-scheduling order — which is not
+//! a correctness guarantee. When it loses, the supervisor logs
 //! `state transition starting→running` and `idle timeout; draining to idle`
-//! in the same millisecond, and the upstream proxy failed with `client error
+//! in the same millisecond and the upstream proxy fails with `client error
 //! (Connect)`.
 
 #![cfg(feature = "test-fakes")]
@@ -79,10 +79,9 @@ async fn cold_start_does_not_drain_on_entry_to_running() {
     assert_eq!(resp2.status(), StatusCode::OK);
     tokio::task::yield_now().await;
 
-    // With the race, the supervisor would already have transitioned back to
-    // Idle (or to Draining) by this point, and the second fake child would be
-    // in SigTerm. With the fix, both stay Running until the next idle window
-    // legitimately elapses.
+    // Losing the race transitions back to Idle (or to Draining) by this
+    // point, with the second fake child in SigTerm. Both must stay Running
+    // until the next idle window legitimately elapses.
     assert!(
         matches!(sup.peek_state(), ServiceState::Running),
         "supervisor drained immediately after entering Running; state = {:?}",

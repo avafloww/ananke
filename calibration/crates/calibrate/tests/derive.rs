@@ -361,7 +361,7 @@ fn the_variant_key_splits_the_gemma_family() {
 fn the_head_count_falls_back_where_the_gguf_omits_it() {
     let rows = rows();
     // laguna carries only `head_count_kv`, so its query heads have to be inferred
-    // from `embedding_length / key_length`; a zero there left 9218 MiB unreserved.
+    // from `embedding_length / key_length`; a zero there leaves 9218 MiB unreserved.
     let laguna = rows
         .iter()
         .find(|r| r.parsed.arch == "laguna")
@@ -387,12 +387,12 @@ fn superseded_rows_are_dropped() {
 ///
 /// Several derivers read a constant they do not derive — the arena charges the two
 /// MoE rates, the baseline offset subtracts the whole process-baseline model — and
-/// reading those from the *committed* document made `emit` a function of (dataset,
-/// previous run). A value that moved would then take two runs to settle, with
-/// nothing to say which run you were looking at.
+/// reading those from the *committed* document would make `emit` a function of
+/// (dataset, previous run). A value that moved would then take two runs to settle,
+/// with nothing to say which run you were looking at.
 ///
 /// Handing it a document whose *derived* inputs are corrupted must produce the
-/// committed one regardless: each is now derived earlier in the same pass.
+/// committed one regardless: each is derived earlier in the same pass.
 ///
 /// The `reachable` constants are deliberately not poisoned. Those are chosen rather
 /// than derived — picked so every model lands inside the rolling correction's clamp —

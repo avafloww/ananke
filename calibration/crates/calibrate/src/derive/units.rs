@@ -2,8 +2,8 @@
 //!
 //! The measurements, the log lines they are parsed from, and this document's own
 //! `$comment`s are all written in MiB; the constants ship in bytes. Every
-//! derivation crosses that boundary at least once, and it crossed it as an inline
-//! `1048576` in eighteen places before this.
+//! derivation crosses that boundary at least once, so the conversion has one name
+//! rather than an inline `1048576` at each of eighteen sites.
 
 /// A mebibyte.
 pub const MIB: u64 = 1024 * 1024;

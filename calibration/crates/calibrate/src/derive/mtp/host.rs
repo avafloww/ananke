@@ -1,8 +1,8 @@
 //! What an MTP context costs in host memory.
 //!
-//! Both constants here were held under review on one or two models at two contexts.
-//! The slot sweep added the axis they lacked, and the answer is that slots are not it:
-//! the host cost is flat in the slot count and scales with context instead.
+//! Both constants here rest on one or two models at two contexts. The slot sweep
+//! supplies the axis they would otherwise lack, and the answer is that slots are not
+//! it: the host cost is flat in the slot count and scales with context instead.
 
 use std::collections::BTreeMap;
 
@@ -25,8 +25,8 @@ const HOST_BASE_MARGIN: f64 = 1.10;
 
 /// One MTP shape's *host* cost, fitted as `base + slope x (ctx / 1024)`.
 ///
-/// Both host constants were held under review on one or two models at two contexts.
-/// The slot sweep adds the axis they lacked, and the answer is that slots are not
+/// Both host constants rest on one or two models at two contexts. The slot sweep
+/// supplies the axis they would otherwise lack, and the answer is that slots are not
 /// it: the host cost is flat in slot count — 239, 243, and 240 MiB for Qwen3.6-27B
 /// at one, two, and four — and scales with context instead, at about 1.1 MiB per
 /// 1024 on every model of both shapes.

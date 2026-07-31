@@ -39,8 +39,9 @@ pub(crate) fn fill(text: &str, parsed: &mut Parsed) {
 /// One hyperparameter's value, plus every occurrence when they disagreed.
 ///
 /// The value is the *first* occurrence, not the last: the target model loads
-/// before any draft or projector, and last-wins recorded the draft's shape for
-/// exactly the MTP cells whose target shape the constants are fitted against.
+/// before any draft or projector, so last-wins would record the draft's shape
+/// for exactly the MTP cells whose target shape the constants are fitted
+/// against.
 ///
 /// A pair rather than a struct because [`fill`] destructures it straight into
 /// the record's two fields, which name both halves at every use.

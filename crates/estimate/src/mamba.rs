@@ -100,8 +100,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
 
 #[cfg(test)]
 mod tests {
-    // Mamba fixtures are nontrivial; smoke-level coverage via the
-    // dispatcher integration test in Task 8. A dedicated fixture file
-    // would duplicate estimator::llama's wiring without meaningful
-    // extra coverage for this feature.
+    // Mamba fixtures are nontrivial; smoke-level coverage comes from the
+    // dispatcher integration test. A dedicated fixture file would duplicate
+    // the llama family's wiring without meaningful extra coverage.
 }

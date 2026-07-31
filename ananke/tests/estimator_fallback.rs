@@ -8,8 +8,8 @@ use std::path::Path;
 use ananke::estimator::{self, EstimatorError};
 use common::synth_gguf;
 
-/// Unknown architectures must hard-reject by default — silent fallback
-/// hid glm4moe's 67× under-reservation for weeks. The error must be the
+/// Unknown architectures must hard-reject by default — a silent fallback
+/// hides an under-reservation as large as glm4moe's 67×. The error must be the
 /// typed `UnknownArchitecture` variant so callers can match on it rather
 /// than stringly-typed substrings.
 #[test]

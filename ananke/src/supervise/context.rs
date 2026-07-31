@@ -127,9 +127,9 @@ impl RunLoop {
     }
 
     /// Combined teardown: delete the DB `running_services` row and clear the
-    /// mirror's `run_id` + `pid`. Replaces the pattern of calling both in
-    /// sequence at every exit from the running/draining loops — keeping the
-    /// two in one helper means we can't forget one.
+    /// mirror's `run_id` + `pid`. Every exit from the running/draining loops
+    /// needs both, and keeping them in one helper means neither can be
+    /// forgotten.
     pub(crate) async fn end_run(&mut self, run_id: i64) {
         delete_running_row(&self.deps.db, self.init.service_id, run_id).await;
         self.clear_running_ids();

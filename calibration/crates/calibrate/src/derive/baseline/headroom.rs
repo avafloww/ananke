@@ -36,7 +36,7 @@ use crate::{
 ///
 /// Measured per architecture because they disagree by two orders of magnitude —
 /// about 165 MiB per slot on qwen35, 89 on gemma3, and 3 on llama — and a single
-/// value taken from the one architecture that had a series would have over-reserved
+/// value taken from the one architecture that has a series would over-reserve
 /// llama by half a gigabyte at four slots. Nothing the estimator already reads
 /// predicts the spread: it is monotonic in layer count over these three but far too
 /// steep to be a layer term, and unrelated to hidden size, KV-head count, or
@@ -236,7 +236,7 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table<VariantKey>> {
 ///
 /// `soak` belongs here: it grows the prompt over six rounds and costs memory of its
 /// own, so pooling a soak-free single-request cell with a soaked concurrent one
-/// measures both at once — which put gemma3 at 211 MiB per slot against the 89 its
+/// measures both at once — which puts gemma3 at 211 MiB per slot against the 89 its
 /// own series shows. `parallel` deliberately does not: an idle slot costs nothing,
 /// so a cell with four slots and one request is a valid one-slot reading, and
 /// excluding it would drop every series whose slot count moves alongside its

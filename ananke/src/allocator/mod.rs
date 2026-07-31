@@ -9,8 +9,7 @@ pub mod balloon;
 pub mod eviction;
 use std::collections::BTreeMap;
 
-/// Layer-aware placement, re-exported so `crate::allocator::placement::…`
-/// paths are unchanged.
+/// Layer-aware placement, reachable as `crate::allocator::placement::…`.
 pub use ananke_placement as placement;
 pub use ananke_placement::AllocationTable;
 use smol_str::SmolStr;
@@ -95,10 +94,10 @@ pub fn can_fit_after_eviction(
 ///
 /// Taking the min is conservative: it prevents over-committing to pending
 /// pledges while also respecting physical pressure from external processes
-/// or in-service growth beyond the pledge. An earlier formulation
-/// (`free - reserved`) double-counted realized pledges — with a 20 GB
-/// model already loaded on a 24 GB GPU, nvml reported 4 GB free and we
-/// subtracted the same 20 GB pledge again to get 0.
+/// or in-service growth beyond the pledge. `free - reserved` would instead
+/// double-count realized pledges: with a 20 GB model already loaded on a
+/// 24 GB GPU, nvml reports 4 GB free and subtracting the same 20 GB pledge
+/// again gives 0.
 pub fn can_fit(
     want: &BTreeMap<DeviceSlot, u64>,
     snapshot: &DeviceSnapshot,
@@ -219,10 +218,10 @@ mod tests {
 
     #[test]
     fn realized_pledges_are_not_double_counted() {
-        // Regression: before the min(free, total-reserved) fix, a service
-        // already running on a 24 GB GPU with 20 GB of loaded weights hit
-        // `available = 0` for any new start — nvml reported 4 GB free and we
-        // subtracted the 20 GB pledge again. A 1 GB request should fit.
+        // Availability is `min(free, total - reserved)`. Subtracting the
+        // pledge from nvml's free instead double-counts: a service already
+        // running on a 24 GB GPU with 20 GB of loaded weights reports
+        // `available = 0` for any new start. A 1 GB request should fit.
         let mut want = BTreeMap::new();
         want.insert(DeviceSlot::Gpu(0), mb(1024));
 
@@ -257,11 +256,10 @@ mod tests {
 
     #[test]
     fn can_fit_after_eviction_treats_victims_as_freed() {
-        // Regression for the scenario-03 "eviction insufficient" bug: the
-        // supervisor's retry was re-running `can_fit` against the unmodified
-        // AllocationTable, which still contained the in-flight drainee. With
-        // that victim present, the retry always reported no-fit even when
-        // the eviction plan would actually satisfy the placement.
+        // The supervisor's retry must run `can_fit` against a table with the
+        // in-flight drainee removed. With the victim still in the
+        // AllocationTable the retry reports no-fit even when the eviction
+        // plan would satisfy the placement.
         let mut want = BTreeMap::new();
         want.insert(DeviceSlot::Gpu(0), mb(18 * 1024)); // want 18 GB
 

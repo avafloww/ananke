@@ -5,9 +5,9 @@
 //! [`Packer::charge`], which scales it by the destination pool's factor. That
 //! is what makes a learned correction reach the placement at all: the pack
 //! paths that matter place from `per_layer_bytes` and `expert_tensors`, so
-//! scaling the `weights_bytes` scalar (as the correction once did) moved only
-//! the tensor-split remainder and the fallback-architecture path — the layer
-//! walk never read it.
+//! scaling the `weights_bytes` scalar instead would move only the tensor-split
+//! remainder and the fallback-architecture path — the layer walk never reads
+//! it.
 
 use std::collections::BTreeMap;
 
@@ -131,9 +131,8 @@ mod tests {
     /// change the placement. It reserves more per layer, so fewer layers fit
     /// the card and the surplus spills to the host.
     ///
-    /// Scaling `Estimate::weights_bytes` — what the correction used to do —
-    /// could not produce this, because the layer walk places from
-    /// `per_layer_bytes` and never reads that scalar.
+    /// Scaling `Estimate::weights_bytes` cannot produce this, because the layer
+    /// walk places from `per_layer_bytes` and never reads that scalar.
     #[test]
     fn a_vram_correction_moves_the_layer_walk() {
         // 40 layers × 500 MiB = ~19.5 GiB of weight against one 24 GiB card:
@@ -364,12 +363,12 @@ mod tests {
         );
     }
 
-    /// The two pack paths must agree on the host side. They once did not: the
-    /// layer walk charged the `Cpu` slot a full GPU-calibrated compute buffer
-    /// and the sharded path charged it nothing, so the same model on the same
-    /// cards produced host slots differing by ~3.8 GiB — which is what made a
-    /// multiplicative host ratio meaningless. Both now charge the modelled
-    /// host overhead, and nothing else non-weight.
+    /// The two pack paths must agree on the host side: both charge the modelled
+    /// host overhead and nothing else non-weight. If they diverge — the layer
+    /// walk charging the `Cpu` slot a full GPU-calibrated compute buffer while
+    /// the sharded path charges it nothing — the same model on the same cards
+    /// yields host slots ~3.8 GiB apart, which makes a multiplicative host ratio
+    /// meaningless.
     #[test]
     fn both_pack_paths_charge_the_same_host_overhead() {
         let mut est = trivial_estimate(20, 200);

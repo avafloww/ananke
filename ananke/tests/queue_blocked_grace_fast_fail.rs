@@ -3,14 +3,14 @@
 //! `service_blocked` error rather than hanging until the proxy's
 //! `max_request_duration_ms` budget runs out.
 //!
-//! Regression target: before the queue-grace bound, a request queued
-//! behind a tied-priority *non-elastic* busy peer (e.g. another model
-//! mid-generation) would block silently on `await_start_bus` for the
-//! full `max_request_duration_ms` (default 10 min in production) and
-//! eventually 503 with the unhelpful `start timed out`. The CLI showed
-//! nothing in the meantime. With the bound, the queue gives up after
-//! ~30 s (overridden in the test via tokio's virtual clock) and the
-//! daemon surfaces `service_blocked` with the busy peer name.
+//! Without the grace bound, a request queued behind a tied-priority
+//! *non-elastic* busy peer (e.g. another model mid-generation) blocks
+//! silently on `await_start_bus` for the full `max_request_duration_ms`
+//! (default 10 min in production) and eventually 503s with the unhelpful
+//! `start timed out`, with nothing shown in the CLI meanwhile. With the
+//! bound, the queue gives up after ~30 s (overridden in the test via
+//! tokio's virtual clock) and the daemon surfaces `service_blocked` with
+//! the busy peer name.
 //!
 //! Distinct from `ensure_queues_behind_busy_peer.rs`: that test exercises
 //! the *successful* queue path where the peer idles quickly. This one
@@ -55,8 +55,8 @@ async fn queued_ensure_fails_with_service_blocked_after_grace() {
     // Both static (default `AllocationMode::None`) so `collect_eviction_
     // candidates` keeps the busy bit semantics — a busy non-dynamic peer
     // is *not* evictable at tied priority, which is the case this test
-    // pins. If either were dynamic, the Bug 1 fix would make eviction
-    // succeed and we'd never reach the grace timeout.
+    // pins. A dynamic peer would be evictable, so the run would never
+    // reach the grace timeout.
     let mut alpha = minimal_llama_service("alpha", 0);
     let mut beta = minimal_llama_service("beta", 0);
 

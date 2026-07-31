@@ -4,8 +4,8 @@
 //! mode — a regime whose rule varies in an axis the measurements hold fixed — and
 //! that failure mode has produced four wrong constants here: the
 //! flash-attention rate, the shared-cache window mask, the separate-draft compute,
-//! and the checkpoint headroom all looked flat until a second point in the axis
-//! that mattered. Every sweep below closes one of the gaps that audit reports.
+//! and the checkpoint headroom all look flat without a second point in the axis
+//! that matters. Every sweep below closes one of the gaps that audit reports.
 
 use ananke_config::placement::SplitMode;
 use ananke_measure::record::{Factors, FlashAttn, Runtime};
@@ -63,16 +63,16 @@ pub fn flash_attention(lib: &Library) -> Vec<Factors> {
 
 /// The slot rules at a second batch size.
 ///
-/// Every cell with `parallel > 1` or `--kv-unified` was measured at ubatch 512,
+/// Every cell with `parallel > 1` or `--kv-unified` sits at ubatch 512,
 /// and both feed rules that multiply terms which scale with the batch: the stream
 /// division that sizes the KQ mask, and the three window masks an interleaved-SWA
 /// model builds when slots share one cache. A rule that is wrong in its batch
 /// dependence is invisible at one batch size.
 ///
-/// That is exactly how flash-attention-off spent the first campaign recorded as an
-/// inconsistent baseline shift when it is a clean per-token rate — the cells that
-/// would have shown it all sat at one ubatch. This is the same hole in the two
-/// remaining places it exists.
+/// That is exactly how flash-attention-off reads as an inconsistent baseline shift
+/// when it is a clean per-token rate: the cells that would show it otherwise all
+/// sit at one ubatch. These close the same hole in the two remaining places it
+/// exists.
 ///
 /// An SWA model and a plain causal one, since only the former exercises the
 /// window-mask rule.
@@ -144,12 +144,12 @@ pub fn concurrency_models(lib: &Library) -> Vec<Factors> {
 /// Two claims this campaign asserted on data outside the dataset.
 ///
 /// The flash-attention term is divided by the stream count, on the strength of
-/// hardcoded Qwen3-4B points in a unit test from an earlier sweep: every such cell
+/// hardcoded Qwen3-4B points in a unit test rather than on the dataset: every such cell
 /// in `measurements.ndjson` runs one slot, so nothing there can falsify it. If the
 /// division is right these cells show a quarter of the one-slot rate; if it is
 /// wrong they show the whole of it.
 ///
-/// And the per-slot host cost was measured at one context and one batch. It is
+/// And the per-slot host cost rests on one context and one batch. It is
 /// reserved as slop rather than charged to the correction, so an error is less
 /// costly — but "measured at one point in the axis" is what made three other
 /// constants wrong here, so it gets a second batch size.
@@ -305,7 +305,7 @@ pub fn checkpoint_steady(lib: &Library) -> Vec<Factors> {
 
 /// A second context for the two regimes the coverage audit reports as thin.
 ///
-/// `checkpoint_headroom_bytes` and `per_slot_host_bytes` were both fitted from
+/// `checkpoint_headroom_bytes` and `per_slot_host_bytes` are both fitted from
 /// cells at ctx 32768 alone, which is the shape that has produced a wrong constant
 /// four times here. Neither is charged to the rolling correction — both are
 /// reserved as slop — so an error costs capacity rather than a failed load, but a

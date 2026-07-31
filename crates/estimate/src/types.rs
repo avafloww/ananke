@@ -34,9 +34,9 @@ pub struct EstimatorInputs<'a> {
     ///
     /// Each one costs host memory for its context — measured at ~20 MiB per
     /// device beyond the first, with placement pinned to the CPU so nothing
-    /// but the context count varied. The estimator ran on a two-card machine
-    /// for its whole history, so that cost was folded into the process
-    /// baseline; an operator with four or eight cards inherited it wrong.
+    /// but the context count varied. It has to be charged per device rather
+    /// than folded into the process baseline, which would only be right on the
+    /// two-card machine the baseline was fitted on.
     pub visible_devices: u32,
     /// Whether the child will hold expert tensors on the host.
     ///
@@ -316,7 +316,7 @@ pub struct NonLayer {
     /// CPU-resident weight cannot be, so llama.cpp keeps a second GPU-resident
     /// copy split across the cards while the CPU copy stays. Distinct from
     /// [`Self::token_embd_bytes`] because the E-variants' per-layer stack sits
-    /// in that bucket and is *not* the head — copying it too over-reserved
+    /// in that bucket and is *not* the head — copying it too over-reserves
     /// gemma-4-E4B by 3 GiB. See
     /// `Packer::distribute_sharded`.
     pub tied_head_bytes: u64,

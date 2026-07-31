@@ -66,9 +66,9 @@ pub(crate) fn already_measured(files: &dyn Files, path: &Path) -> Result<BTreeSe
 ///
 /// `Record` itself only derives `Serialize` — the writer side owns the exact
 /// spacing via [`to_dataset_json`] — so this is its own small `Deserialize`
-/// shape rather than a cast through `serde_json::Value`, which let a status
+/// shape rather than a cast through `serde_json::Value`, which lets a status
 /// spelling drift or a non-object row compare `Null != "ok"` and silently pass
-/// as "not yet measured", costing a re-measurement of a cell that had already
+/// as "not yet measured", costing a re-measurement of a cell that has already
 /// used the GPU time. `status` uses the crate's own [`Status`] enum so a typo
 /// or a schema change fails to deserialize instead of comparing unequal.
 #[derive(Deserialize)]
@@ -140,9 +140,8 @@ pub(crate) fn archive_log(
     Ok(name)
 }
 
-/// Read one archived log back. The originals were decoded with replacement, so a
-/// stray non-UTF-8 byte stays a replacement character here too rather than
-/// failing the read.
+/// Read one archived log back. Decoded with replacement, so a stray non-UTF-8
+/// byte stays a replacement character rather than failing the read.
 pub(crate) fn read_archived_log(files: &dyn Files, path: &Path) -> Option<String> {
     let compressed = files.read(path)?;
     let mut bytes = Vec::new();

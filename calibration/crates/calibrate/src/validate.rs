@@ -89,7 +89,7 @@ pub fn estimator_inputs<'a>(record: &'a Record, model: &'a std::path::Path) -> E
         draft_model: f.draft.as_deref().map(std::path::Path::new),
         ik_llama: f.runtime_is_ik(),
         // The fork's sparse-attention path is a separate flag, and the campaign
-        // only ran it for the architecture that has one.
+        // runs it only for the architecture that has one.
         ik_dsa: f.runtime_is_ik() && record.parsed.arch == "glm-dsa",
         parallel: Some(f.parallel),
         flash_attn: Some(f.flash_attn_on()),
@@ -140,9 +140,8 @@ pub fn snapshot(record: &Record) -> DeviceSnapshot {
 ///
 /// A key that omits a factor is not a narrower key, it is a wrong one: cells
 /// differing only in the omitted factor collide and all but the first are
-/// discarded as duplicates. The sixteen-field `format!` this replaces dropped 53
-/// comparable cells that way, `extra` — which carries ik's `-dsa`, worth
-/// gigabytes of VRAM — among the factors it could not see.
+/// discarded as duplicates. Omitting `extra` alone — it carries ik's `-dsa`,
+/// worth gigabytes of VRAM — collides 53 otherwise comparable cells.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ConfigurationKey<'a> {
     model: &'a str,

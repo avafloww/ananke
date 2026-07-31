@@ -353,15 +353,14 @@ fn placement_cmd_args_emit_weighted_tensor_split() {
     assert_eq!(cmd.args[sm + 1], "tensor");
 }
 
-/// Regression for the scenario-01 `CUDA_VISIBLE_DEVICES=` empty-env bug:
 /// `SupervisorInit::allocation` is built from `placement_override` when the
-/// registry is constructed. For any estimator-driven service (no override),
-/// that bundle is empty, so rendering `render_argv` against it would emit
-/// `CUDA_VISIBLE_DEVICES=` and the child would silently fall back to CPU.
-/// The supervisor must thread the *packed* allocation into `render_argv`.
-/// This test demonstrates the discriminator: the two allocations produce
-/// different env values, so a regression that swaps back to `init.allocation`
-/// would be caught by the supervisor-level smoke path.
+/// registry is constructed. For any estimator-driven service (no override)
+/// that bundle is empty, so rendering `render_argv` against it emits
+/// `CUDA_VISIBLE_DEVICES=` and the child silently falls back to CPU. The
+/// supervisor must thread the *packed* allocation into `render_argv`
+/// instead. This test pins the discriminator: the two allocations produce
+/// different env values, so swapping back to `init.allocation` is caught by
+/// the supervisor-level smoke path.
 #[test]
 fn render_uses_supplied_allocation_for_cuda_env() {
     let svc = base_service();
