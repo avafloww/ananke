@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, fmt::Write};
 
 use crate::harness::probe::{
     Observations, Reading,
-    plan::{Question, Tag},
+    plan::{Question, STEP_PREDICT, STEP_WORDS, StageKind, Tag},
 };
 
 /// Bytes as MiB, to one decimal. Every figure here is a difference of two readings
@@ -17,11 +17,6 @@ use crate::harness::probe::{
 fn mib(bytes: u64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
 }
-
-/// The stage every question but `growth` reads from. Named because several sections
-/// pick their readings out of it by name, and the growth stages now take the same
-/// ones.
-const SHARED: &str = "shared";
 
 fn anon_mib(reading: &Reading) -> f64 {
     mib(reading.rss.rss_anon_kb * 1024)
@@ -62,11 +57,11 @@ fn step(out: &mut String, observations: &Observations) {
         observations
             .readings
             .iter()
-            .find(|r| r.tag == Tag::Idle && r.stage.starts_with(SHARED)),
+            .find(|r| r.tag == Tag::Idle && r.stage == StageKind::Shared),
         observations
             .readings
             .iter()
-            .find(|r| r.tag == Tag::Stepped && r.stage.starts_with(SHARED)),
+            .find(|r| r.tag == Tag::Stepped && r.stage == StageKind::Shared),
     ) else {
         return;
     };
@@ -125,7 +120,8 @@ fn maps(out: &mut String, observations: &Observations) {
 /// Printed as a series per cache setting rather than a total: a leak and a cache
 /// filling to its cap both grow, and only the shape tells them apart.
 fn growth(out: &mut String, observations: &Observations) {
-    let mut by_stage: BTreeMap<&str, Vec<(usize, f64)>> = BTreeMap::new();
+    // Keyed on the cache setting, which is what the two series actually differ in.
+    let mut by_cram: BTreeMap<u32, Vec<(usize, f64)>> = BTreeMap::new();
     for reading in &observations.readings {
         // Index 0 is the stage's post-step reading, which every stage takes. Starting
         // one series there and another at idle would put the one-time step in one
@@ -135,20 +131,20 @@ fn growth(out: &mut String, observations: &Observations) {
             Tag::Growth(n) => n,
             _ => continue,
         };
-        by_stage
-            .entry(reading.stage.as_str())
+        by_cram
+            .entry(reading.cram_mib)
             .or_default()
             .push((index, anon_mib(reading)));
     }
-    by_stage.retain(|_, series| series.len() > 1);
-    if by_stage.is_empty() {
+    by_cram.retain(|_, series| series.len() > 1);
+    if by_cram.is_empty() {
         return;
     }
     let _ = writeln!(
         out,
         "\ngrowth — RssAnon MiB over repeated identical requests, from the post-step reading"
     );
-    for (stage, mut series) in by_stage {
+    for (cram, mut series) in by_cram {
         series.sort_by_key(|(n, _)| *n);
         let figures: Vec<String> = series.iter().map(|(_, v)| format!("{v:.1}")).collect();
         let drift = series
@@ -158,7 +154,7 @@ fn growth(out: &mut String, observations: &Observations) {
             .unwrap_or(0.0);
         let _ = writeln!(
             out,
-            "  {stage:<22} {}   total {drift:+.1}",
+            "  cram {cram:<17} {}   total {drift:+.1}",
             figures.join(" -> ")
         );
     }
@@ -181,11 +177,11 @@ fn prefill(out: &mut String, observations: &Observations) {
             // The shared stage's step is also the (64, 8) point. Every growth stage
             // now takes that same pair, so this reads the shared one specifically
             // rather than whichever happened to be recorded last.
-            Tag::Idle if reading.stage.starts_with(SHARED) => {
-                points.entry((64, 8)).or_default().0 = Some(anon_mib(reading));
+            Tag::Idle if reading.stage == StageKind::Shared => {
+                points.entry((STEP_WORDS, STEP_PREDICT)).or_default().0 = Some(anon_mib(reading));
             }
-            Tag::Stepped if reading.stage.starts_with(SHARED) => {
-                points.entry((64, 8)).or_default().1 = Some(anon_mib(reading));
+            Tag::Stepped if reading.stage == StageKind::Shared => {
+                points.entry((STEP_WORDS, STEP_PREDICT)).or_default().1 = Some(anon_mib(reading));
             }
             _ => {}
         }
@@ -226,7 +222,8 @@ mod tests {
     fn reading(tag: Tag, anon_mib: u64, maps: Option<BTreeMap<String, u64>>) -> Reading {
         Reading {
             tag,
-            stage: "shared (cram 0)".to_string(),
+            stage: StageKind::Shared,
+            cram_mib: 0,
             rss: RssSnapshot {
                 rss_total_kb: anon_mib * 1024,
                 rss_anon_kb: anon_mib * 1024,

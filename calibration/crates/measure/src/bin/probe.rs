@@ -84,7 +84,7 @@ fn main() -> ExitCode {
         stages.len()
     );
     for stage in &stages {
-        println!("  {}", stage.label);
+        println!("  {}", stage.label());
     }
     if cli.dry_run {
         return ExitCode::SUCCESS;

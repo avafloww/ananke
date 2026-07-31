@@ -19,7 +19,7 @@ use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use crate::{
     harness::{
-        probe::plan::{Sample, Stage, Step, Tag},
+        probe::plan::{Sample, Stage, StageKind, Step, Tag},
         run::{
             PORT_WAIT,
             child::{spawn_server, stop_child},
@@ -64,7 +64,10 @@ pub struct Options<'a> {
 #[derive(Debug, Clone)]
 pub struct Reading {
     pub tag: Tag,
-    pub stage: String,
+    pub stage: StageKind,
+    /// Repeated on the reading so the report can group by cache setting without
+    /// re-deriving it from the stage.
+    pub cram_mib: u32,
     pub rss: RssSnapshot,
     /// Anonymous bytes per mapping, when the plan asked for the breakdown.
     pub maps: Option<BTreeMap<String, u64>>,
@@ -93,7 +96,7 @@ pub fn probe(deps: &Deps, options: &Options<'_>) -> Observations {
         if let Err(error) = run_stage(deps, options, stage, &mut observations) {
             observations
                 .failures
-                .push(format!("{}: {error}", stage.label));
+                .push(format!("{}: {error}", stage.label()));
         }
     }
     observations
@@ -174,7 +177,7 @@ fn walk(
                 {
                     observations
                         .failures
-                        .push(format!("{}: a completion did not return", stage.label));
+                        .push(format!("{}: a completion did not return", stage.label()));
                 }
                 deps.clock.sleep(SETTLE);
             }
@@ -191,7 +194,8 @@ fn read(deps: &Deps, pid: u32, stage: &Stage, sample: &Sample) -> Option<Reading
     };
     Some(Reading {
         tag: sample.tag.clone(),
-        stage: stage.label.clone(),
+        stage: stage.kind,
+        cram_mib: stage.cram_mib,
         rss,
         maps,
     })
@@ -204,7 +208,7 @@ fn read(deps: &Deps, pid: u32, stage: &Stage, sample: &Sample) -> Option<Reading
 /// started. A flag that changes for a measured cell changes here too.
 fn factors_for(options: &Options<'_>, stage: &Stage) -> Factors {
     Factors {
-        label: format!("probe-{}", stage.label),
+        label: format!("probe-{}", stage.label()),
         model: options.model.to_string(),
         runtime: Runtime::Mainline,
         gpus: options.gpus.to_string(),

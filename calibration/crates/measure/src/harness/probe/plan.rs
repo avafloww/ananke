@@ -45,11 +45,35 @@ impl Question {
 /// One server, and the ordered things done to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stage {
-    /// Shown in the output, and in the failure when a server dies.
-    pub label: String,
+    pub kind: StageKind,
     /// `-cram`, the prompt-cache cap in MiB.
     pub cram_mib: u32,
     pub steps: Vec<Step>,
+}
+
+/// Which stage a reading came from. The report picks readings out by this rather
+/// than by parsing the display label, which it used to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StageKind {
+    /// Carries every question that can share one server.
+    Shared,
+    /// The growth series at a cache setting the shared stage does not cover.
+    Growth,
+    /// One point of the prompt/generation sweep.
+    Prefill { words: usize, n_predict: u32 },
+}
+
+impl Stage {
+    /// For the operator: the progress line, and the failure when a server dies.
+    pub fn label(&self) -> String {
+        match self.kind {
+            StageKind::Shared => format!("shared (cram {})", self.cram_mib),
+            StageKind::Growth => format!("growth (cram {})", self.cram_mib),
+            StageKind::Prefill { words, n_predict } => {
+                format!("prefill (words {words}, predict {n_predict})")
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,8 +142,8 @@ const GROWTH_REQUESTS: usize = 5;
 ///
 /// 64 words because the step saturates by then and is absent at one, so it is the
 /// cheapest request that provokes the whole of it.
-const STEP_WORDS: usize = 64;
-const STEP_PREDICT: u32 = 8;
+pub(crate) const STEP_WORDS: usize = 64;
+pub(crate) const STEP_PREDICT: u32 = 8;
 
 /// Build the ordered plan for the questions asked.
 ///
@@ -153,7 +177,7 @@ pub fn plan(questions: &[Question]) -> Vec<Stage> {
             steps.extend(growth_series());
         }
         stages.push(Stage {
-            label: format!("shared (cram {})", GROWTH_CRAM_MIB[0]),
+            kind: StageKind::Shared,
             cram_mib: GROWTH_CRAM_MIB[0],
             steps,
         });
@@ -186,7 +210,7 @@ pub fn plan(questions: &[Question]) -> Vec<Stage> {
             ];
             steps.extend(growth_series());
             stages.push(Stage {
-                label: format!("growth (cram {cram})"),
+                kind: StageKind::Growth,
                 cram_mib: cram,
                 steps,
             });
@@ -203,7 +227,7 @@ pub fn plan(questions: &[Question]) -> Vec<Stage> {
                 continue;
             }
             stages.push(Stage {
-                label: format!("prefill (words {words}, predict {n_predict})"),
+                kind: StageKind::Prefill { words, n_predict },
                 cram_mib: 0,
                 steps: vec![
                     Step::Sample(Sample {
@@ -272,7 +296,7 @@ mod tests {
                     Step::Sample(sample) => assert!(
                         !(sample.needs_fresh && requested),
                         "`{}` samples {:?} as fresh after a request",
-                        stage.label,
+                        stage.label(),
                         sample.tag
                     ),
                 }
@@ -286,12 +310,12 @@ mod tests {
     fn every_stage_opens_with_a_fresh_reading() {
         for stage in plan(&Question::ALL) {
             let Some(Step::Sample(first)) = stage.steps.first() else {
-                panic!("`{}` does not open with a reading", stage.label);
+                panic!("`{}` does not open with a reading", stage.label());
             };
             assert!(
                 first.needs_fresh,
                 "`{}` opens with a reading it does not require to be fresh",
-                stage.label
+                stage.label()
             );
         }
     }
@@ -340,7 +364,7 @@ mod tests {
                     .iter()
                     .any(|s| matches!(s, Step::Sample(s) if s.tag == Tag::Stepped)),
                 "`{}` has no post-step anchor to start its series from",
-                stage.label
+                stage.label()
             );
         }
     }
