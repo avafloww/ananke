@@ -27,27 +27,50 @@ use ananke_calibrate::{
 use ananke_estimate::Estimate;
 use ananke_fs::LocalFs;
 use ananke_placement::{Packed, devices::DeviceId, pack_demand};
+use serde::Serialize;
 
 const MODELS_TOML: &str = "calibration/models.toml";
 const GIB: f64 = MIB_F64 * 1024.0;
 
 /// One model's estimate, or why it has none.
+///
+/// Untagged so `--json` emits the same shape `as_value` used to hand-build:
+/// no discriminant, and `why` under its JSON name `error`. `Estimated` is
+/// boxed because it is an order of magnitude larger than `Failed`, and an
+/// untagged newtype variant serializes transparently as the boxed value —
+/// the JSON is unaffected by the indirection.
+#[derive(Serialize)]
+#[serde(untagged)]
 enum Row {
-    Estimated {
-        name: String,
-        arch: String,
-        weights_gib: f64,
-        compute_buffer_mb: u32,
-        kv_total_mib: u64,
-        mtp_mib: u64,
-        gpu_vram_gib: f64,
-        host_overhead_mib: u64,
-        packed: Option<Packed>,
-    },
+    Estimated(Box<EstimatedRow>),
     Failed {
-        name: String,
+        #[serde(rename = "error")]
         why: String,
+        name: String,
     },
+}
+
+/// One model's fitted terms and where the packer put them.
+///
+/// Fields are declared alphabetically because `serde_json`'s `Value` has no
+/// `preserve_order` feature here, so the hand-built `json!` output this
+/// replaces was alphabetised — a struct serializes in declaration order, so
+/// this is what reproduces it byte for byte.
+#[derive(Serialize)]
+struct EstimatedRow {
+    #[serde(rename = "architecture")]
+    arch: String,
+    compute_buffer_mb: u32,
+    expert_offload_layers: Option<u32>,
+    expert_offload_mib: Option<u64>,
+    gpu_vram_gib: f64,
+    host_overhead_mib: u64,
+    kv_total_mib: u64,
+    mtp_mib: u64,
+    name: String,
+    weights_gib: f64,
+    #[serde(skip)]
+    packed: Option<Packed>,
 }
 
 fn main() -> ExitCode {
@@ -64,8 +87,7 @@ fn main() -> ExitCode {
     let rows: Vec<Row> = configs.iter().map(|c| estimate_one(&fs, c)).collect();
 
     if as_json {
-        let json: Vec<serde_json::Value> = rows.iter().map(as_value).collect();
-        match serde_json::to_string_pretty(&json) {
+        match serde_json::to_string_pretty(&rows) {
             Ok(text) => println!("{text}"),
             Err(e) => {
                 eprintln!("serialising: {e}");
@@ -83,20 +105,23 @@ fn main() -> ExitCode {
     for row in &rows {
         match row {
             Row::Failed { name, why } => println!("{name:<30} ERROR: {}", truncate(why, 80)),
-            Row::Estimated {
-                name,
-                arch,
-                weights_gib,
-                compute_buffer_mb,
-                kv_total_mib,
-                mtp_mib,
-                gpu_vram_gib,
-                host_overhead_mib,
-                ..
-            } => println!(
-                "{name:<30} {arch:<12} {weights_gib:>7.1}G {compute_buffer_mb:>6}M \
-                 {kv_total_mib:>7}M {mtp_mib:>7}M {gpu_vram_gib:>8.1}G {host_overhead_mib:>7}M"
-            ),
+            Row::Estimated(row) => {
+                let EstimatedRow {
+                    name,
+                    arch,
+                    weights_gib,
+                    compute_buffer_mb,
+                    kv_total_mib,
+                    mtp_mib,
+                    gpu_vram_gib,
+                    host_overhead_mib,
+                    ..
+                } = row.as_ref();
+                println!(
+                    "{name:<30} {arch:<12} {weights_gib:>7.1}G {compute_buffer_mb:>6}M \
+                     {kv_total_mib:>7}M {mtp_mib:>7}M {gpu_vram_gib:>8.1}G {host_overhead_mib:>7}M"
+                )
+            }
         }
     }
 
@@ -106,9 +131,10 @@ fn main() -> ExitCode {
     );
     println!("{}", "-".repeat(80));
     for row in &rows {
-        let Row::Estimated { name, packed, .. } = row else {
+        let Row::Estimated(row) = row else {
             continue;
         };
+        let EstimatedRow { name, packed, .. } = row.as_ref();
         let Some(packed) = packed else {
             println!("{name:<28} {:>10}", "not packed");
             continue;
@@ -127,7 +153,7 @@ fn main() -> ExitCode {
             slot(DeviceId::Gpu(1)),
             slot(DeviceId::Cpu),
             format!("{}M", packed.expert_offload_bytes / MIB),
-            packed.expert_offload_layers
+            packed.expert_offload_layers,
         );
     }
     ExitCode::SUCCESS
@@ -160,7 +186,7 @@ fn estimate_one(fs: &LocalFs, config: &ModelConfig) -> Row {
     // reservation is what `scoreboard` reports, and the packing detail below shows
     // where it actually landed.
     let gpu_vram_mib = notional_gpu_mib(&estimate, config);
-    Row::Estimated {
+    Row::Estimated(Box::new(EstimatedRow {
         name: config.name.clone(),
         arch: estimate.architecture.to_string(),
         weights_gib: estimate.weights_bytes as f64 / GIB,
@@ -169,8 +195,10 @@ fn estimate_one(fs: &LocalFs, config: &ModelConfig) -> Row {
         mtp_mib: estimate.mtp_bytes / MIB,
         gpu_vram_gib: (gpu_vram_mib * MIB) as f64 / GIB,
         host_overhead_mib: estimate.host_overhead_bytes / MIB,
+        expert_offload_mib: packed.as_ref().map(|p| p.expert_offload_bytes / MIB),
+        expert_offload_layers: packed.as_ref().map(|p| p.expert_offload_layers),
         packed,
-    }
+    }))
 }
 
 /// What the estimator says this model needs on a card, before placement.
@@ -207,36 +235,6 @@ fn kv_total_mib(estimate: &Estimate, config: &ModelConfig) -> u64 {
         .kv_per_token
         .saturating_mul(u64::from(config.context))
         / MIB
-}
-
-fn as_value(row: &Row) -> serde_json::Value {
-    match row {
-        Row::Failed { name, why } => serde_json::json!({"name": name, "error": why}),
-        Row::Estimated {
-            name,
-            arch,
-            weights_gib,
-            compute_buffer_mb,
-            kv_total_mib,
-            mtp_mib,
-            gpu_vram_gib,
-            host_overhead_mib,
-            packed,
-        } => serde_json::json!({
-            "name": name,
-            "architecture": arch,
-            "weights_gib": weights_gib,
-            "compute_buffer_mb": compute_buffer_mb,
-            "kv_total_mib": kv_total_mib,
-            "mtp_mib": mtp_mib,
-            "gpu_vram_gib": gpu_vram_gib,
-            "host_overhead_mib": host_overhead_mib,
-            "expert_offload_mib": packed
-                .as_ref()
-                .map(|p| p.expert_offload_bytes / MIB),
-            "expert_offload_layers": packed.as_ref().map(|p| p.expert_offload_layers),
-        }),
-    }
 }
 
 fn truncate(s: &str, max: usize) -> String {

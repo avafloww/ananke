@@ -17,6 +17,8 @@
 
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
+use serde::Serialize;
+
 use crate::{
     harness::{
         probe::plan::{Sample, Stage, StageKind, Step, Tag},
@@ -26,7 +28,7 @@ use crate::{
             readiness::{Readiness, ReadinessWait, wait_for_port, wait_for_ready},
             watchdog::SwapWatchdog,
         },
-        sys::Deps,
+        sys::{Deps, post_json},
     },
     record::{FULLY_OFFLOADED, Factors, FlashAttn, KvType, RssSnapshot, Runtime},
 };
@@ -167,15 +169,22 @@ fn walk(
             }
             Step::Request { words, n_predict } => {
                 let prompt = vec!["word"; *words].join(" ");
-                let body = serde_json::json!({
-                    "prompt": prompt,
-                    "n_predict": n_predict,
-                    "cache_prompt": false,
-                });
-                if deps
-                    .http
-                    .post(options.port, "/completion", &body, REQUEST_TIMEOUT)
-                    .is_none()
+                let request = CompletionRequest {
+                    prompt: &prompt,
+                    n_predict: *n_predict,
+                    // Isolates the step from the prompt cache: a probe step
+                    // measures what one fresh request allocates, and a cache
+                    // hit would measure the cache instead.
+                    cache_prompt: false,
+                };
+                if post_json::<_, serde_json::Value>(
+                    deps.http.as_ref(),
+                    options.port,
+                    "/completion",
+                    &request,
+                    REQUEST_TIMEOUT,
+                )
+                .is_none()
                 {
                     observations
                         .failures
@@ -185,6 +194,14 @@ fn walk(
             }
         }
     }
+}
+
+/// A `/completion` request, as [`Step::Request`] wants it issued.
+#[derive(Debug, Serialize)]
+struct CompletionRequest<'a> {
+    prompt: &'a str,
+    n_predict: u32,
+    cache_prompt: bool,
 }
 
 fn read(deps: &Deps, pid: u32, stage: &Stage, sample: &Sample) -> Option<Reading> {

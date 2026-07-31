@@ -20,7 +20,7 @@ pub use crate::harness::sys::{
     clock::{Clock, SystemClock},
     files::{Files, LocalFiles},
     gpu::{GpuSampler, NvidiaSmi},
-    http::{Http, LoopbackHttp},
+    http::{Http, LoopbackHttp, post_json},
     procfs::{LocalProcFs, ProcFs},
     spawn::{Child, LocalSpawner, SpawnRequest, Spawner, Stop},
 };

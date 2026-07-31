@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     harness::{
         run::{bench, watchdog::SwapWatchdog},
-        sys::Deps,
+        sys::{Deps, post_json},
     },
     record::{Checkpoint, DEFAULT_PROBE_PROMPT_TOKENS, Factors, GpuUsage},
 };
@@ -67,10 +67,12 @@ pub(crate) fn exercise(
     } else {
         vec!["word"; factors.probe_prompt_tokens as usize].join(" ")
     };
-    deps.http.post(
+    let warmup = [message(Role::User, &prompt)];
+    post_json::<_, serde_json::Value>(
+        deps.http.as_ref(),
         port,
         "/v1/chat/completions",
-        &chat_body(&[message(Role::User, &prompt)], factors.probe_tokens),
+        &chat_request(&warmup, factors.probe_tokens),
         PROBE_TIMEOUT,
     );
 
@@ -83,14 +85,23 @@ pub(crate) fn exercise(
         prompt.push_str(&format!(
             " Also cover point {round} in detail, at length, with examples."
         ));
-        let body = chat_body(&[message(Role::User, &prompt)], 256);
+        let messages = [message(Role::User, &prompt)];
+        let request = chat_request(&messages, 256);
         // Overlapping requests, because a strictly serial probe never reaches a
         // slot past the first.
         std::thread::scope(|scope| {
             for _ in 0..factors.concurrency.max(1) {
                 let http = deps.http.clone();
-                let body = body.clone();
-                scope.spawn(move || http.post(port, "/v1/chat/completions", &body, SOAK_TIMEOUT));
+                let request = &request;
+                scope.spawn(move || {
+                    post_json::<_, serde_json::Value>(
+                        http.as_ref(),
+                        port,
+                        "/v1/chat/completions",
+                        request,
+                        SOAK_TIMEOUT,
+                    )
+                });
             }
         });
         if watchdog.check(deps.procfs.as_ref()).is_some() {
@@ -112,10 +123,11 @@ fn embeddings(deps: &Deps, factors: &Factors, port: u16, pid: u32) -> Vec<Checkp
     let mut checkpoints = Vec::new();
     for round in 0..rounds {
         let input = format!("calibration probe {round} {}", "token ".repeat(64));
-        deps.http.post(
+        post_json::<_, serde_json::Value>(
+            deps.http.as_ref(),
             port,
             "/v1/embeddings",
-            &embeddings_body(&input),
+            &EmbeddingsRequest { input: &input },
             Duration::from_secs(120),
         );
         if !factors.bench {
@@ -160,17 +172,15 @@ fn growth(
         let which = turn as usize % conversations.len();
         let prompt = bench::PROMPTS[turn as usize % bench::PROMPTS.len()];
         conversations[which].push(message(Role::User, prompt));
-        let Some(body) = deps.http.post(
-            port,
-            "/v1/chat/completions",
-            &chat_body(&conversations[which], GROWTH_MAX_TOKENS),
-            GROWTH_TIMEOUT,
-        ) else {
-            break;
-        };
         // Not `deny_unknown_fields`: a completion response carries far more than
         // this reads, and an unrecognised field must be ignored, not rejected.
-        let Ok(response) = serde_json::from_value::<ChatCompletionResponse>(body) else {
+        let Some(response) = post_json::<_, ChatCompletionResponse>(
+            deps.http.as_ref(),
+            port,
+            "/v1/chat/completions",
+            &chat_request(&conversations[which], GROWTH_MAX_TOKENS),
+            GROWTH_TIMEOUT,
+        ) else {
             break;
         };
         let Some(choice) = response.choices.into_iter().next() else {
@@ -282,23 +292,17 @@ struct ChatCompletionRequest<'a> {
     max_tokens: u32,
 }
 
-fn chat_body(messages: &[Message], max_tokens: u32) -> serde_json::Value {
-    serde_json::to_value(ChatCompletionRequest {
+fn chat_request<'a>(messages: &'a [Message], max_tokens: u32) -> ChatCompletionRequest<'a> {
+    ChatCompletionRequest {
         model: MODEL_PLACEHOLDER,
         messages,
         max_tokens,
-    })
-    .expect("a chat completion request always serializes")
+    }
 }
 
 #[derive(Debug, Serialize)]
 struct EmbeddingsRequest<'a> {
     input: &'a str,
-}
-
-fn embeddings_body(input: &str) -> serde_json::Value {
-    serde_json::to_value(EmbeddingsRequest { input })
-        .expect("an embeddings request always serializes")
 }
 
 /// A `/v1/chat/completions` response. llama-server's replies carry far more

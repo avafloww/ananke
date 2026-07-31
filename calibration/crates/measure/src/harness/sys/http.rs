@@ -20,6 +20,8 @@ use std::{
     time::Duration,
 };
 
+use serde::{Serialize, de::DeserializeOwned};
+
 pub trait Http: Send + Sync {
     /// Whether a fresh server could bind the port right now.
     fn port_free(&self, port: u16) -> bool;
@@ -29,6 +31,11 @@ pub trait Http: Send + Sync {
     /// Send a request, returning the decoded body when there is one. The body
     /// carries the server's own token accounting, which is what ties a memory
     /// reading to the work that produced it.
+    ///
+    /// The JSON transport: callers that know their request and response shapes
+    /// go through [`post_json`] instead. This stays `Value`-shaped because
+    /// `Deps` holds `Http` as `Arc<dyn Http>`, and a generic method would make
+    /// the trait non-object-safe.
     fn post(
         &self,
         port: u16,
@@ -36,6 +43,25 @@ pub trait Http: Send + Sync {
         body: &serde_json::Value,
         timeout: Duration,
     ) -> Option<serde_json::Value>;
+}
+
+/// Serialize `body`, `POST` it, and decode the reply as `Res` — the typed
+/// wrapper over [`Http::post`]'s `Value` transport.
+///
+/// A free function rather than a default trait method: every caller holds
+/// `Arc<dyn Http>`, and a generic method is not callable through a trait
+/// object even when declared `where Self: Sized` (that bound only makes the
+/// trait itself object-safe; it still excludes the method from `dyn Http`).
+pub fn post_json<Req: Serialize, Res: DeserializeOwned>(
+    http: &dyn Http,
+    port: u16,
+    path: &str,
+    body: &Req,
+    timeout: Duration,
+) -> Option<Res> {
+    let body = serde_json::to_value(body).ok()?;
+    let reply = http.post(port, path, &body, timeout)?;
+    serde_json::from_value(reply).ok()
 }
 
 pub struct LoopbackHttp;
@@ -164,6 +190,12 @@ fn dechunk(body: &str) -> String {
 
 /// A server that is whatever a test says: busy or free, loading for a scripted
 /// number of polls, and replying with canned bodies.
+///
+/// Recorded requests and canned replies stay `serde_json::Value`: `FakeHttp`
+/// implements the same `Value`-shaped [`Http::post`] every real transport
+/// does, so a fake for that seam legitimately stores the wire form rather
+/// than a caller's typed request or response. This is not the `Value` cluster
+/// [`post_json`] exists to remove.
 #[cfg(any(test, feature = "test-fakes"))]
 pub struct FakeHttp {
     inner: parking_lot::Mutex<FakeHttpState>,
