@@ -4,6 +4,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ananke_config::placement::SplitMode;
+
 use crate::{
     derive::{
         Scalar, Table,
@@ -45,7 +47,7 @@ pub fn layer_split_copies(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
             continue;
         }
         let k = (arena - terms.hidden) / terms.masks();
-        if factors.cards_or(1) > 1 && factors.split_or_layer() == "layer" {
+        if factors.cards_or(1) > 1 && factors.split_or_layer() == SplitMode::Layer {
             multiples.push(k);
         } else {
             singles.push(k);
@@ -138,7 +140,7 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         if factors.runtime_is_ik() || !factors.is_hybrid() {
             continue;
         }
-        if factors.split_or_layer() != "tensor" || !factors.flash_attn_on() {
+        if factors.split_or_layer() != SplitMode::Tensor || !factors.flash_attn_on() {
             continue;
         }
         // An MTP run measures without this term entirely.

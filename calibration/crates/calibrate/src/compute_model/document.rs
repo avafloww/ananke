@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use ananke_config::placement::SplitMode;
 use ananke_estimate::compute_model::{Columns, Scalars};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -84,7 +85,7 @@ pub fn document_section(groups: &Groups) -> Result<(Value, Vec<String>), String>
             archs: vec![key.arch.clone()],
             variant: key.variant.map(str::to_owned),
             runtime: (key.runtime != "mainline").then(|| key.runtime.clone()),
-            split: key.split.clone(),
+            split: key.split.as_flag().to_owned(),
             coefficients: rounded(&coefficients),
             evidence: format!(
                 "non-negative weighted least squares over {} per-device \
@@ -111,7 +112,7 @@ pub fn document_section(groups: &Groups) -> Result<(Value, Vec<String>), String>
 
     let pooled: Vec<Row> = groups
         .iter()
-        .filter(|(key, _)| key.runtime == "mainline" && key.split == "layer")
+        .filter(|(key, _)| key.runtime == "mainline" && key.split == SplitMode::Layer)
         .flat_map(|(_, rows)| rows.iter().cloned())
         .collect();
     let (coefficients, worst) =

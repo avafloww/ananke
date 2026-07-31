@@ -14,6 +14,7 @@ use ananke_calibrate::{
     compute_model::{Groups, Section, collect, dataset::latest_per_cell, document_section, fit},
     record::read_ndjson,
 };
+use ananke_config::placement::SplitMode;
 use ananke_measure::record::Status;
 
 /// Relative agreement demanded of every coefficient.
@@ -77,7 +78,7 @@ fn the_fit_reproduces_the_fixture() {
             .iter()
             .find(|(key, _)| {
                 key.runtime == expected.runtime
-                    && key.split == expected.split
+                    && key.split.as_flag() == expected.split
                     && key.arch == expected.arch
                     && key.variant.map(str::to_owned) == expected.variant
             })
@@ -110,7 +111,7 @@ fn the_pooled_default_reproduces_the_fixture() {
     let (groups, fixture) = load();
     let pooled: Vec<_> = groups
         .iter()
-        .filter(|(key, _)| key.runtime == "mainline" && key.split == "layer")
+        .filter(|(key, _)| key.runtime == "mainline" && key.split == SplitMode::Layer)
         .flat_map(|(_, rows)| rows.iter().cloned())
         .collect();
     assert_eq!(pooled.len(), fixture.pooled.rows, "pooled row count");

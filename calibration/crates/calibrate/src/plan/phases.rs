@@ -7,7 +7,8 @@
 //! varying the model is what stops a constant fitted to one shape from being
 //! generalised — the mistake this campaign exists to stop repeating.
 
-use ananke_measure::record::{Factors, Runtime};
+use ananke_config::placement::SplitMode;
+use ananke_measure::record::{Factors, FlashAttn, KvType, Runtime};
 
 use crate::plan::library::{Library, MODELS, Model, model, runtime_name};
 
@@ -35,8 +36,8 @@ pub fn factor_screen(lib: &Library) -> Vec<Factors> {
     let m = model("qwen3-4b");
     let mut cells = Vec::new();
     for gpus in ["0", "0,1"] {
-        for split in ["layer", "tensor"] {
-            for kv in ["f16", "q8_0"] {
+        for split in [SplitMode::Layer, SplitMode::Tensor] {
+            for kv in [KvType::F16, KvType::Q80] {
                 for served in [true, false] {
                     for parallel in [1, 4] {
                         for ctx in [8192, 32768] {
@@ -48,8 +49,8 @@ pub fn factor_screen(lib: &Library) -> Vec<Factors> {
                                 ),
                                 model: lib.path_of(m.path),
                                 gpus: gpus.to_owned(),
-                                split: Some(split.to_owned()),
-                                kv_type: kv.to_owned(),
+                                split: Some(split),
+                                kv_type: kv,
                                 served,
                                 parallel,
                                 ctx,
@@ -108,7 +109,7 @@ pub fn curves(lib: &Library) -> Vec<Factors> {
                 // Flash attention is a KV-cache property; `-dsa` rejects a
                 // quantised cache and the fa-off point is not meaningful for a
                 // model that must run with it on.
-                if fa == "off" && m.kv_types == ["f16"] && !m.extra.is_empty() {
+                if fa == FlashAttn::Off && m.kv_types == [KvType::F16] && !m.extra.is_empty() {
                     continue;
                 }
                 cells.push(Factors {
@@ -120,10 +121,10 @@ pub fn curves(lib: &Library) -> Vec<Factors> {
                     model: lib.path_of(m.path),
                     runtime,
                     gpus: gpus.to_owned(),
-                    split: Some("layer".to_owned()),
+                    split: Some(SplitMode::Layer),
                     ctx,
                     ubatch,
-                    flash_attn: fa.to_owned(),
+                    flash_attn: fa,
                     ..m.flags(gpus)
                 });
             }
@@ -161,7 +162,7 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
                 label: format!("{label}-c{ctx}-np{parallel}"),
                 model: lib.path_of(m.path),
                 gpus: "0,1".to_owned(),
-                split: Some("tensor".to_owned()),
+                split: Some(SplitMode::Tensor),
                 ctx,
                 parallel,
                 kv_unified: unified,
@@ -177,7 +178,7 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
             label: format!("{label}-g4"),
             model: lib.path_of(g4.path),
             gpus: "0,1".to_owned(),
-            split: Some("tensor".to_owned()),
+            split: Some(SplitMode::Tensor),
             mmproj: lib.path_opt(mmproj),
             ..Factors::default()
         });
@@ -259,7 +260,7 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
             model: lib.path_of(m.path),
             runtime: m.runtimes[0],
             gpus: gpus.to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             bench: true,
             bench_turns: GROWTH_TURNS,
             verbose_log: false,
@@ -301,7 +302,7 @@ pub fn holdout(lib: &Library) -> Vec<Factors> {
             draft: lib.path_opt(g4.draft),
             spec_type: Some("draft-mtp".to_owned()),
             gpus: "0,1".to_owned(),
-            split: Some("tensor".to_owned()),
+            split: Some(SplitMode::Tensor),
             ctx: 240000,
             parallel: 4,
             kv_unified: true,
@@ -314,10 +315,10 @@ pub fn holdout(lib: &Library) -> Vec<Factors> {
             mmproj: lib.path_opt(q27.mmproj),
             spec_type: Some("draft-mtp".to_owned()),
             gpus: "0,1".to_owned(),
-            split: Some("tensor".to_owned()),
+            split: Some(SplitMode::Tensor),
             ctx: 360000,
             parallel: 2,
-            kv_type: "q8_0".to_owned(),
+            kv_type: KvType::Q80,
             ..Factors::default()
         },
         Factors {
@@ -326,10 +327,10 @@ pub fn holdout(lib: &Library) -> Vec<Factors> {
             mmproj: lib.path_opt(q35.mmproj),
             spec_type: Some("draft-mtp".to_owned()),
             gpus: "0,1".to_owned(),
-            split: Some("tensor".to_owned()),
+            split: Some(SplitMode::Tensor),
             ctx: 524288,
             parallel: 2,
-            kv_type: "q8_0".to_owned(),
+            kv_type: KvType::Q80,
             n_cpu_moe: q35.n_cpu_moe,
             ..Factors::default()
         },
@@ -341,7 +342,7 @@ pub fn holdout(lib: &Library) -> Vec<Factors> {
             ctx: 131072,
             batch: Some(2048),
             ubatch: 2048,
-            kv_type: "q8_0".to_owned(),
+            kv_type: KvType::Q80,
             no_mmap: true,
             threads: Some(24),
             numa: Some("distribute".to_owned()),
@@ -412,8 +413,8 @@ fn significant(lib: &Library, m: &Model, runtime: Runtime) -> Vec<Factors> {
                         model: lib.path_of(m.path),
                         runtime,
                         gpus: (*gpus).to_owned(),
-                        split: Some(split.to_owned()),
-                        kv_type: (*kv).to_owned(),
+                        split: Some(split),
+                        kv_type: *kv,
                         served,
                         ..m.flags(gpus)
                     };
@@ -437,14 +438,14 @@ fn significant(lib: &Library, m: &Model, runtime: Runtime) -> Vec<Factors> {
 /// larger batch for the terms that scale with it, and one flash-attention-off
 /// point. A model whose native context is below the standard sweep gets the same
 /// shape scaled into its own range instead of being pushed past it.
-fn curve_points(m: &Model) -> Vec<(u32, u32, &'static str)> {
+fn curve_points(m: &Model) -> Vec<(u32, u32, FlashAttn)> {
     let contexts = match m.max_ctx {
         Some(top) if top < 65536 => [(top / 4).max(512), (top / 2).max(1024), top],
         _ => [8192, 32768, 65536],
     };
     let mid = contexts[1];
-    let mut points: Vec<_> = contexts.iter().map(|&c| (c, 512, "on")).collect();
-    points.push((mid, 2048, "on"));
-    points.push((mid, 512, "off"));
+    let mut points: Vec<_> = contexts.iter().map(|&c| (c, 512, FlashAttn::On)).collect();
+    points.push((mid, 2048, FlashAttn::On));
+    points.push((mid, 512, FlashAttn::Off));
     points
 }

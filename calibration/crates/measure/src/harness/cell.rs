@@ -77,11 +77,11 @@ pub(crate) fn argv(factors: &Factors, binary: &str, port: u16) -> Vec<String> {
         "-cram",
         &factors.cram.to_string(),
         "-fa",
-        &factors.flash_attn,
+        factors.flash_attn.name(),
         "-ctk",
-        &factors.kv_type,
+        factors.kv_type.name(),
         "-ctv",
-        &factors.kv_type,
+        factors.kv_type.name(),
         "--port",
         &port.to_string(),
         "--host",
@@ -101,7 +101,10 @@ pub(crate) fn argv(factors: &Factors, binary: &str, port: u16) -> Vec<String> {
     }
     let optional: [(&str, Option<String>); 8] = [
         ("-b", factors.batch.map(|value| value.to_string())),
-        ("--split-mode", factors.split.clone()),
+        (
+            "--split-mode",
+            factors.split.map(|split| split.as_flag().to_owned()),
+        ),
         (
             "--n-cpu-moe",
             factors.n_cpu_moe.map(|value| value.to_string()),
@@ -167,7 +170,10 @@ pub(crate) fn load_plan(text: &str) -> Result<Vec<Factors>, Error> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_config::placement::SplitMode;
+
     use super::*;
+    use crate::record::KvType;
 
     fn cell() -> Factors {
         Factors {
@@ -177,7 +183,7 @@ mod tests {
             gpus: "0,1".to_owned(),
             ctx: 65536,
             n_cpu_moe: Some(40),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             kv_unified: true,
             extra: vec!["-dsa".to_owned()],
             ..Factors::default()
@@ -259,7 +265,7 @@ mod tests {
             (
                 "kv_type",
                 Factors {
-                    kv_type: "q8_0".to_owned(),
+                    kv_type: KvType::Q80,
                     ..base.clone()
                 },
             ),

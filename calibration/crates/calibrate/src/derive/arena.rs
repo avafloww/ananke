@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 
+use ananke_config::placement::SplitMode;
+
 use crate::{
     derive::{
         error::{DeriveError, Result},
@@ -69,7 +71,7 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
     };
     let n_kv = pad(n_kv, KV_CACHE_PAD);
     let tokens = factors.tokens();
-    let width = if factors.flash_attn_on() { 2 } else { 4 };
+    let width = factors.flash_attn.mask_element_bytes();
 
     // MLA compresses K and V into a shared latent, so the mask is half width.
     let mla = matches!(arch, "deepseek4" | "deepseek2" | "glm-dsa");
@@ -128,7 +130,7 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
                 .max(0) as u64
                 * n_embd
                 * tokens;
-        } else if factors.is_hybrid() && factors.split_or_layer() == "tensor" {
+        } else if factors.is_hybrid() && factors.split_or_layer() == SplitMode::Tensor {
             hidden += tuning.mainline_tensor_moe_per_nembd().max(0) as u64 * n_embd * tokens;
         }
     }
@@ -173,7 +175,10 @@ pub fn check_arena_model(
         if arena == 0.0 {
             continue;
         }
-        if factors.has_spec() || factors.split_or_layer() == "tensor" || factors.is_hybrid() {
+        if factors.has_spec()
+            || factors.split_or_layer() == SplitMode::Tensor
+            || factors.is_hybrid()
+        {
             continue;
         }
         // Layers on the GPU only. With `-ngl 0` nothing is pinned and the CPU
@@ -193,12 +198,12 @@ pub fn check_arena_model(
         // Never on ik: `pinned_graph_bytes` returns before this term, so letting
         // the table's default apply here would compare against a model the
         // estimator does not use.
-        let no_fa = if !factors.runtime_is_ik() && !factors.flash_attn_on() {
+        let no_fa = if !factors.runtime_is_ik() && factors.flash_attn.charged_unfused() {
             table_rate(no_fa_rates, &VariantKey::of(record)) as f64 * tokens / MIB
         } else {
             0.0
         };
-        let quantised = if factors.kv_type != "f16" {
+        let quantised = if factors.kv_quantised() {
             table_rate(quant_rates, &ArchKey::recorded(record)) as f64 * tokens / MIB
         } else {
             0.0

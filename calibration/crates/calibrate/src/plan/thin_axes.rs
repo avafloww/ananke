@@ -7,7 +7,8 @@
 //! and the checkpoint headroom all looked flat until a second point in the axis
 //! that mattered. Every sweep below closes one of the gaps that audit reports.
 
-use ananke_measure::record::{Factors, Runtime};
+use ananke_config::placement::SplitMode;
+use ananke_measure::record::{Factors, FlashAttn, Runtime};
 
 use crate::plan::library::{Library, model};
 
@@ -52,7 +53,7 @@ pub fn flash_attention(lib: &Library) -> Vec<Factors> {
                 split: Some(m.splits_for(Runtime::Mainline)[0].to_owned()),
                 ctx,
                 ubatch,
-                flash_attn: "off".to_owned(),
+                flash_attn: FlashAttn::Off,
                 ..m.flags(gpus)
             });
         }
@@ -90,7 +91,7 @@ pub fn slot_batch(lib: &Library) -> Vec<Factors> {
                     purpose: vec!["slot-batch".to_owned()],
                     model: lib.path_of(m.path),
                     gpus: "0,1".to_owned(),
-                    split: Some("layer".to_owned()),
+                    split: Some(SplitMode::Layer),
                     ubatch,
                     parallel,
                     kv_unified: unified,
@@ -128,7 +129,7 @@ pub fn concurrency_models(lib: &Library) -> Vec<Factors> {
                 purpose: vec!["concurrency".to_owned()],
                 model: lib.path_of(m.path),
                 gpus: "0,1".to_owned(),
-                split: Some("layer".to_owned()),
+                split: Some(SplitMode::Layer),
                 parallel: 4,
                 kv_unified: true,
                 soak: 6,
@@ -161,9 +162,9 @@ pub fn loose_ends(lib: &Library) -> Vec<Factors> {
             purpose: vec!["flash-attention".to_owned()],
             model: lib.path_of(m.path),
             gpus: "0,1".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             parallel: 4,
-            flash_attn: "off".to_owned(),
+            flash_attn: FlashAttn::Off,
             ..m.flags("0,1")
         });
     }
@@ -174,7 +175,7 @@ pub fn loose_ends(lib: &Library) -> Vec<Factors> {
             purpose: vec!["concurrency".to_owned()],
             model: lib.path_of(m.path),
             gpus: "0,1".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             ubatch: 2048,
             parallel: 4,
             kv_unified: true,
@@ -203,7 +204,7 @@ pub fn single_card(lib: &Library) -> Vec<Factors> {
                 purpose: vec!["curves".to_owned()],
                 model: lib.path_of(m.path),
                 gpus: "0".to_owned(),
-                split: Some("layer".to_owned()),
+                split: Some(SplitMode::Layer),
                 ctx,
                 ubatch,
                 ..m.flags("0")
@@ -241,7 +242,7 @@ pub fn sparse_switches(lib: &Library) -> Vec<Factors> {
             purpose: vec!["switches".to_owned()],
             model: lib.path_of(dense.path),
             gpus: "0".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             numa: value.then(|| "distribute".to_owned()),
             ..dense.flags("0")
         });
@@ -250,7 +251,7 @@ pub fn sparse_switches(lib: &Library) -> Vec<Factors> {
             purpose: vec!["switches".to_owned()],
             model: lib.path_of(dense.path),
             gpus: "0".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             runtime: Runtime::Ik,
             rtr: value,
             no_mmap: true,
@@ -294,7 +295,7 @@ pub fn checkpoint_steady(lib: &Library) -> Vec<Factors> {
             purpose: vec!["switches".to_owned()],
             model: lib.path_of(m.path),
             gpus: "0,1".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             probe_prompt_tokens: 16384,
             ..m.flags("0,1")
         }
@@ -322,7 +323,7 @@ pub fn second_context(lib: &Library) -> Vec<Factors> {
             purpose: vec!["switches".to_owned()],
             model: lib.path_of(m.path),
             gpus: "0,1".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             ctx: 65536,
             probe_prompt_tokens: 16384,
             ..m.flags("0,1")
@@ -336,7 +337,7 @@ pub fn second_context(lib: &Library) -> Vec<Factors> {
                 purpose: vec!["concurrency".to_owned()],
                 model: lib.path_of(m.path),
                 gpus: "0,1".to_owned(),
-                split: Some("layer".to_owned()),
+                split: Some(SplitMode::Layer),
                 ctx: 65536,
                 parallel: 4,
                 kv_unified: true,
@@ -357,7 +358,7 @@ pub fn second_context(lib: &Library) -> Vec<Factors> {
             purpose: vec!["switches".to_owned()],
             model: lib.path_of(m.path),
             gpus: "0".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             probe_prompt_tokens: 16384,
             ..m.flags("0")
         });

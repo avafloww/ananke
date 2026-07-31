@@ -27,6 +27,7 @@ pub mod thin_axes;
 
 use std::{collections::HashMap, path::Path};
 
+use ananke_config::placement::SplitMode;
 use ananke_measure::record::Factors;
 use serde::Serialize;
 use serde_json::ser::{PrettyFormatter, Serializer};
@@ -221,7 +222,7 @@ struct Disturbance<'a> {
     no_mmap: bool,
     rtr: bool,
     gpus: &'a str,
-    split: &'a str,
+    split: &'static str,
     ngl: u32,
     spec_type: &'a str,
     draft: &'a str,
@@ -229,8 +230,8 @@ struct Disturbance<'a> {
     ctx: u32,
     ubatch: u32,
     parallel: u32,
-    kv_type: &'a str,
-    flash_attn: &'a str,
+    kv_type: &'static str,
+    flash_attn: &'static str,
     /// Served cells first: an idle process is the odd one out, and reaching it
     /// last keeps the served ones adjacent.
     idle: bool,
@@ -245,7 +246,7 @@ fn disturbance<'a>(cell: &'a Factors, sizes: &ModelSizes) -> Disturbance<'a> {
         no_mmap: cell.no_mmap,
         rtr: cell.rtr,
         gpus: &cell.gpus,
-        split: cell.split.as_deref().unwrap_or(""),
+        split: cell.split.map(SplitMode::as_flag).unwrap_or(""),
         ngl: cell.ngl,
         spec_type: cell.spec_type.as_deref().unwrap_or(""),
         draft: cell.draft.as_deref().unwrap_or(""),
@@ -253,8 +254,8 @@ fn disturbance<'a>(cell: &'a Factors, sizes: &ModelSizes) -> Disturbance<'a> {
         ctx: cell.ctx,
         ubatch: cell.ubatch,
         parallel: cell.parallel,
-        kv_type: &cell.kv_type,
-        flash_attn: &cell.flash_attn,
+        kv_type: cell.kv_type.name(),
+        flash_attn: cell.flash_attn.name(),
         idle: !cell.served,
         bench: cell.bench,
     }

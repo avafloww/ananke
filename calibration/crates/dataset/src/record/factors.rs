@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use ananke_config::{flags::cache_type, placement::SplitMode};
 use serde::{Deserialize, Serialize};
 
 /// Every factor that could plausibly move host memory, so a row is a complete
@@ -27,10 +28,10 @@ pub struct Factors {
     pub batch: Option<u32>,
     pub parallel: u32,
     pub ngl: u32,
-    pub split: Option<String>,
-    pub kv_type: String,
+    pub split: Option<SplitMode>,
+    pub kv_type: KvType,
     pub kv_unified: bool,
-    pub flash_attn: String,
+    pub flash_attn: FlashAttn,
     pub n_cpu_moe: Option<u32>,
     pub mmproj: Option<String>,
     pub draft: Option<String>,
@@ -81,9 +82,9 @@ impl Default for Factors {
             parallel: 1,
             ngl: FULLY_OFFLOADED,
             split: None,
-            kv_type: "f16".to_owned(),
+            kv_type: KvType::F16,
             kv_unified: false,
-            flash_attn: "on".to_owned(),
+            flash_attn: FlashAttn::On,
             n_cpu_moe: None,
             mmproj: None,
             draft: None,
@@ -135,13 +136,150 @@ impl fmt::Display for Runtime {
     }
 }
 
+/// What `-fa` was set to, which decides whether the attention pass is fused.
+///
+/// Guardrail: `Auto` is not a synonym for either of the others. llama.cpp
+/// resolves it at load time against the backend, so a record spelling it says
+/// what was *asked for* and not what happened — and the KQ mask's element width
+/// is a factor of two on the answer. Every deriver that fits against that term
+/// excludes `Auto` rather than guessing, via [`FlashAttn::fused`].
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum FlashAttn {
+    /// `-fa on`, fused.
+    #[default]
+    On,
+    /// `-fa off`, unfused: the graph materialises the score matrix.
+    Off,
+    /// `-fa auto`, the recent builds' default: fused where the backend can.
+    Auto,
+}
+
+impl FlashAttn {
+    /// The KQ mask's element width in bytes when the pass is fused (f16).
+    pub const FUSED_MASK_BYTES: u64 = 2;
+    /// The KQ mask's element width in bytes when it is not (f32).
+    pub const UNFUSED_MASK_BYTES: u64 = 4;
+
+    /// How the flag is spelled on the command line and in the record.
+    pub fn name(self) -> &'static str {
+        match self {
+            FlashAttn::On => "on",
+            FlashAttn::Off => "off",
+            FlashAttn::Auto => "auto",
+        }
+    }
+
+    /// Whether the pass is fused, or `None` where only the runtime knows.
+    pub fn fused(self) -> Option<bool> {
+        match self {
+            FlashAttn::On => Some(true),
+            FlashAttn::Off => Some(false),
+            FlashAttn::Auto => None,
+        }
+    }
+
+    /// Whether the *charge* is the unfused one. `Auto` is charged unfused so
+    /// an unresolved cell over-reserves rather than under-reserving; the
+    /// derivers that *fit* the unfused terms use [`Self::fused`] instead, so no
+    /// unresolved cell reaches a fit.
+    pub fn charged_unfused(self) -> bool {
+        self.fused() != Some(true)
+    }
+
+    /// The KQ mask's element width, f32 wherever the charge is the unfused one.
+    pub fn mask_element_bytes(self) -> u64 {
+        if self.charged_unfused() {
+            Self::UNFUSED_MASK_BYTES
+        } else {
+            Self::FUSED_MASK_BYTES
+        }
+    }
+}
+
+impl fmt::Display for FlashAttn {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
+/// What `-ctk`/`-ctv` were set to. Both halves of the cache take one type in
+/// this campaign, so the record carries one field.
+///
+/// Closed on llama.cpp's own list rather than free text, so a spelling the
+/// runtime would reject fails the plan reader instead of the server.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
+pub enum KvType {
+    /// Unquantised 32-bit float.
+    #[serde(rename = "f32")]
+    F32,
+    /// Unquantised 16-bit float, llama.cpp's default and the campaign's.
+    #[default]
+    #[serde(rename = "f16")]
+    F16,
+    /// Unquantised brain float.
+    #[serde(rename = "bf16")]
+    Bf16,
+    /// 8-bit quantised, the only quantised type the campaign measured.
+    #[serde(rename = "q8_0")]
+    Q80,
+    /// 5-bit quantised, with a per-block offset.
+    #[serde(rename = "q5_1")]
+    Q51,
+    /// 5-bit quantised.
+    #[serde(rename = "q5_0")]
+    Q50,
+    /// 4-bit quantised, with a per-block offset.
+    #[serde(rename = "q4_1")]
+    Q41,
+    /// 4-bit quantised.
+    #[serde(rename = "q4_0")]
+    Q40,
+    /// 4-bit non-linear quantised.
+    #[serde(rename = "iq4_nl")]
+    Iq4Nl,
+}
+
+impl KvType {
+    /// How the type is spelled on the command line and in the record.
+    pub fn name(self) -> &'static str {
+        match self {
+            KvType::F32 => cache_type::F32,
+            KvType::F16 => cache_type::F16,
+            KvType::Bf16 => cache_type::BF16,
+            KvType::Q80 => cache_type::Q8_0,
+            KvType::Q51 => cache_type::Q5_1,
+            KvType::Q50 => cache_type::Q5_0,
+            KvType::Q41 => cache_type::Q4_1,
+            KvType::Q40 => cache_type::Q4_0,
+            KvType::Iq4Nl => cache_type::IQ4_NL,
+        }
+    }
+
+    /// Whether the cache is stored quantised, which costs extra pinned memory.
+    ///
+    /// The predicate is [`cache_type::is_quantised`], shared with
+    /// `ananke_estimate::host_buffer`, so the rate is fitted over exactly the
+    /// rows it is later charged to.
+    pub fn is_quantised(self) -> bool {
+        cache_type::is_quantised(self.name())
+    }
+}
+
+impl fmt::Display for KvType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
 impl Factors {
     /// The split mode, with llama.cpp's default named rather than left absent.
-    pub fn split_or_layer(&self) -> &str {
-        self.split
-            .as_deref()
-            .filter(|split| !split.is_empty())
-            .unwrap_or("layer")
+    pub fn split_or_layer(&self) -> SplitMode {
+        self.split.unwrap_or_default()
     }
 
     /// How many cards the cell was pinned to, with `default` for an empty pin.
@@ -188,8 +326,20 @@ impl Factors {
         }
     }
 
+    /// Definitely fused. `-fa auto` is neither this nor [`Self::flash_attn_off`],
+    /// so a deriver that filters on both never fits an unresolved cell.
     pub fn flash_attn_on(&self) -> bool {
-        self.flash_attn == "on"
+        self.flash_attn.fused() == Some(true)
+    }
+
+    /// Definitely unfused.
+    pub fn flash_attn_off(&self) -> bool {
+        self.flash_attn.fused() == Some(false)
+    }
+
+    /// Whether the cell ran a quantised KV cache.
+    pub fn kv_quantised(&self) -> bool {
+        self.kv_type.is_quantised()
     }
 
     /// A partly- or un-offloaded process builds a different graph, so most
@@ -222,3 +372,58 @@ const DEFAULT_UBATCH: u32 = 512;
 /// The `-ngl` the campaign spells "every layer on a device" as. Any count at or
 /// above the model's layer total does it; 99 is the one every cell uses.
 const FULLY_OFFLOADED: u32 = 99;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wire and the flag are one spelling.
+    ///
+    /// `name()` reaches the server's command line and the serde rename reaches
+    /// the dataset and the payload a cell's identity is hashed over. They are
+    /// written apart, so a drift between them would re-hash every cell in the
+    /// campaign while the harness went on passing the old flag.
+    #[test]
+    fn a_factors_flag_and_its_recorded_spelling_are_the_same_word() {
+        let flash = [FlashAttn::On, FlashAttn::Off, FlashAttn::Auto];
+        for variant in flash {
+            match variant {
+                FlashAttn::On | FlashAttn::Off | FlashAttn::Auto => {}
+            }
+            assert_eq!(
+                serde_json::to_string(&variant).expect("a unit variant serializes"),
+                format!("\"{}\"", variant.name())
+            );
+        }
+
+        let kv = [
+            KvType::F32,
+            KvType::F16,
+            KvType::Bf16,
+            KvType::Q80,
+            KvType::Q51,
+            KvType::Q50,
+            KvType::Q41,
+            KvType::Q40,
+            KvType::Iq4Nl,
+        ];
+        for variant in kv {
+            match variant {
+                KvType::F32
+                | KvType::F16
+                | KvType::Bf16
+                | KvType::Q80
+                | KvType::Q51
+                | KvType::Q50
+                | KvType::Q41
+                | KvType::Q40
+                | KvType::Iq4Nl => {}
+            }
+            assert_eq!(
+                serde_json::to_string(&variant).expect("a unit variant serializes"),
+                format!("\"{}\"", variant.name())
+            );
+        }
+        assert_eq!(kv.len(), cache_type::ALL.len());
+    }
+}

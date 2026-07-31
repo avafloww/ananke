@@ -37,7 +37,7 @@ use ananke::{
     },
     gguf::{GgufSummary, GgufTensor, GgufType, GgufValue},
 };
-use ananke_dataset::{Record, Status, read_ndjson};
+use ananke_dataset::{KvType, Record, Status, read_ndjson};
 
 /// Architectures whose arena the campaign confirmed to within 0.1 MiB.
 ///
@@ -258,7 +258,7 @@ struct Case {
     mtp: bool,
     /// Whether the cell loaded a vision projector.
     vision: bool,
-    kv_type: String,
+    kv_type: KvType,
     served: bool,
     no_mmap: bool,
     steady_prompt: bool,
@@ -389,7 +389,7 @@ impl Case {
             concurrency: factors.concurrency,
             no_mmap: factors.no_mmap,
             served: factors.served,
-            kv_type: factors.kv_type.clone(),
+            kv_type: factors.kv_type,
             // Compute *plus* what llama.cpp cannot attribute, averaged across
             // all real (non-Meta) devices. The packer charges the same
             // compute_buffer_mb to every GPU, so the fair comparison is the
@@ -398,9 +398,7 @@ impl Case {
             // secondary). Under tensor split the fused `Meta()` device's
             // columns are not comparable to a per-device reservation.
             device_target_mib: device_target_mib(record),
-            // `from_flag` rather than a private match, so the harness's
-            // spelling and the validator's cannot drift.
-            split: SplitMode::from_flag(factors.split_or_layer()).unwrap_or(SplitMode::Layer),
+            split: factors.split_or_layer(),
         })
     }
 
@@ -414,8 +412,8 @@ impl Case {
             split_mode: self.split,
             context: self.context,
             ubatch: Some(self.ubatch),
-            cache_type_k: Some(&self.kv_type),
-            cache_type_v: Some(&self.kv_type),
+            cache_type_k: Some(self.kv_type.name()),
+            cache_type_v: Some(self.kv_type.name()),
             override_tensor: &[],
             compute_buffer_mb: None,
             allow_fallback: false,

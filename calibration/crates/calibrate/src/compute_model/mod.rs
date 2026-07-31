@@ -127,6 +127,7 @@
 
 use std::collections::HashMap;
 
+use ananke_config::placement::SplitMode;
 use ananke_estimate::compute_model::{Columns, Scalars};
 
 use crate::record::Record;
@@ -163,7 +164,7 @@ pub fn column_value(columns: &Columns, name: &str) -> f64 {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Group {
     pub runtime: String,
-    pub split: String,
+    pub split: SplitMode,
     pub arch: String,
     pub variant: Option<&'static str>,
 }
@@ -236,7 +237,7 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
         if n_embd == 0 {
             continue;
         }
-        if factors.flash_attn == "off" {
+        if factors.flash_attn_off() {
             continue;
         }
         if !include_spec && present(factors.spec_type.as_deref()) {
@@ -265,14 +266,14 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
         // than one device pays for copies. A hybrid does not replicate them
         // either — measured at 1.00 against 4.00 — so the replication follows the
         // placement, not the model.
-        let copies = if split == "layer" && cards.len() > 1 && !factors.is_hybrid() {
+        let copies = if split == SplitMode::Layer && cards.len() > 1 && !factors.is_hybrid() {
             split_mask_copies
         } else {
             1
         };
         let key = Group {
             runtime: factors.runtime.name().to_owned(),
-            split: split.to_string(),
+            split,
             arch: arch.to_string(),
             variant,
         };
@@ -293,7 +294,7 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
             ubatch: f64::from(ubatch),
             n_kv: f64::from(factors.ctx / streams),
             ctx: f64::from(factors.ctx),
-            quantised: factors.kv_type != "f16",
+            quantised: factors.kv_quantised(),
             head_share,
             n_vocab: parsed.n_vocab as f64,
             n_embd: parsed.n_embd as f64,

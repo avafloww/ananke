@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::parsed::Parsed;
 pub use crate::record::{
-    factors::{Factors, Runtime},
+    factors::{Factors, FlashAttn, KvType, Runtime},
     hardware::{Cpu, Gpu, Hardware, Provenance},
     memory::{Checkpoint, GpuUsage, Rss, RssSnapshot, Sample},
 };

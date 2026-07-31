@@ -81,7 +81,7 @@ impl VariantEnvironmentKey {
         if record.factors.runtime_is_ik() {
             key.push_str(IK_SUFFIX);
         }
-        if !record.factors.flash_attn_on() {
+        if record.factors.flash_attn.charged_unfused() {
             key.push_str(NO_FLASH_ATTN_SUFFIX);
         }
         Self(key)

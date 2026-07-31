@@ -32,6 +32,45 @@ pub mod numa {
     pub const ALL: &[&str] = &[DISTRIBUTE, ISOLATE, NUMACTL];
 }
 
+/// `cache_type_k` / `cache_type_v` / `-ctk` / `-ctv` values.
+///
+/// The config field is a free-form string rather than a validated enum, so this
+/// vocabulary is llama.cpp's rather than the schema's; it exists so the
+/// estimator and the calibration agree on which spellings mean a quantised
+/// cache.
+pub mod cache_type {
+    /// Unquantised 32-bit float.
+    pub const F32: &str = "f32";
+    /// Unquantised 16-bit float, llama.cpp's default.
+    pub const F16: &str = "f16";
+    /// Unquantised brain float.
+    pub const BF16: &str = "bf16";
+    /// 8-bit quantised.
+    pub const Q8_0: &str = "q8_0";
+    /// 5-bit quantised, with a per-block offset.
+    pub const Q5_1: &str = "q5_1";
+    /// 5-bit quantised.
+    pub const Q5_0: &str = "q5_0";
+    /// 4-bit quantised, with a per-block offset.
+    pub const Q4_1: &str = "q4_1";
+    /// 4-bit quantised.
+    pub const Q4_0: &str = "q4_0";
+    /// 4-bit non-linear quantised.
+    pub const IQ4_NL: &str = "iq4_nl";
+    /// Every accepted value, in llama.cpp's own declaration order.
+    pub const ALL: &[&str] = &[F32, F16, BF16, Q8_0, Q5_1, Q5_0, Q4_1, Q4_0, IQ4_NL];
+
+    /// Whether a cache type stores the cache quantised.
+    ///
+    /// Guardrail: `f16` and `f32` are the unquantised forms and *everything*
+    /// else — `bf16` included — is charged the quantised rate. That rate was
+    /// fitted against this exact partition, so narrowing it means refitting
+    /// `quantised_cache_rates`, not just editing this line.
+    pub fn is_quantised(value: &str) -> bool {
+        !value.eq_ignore_ascii_case(F16) && !value.eq_ignore_ascii_case(F32)
+    }
+}
+
 /// `expert_offload` string values. The field also accepts an integer layer
 /// count, which has no fixed string form and so is not listed here.
 pub mod expert_offload {

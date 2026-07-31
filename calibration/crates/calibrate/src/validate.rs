@@ -11,7 +11,7 @@
 //! production Qwen3.6-27B cell the two differ by 472 MiB, which is the
 //! difference between +1.1% and −0.1%.
 
-use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode};
+use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy};
 use ananke_estimate::EstimatorInputs;
 use ananke_measure::record::Status;
 use ananke_placement::{
@@ -76,9 +76,9 @@ pub fn estimator_inputs<'a>(record: &'a Record, model: &'a std::path::Path) -> E
         ubatch: Some(f.ubatch),
         visible_devices: cards,
         host_resident_experts: f.n_cpu_moe.is_some(),
-        split_mode: split_mode(f.split.as_deref()),
-        cache_type_k: Some(&f.kv_type),
-        cache_type_v: Some(&f.kv_type),
+        split_mode: f.split_or_layer(),
+        cache_type_k: Some(f.kv_type.name()),
+        cache_type_v: Some(f.kv_type.name()),
         override_tensor: &[],
         compute_buffer_mb: None,
         allow_fallback: false,
@@ -104,7 +104,7 @@ pub fn placement_inputs(record: &Record) -> PlacementInputs {
         } else {
             PlacementPolicy::GpuOnly
         },
-        split_mode: split_mode(f.split.as_deref()),
+        split_mode: f.split_or_layer(),
         gpu_allow: record.factors.gpu_ids(),
         expert_offload: match f.n_cpu_moe {
             Some(n) => OffloadMode::Layers(n),
@@ -127,17 +127,6 @@ pub fn snapshot(record: &Record) -> DeviceSnapshot {
         .map(|g| g.memory_total_mib)
         .collect();
     snapshot_for(&record.factors.gpu_ids(), &capacities)
-}
-
-/// The split this cell ran under.
-///
-/// Parsed with `SplitMode::from_flag`, the same function the config validator
-/// uses, so the harness's spelling and the daemon's cannot drift. An absent or
-/// unrecognised value means the runtime's own default.
-fn split_mode(split: Option<&str>) -> SplitMode {
-    split
-        .and_then(SplitMode::from_flag)
-        .unwrap_or(SplitMode::Layer)
 }
 
 /// A key identifying the configuration, so repeats of one cell are counted once.

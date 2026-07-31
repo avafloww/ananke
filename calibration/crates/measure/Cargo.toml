@@ -31,4 +31,6 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+# `SplitMode`, to spell a test cell's split the way the schema does.
+ananke-config.workspace = true
 pretty_assertions.workspace = true

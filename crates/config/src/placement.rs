@@ -6,8 +6,9 @@
 //! to, are properties of the runtime invocation. `ananke::config::validate`
 //! re-exports both, so config-side paths are unchanged.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
+use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::flags;
@@ -28,7 +29,16 @@ pub fn flag_variant<T: Copy>(table: &[(T, &'static str)], s: &str) -> Option<T> 
 }
 
 /// How llama.cpp spreads the model across devices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+///
+/// Guardrail: the serde spellings are a wire, not a convenience. They are the
+/// `split` column of `calibration/data/measurements.ndjson` and part of the
+/// payload a cell's identity is hashed over, so they must stay identical to
+/// [`SplitMode::as_flag`] — which `split_mode_vocab_is_single_sourced_and_complete`
+/// asserts.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum SplitMode {
     /// Whole layers pipelined across the cards, each layer living on one.
     #[default]
@@ -72,6 +82,12 @@ impl SplitMode {
     /// balanced-distribution path.
     pub fn is_sharded(self) -> bool {
         matches!(self, SplitMode::Row | SplitMode::Tensor)
+    }
+}
+
+impl fmt::Display for SplitMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_flag())
     }
 }
 
@@ -119,6 +135,12 @@ mod tests {
         for &(variant, flag) in SplitMode::VARIANTS {
             assert_eq!(variant.as_flag(), flag);
             assert_eq!(SplitMode::from_flag(flag), Some(variant));
+            // The dataset's `split` column and the flag are one spelling; a
+            // rename here re-hashes every cell identity in the campaign.
+            assert_eq!(
+                serde_json::to_string(&variant).expect("a unit variant serializes"),
+                format!("\"{flag}\"")
+            );
         }
         // Completeness: the exhaustive match makes a newly added variant a
         // compile error until it is handled, and the assert then requires it

@@ -4,6 +4,9 @@
 
 use std::collections::BTreeMap;
 
+use ananke_config::placement::SplitMode;
+use ananke_dataset::{FlashAttn, KvType};
+
 use crate::{
     derive::{
         Scalar, Table,
@@ -39,11 +42,11 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
         // f16's steady 1025-1028 — so the arena model is missing a term that
         // depends on the cache type, and pooling the two would attribute that term
         // to the E-variant.
-        if factors.kv_type != "f16" {
+        if factors.kv_quantised() {
             continue;
         }
         let terms = arena_terms(record, true, tuning);
-        let copies = if factors.cards_or(1) > 1 && factors.split_or_layer() == "layer" {
+        let copies = if factors.cards_or(1) > 1 && factors.split_or_layer() == SplitMode::Layer {
             4.0
         } else {
             1.0
@@ -97,7 +100,7 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
 /// Doing so costs 12 MiB at the largest batch measured, which is cheap insurance
 /// against an under-prediction whose size is not understood.
 pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)> {
-    let mut paired: BTreeMap<CacheTypePairKey, BTreeMap<String, f64>> = BTreeMap::new();
+    let mut paired: BTreeMap<CacheTypePairKey, BTreeMap<KvType, f64>> = BTreeMap::new();
     let mut archs: BTreeMap<String, ArchKey> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
@@ -114,9 +117,9 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)
             ubatch: factors.ubatch,
             parallel: factors.parallel,
             kv_unified: factors.kv_unified,
-            split: factors.split.clone().unwrap_or_else(|| "-".to_string()),
+            split: factors.split,
             gpus: factors.gpus.clone(),
-            flash_attn: factors.flash_attn.clone(),
+            flash_attn: factors.flash_attn,
             served: factors.served,
             n_cpu_moe: factors.n_cpu_moe.unwrap_or(0),
             no_mmap: factors.no_mmap,
@@ -126,7 +129,7 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)
         paired
             .entry(key)
             .or_default()
-            .insert(factors.kv_type.clone(), arena);
+            .insert(factors.kv_type, arena);
         archs.insert(
             record.provenance.model_key.clone(),
             ArchKey::recorded(record),
@@ -139,7 +142,7 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)
         if pair.len() != 2 {
             continue;
         }
-        let (Some(quantised), Some(f16)) = (pair.get("q8_0"), pair.get("f16")) else {
+        let (Some(quantised), Some(f16)) = (pair.get(&KvType::Q80), pair.get(&KvType::F16)) else {
             continue;
         };
         let tokens = u64::from(key.ctx).min(u64::from(key.ubatch)) as f64;
@@ -148,7 +151,7 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)
         // hybrid does not replicate, and treating one as though it did put
         // qwen35moe's rate at both 133 and 532.
         let hybrid = key.n_cpu_moe != 0;
-        let copies = if cards > 1 && key.split == "layer" && !hybrid {
+        let copies = if cards > 1 && key.split == Some(SplitMode::Layer) && !hybrid {
             4.0
         } else {
             1.0
@@ -223,9 +226,9 @@ struct CacheTypePairKey {
     ubatch: u32,
     parallel: u32,
     kv_unified: bool,
-    split: String,
+    split: Option<SplitMode>,
     gpus: String,
-    flash_attn: String,
+    flash_attn: FlashAttn,
     served: bool,
     n_cpu_moe: u32,
     no_mmap: bool,
@@ -270,7 +273,7 @@ pub fn no_flash_attn_rates(
     let mut by_variant: BTreeMap<VariantKey, Vec<f64>> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
-        if factors.flash_attn_on() {
+        if !factors.flash_attn_off() {
             continue;
         }
         let arena = parsed.arena_mib;
@@ -293,11 +296,12 @@ pub fn no_flash_attn_rates(
         // the quantised-cache rate needs, and leaving it out here would put every
         // hybrid architecture's rate wildly negative and drop it from the table,
         // where it would then inherit the *worst* rate as its default.
-        let copies = if cards > 1 && factors.split_or_layer() == "layer" && !factors.is_hybrid() {
-            4.0
-        } else {
-            1.0
-        };
+        let copies =
+            if cards > 1 && factors.split_or_layer() == SplitMode::Layer && !factors.is_hybrid() {
+                4.0
+            } else {
+                1.0
+            };
         let tokens = factors.tokens() as f64;
         // The other two terms that live in the arena beside the masks. Leaving them
         // in the residual makes this rate absorb them, and then the model adds them
@@ -307,7 +311,7 @@ pub fn no_flash_attn_rates(
         if parsed.per_layer_token_embd {
             extra += e_variant_rate * parsed.n_layer as f64 * tokens / 1048576.0;
         }
-        if factors.kv_type != "f16"
+        if factors.kv_quantised()
             && let Some(quant) = quant_rates.filter(|table| !table.is_empty())
         {
             let rate = quant

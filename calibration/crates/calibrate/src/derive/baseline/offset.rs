@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use ananke_config::placement::SplitMode;
+
 use crate::{
     derive::{
         Scalar, Table,
@@ -93,7 +95,7 @@ pub fn baseline_offset(
         if factors.probe_prompt_tokens >= CHECKPOINT_MIN_STEP {
             continue;
         }
-        if factors.split_or_layer() != "layer" || parsed.n_layer == 0 {
+        if factors.split_or_layer() != SplitMode::Layer || parsed.n_layer == 0 {
             continue;
         }
         // Flash attention off is kept, under its own key. Pooling it with flash
@@ -122,9 +124,7 @@ pub fn baseline_offset(
         // The per-token flash-attention term is a separate constant. Leaving it in
         // the residual would charge it twice: once in the arena and again in the
         // baseline, where it would also stop being flat and break the group.
-        let no_fa = if factors.flash_attn_on() {
-            0.0
-        } else {
+        let no_fa = if factors.flash_attn.charged_unfused() {
             let rate = no_fa_rates
                 .get(&VariantKey::of(record))
                 .copied()
@@ -134,6 +134,8 @@ pub fn baseline_offset(
             // Subtracting the unreplicated figure left every flash-attention-off
             // cell over-predicted, at 0.71 to 0.78.
             rate as f64 * factors.tokens() as f64 * copies
+        } else {
+            0.0
         };
         let modelled =
             flat + parsed.n_layer as f64 * per_layer + if parsed.n_expert != 0 { moe } else { 0.0 };
@@ -220,7 +222,7 @@ pub fn baseline_offset(
 /// split is what the operator runs for several of them.
 pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Table<ArchKey>)> {
     type Key = (String, u32, u32, ArchKey);
-    let mut pairs: BTreeMap<Key, BTreeMap<String, Vec<f64>>> = BTreeMap::new();
+    let mut pairs: BTreeMap<Key, BTreeMap<SplitMode, Vec<f64>>> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
         if !factors.fully_offloaded() || factors.gpus != "0,1" || factors.has_spec() {
@@ -242,8 +244,8 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
         }
         let owned = record.owned_bytes() as f64;
         let terms = arena_terms(record, true, tuning);
-        let split = factors.split_or_layer().to_string();
-        let copies = if split == "layer" { 4.0 } else { 1.0 };
+        let split = factors.split_or_layer();
+        let copies = if split == SplitMode::Layer { 4.0 } else { 1.0 };
         let base = (owned - (copies * terms.masks() + terms.hidden) * 1048576.0) / 1048576.0;
         let key = (
             record.provenance.model_key.clone(),
@@ -263,7 +265,9 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
     let mut detail = Vec::new();
     let mut by_arch: BTreeMap<ArchKey, Vec<f64>> = BTreeMap::new();
     for (key, group) in &pairs {
-        let (Some(layer), Some(tensor)) = (group.get("layer"), group.get("tensor")) else {
+        let (Some(layer), Some(tensor)) =
+            (group.get(&SplitMode::Layer), group.get(&SplitMode::Tensor))
+        else {
             continue;
         };
         let delta = median(tensor) - median(layer);

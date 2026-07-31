@@ -4,6 +4,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ananke_config::placement::SplitMode;
+use ananke_dataset::{FlashAttn, KvType};
+
 use crate::{
     derive::{
         NestedTable, Scalar, Table,
@@ -23,8 +26,8 @@ struct ScorePairKey {
     model: String,
     ctx: u32,
     ubatch: u32,
-    kv_type: String,
-    split: String,
+    kv_type: KvType,
+    split: SplitMode,
     gpus: String,
     parallel: u32,
     kv_unified: bool,
@@ -35,7 +38,7 @@ struct ScorePairKey {
     embeddings: bool,
     mmproj: bool,
     served: bool,
-    flash_attn: String,
+    flash_attn: FlashAttn,
 }
 
 /// What an unfused attention pass costs per head, per cache token, per batch token,
@@ -71,8 +74,8 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table<ArchKey>> {
             model: factors.model.clone(),
             ctx: factors.ctx,
             ubatch: factors.ubatch_or_default(),
-            kv_type: factors.kv_type.clone(),
-            split: factors.split_or_layer().to_string(),
+            kv_type: factors.kv_type,
+            split: factors.split_or_layer(),
             gpus: factors.gpus.clone(),
             parallel: factors.parallel,
             kv_unified: factors.kv_unified,
@@ -83,17 +86,17 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table<ArchKey>> {
             embeddings: factors.embeddings,
             mmproj: factors.mmproj.as_deref().is_some_and(|m| !m.is_empty()),
             served: factors.served,
-            flash_attn: factors.flash_attn.clone(),
+            flash_attn: factors.flash_attn,
         };
         paired.entry(key).or_insert((total, record));
     }
     let mut per_arch: BTreeMap<ArchKey, Vec<f64>> = BTreeMap::new();
     for (key, (total, record)) in &paired {
-        if key.flash_attn != "off" {
+        if key.flash_attn != FlashAttn::Off {
             continue;
         }
         let sibling_key = ScorePairKey {
-            flash_attn: "on".to_string(),
+            flash_attn: FlashAttn::On,
             ..key.clone()
         };
         let Some((sibling_total, sibling)) = paired.get(&sibling_key) else {

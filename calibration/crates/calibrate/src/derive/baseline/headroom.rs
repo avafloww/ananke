@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use ananke_config::placement::SplitMode;
+use ananke_dataset::{FlashAttn, KvType};
 use ananke_measure::record::Status;
 
 use crate::{
@@ -49,7 +51,17 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table<ArchKey>> {
     // nothing, so a cell with four slots and one request is a valid one-slot
     // reading, and excluding it would drop every series whose slot count moves
     // alongside its concurrency.
-    type Key = (ArchKey, String, u32, u32, String, String, String, bool, u32);
+    type Key = (
+        ArchKey,
+        String,
+        u32,
+        u32,
+        String,
+        SplitMode,
+        KvType,
+        bool,
+        u32,
+    );
     let mut groups: BTreeMap<Key, BTreeMap<u32, i64>> = BTreeMap::new();
     for record in rows {
         let factors = &record.factors;
@@ -68,8 +80,8 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table<ArchKey>> {
             factors.ctx,
             factors.ubatch,
             factors.gpus.clone(),
-            factors.split_or_layer().to_string(),
-            factors.kv_type.clone(),
+            factors.split_or_layer(),
+            factors.kv_type,
             factors.kv_unified,
             factors.soak,
         );
@@ -174,10 +186,10 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table<VariantKey>> {
             ctx: factors.ctx,
             ubatch: factors.ubatch,
             gpus: factors.gpus.clone(),
-            split: factors.split_or_layer().to_string(),
-            kv_type: factors.kv_type.clone(),
+            split: factors.split_or_layer(),
+            kv_type: factors.kv_type,
             parallel: factors.parallel,
-            flash_attn: factors.flash_attn.clone(),
+            flash_attn: factors.flash_attn,
             soak: factors.soak,
             concurrency: factors.concurrency,
             cram: factors.cram,
@@ -254,10 +266,10 @@ struct CheckpointKey {
     ctx: u32,
     ubatch: u32,
     gpus: String,
-    split: String,
-    kv_type: String,
+    split: SplitMode,
+    kv_type: KvType,
     parallel: u32,
-    flash_attn: String,
+    flash_attn: FlashAttn,
     soak: u32,
     concurrency: u32,
     cram: u32,

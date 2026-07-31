@@ -6,7 +6,8 @@
 //! one — and the difference is charged to the slope, so it grows with every
 //! extrapolation.
 
-use ananke_measure::record::{Factors, Runtime};
+use ananke_config::placement::SplitMode;
+use ananke_measure::record::{Factors, FlashAttn, KvType, Runtime};
 
 use crate::plan::library::{Library, model};
 
@@ -30,7 +31,7 @@ pub fn interior(lib: &Library) -> Vec<Factors> {
                 model: lib.path_of(m.path),
                 runtime: Runtime::Ik,
                 gpus: "0,1".to_owned(),
-                split: Some("layer".to_owned()),
+                split: Some(SplitMode::Layer),
                 ubatch,
                 ..m.flags("0,1")
             });
@@ -44,9 +45,9 @@ pub fn interior(lib: &Library) -> Vec<Factors> {
             label: format!("nofa-{}-ub2048", m.key),
             model: lib.path_of(m.path),
             gpus: "0,1".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             ubatch: 2048,
-            flash_attn: "off".to_owned(),
+            flash_attn: FlashAttn::Off,
             ..m.flags("0,1")
         });
     }
@@ -56,7 +57,7 @@ pub fn interior(lib: &Library) -> Vec<Factors> {
         label: "dsv4f-ub1024".to_owned(),
         model: lib.path_of(ds.path),
         gpus: "0,1".to_owned(),
-        split: Some("layer".to_owned()),
+        split: Some(SplitMode::Layer),
         ubatch: 1024,
         ..ds.flags("0,1")
     });
@@ -78,7 +79,7 @@ pub fn interior(lib: &Library) -> Vec<Factors> {
             model: lib.path_of(m.path),
             runtime,
             gpus: "0,1".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             ctx,
             ..m.flags("0,1")
         });
@@ -92,7 +93,7 @@ pub fn interior(lib: &Library) -> Vec<Factors> {
             label: format!("mtp-{name}-35b"),
             model: lib.path_of(q35.path),
             gpus: "0,1".to_owned(),
-            split: Some("tensor".to_owned()),
+            split: Some(SplitMode::Tensor),
             spec_type: spec.map(str::to_owned),
             ..q35.flags("0,1")
         });
@@ -114,7 +115,7 @@ pub fn interactions(lib: &Library) -> Vec<Factors> {
     let mut cells = Vec::new();
     for key in ["qwen3-4b", "gemma3-27b", "qwen36-27b", "qwen36-35b-a3b"] {
         let m = model(key);
-        if m.kv_types == ["f16"] {
+        if m.kv_types == [KvType::F16] {
             continue;
         }
         for ctx in [8192, 65536] {
@@ -122,16 +123,16 @@ pub fn interactions(lib: &Library) -> Vec<Factors> {
                 label: format!("interact-{}-c{ctx}-q8", m.key),
                 model: lib.path_of(m.path),
                 gpus: "0,1".to_owned(),
-                split: Some("layer".to_owned()),
+                split: Some(SplitMode::Layer),
                 ctx,
-                kv_type: "q8_0".to_owned(),
+                kv_type: KvType::Q80,
                 ..m.flags("0,1")
             });
             cells.push(Factors {
                 label: format!("interact-{}-c{ctx}-np4", m.key),
                 model: lib.path_of(m.path),
                 gpus: "0,1".to_owned(),
-                split: Some("layer".to_owned()),
+                split: Some(SplitMode::Layer),
                 ctx,
                 parallel: 4,
                 kv_unified: true,
@@ -141,7 +142,7 @@ pub fn interactions(lib: &Library) -> Vec<Factors> {
                 label: format!("interact-{}-c{ctx}-tensor", m.key),
                 model: lib.path_of(m.path),
                 gpus: "0,1".to_owned(),
-                split: Some("tensor".to_owned()),
+                split: Some(SplitMode::Tensor),
                 ctx,
                 ..m.flags("0,1")
             });
@@ -179,7 +180,7 @@ pub fn review_followup(lib: &Library) -> Vec<Factors> {
                 label: format!("ds4-offload{n_cpu_moe}-c{ctx}"),
                 model: lib.path_of(ds.path),
                 gpus: "0,1".to_owned(),
-                split: Some("layer".to_owned()),
+                split: Some(SplitMode::Layer),
                 ctx,
                 // Zero means "nothing on the CPU", which is the absence of the
                 // flag rather than the flag with a zero.
@@ -202,7 +203,7 @@ pub fn review_followup(lib: &Library) -> Vec<Factors> {
                 label: format!("mtprev-{}-{name}-c{ctx}", m.key),
                 model: lib.path_of(m.path),
                 gpus: "0,1".to_owned(),
-                split: Some("tensor".to_owned()),
+                split: Some(SplitMode::Tensor),
                 ctx,
                 spec_type: spec.map(str::to_owned),
                 draft: spec.and_then(|_| lib.path_opt(m.draft)),
@@ -239,7 +240,7 @@ pub fn mtp_slots(lib: &Library) -> Vec<Factors> {
                     purpose: vec!["mtp-slots".to_owned()],
                     model: lib.path_of(m.path),
                     gpus: "0,1".to_owned(),
-                    split: Some("tensor".to_owned()),
+                    split: Some(SplitMode::Tensor),
                     parallel,
                     kv_unified: true,
                     spec_type: spec.map(str::to_owned),
@@ -274,7 +275,7 @@ pub fn replication(lib: &Library) -> Vec<Factors> {
             model: lib.path_of(lag.path),
             runtime: Runtime::Ik,
             gpus: "0,1".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             repeat,
             ..lag.flags("0,1")
         });
@@ -282,7 +283,7 @@ pub fn replication(lib: &Library) -> Vec<Factors> {
             label: format!("repeat-gemma3-tensor-{repeat}"),
             model: lib.path_of(gemma3.path),
             gpus: "0,1".to_owned(),
-            split: Some("tensor".to_owned()),
+            split: Some(SplitMode::Tensor),
             repeat,
             ..Factors::default()
         });
@@ -303,7 +304,7 @@ pub fn concurrency(lib: &Library) -> Vec<Factors> {
             label: format!("slots-np{parallel}-c{conc}"),
             model: lib.path_of(m.path),
             gpus: "0,1".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             parallel,
             kv_unified: unified,
             soak: 6,
@@ -352,7 +353,7 @@ pub fn device_scaling(lib: &Library) -> Vec<Factors> {
             model: lib.path_of(lag.path),
             runtime: Runtime::Ik,
             gpus: "0,1".to_owned(),
-            split: Some("layer".to_owned()),
+            split: Some(SplitMode::Layer),
             threads: Some(threads),
             n_cpu_moe: lag.n_cpu_moe,
             ..Factors::default()

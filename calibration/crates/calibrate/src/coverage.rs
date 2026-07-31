@@ -24,6 +24,7 @@
 
 use std::collections::BTreeSet;
 
+use ananke_config::placement::SplitMode;
 use ananke_measure::record::Status;
 
 use crate::record::Record;
@@ -87,19 +88,19 @@ pub struct Regime {
 pub const REGIMES: &[Regime] = &[
     Regime {
         name: "flash attention off",
-        select: |r| !r.factors.flash_attn_on(),
+        select: |r| r.factors.flash_attn.charged_unfused(),
         axes: &[Axis::Context, Axis::Ubatch, Axis::Gpus],
         constant: "no_flash_attn_rates",
     },
     Regime {
         name: "quantised KV",
-        select: |r| r.factors.kv_type != "f16",
+        select: |r| r.factors.kv_quantised(),
         axes: &[Axis::Context, Axis::Ubatch],
         constant: "quantised_cache_rates, quantised KV compute",
     },
     Regime {
         name: "tensor split",
-        select: |r| r.factors.split_or_layer() == "tensor",
+        select: |r| r.factors.split_or_layer() == SplitMode::Tensor,
         axes: &[Axis::Context, Axis::Ubatch, Axis::Gpus],
         constant: "tensor_split_baseline",
     },

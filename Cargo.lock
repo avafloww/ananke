@@ -114,6 +114,7 @@ name = "ananke-config"
 version = "0.2.0"
 dependencies = [
  "serde",
+ "serde_json",
  "smol_str",
 ]
 
@@ -121,6 +122,7 @@ dependencies = [
 name = "ananke-dataset"
 version = "0.2.0"
 dependencies = [
+ "ananke-config",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -160,6 +162,7 @@ dependencies = [
 name = "ananke-measure"
 version = "0.2.0"
 dependencies = [
+ "ananke-config",
  "ananke-dataset",
  "clap",
  "flate2",

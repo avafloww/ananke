@@ -28,7 +28,7 @@ use crate::{
         },
         sys::Deps,
     },
-    record::{Factors, RssSnapshot, Runtime},
+    record::{Factors, FlashAttn, KvType, RssSnapshot, Runtime},
 };
 
 pub mod plan;
@@ -216,8 +216,8 @@ fn factors_for(options: &Options<'_>, stage: &Stage) -> Factors {
         ubatch: 512,
         parallel: 1,
         ngl: 99,
-        kv_type: "f16".to_string(),
-        flash_attn: "on".to_string(),
+        kv_type: KvType::F16,
+        flash_attn: FlashAttn::On,
         cram: stage.cram_mib,
         ..Factors::default()
     }

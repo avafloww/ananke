@@ -9,6 +9,9 @@
 
 use std::collections::BTreeMap;
 
+use ananke_config::placement::SplitMode;
+use ananke_dataset::KvType;
+
 use crate::{
     derive::{dataset::measured_at, ordered::OrderedMap},
     record::Record,
@@ -44,7 +47,17 @@ pub struct MtpPair<'a> {
 /// host delta where every same-sitting served pair of the same configuration shows
 /// 239 to 243.
 pub fn mtp_pairs(rows: &[Record], draft: bool) -> Vec<MtpPair<'_>> {
-    type Identity = (String, u32, u32, bool, String, String, u32, String, bool);
+    type Identity = (
+        String,
+        u32,
+        u32,
+        bool,
+        Option<SplitMode>,
+        String,
+        u32,
+        KvType,
+        bool,
+    );
     fn identity(record: &Record) -> Identity {
         let f = &record.factors;
         (
@@ -52,10 +65,10 @@ pub fn mtp_pairs(rows: &[Record], draft: bool) -> Vec<MtpPair<'_>> {
             f.ctx,
             f.parallel,
             f.kv_unified,
-            f.split.clone().unwrap_or_else(|| "-".to_string()),
+            f.split,
             f.gpus.clone(),
             f.ubatch,
-            f.kv_type.clone(),
+            f.kv_type,
             f.served,
         )
     }

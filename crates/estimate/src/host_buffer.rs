@@ -68,6 +68,7 @@
 // `build.rs` turns into compile-time constants. Each carries its evidence in
 // its own doc comment — how many models it rests on, and where it is weak.
 
+use ananke_config::flags::cache_type;
 use ananke_gguf::GgufSummary;
 
 pub use crate::tuning::DEFAULT_CACHE_RAM_MB;
@@ -1189,10 +1190,12 @@ fn quantised_cache_rate(arch: &str) -> u64 {
 /// Whether either half of the KV cache is stored quantised.
 ///
 /// A quantised cache costs more pinned host memory than an f16 one, measured
-/// in every one of 117 pairs differing in nothing else.
+/// in every one of 117 pairs differing in nothing else. The partition is
+/// [`cache_type::is_quantised`], shared with the calibration's `KvType` so the
+/// fit and the estimate cannot classify a row differently.
 pub(crate) fn quantised_kv(inputs: &EstimatorInputs<'_>) -> bool {
     [inputs.cache_type_k, inputs.cache_type_v]
         .iter()
         .flatten()
-        .any(|t| !t.eq_ignore_ascii_case("f16") && !t.eq_ignore_ascii_case("f32"))
+        .any(|t| cache_type::is_quantised(t))
 }

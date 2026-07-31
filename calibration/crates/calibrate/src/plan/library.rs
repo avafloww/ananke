@@ -9,7 +9,8 @@
 
 use std::path::PathBuf;
 
-use ananke_measure::record::{Factors, Runtime};
+use ananke_config::placement::SplitMode;
+use ananke_measure::record::{Factors, KvType, Runtime};
 
 /// Where the model files live when `$LLM_DIR` says nothing.
 pub const DEFAULT_LLM_DIR: &str = "/mnt/ssd0/ai/llm";
@@ -66,7 +67,7 @@ pub struct Model {
     /// same list, and although ik does not gate on architecture at all, the
     /// operator serves that model hybrid rather than tensor-split, so measuring
     /// it would characterise a configuration nobody runs.
-    pub splits: &'static [&'static str],
+    pub splits: &'static [SplitMode],
     /// Flags the architecture needs to run the way production runs it.
     ///
     /// glm52 is served with `-mla 1 -dsa -amb 512`; without them ik takes a
@@ -78,7 +79,7 @@ pub struct Model {
     ///
     /// `-dsa` rejects a quantised cache, so sweeping q8_0 on glm52 plans eight
     /// cells that cannot load.
-    pub kv_types: &'static [&'static str],
+    pub kv_types: &'static [KvType],
     /// Card counts worth measuring. A 350M embedding model does not need two, and
     /// spreading it changes the very baseline the cell exists to isolate.
     pub gpus: &'static [&'static str],
@@ -105,7 +106,7 @@ pub struct Model {
 
 impl Model {
     /// Split modes both the architecture and the runtime will accept.
-    pub fn splits_for(&self, runtime: Runtime) -> Vec<&'static str> {
+    pub fn splits_for(&self, runtime: Runtime) -> Vec<SplitMode> {
         let Some(allowed) = runtime_splits(runtime) else {
             return self.splits.to_vec();
         };
@@ -225,7 +226,7 @@ pub const MODELS: &[Model] = &[
         "unsloth/DeepSeek-V4-Flash-GGUF/UD-IQ3_XXS/DeepSeek-V4-Flash-UD-IQ3_XXS-00001-of-00004.gguf",
     )
     .n_cpu_moe(40)
-    .splits(&["layer"]),
+    .splits(&[SplitMode::Layer]),
     // MoE + MLA + DSA, 79L — the production quant.
     Model::new(
         "glm52",
@@ -235,10 +236,10 @@ pub const MODELS: &[Model] = &[
     .n_cpu_moe(92)
     .n_cpu_moe_1gpu(96)
     .extra(&["-mla", "1", "-dsa", "-amb", "512"])
-    .kv_types(&["f16"])
+    .kv_types(&[KvType::F16])
     .threads(24)
     .no_mmap()
-    .splits(&["layer"]),
+    .splits(&[SplitMode::Layer]),
     // Every remaining llama.cpp service in the operator's config. These were
     // absent from the registry while being served in production daily, which
     // meant the campaign's "holdout" covered under half of what the daemon
@@ -276,7 +277,7 @@ pub const MODELS: &[Model] = &[
     )
     .embeddings()
     .gpus(&["0"])
-    .splits(&["layer"]),
+    .splits(&[SplitMode::Layer]),
 ];
 
 /// ik_llama's `--split-mode` takes none/graph/layer — there is no `tensor`, and
@@ -284,10 +285,10 @@ pub const MODELS: &[Model] = &[
 /// `graph`, which the operator does not run, so restricting to layer keeps the
 /// fork's cells comparable to mainline's rather than measuring a mode nobody
 /// uses.
-fn runtime_splits(runtime: Runtime) -> Option<&'static [&'static str]> {
+fn runtime_splits(runtime: Runtime) -> Option<&'static [SplitMode]> {
     match runtime {
         Runtime::Mainline => None,
-        Runtime::Ik => Some(&["layer"]),
+        Runtime::Ik => Some(&[SplitMode::Layer]),
     }
 }
 
@@ -302,9 +303,9 @@ impl Model {
             runtimes: &[Runtime::Mainline],
             mmproj: None,
             draft: None,
-            splits: &["layer", "tensor"],
+            splits: &[SplitMode::Layer, SplitMode::Tensor],
             extra: &[],
-            kv_types: &["f16", "q8_0"],
+            kv_types: &[KvType::F16, KvType::Q80],
             gpus: &["0", "0,1"],
             max_ctx: None,
             embeddings: false,
@@ -330,7 +331,7 @@ impl Model {
         self
     }
 
-    const fn splits(mut self, splits: &'static [&'static str]) -> Self {
+    const fn splits(mut self, splits: &'static [SplitMode]) -> Self {
         self.splits = splits;
         self
     }
@@ -340,7 +341,7 @@ impl Model {
         self
     }
 
-    const fn kv_types(mut self, kv_types: &'static [&'static str]) -> Self {
+    const fn kv_types(mut self, kv_types: &'static [KvType]) -> Self {
         self.kv_types = kv_types;
         self
     }
