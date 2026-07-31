@@ -1,6 +1,6 @@
 //! The document itself, and the scalar constants that make up most of it.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Number;
@@ -57,8 +57,66 @@ pub struct Constant {
     pub ty: Type,
     /// Kept as a JSON number so an integer does not acquire a decimal point on
     /// the way back out, which is the difference between `4` and `4.0` in the
-    /// generated source.
+    /// generated source. Read it through [`Constant::typed`], which is the only
+    /// place the declared type and the written number are checked against each
+    /// other.
     pub value: Number,
+}
+
+/// A constant's value, as the type its entry declares.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ConstantValue {
+    U32(u32),
+    U64(u64),
+    F64(f64),
+}
+
+/// A declared type and a written number that do not agree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueMismatch {
+    pub declared: Type,
+    pub written: String,
+}
+
+impl fmt::Display for ValueMismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "read {} as {}", self.written, self.declared.as_str())
+    }
+}
+
+impl std::error::Error for ValueMismatch {}
+
+impl Constant {
+    /// The value as the type the entry declares, or the disagreement.
+    ///
+    /// JSON has one number type, so `type` is not a restatement of `value`: it
+    /// chooses between `u32` and `u64`, and decides whether the generated
+    /// literal carries a decimal point. Nothing but this checks that the two
+    /// describe the same number.
+    pub fn typed(&self) -> Result<ConstantValue, ValueMismatch> {
+        let mismatch = || ValueMismatch {
+            declared: self.ty,
+            written: self.value.to_string(),
+        };
+        match self.ty {
+            Type::U32 => self
+                .value
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .map(ConstantValue::U32)
+                .ok_or_else(mismatch),
+            Type::U64 => self
+                .value
+                .as_u64()
+                .map(ConstantValue::U64)
+                .ok_or_else(mismatch),
+            Type::F64 => self
+                .value
+                .as_f64()
+                .map(ConstantValue::F64)
+                .ok_or_else(mismatch),
+        }
+    }
 }
 
 /// What justifies a constant, as declared rather than inferred.
@@ -123,9 +181,37 @@ impl Type {
             Type::F64 => "f64",
         }
     }
+}
 
-    /// Whether the constant is a float, and so must keep a decimal point.
-    pub fn is_float(self) -> bool {
-        matches!(self, Type::F64)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every committed constant's declared type agrees with the number written
+    /// beside it. A disagreement generates Rust that does not compile, which is
+    /// a worse place to find out than here.
+    #[test]
+    fn every_committed_constant_reads_as_the_type_it_declares() {
+        let text = include_str!("../../tuning/tuning.json");
+        let document: Document = serde_json::from_str(text).expect("the document parses");
+        for (name, constant) in &document.constants {
+            if let Err(error) = constant.typed() {
+                panic!("{name}: {error}");
+            }
+        }
+        assert!(!document.constants.is_empty(), "the document has constants");
+    }
+
+    /// A float declared as an integer is caught, rather than truncating.
+    #[test]
+    fn a_number_that_is_not_its_declared_type_is_refused() {
+        let constant = Constant {
+            doc: String::new(),
+            evidence: String::new(),
+            kind: Kind::Derived,
+            ty: Type::U64,
+            value: serde_json::Number::from_f64(4.5).expect("finite"),
+        };
+        assert!(constant.typed().is_err());
     }
 }
