@@ -24,6 +24,8 @@
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     harness::{
         run::{bench, watchdog::SwapWatchdog},
@@ -63,7 +65,7 @@ pub(crate) fn exercise(
     deps.http.post(
         port,
         "/v1/chat/completions",
-        &chat_body(&[message("user", &prompt)], factors.probe_tokens),
+        &chat_body(&[message(Role::User, &prompt)], factors.probe_tokens),
         PROBE_TIMEOUT,
     );
 
@@ -76,7 +78,7 @@ pub(crate) fn exercise(
         prompt.push_str(&format!(
             " Also cover point {round} in detail, at length, with examples."
         ));
-        let body = chat_body(&[message("user", &prompt)], 256);
+        let body = chat_body(&[message(Role::User, &prompt)], 256);
         // Overlapping requests, because a strictly serial probe never reaches a
         // slot past the first.
         std::thread::scope(|scope| {
@@ -110,7 +112,7 @@ fn embeddings(deps: &Deps, factors: &Factors, port: u16, pid: u32) -> Vec<Checkp
         deps.http.post(
             port,
             "/v1/embeddings",
-            &serde_json::json!({"input": input}),
+            &embeddings_body(&input),
             Duration::from_secs(120),
         );
         if !factors.bench {
@@ -150,9 +152,9 @@ fn growth(
     } else {
         &[""]
     };
-    let mut conversations: Vec<Vec<serde_json::Value>> = markers
+    let mut conversations: Vec<Vec<Message>> = markers
         .iter()
-        .map(|marker| vec![message("system", &format!("{}{marker}", bench::SYSTEM))])
+        .map(|marker| vec![message(Role::System, &format!("{}{marker}", bench::SYSTEM))])
         .collect();
 
     let mut checkpoints = Vec::new();
@@ -160,7 +162,7 @@ fn growth(
     for turn in 0..factors.bench_turns {
         let which = turn as usize % conversations.len();
         let prompt = bench::PROMPTS[turn as usize % bench::PROMPTS.len()];
-        conversations[which].push(message("user", prompt));
+        conversations[which].push(message(Role::User, prompt));
         let Some(body) = deps.http.post(
             port,
             "/v1/chat/completions",
@@ -169,14 +171,16 @@ fn growth(
         ) else {
             break;
         };
-        let Some(reply) = body
-            .pointer("/choices/0/message/content")
-            .and_then(serde_json::Value::as_str)
-        else {
+        // Not `deny_unknown_fields`: a completion response carries far more than
+        // this reads, and an unrecognised field must be ignored, not rejected.
+        let Ok(response) = serde_json::from_value::<ChatCompletionResponse>(body) else {
             break;
         };
-        conversations[which].push(message("assistant", reply));
-        let tokens = Tokens::read(&body);
+        let Some(choice) = response.choices.into_iter().next() else {
+            break;
+        };
+        conversations[which].push(message(Role::Assistant, &choice.message.content));
+        let tokens = Tokens::from_usage(response.usage);
         generated += tokens.completion;
         checkpoints.push(checkpoint(
             deps,
@@ -210,15 +214,10 @@ struct Tokens {
 }
 
 impl Tokens {
-    fn read(body: &serde_json::Value) -> Self {
-        let field = |name: &str| {
-            body.pointer(&format!("/usage/{name}"))
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or_default()
-        };
+    fn from_usage(usage: Usage) -> Self {
         Self {
-            prompt: field("prompt_tokens"),
-            completion: field("completion_tokens"),
+            prompt: usage.prompt_tokens,
+            completion: usage.completion_tokens,
             generated: 0,
         }
     }
@@ -252,14 +251,86 @@ fn checkpoint(
     }
 }
 
-fn message(role: &str, content: &str) -> serde_json::Value {
-    serde_json::json!({"role": role, "content": content})
+/// A chat message's sender. The harness only ever plays these three parts, so
+/// the role is a closed set rather than an arbitrary string.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Role {
+    System,
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct Message {
+    role: Role,
+    content: String,
+}
+
+fn message(role: Role, content: &str) -> Message {
+    Message {
+        role,
+        content: content.to_owned(),
+    }
 }
 
 /// `model` is a placeholder: the request goes straight to the server under
 /// measurement, which serves whatever it was started with.
-fn chat_body(messages: &[serde_json::Value], max_tokens: u32) -> serde_json::Value {
-    serde_json::json!({"model": "m", "messages": messages, "max_tokens": max_tokens})
+const MODEL_PLACEHOLDER: &str = "m";
+
+#[derive(Debug, Serialize)]
+struct ChatCompletionRequest<'a> {
+    model: &'a str,
+    messages: &'a [Message],
+    max_tokens: u32,
+}
+
+fn chat_body(messages: &[Message], max_tokens: u32) -> serde_json::Value {
+    serde_json::to_value(ChatCompletionRequest {
+        model: MODEL_PLACEHOLDER,
+        messages,
+        max_tokens,
+    })
+    .expect("a chat completion request always serializes")
+}
+
+#[derive(Debug, Serialize)]
+struct EmbeddingsRequest<'a> {
+    input: &'a str,
+}
+
+fn embeddings_body(input: &str) -> serde_json::Value {
+    serde_json::to_value(EmbeddingsRequest { input })
+        .expect("an embeddings request always serializes")
+}
+
+/// A `/v1/chat/completions` response. llama-server's replies carry far more
+/// fields than these (timings, model, id, …), so this deliberately does not
+/// `deny_unknown_fields` — an unrecognised field is ignored, not rejected.
+#[derive(Debug, Default, Deserialize)]
+struct ChatCompletionResponse {
+    #[serde(default)]
+    choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Usage,
+}
+
+#[derive(Debug, Deserialize)]
+struct Choice {
+    message: ResponseMessage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseMessage {
+    content: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Usage {
+    #[serde(default)]
+    prompt_tokens: u64,
+    #[serde(default)]
+    completion_tokens: u64,
 }
 
 #[cfg(test)]
