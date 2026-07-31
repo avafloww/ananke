@@ -97,7 +97,7 @@ impl Default for Factors {
             embeddings: false,
             served: true,
             probe_tokens: 64,
-            probe_prompt_tokens: 4,
+            probe_prompt_tokens: DEFAULT_PROBE_PROMPT_TOKENS,
             soak: 0,
             concurrency: 1,
             bench: false,
@@ -369,9 +369,14 @@ impl Factors {
 /// at.
 const DEFAULT_UBATCH: u32 = 512;
 
+/// The probe prompt a cell gets when it asks for no particular length. Too short
+/// to reach a checkpoint, which is what makes it the control half of every
+/// checkpoint-headroom pair.
+pub const DEFAULT_PROBE_PROMPT_TOKENS: u32 = 4;
+
 /// The `-ngl` the campaign spells "every layer on a device" as. Any count at or
-/// above the model's layer total does it; 99 is the one every cell uses.
-const FULLY_OFFLOADED: u32 = 99;
+/// above the model's layer total does it; this is the one every cell uses.
+pub const FULLY_OFFLOADED: u32 = 99;
 
 #[cfg(test)]
 mod tests {

@@ -21,6 +21,7 @@ use crate::{
         pair::Pair,
         shape::CHECKPOINT_MIN_STEP,
         stats::{OUTLIER_TOLERANCE, check_no_outlier_dominates, round_half_even},
+        units::{MIB_F64, MIB_I64},
     },
     record::Record,
 };
@@ -118,7 +119,7 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table<ArchKey>> {
         .collect();
     let detail = table
         .iter()
-        .map(|(arch, value)| format!("{arch} {:.0} MiB/slot", *value as f64 / 1048576.0))
+        .map(|(arch, value)| format!("{arch} {:.0} MiB/slot", *value as f64 / MIB_F64))
         .collect::<Vec<_>>()
         .join(", ");
     Ok(Table {
@@ -211,13 +212,13 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table<VariantKey>> {
         .map(|(variant, group)| {
             (
                 variant.clone(),
-                group.iter().copied().max().unwrap_or(0) * 1024 * 1024,
+                group.iter().copied().max().unwrap_or(0) * MIB_I64,
             )
         })
         .collect();
     let detail = table
         .iter()
-        .map(|(variant, value)| format!("{variant} {} MiB", value / 1024 / 1024))
+        .map(|(variant, value)| format!("{variant} {} MiB", value / MIB_I64))
         .collect::<Vec<_>>()
         .join(", ");
     Ok(Table {

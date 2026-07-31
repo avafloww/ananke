@@ -131,6 +131,15 @@ pub fn mtp_unaccounted(rows: &[Record]) -> Result<Scalar> {
     })
 }
 
+/// How far the runtime's own `[spec] estimated memory usage` line may sit from the
+/// per-buffer lines it should sum to before the parse is treated as having picked
+/// up the wrong context, in MiB.
+const SUMMARY_AGREEMENT_MIB: f64 = 1.0;
+
+/// The draft context's context slope ships as an integer in thousandths of a MiB
+/// per 1024 tokens, the measured figure being a fraction of a MiB.
+const SLOPE_MILLI: f64 = 1000.0;
+
 /// The MTP draft context's own compute buffer, per device, by architecture.
 ///
 /// Taken from what the runtime reports for that context and nothing else. The
@@ -174,7 +183,7 @@ pub fn mtp_draft_compute(rows: &[Record]) -> Result<DraftComputeFit> {
         // a parse that picked up the wrong context is caught here rather than becoming
         // a coefficient.
         let reported = parsed.mtp_context_mib;
-        if reported != 0.0 && (reported - (cache + share)).abs() > 1.0 {
+        if reported != 0.0 && (reported - (cache + share)).abs() > SUMMARY_AGREEMENT_MIB {
             return Err(DeriveError::disagreement(format!(
                 "{} ctx {}: [spec] reports {reported} MiB but the buffer lines sum \
                      to {}",
@@ -219,7 +228,7 @@ pub fn mtp_draft_compute(rows: &[Record]) -> Result<DraftComputeFit> {
             .fold(f64::NEG_INFINITY, f64::max);
         base += deficit.max(0.0);
         bases.insert(arch.clone(), round_half_even(base));
-        slopes.insert(arch.clone(), round_half_even(slope * 1000.0));
+        slopes.insert(arch.clone(), round_half_even(slope * SLOPE_MILLI));
         detail.push(format!(
             "{arch} {} context(s) {base:.0}+{slope:.3}/1k",
             points.len()

@@ -81,6 +81,10 @@ pub(crate) fn non_negative(points: &[Row], live: &[&'static str]) -> Option<Coef
     None
 }
 
+/// A pivot no larger than this is treated as zero, so a design whose columns are
+/// linearly dependent is refused rather than solved into arbitrary coefficients.
+const PIVOT_EPSILON: f64 = 1e-9;
+
 /// Gaussian elimination with partial pivoting, or `None` if singular.
 fn solve(matrix: &[Vec<f64>], right: &[f64]) -> Option<Vec<f64>> {
     let n = matrix.len();
@@ -104,7 +108,7 @@ fn solve(matrix: &[Vec<f64>], right: &[f64]) -> Option<Vec<f64>> {
             }
         }
         augmented.swap(i, pivot);
-        if augmented[i][i].abs() < 1e-9 {
+        if augmented[i][i].abs() < PIVOT_EPSILON {
             return None;
         }
         for r in i + 1..n {

@@ -7,7 +7,7 @@
 //! constraints live here beside the path rather than being rediscovered in each
 //! sweep.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ananke_config::placement::SplitMode;
 use ananke_measure::record::{Factors, KvType, Runtime};
@@ -38,6 +38,11 @@ impl Library {
     /// plans testable without touching the environment.
     pub fn rooted(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
+    }
+
+    /// The root itself, for a caller that joins its own paths onto it.
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     /// One library-relative path, resolved.

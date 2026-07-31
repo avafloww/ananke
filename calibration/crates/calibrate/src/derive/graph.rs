@@ -9,11 +9,12 @@ use ananke_config::placement::SplitMode;
 use crate::{
     derive::{
         Scalar, Table,
-        arena::{MoeCharge, arena_terms},
+        arena::{MOE_OFFLOAD_MIN_BATCH_RATIO, MoeCharge, arena_terms},
         error::{DeriveError, Result},
         keys::{ArchCardsKey, ArchKey},
         stats::{consensus_default, median, round_half_even, round_tenths_half_even},
         tuning::Tuning,
+        units::MIB_F64,
     },
     record::Record,
 };
@@ -75,7 +76,16 @@ pub fn layer_split_copies(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
     })
 }
 
+/// Bytes per token of unmodelled arena above which the CPU-resident MoE term is
+/// judged present. A present term is tens of MiB and an absent one leaves
+/// hundredths, so anything in between would be the filter failing rather than a
+/// close call.
+const MOE_TERM_PRESENT_BYTES_PER_TOKEN: f64 = 1024.0;
+
 /// The batch threshold at which ik moves its MoE ops off the CPU.
+///
+/// It comes out at [`MOE_OFFLOAD_MIN_BATCH_RATIO`], which the modelled arena
+/// charges the term below — the fit and the model agreeing is the whole check.
 pub fn offload_min_batch(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
     let mut on: Vec<f64> = Vec::new();
     let mut off: Vec<f64> = Vec::new();
@@ -100,12 +110,11 @@ pub fn offload_min_batch(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         }
         let terms = arena_terms(record, MoeCharge::Off, tuning);
         // Whether the term is there at all, judged from the measurement rather
-        // than from the threshold being solved for. A present term is tens of
-        // MiB; an absent one leaves hundredths.
-        let excess_per_token = (arena - terms.total()) * 1048576.0 / tokens as f64;
+        // than from the threshold being solved for.
+        let excess_per_token = (arena - terms.total()) * MIB_F64 / tokens as f64;
         let ratio = (tokens * used) as f64 / experts as f64;
         cells += 1;
-        if excess_per_token > 1024.0 {
+        if excess_per_token > MOE_TERM_PRESENT_BYTES_PER_TOKEN {
             on.push(ratio)
         } else {
             off.push(ratio)
@@ -156,7 +165,7 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         }
         let terms = arena_terms(record, MoeCharge::Off, tuning);
         let tokens = factors.tokens() as f64;
-        let excess = (arena - terms.total()) * 1048576.0;
+        let excess = (arena - terms.total()) * MIB_F64;
         if excess <= 0.0 {
             continue;
         }
@@ -228,14 +237,14 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
         let experts = parsed.n_expert;
         let used = parsed.n_expert_used;
         let tokens = factors.tokens();
-        if experts == 0 || used == 0 || tokens * used >= 32 * experts {
+        if experts == 0 || used == 0 || tokens * used >= MOE_OFFLOAD_MIN_BATCH_RATIO * experts {
             continue;
         }
         if !factors.flash_attn_on() || !factors.fully_offloaded() {
             continue;
         }
         let terms = arena_terms(record, MoeCharge::Off, tuning);
-        let excess = (arena - terms.total()) * 1048576.0 / tokens as f64;
+        let excess = (arena - terms.total()) * MIB_F64 / tokens as f64;
         let n_embd = parsed.n_embd;
         points.push(Point {
             n_embd,

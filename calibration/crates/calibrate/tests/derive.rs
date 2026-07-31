@@ -14,7 +14,7 @@ use std::{
 use ananke_calibrate::{
     derive::{
         Table, arena, baseline, dataset, emit, graph, keys::VariantKey, mtp, pinned, recurrent,
-        shape::query_head_count, stats::pad, tuning::Tuning, vram,
+        shape::query_head_count, stats::pad, tuning::Tuning, units::MIB_F64, vram,
     },
     record::Record,
 };
@@ -345,10 +345,10 @@ fn the_arena_terms_are_whole_masks() {
     let terms = arena::arena_terms(record, arena::MoeCharge::On, tuning());
     let tokens = record.factors.tokens();
     let n_kv = pad(u64::from(record.factors.ctx), arena::KV_CACHE_PAD);
-    assert_eq!(terms.mask, (n_kv * tokens * 2) as f64 / 1048576.0);
+    assert_eq!(terms.mask, (n_kv * tokens * 2) as f64 / MIB_F64);
     assert_eq!(terms.swa_mask, 0.0);
     let n_embd = record.parsed.n_embd;
-    assert_eq!(terms.hidden, (2 * n_embd * tokens * 4) as f64 / 1048576.0);
+    assert_eq!(terms.hidden, (2 * n_embd * tokens * 4) as f64 / MIB_F64);
 }
 
 #[test]

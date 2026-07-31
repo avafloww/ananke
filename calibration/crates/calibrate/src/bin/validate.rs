@@ -11,6 +11,7 @@ use std::{
 };
 
 use ananke_calibrate::{
+    derive::units::MIB,
     record::{Record, read_ndjson},
     validate::{
         Comparison, ConfigurationKey, NEUTRAL, configuration_key, estimator_inputs,
@@ -155,7 +156,7 @@ fn compare(fs: &LocalFs, record: &Record) -> Result<Comparison, String> {
     let packed = pack_demand(&estimate, &placement, &snap, NEUTRAL)
         .map_err(|_| "estimator refused the configuration".to_string())?;
 
-    let predicted_mib = packed.rolling.uncorrected_vram_bytes / (1024 * 1024);
+    let predicted_mib = packed.rolling.uncorrected_vram_bytes / MIB;
     if predicted_mib == 0 {
         return Err("nothing placed on a GPU".into());
     }
@@ -166,7 +167,7 @@ fn compare(fs: &LocalFs, record: &Record) -> Result<Comparison, String> {
         .filter(|(id, _)| matches!(id, DeviceId::Gpu(_)))
         .map(|(_, &b)| b)
         .sum::<u64>()
-        / (1024 * 1024);
+        / MIB;
     // llama.cpp's layer split spreads across every visible card; ananke packs a
     // model that fits onto one, deliberately. When the two land on different
     // numbers of cards the totals are not comparable — a second card is a second

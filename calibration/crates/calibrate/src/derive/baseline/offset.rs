@@ -21,6 +21,7 @@ use crate::{
         shape::CHECKPOINT_MIN_STEP,
         stats::{consensus, consensus_default, median, round_half_even},
         tuning::Tuning,
+        units::MIB_F64,
     },
     record::Record,
 };
@@ -140,7 +141,7 @@ pub fn baseline_offset(
         let modelled =
             flat + parsed.n_layer as f64 * per_layer + if parsed.n_expert != 0 { moe } else { 0.0 };
         let residual = owned
-            - (copies * terms.masks() + terms.hidden) * 1048576.0
+            - (copies * terms.masks() + terms.hidden) * MIB_F64
             - no_fa
             - pinned
             - dev * (cards as f64 - 1.0)
@@ -180,8 +181,8 @@ pub fn baseline_offset(
     let detail = by_variant
         .iter()
         .map(|(variant, group)| {
-            let lo = group.iter().copied().fold(f64::INFINITY, f64::min) / 1048576.0;
-            let hi = group.iter().copied().fold(f64::NEG_INFINITY, f64::max) / 1048576.0;
+            let lo = group.iter().copied().fold(f64::INFINITY, f64::min) / MIB_F64;
+            let hi = group.iter().copied().fold(f64::NEG_INFINITY, f64::max) / MIB_F64;
             if hi - lo > 32.0 {
                 format!("{variant} {hi:+.0} (spans {lo:+.0})")
             } else {
@@ -245,7 +246,7 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
         let terms = arena_terms(record, MoeCharge::On, tuning);
         let split = factors.split_or_layer();
         let copies = if split == SplitMode::Layer { 4.0 } else { 1.0 };
-        let base = (owned - (copies * terms.masks() + terms.hidden) * 1048576.0) / 1048576.0;
+        let base = (owned - (copies * terms.masks() + terms.hidden) * MIB_F64) / MIB_F64;
         let key = SplitPairKey {
             model: record.provenance.model_key.clone(),
             ctx: factors.ctx,
@@ -300,13 +301,13 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
         .iter()
         .map(|(arch, group)| {
             let worst = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            (arch.clone(), round_half_even(worst * 1048576.0))
+            (arch.clone(), round_half_even(worst * MIB_F64))
         })
         .collect();
     let worst = deltas.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     Ok((
         Scalar {
-            value: round_half_even(worst * 1048576.0),
+            value: round_half_even(worst * MIB_F64),
             evidence: format!(
                 "{} models measured under both split modes at matching context, batch, \
                  slots and cards: {} MiB. Per architecture, since the spread across all \
@@ -352,7 +353,7 @@ pub fn per_device_bytes(rows: &[Record]) -> Result<Scalar> {
                 .chars()
                 .take(24)
                 .collect();
-            detail.push(format!("{name} {:.0} MiB", delta / 1048576.0));
+            detail.push(format!("{name} {:.0} MiB", delta / MIB_F64));
         }
     }
     if deltas.is_empty() {

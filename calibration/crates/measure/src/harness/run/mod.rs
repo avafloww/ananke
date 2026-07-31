@@ -28,7 +28,7 @@ use crate::{
             assemble::{record, rss_summary, tail},
             child::{spawn_server, stop_child},
             exercise::exercise,
-            readiness::{Readiness, wait_for_port, wait_for_ready},
+            readiness::{Readiness, ReadinessWait, wait_for_port, wait_for_ready},
             sampler::SamplerThread,
             watchdog::SwapWatchdog,
         },
@@ -238,11 +238,13 @@ fn measure(deps: &Deps, factors: &Factors, id: &str, options: &Options) -> Run {
     let sampler = SamplerThread::start(deps, child.pid());
     let readiness = wait_for_ready(
         deps,
-        child.as_mut(),
-        options.port,
-        spawned_at,
-        options.load_timeout,
-        &mut watchdog,
+        ReadinessWait {
+            child: child.as_mut(),
+            port: options.port,
+            spawned_at,
+            timeout: options.load_timeout,
+            watchdog: &mut watchdog,
+        },
     );
 
     let load_seconds = match readiness {

@@ -8,7 +8,7 @@
 //! generalised — the mistake this campaign exists to stop repeating.
 
 use ananke_config::placement::SplitMode;
-use ananke_measure::record::{Factors, FlashAttn, KvType, Runtime};
+use ananke_measure::record::{FULLY_OFFLOADED, Factors, FlashAttn, KvType, Runtime};
 
 use crate::plan::library::{Library, MODELS, Model, model, runtime_name};
 
@@ -210,7 +210,7 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
     for regime in [
         OffloadRegime {
             label: "ngl99",
-            ngl: 99,
+            ngl: FULLY_OFFLOADED,
             gpus: "0",
         },
         OffloadRegime {

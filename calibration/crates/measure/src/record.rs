@@ -13,6 +13,7 @@
 //! harness.
 
 pub use ananke_dataset::{
-    Checkpoint, Cpu, Factors, FlashAttn, Gpu, GpuUsage, Hardware, KvType, Provenance, Record, Rss,
-    RssSnapshot, Runtime, SCHEMA, Sample, Status,
+    Checkpoint, Cpu, DEFAULT_PROBE_PROMPT_TOKENS, FULLY_OFFLOADED, Factors, FlashAttn, Gpu,
+    GpuUsage, Hardware, KvType, Provenance, Record, Rss, RssSnapshot, Runtime, SCHEMA, Sample,
+    Status,
 };

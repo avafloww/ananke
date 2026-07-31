@@ -20,6 +20,7 @@
 use std::process::ExitCode;
 
 use ananke_calibrate::{
+    derive::units::{MIB, MIB_F64},
     models::{self, ModelConfig},
     validate::{NEUTRAL, snapshot_for},
 };
@@ -28,8 +29,7 @@ use ananke_fs::LocalFs;
 use ananke_placement::{Packed, devices::DeviceId, pack_demand};
 
 const MODELS_TOML: &str = "calibration/models.toml";
-const MIB: u64 = 1024 * 1024;
-const GIB: f64 = (1024 * 1024 * 1024) as f64;
+const GIB: f64 = MIB_F64 * 1024.0;
 
 /// One model's estimate, or why it has none.
 enum Row {

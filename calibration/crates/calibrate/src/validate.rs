@@ -19,7 +19,10 @@ use ananke_placement::{
     devices::{DeviceSnapshot, GpuSnapshot},
 };
 
-use crate::record::{FlashAttn, KvType, Record, Runtime};
+use crate::{
+    derive::units::MIB,
+    record::{FlashAttn, KvType, Record, Runtime},
+};
 
 /// Host memory the packer is told it has. The campaign machine has 256 GiB and
 /// nothing here depends on the exact figure — it only has to be large enough not
@@ -219,7 +222,7 @@ pub fn snapshot_for(ids: &[u32], capacities_mib: &[u64]) -> DeviceSnapshot {
         .iter()
         .enumerate()
         .map(|(index, &id)| {
-            let total = capacities_mib.get(index).copied().unwrap_or(24_576) * 1024 * 1024;
+            let total = capacities_mib.get(index).copied().unwrap_or(24_576) * MIB;
             GpuSnapshot {
                 id,
                 name: format!("GPU {id}"),
@@ -231,8 +234,8 @@ pub fn snapshot_for(ids: &[u32], capacities_mib: &[u64]) -> DeviceSnapshot {
     DeviceSnapshot {
         gpus,
         cpu: Some(ananke_placement::devices::CpuSnapshot {
-            total_bytes: CPU_CAPACITY_MIB * 1024 * 1024,
-            available_bytes: CPU_CAPACITY_MIB * 1024 * 1024,
+            total_bytes: CPU_CAPACITY_MIB * MIB,
+            available_bytes: CPU_CAPACITY_MIB * MIB,
         }),
         taken_at_ms: 0,
     }
@@ -250,7 +253,7 @@ pub fn gpu_reserved_mib(packed: &ananke_placement::Packed) -> u64 {
         .filter(|(id, _)| matches!(id, ananke_placement::devices::DeviceId::Gpu(_)))
         .map(|(_, &b)| b)
         .sum::<u64>()
-        / (1024 * 1024)
+        / MIB
 }
 
 /// The neutral corrections a validation run packs with: this compares the

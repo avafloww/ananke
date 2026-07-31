@@ -12,9 +12,16 @@ use crate::{
         error::{DeriveError, Result},
         mtp::pairs::{MtpShape, mtp_pairs},
         ordered::OrderedMap,
+        units::MIB_I64,
     },
     record::Record,
 };
+
+/// How far above the worst measured residual the fitted base is lifted. Taking
+/// the worst reproduces some model's point exactly — the separate draft lands on
+/// 287 MiB against 287 measured — and an exact fit under-reserves on any variation
+/// at all.
+const HOST_BASE_MARGIN: f64 = 1.10;
 
 /// One MTP shape's *host* cost, fitted as `base + slope x (ctx / 1024)`.
 ///
@@ -60,14 +67,11 @@ pub fn mtp_host_fit(rows: &[Record], shape: MtpShape) -> Result<HostFit> {
     } else {
         worst_slope.ceil() as i64
     };
-    // Plus a margin, for the reason the GPU fit needs one: taking the worst residual
-    // reproduces some model's point exactly — the separate draft lands on 287 MiB
-    // against 287 measured — and an exact fit under-reserves on any variation at all.
     let residual = points
         .iter()
         .map(|(ctx, value)| *value as f64 - slope as f64 * (f64::from(*ctx) / 1024.0))
         .fold(f64::NEG_INFINITY, f64::max);
-    let base = (residual * 1.10).ceil() as i64;
+    let base = (residual * HOST_BASE_MARGIN).ceil() as i64;
     Ok(HostFit {
         base,
         slope,
@@ -101,7 +105,7 @@ pub struct HostFit {
 pub fn mtp_host_embedded(rows: &[Record]) -> Result<Scalar> {
     let fit = mtp_host_fit(rows, MtpShape::Embedded)?;
     Ok(Scalar {
-        value: fit.base * 1024 * 1024,
+        value: fit.base * MIB_I64,
         evidence: fit.evidence,
     })
 }
@@ -110,7 +114,7 @@ pub fn mtp_host_embedded(rows: &[Record]) -> Result<Scalar> {
 pub fn mtp_host_separate(rows: &[Record]) -> Result<Scalar> {
     let fit = mtp_host_fit(rows, MtpShape::SeparateDraft)?;
     Ok(Scalar {
-        value: fit.base * 1024 * 1024,
+        value: fit.base * MIB_I64,
         evidence: fit.evidence,
     })
 }

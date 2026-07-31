@@ -7,13 +7,27 @@
 
 use std::path::{Path, PathBuf};
 
-use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode};
+use ananke_config::{
+    flags::expert_offload::AUTO,
+    placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode},
+};
 use ananke_estimate::EstimatorInputs;
 use serde::Deserialize;
 
+use crate::plan::library::Library;
+
 /// Where the model files live, relative to which `ModelConfig::model` is
-/// resolved. The campaign machine keeps them all under one root.
-pub const MODEL_ROOT: &str = "/mnt/ssd0/ai/llm";
+/// resolved.
+///
+/// Resolved through `$LLM_DIR` the same way a plan's paths are, so a scoreboard
+/// and a plan name the same file on a machine that keeps its library elsewhere.
+pub fn model_root() -> PathBuf {
+    Library::from_env().root().to_path_buf()
+}
+
+/// How many cards a model that names neither `visible_devices` nor `gpus` spans:
+/// the campaign machine's pair.
+const DEFAULT_CARDS: u32 = 2;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -79,26 +93,24 @@ pub struct ModelConfig {
 impl ModelConfig {
     /// The GGUF's absolute path.
     pub fn model_path(&self) -> PathBuf {
-        Path::new(MODEL_ROOT).join(&self.model)
+        model_root().join(&self.model)
     }
 
     /// The vision projector's absolute path, if this model has one.
     pub fn mmproj_path(&self) -> Option<PathBuf> {
-        self.mmproj.as_ref().map(|p| Path::new(MODEL_ROOT).join(p))
+        self.mmproj.as_ref().map(|p| model_root().join(p))
     }
 
     /// The separate draft GGUF's absolute path, if this model has one.
     pub fn draft_path(&self) -> Option<PathBuf> {
-        self.draft_model
-            .as_ref()
-            .map(|p| Path::new(MODEL_ROOT).join(p))
+        self.draft_model.as_ref().map(|p| model_root().join(p))
     }
 
     /// How many cards this model spans.
     pub fn cards(&self) -> u32 {
         self.visible_devices
             .or_else(|| self.gpus.as_ref().map(|g| g.len() as u32))
-            .unwrap_or(2)
+            .unwrap_or(DEFAULT_CARDS)
             .max(1)
     }
 
@@ -117,7 +129,7 @@ impl ModelConfig {
     pub fn offload(&self) -> OffloadMode {
         match (self.n_cpu_moe, self.expert_offload.as_deref()) {
             (Some(n), _) => OffloadMode::Layers(n),
-            (None, Some("auto")) => OffloadMode::Auto,
+            (None, Some(AUTO)) => OffloadMode::Auto,
             _ => OffloadMode::Off,
         }
     }

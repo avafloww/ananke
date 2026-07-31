@@ -25,8 +25,9 @@ pub use crate::{
     json::to_dataset_json,
     parsed::{BufferRole, Context, DeviceRow, HostBreakdown, KvPool, Mapped, Parsed, RsPool},
     record::{
-        Checkpoint, Cpu, Factors, FlashAttn, Gpu, GpuUsage, Hardware, KvType, Provenance, Record,
-        Rss, RssSnapshot, Runtime, SCHEMA, Sample, Status,
+        Checkpoint, Cpu, DEFAULT_PROBE_PROMPT_TOKENS, FULLY_OFFLOADED, Factors, FlashAttn, Gpu,
+        GpuUsage, Hardware, KvType, Provenance, Record, Rss, RssSnapshot, Runtime, SCHEMA, Sample,
+        Status,
     },
 };
 

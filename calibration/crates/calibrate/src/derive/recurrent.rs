@@ -6,6 +6,7 @@ use crate::{
     derive::{
         Scalar,
         error::{DeriveError, Result},
+        units::MIB_F64,
     },
     record::{Parsed, Record, RsPool},
 };
@@ -70,7 +71,7 @@ pub fn modelled_recurrent_mib(pool: &RsPool, parsed: &Parsed) -> Option<(f64, f6
     }
     let recurrent = span - span / interval;
     let copies = pool.seqs as i64 * (pool.rs_seq + 1) as i64;
-    let scale = (recurrent * copies * 4) as f64 / 1048576.0;
+    let scale = (recurrent * copies * 4) as f64 / MIB_F64;
     Some((n_embd_r as f64 * scale, n_embd_s as f64 * scale))
 }
 

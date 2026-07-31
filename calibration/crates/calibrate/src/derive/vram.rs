@@ -14,6 +14,7 @@ use crate::{
         keys::ArchKey,
         shape::{WEIGHT_TOLERANCE, query_head_count, same_resident_weights, table_less_compute},
         stats::round_half_even,
+        units::MIB_F64,
     },
     record::Record,
 };
@@ -132,7 +133,7 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table<ArchKey>> {
         per_arch
             .entry(key.arch.clone())
             .or_default()
-            .push(per_device * 1048576.0 / entries as f64);
+            .push(per_device * MIB_F64 / entries as f64);
     }
     if per_arch.is_empty() {
         return Err(DeriveError::no_data(
@@ -223,7 +224,7 @@ pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
             continue;
         };
         seen.push(MmprojCell {
-            graph: reserved * 1048576.0 - tensors as f64,
+            graph: reserved * MIB_F64 - tensors as f64,
             image: parsed.clip_image_size.unwrap_or(0),
             merge: parsed.clip_n_merge.unwrap_or(0),
         });
@@ -242,7 +243,7 @@ pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
         .map(|cell| VisionShape {
             image: cell.image,
             merge: cell.merge,
-            mib: round_half_even(cell.graph / 1048576.0),
+            mib: round_half_even(cell.graph / MIB_F64),
         })
         .collect();
     let detail = shapes

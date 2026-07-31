@@ -15,9 +15,15 @@ use crate::{
         keys::{ArchKey, VariantKey},
         stats::{consensus, consensus_default, median, round_half_even},
         tuning::Tuning,
+        units::MIB_F64,
     },
     record::Record,
 };
+
+/// Bytes per layer per token separating a gemma4 E-variant reading from a
+/// control. The two populations sit at ~1028 and ~3, so the boundary is nowhere
+/// near either and a cell between them means the filter is wrong.
+const E_VARIANT_FLOOR_BYTES: f64 = 500.0;
 
 /// The E-variant's per-layer embedding input, in bytes per layer per token.
 pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
@@ -53,12 +59,12 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
         };
         let residual = arena - (copies * terms.masks() + terms.hidden);
         let tokens = factors.tokens() as f64;
-        let per = residual * 1048576.0 / (parsed.n_layer as f64 * tokens);
+        let per = residual * MIB_F64 / (parsed.n_layer as f64 * tokens);
         // The two populations are ~1028 and ~3 bytes per layer per token, so the
         // boundary is nowhere near either. A cell between them is not an E-variant
         // reading and not a control; it is a sign the filter is wrong, and
         // `consensus` will say so rather than averaging it in.
-        if per > 500.0 {
+        if per > E_VARIANT_FLOOR_BYTES {
             residuals.push(per)
         } else {
             controls.push(per)
@@ -156,7 +162,7 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)
         } else {
             1.0
         };
-        let rate = (quantised - f16) * 1048576.0 / tokens / copies;
+        let rate = (quantised - f16) * MIB_F64 / tokens / copies;
         rates.push(rate);
         by_arch
             .entry(archs[&key.model_key].clone())
@@ -309,7 +315,7 @@ pub fn no_flash_attn_rates(
         // per-layer term counted twice.
         let mut extra = 0.0;
         if parsed.per_layer_token_embd {
-            extra += e_variant_rate * parsed.n_layer as f64 * tokens / 1048576.0;
+            extra += e_variant_rate * parsed.n_layer as f64 * tokens / MIB_F64;
         }
         if factors.kv_quantised()
             && let Some(quant) = quant_rates.filter(|table| !table.is_empty())
@@ -318,7 +324,7 @@ pub fn no_flash_attn_rates(
                 .get(&ArchKey::recorded(record))
                 .copied()
                 .unwrap_or_else(|| quant.values().copied().max().unwrap_or(0));
-            extra += rate as f64 * tokens / 1048576.0;
+            extra += rate as f64 * tokens / MIB_F64;
         }
         let residual = arena - (copies * terms.masks() + terms.hidden) - extra;
         // Per device copy: the term is replicated under a layer split the same way
@@ -328,7 +334,7 @@ pub fn no_flash_attn_rates(
         by_variant
             .entry(VariantKey::of(record))
             .or_default()
-            .push(residual * 1048576.0 / tokens / copies);
+            .push(residual * MIB_F64 / tokens / copies);
     }
     if by_variant.is_empty() {
         return Err(DeriveError::no_data(

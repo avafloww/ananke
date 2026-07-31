@@ -49,6 +49,7 @@ pub mod recurrent;
 pub mod shape;
 pub mod stats;
 pub mod tuning;
+pub mod units;
 pub mod vram;
 
 /// One derived constant: the value that ships, and what it rests on.

@@ -16,12 +16,19 @@ use crate::{
         keys::{ArchKey, VariantKey},
         stats::pad,
         tuning::Tuning,
+        units::MIB_F64,
     },
     record::Record,
 };
 
 /// llama.cpp pads the KV cache length to a multiple of this.
 pub const KV_CACHE_PAD: u64 = 256;
+
+/// Below this many activated experts per expert — `tokens * n_expert_used /
+/// n_expert` — the MoE op intermediates stay on the host. [`crate::derive::graph::offload_min_batch`]
+/// derives the same threshold from the dataset and lands on this number, so the
+/// modelled arena and the fitted constant are one fact stated twice.
+pub const MOE_OFFLOAD_MIN_BATCH_RATIO: u64 = 32;
 
 /// The modelled arena, split into its three terms, in MiB.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -130,7 +137,11 @@ pub fn arena_terms(record: &Record, charge_moe: MoeCharge, tuning: &Tuning) -> A
     // FINDINGS.md. mainline shows the same shape under a tensor split alone.
     let experts = parsed.n_expert;
     let used = parsed.n_expert_used;
-    if charge_moe == MoeCharge::On && experts != 0 && used != 0 && tokens * used < 32 * experts {
+    if charge_moe == MoeCharge::On
+        && experts != 0
+        && used != 0
+        && tokens * used < MOE_OFFLOAD_MIN_BATCH_RATIO * experts
+    {
         if ik {
             hidden += tuning
                 .ik_moe_rate_frozen_arch_miss(&ArchKey::recorded(record))
@@ -142,11 +153,10 @@ pub fn arena_terms(record: &Record, charge_moe: MoeCharge, tuning: &Tuning) -> A
         }
     }
 
-    const MIB: f64 = (1024 * 1024) as f64;
     ArenaTerms {
-        mask: mask as f64 / MIB,
-        swa_mask: swa_mask as f64 / MIB,
-        hidden: hidden as f64 / MIB,
+        mask: mask as f64 / MIB_F64,
+        swa_mask: swa_mask as f64 / MIB_F64,
+        hidden: hidden as f64 / MIB_F64,
     }
 }
 
@@ -206,17 +216,17 @@ pub fn check_arena_model(
         // the table's default apply here would compare against a model the
         // estimator does not use.
         let no_fa = if !factors.runtime_is_ik() && factors.flash_attn.charged_unfused() {
-            table_rate(no_fa_rates, &VariantKey::of(record)) as f64 * tokens / MIB
+            table_rate(no_fa_rates, &VariantKey::of(record)) as f64 * tokens / MIB_F64
         } else {
             0.0
         };
         let quantised = if factors.kv_quantised() {
-            table_rate(quant_rates, &ArchKey::recorded(record)) as f64 * tokens / MIB
+            table_rate(quant_rates, &ArchKey::recorded(record)) as f64 * tokens / MIB_F64
         } else {
             0.0
         };
         let e_variant = if parsed.per_layer_token_embd {
-            e_variant_rate * parsed.n_layer as f64 * tokens / MIB
+            e_variant_rate * parsed.n_layer as f64 * tokens / MIB_F64
         } else {
             0.0
         };
@@ -252,8 +262,6 @@ pub fn check_arena_model(
 
 /// The tolerance `check_arena_model` allows before calling it drift.
 pub const ARENA_TOLERANCE_MIB: f64 = 5.0;
-
-const MIB: f64 = (1024 * 1024) as f64;
 
 /// The cell an architecture's model reproduces worst, and the log line naming it.
 #[derive(Debug, Default, Clone)]

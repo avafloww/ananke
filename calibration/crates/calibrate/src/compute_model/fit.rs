@@ -81,6 +81,9 @@ const PRIORITY: [&str; 8] = [
 /// groups that had plenty of rows for the three or four columns they varied.
 const MIN_SURPLUS_ROWS: usize = 3;
 
+/// The scale column values are compared as integers at, nine decimal places.
+const VARIES_SCALE: f64 = 1e9;
+
 /// Whether a column takes more than one value across the group.
 ///
 /// Compared at nine decimals, matching the fitter this replaces: two rows whose
@@ -89,7 +92,7 @@ const MIN_SURPLUS_ROWS: usize = 3;
 fn varies(points: &[Row], name: &str) -> bool {
     let distinct: BTreeSet<i64> = points
         .iter()
-        .map(|p| (column_value(&p.columns, name) * 1e9).round() as i64)
+        .map(|p| (column_value(&p.columns, name) * VARIES_SCALE).round() as i64)
         .collect();
     distinct.len() > 1
 }

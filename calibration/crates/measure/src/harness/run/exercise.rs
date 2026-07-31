@@ -31,7 +31,7 @@ use crate::{
         run::{bench, watchdog::SwapWatchdog},
         sys::Deps,
     },
-    record::{Checkpoint, Factors, GpuUsage},
+    record::{Checkpoint, DEFAULT_PROBE_PROMPT_TOKENS, Factors, GpuUsage},
 };
 
 /// Long enough for a 200 GiB hybrid's first prompt, which is minutes of prefill.
@@ -39,6 +39,11 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(600);
 const SOAK_TIMEOUT: Duration = Duration::from_secs(300);
 const GROWTH_TIMEOUT: Duration = Duration::from_secs(900);
 const GROWTH_MAX_TOKENS: u32 = 512;
+
+/// How much of the context a growth run is allowed to fill before it stops. Past
+/// that point the server evicts, and the footprint stops being a function of what
+/// was generated — which is the whole quantity the run exists to measure.
+const CONTEXT_WRAP_FRACTION: f64 = 0.85;
 
 pub(crate) fn exercise(
     deps: &Deps,
@@ -55,7 +60,7 @@ pub(crate) fn exercise(
     }
     // One word per token, near enough: what matters is which side of the
     // checkpoint spacing the prompt falls on, not the exact count.
-    let prompt = if factors.probe_prompt_tokens <= 4 {
+    let prompt = if factors.probe_prompt_tokens <= DEFAULT_PROBE_PROMPT_TOKENS {
         // The literal the whole campaign was measured with, so existing cells
         // keep their meaning as well as their identity.
         "Count to twenty.".to_owned()
@@ -184,9 +189,8 @@ fn growth(
             },
             Some(which as u32),
         ));
-        // Stop before the context wraps: past that point the server evicts and
-        // the footprint stops being a function of what was generated.
-        if tokens.kv_depth() as f64 > f64::from(factors.ctx) * 0.85 {
+        // Stop before the context wraps.
+        if tokens.kv_depth() as f64 > f64::from(factors.ctx) * CONTEXT_WRAP_FRACTION {
             break;
         }
         if watchdog.check(deps.procfs.as_ref()).is_some() {

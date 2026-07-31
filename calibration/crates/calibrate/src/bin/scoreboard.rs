@@ -22,6 +22,10 @@ const MEASUREMENTS: &str = "calibration/data/measurements.ndjson";
 const MODELS_TOML: &str = "calibration/models.toml";
 const TOLERANCE_PCT: f64 = 5.0;
 
+/// An ISO 8601 timestamp truncated to its `YYYY-MM-DD` date, which is as precise
+/// as a measurement's age needs to be read.
+const ISO_DATE_LEN: usize = 10;
+
 /// A `models.toml` entry name against the `factors.label` of its production cell.
 struct ProdModel {
     config: &'static str,
@@ -167,7 +171,7 @@ fn main() -> ExitCode {
         worst = worst.max(drift.abs());
         println!(
             "{name:<24} {est:>9} {measured:>9} {drift:>+7.1}%  {}{flag}",
-            &when[..when.len().min(10)]
+            &when[..when.len().min(ISO_DATE_LEN)]
         );
     }
     println!("\nworst drift: {worst:.1}% (tolerance {TOLERANCE_PCT:.0}%)");

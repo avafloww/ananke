@@ -23,12 +23,12 @@ use crate::{
         run::{
             PORT_WAIT,
             child::{spawn_server, stop_child},
-            readiness::{Readiness, wait_for_port, wait_for_ready},
+            readiness::{Readiness, ReadinessWait, wait_for_port, wait_for_ready},
             watchdog::SwapWatchdog,
         },
         sys::Deps,
     },
-    record::{Factors, FlashAttn, KvType, RssSnapshot, Runtime},
+    record::{FULLY_OFFLOADED, Factors, FlashAttn, KvType, RssSnapshot, Runtime},
 };
 
 pub mod plan;
@@ -125,11 +125,13 @@ fn run_stage(
     let mut watchdog = SwapWatchdog::start(deps.procfs.as_ref(), SWAP_LIMIT_GIB);
     let readiness = wait_for_ready(
         deps,
-        child.as_mut(),
-        options.port,
-        spawned_at,
-        LOAD_TIMEOUT,
-        &mut watchdog,
+        ReadinessWait {
+            child: child.as_mut(),
+            port: options.port,
+            spawned_at,
+            timeout: LOAD_TIMEOUT,
+            watchdog: &mut watchdog,
+        },
     );
     let result = match readiness {
         Readiness::Loaded { .. } => {
@@ -215,7 +217,7 @@ fn factors_for(options: &Options<'_>, stage: &Stage) -> Factors {
         ctx: options.context,
         ubatch: 512,
         parallel: 1,
-        ngl: 99,
+        ngl: FULLY_OFFLOADED,
         kv_type: KvType::F16,
         flash_attn: FlashAttn::On,
         cram: stage.cram_mib,

@@ -32,14 +32,26 @@ pub(crate) enum Readiness {
     Swapping(f64),
 }
 
-pub(crate) fn wait_for_ready(
-    deps: &Deps,
-    child: &mut dyn Child,
-    port: u16,
-    spawned_at: Duration,
-    timeout: Duration,
-    watchdog: &mut SwapWatchdog,
-) -> Readiness {
+/// One server being waited on: which process, on which port, and for how long.
+pub(crate) struct ReadinessWait<'a> {
+    /// Polled for an early exit, so a server that dies loading is told apart from
+    /// one that is merely slow.
+    pub child: &'a mut dyn Child,
+    pub port: u16,
+    /// The clock reading taken at the spawn, which `timeout` runs from.
+    pub spawned_at: Duration,
+    pub timeout: Duration,
+    pub watchdog: &'a mut SwapWatchdog,
+}
+
+pub(crate) fn wait_for_ready(deps: &Deps, wait: ReadinessWait<'_>) -> Readiness {
+    let ReadinessWait {
+        child,
+        port,
+        spawned_at,
+        timeout,
+        watchdog,
+    } = wait;
     let deadline = spawned_at + timeout;
     loop {
         if deps.http.healthy(port) {
@@ -111,11 +123,13 @@ mod tests {
         let mut watchdog = SwapWatchdog::start(deps.procfs.as_ref(), 4.0);
         let readiness = wait_for_ready(
             &deps,
-            child.as_mut(),
-            18099,
-            Duration::ZERO,
-            Duration::from_secs(1800),
-            &mut watchdog,
+            ReadinessWait {
+                child: child.as_mut(),
+                port: 18099,
+                spawned_at: Duration::ZERO,
+                timeout: Duration::from_secs(1800),
+                watchdog: &mut watchdog,
+            },
         );
         // Four unhealthy polls, each followed by a two-second wait.
         assert_eq!(readiness, Readiness::Loaded { load_seconds: 8.0 });
@@ -134,11 +148,13 @@ mod tests {
         assert_eq!(
             wait_for_ready(
                 &deps,
-                child.as_mut(),
-                18099,
-                Duration::ZERO,
-                Duration::from_secs(1800),
-                &mut watchdog,
+                ReadinessWait {
+                    child: child.as_mut(),
+                    port: 18099,
+                    spawned_at: Duration::ZERO,
+                    timeout: Duration::from_secs(1800),
+                    watchdog: &mut watchdog,
+                },
             ),
             Readiness::Exited(1)
         );
@@ -162,11 +178,13 @@ mod tests {
         assert_eq!(
             wait_for_ready(
                 &deps,
-                child.as_mut(),
-                18099,
-                Duration::ZERO,
-                Duration::from_secs(60),
-                &mut watchdog,
+                ReadinessWait {
+                    child: child.as_mut(),
+                    port: 18099,
+                    spawned_at: Duration::ZERO,
+                    timeout: Duration::from_secs(60),
+                    watchdog: &mut watchdog,
+                },
             ),
             Readiness::TimedOut
         );
@@ -188,11 +206,13 @@ mod tests {
         assert_eq!(
             wait_for_ready(
                 &deps,
-                child.as_mut(),
-                18099,
-                Duration::ZERO,
-                Duration::from_secs(1800),
-                &mut watchdog,
+                ReadinessWait {
+                    child: child.as_mut(),
+                    port: 18099,
+                    spawned_at: Duration::ZERO,
+                    timeout: Duration::from_secs(1800),
+                    watchdog: &mut watchdog,
+                },
             ),
             Readiness::Swapping(3.0)
         );
