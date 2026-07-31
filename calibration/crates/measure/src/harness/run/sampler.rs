@@ -23,7 +23,7 @@ use parking_lot::Mutex;
 
 use crate::{
     harness::sys::Deps,
-    record::{GpuUsage, Metric, RssSnapshot, Sample},
+    record::{GpuUsage, Rss, RssSnapshot, Sample},
 };
 
 pub(crate) const INTERVAL: Duration = Duration::from_secs(2);
@@ -33,9 +33,14 @@ pub(crate) const INTERVAL: Duration = Duration::from_secs(2);
 #[derive(Debug, Default)]
 pub(crate) struct Sampler {
     trace: Vec<Sample>,
-    peak: BTreeMap<String, i64>,
-    /// The first sample's metrics, which growth is measured from.
-    first: BTreeMap<String, i64>,
+    peak: Readings,
+    /// The first reading of each counter, which growth is measured from.
+    ///
+    /// Per counter rather than "the first sample", because a card the driver
+    /// only reports part-way through the run has its own first reading, and
+    /// measuring its growth from zero would report its whole allocation as
+    /// growth.
+    first: Readings,
 }
 
 impl Sampler {
@@ -51,18 +56,13 @@ impl Sampler {
             t_seconds: (t_seconds * 10.0).round() / 10.0,
             at_utc,
             rss,
-            gpu_used_mib: (!gpu.is_empty()).then(|| gpu.values().sum()),
-            gpu_per_device: GpuUsage { used_mib: gpu },
+            gpu: GpuUsage {
+                total_mib: (!gpu.is_empty()).then(|| gpu.values().sum()),
+                used_mib: gpu,
+            },
         };
-        for (key, value) in metrics(&sample) {
-            // `or_insert` before the comparison: a metric that is legitimately
-            // zero for the whole run — `RssShmem` with no CUDA, so no pinned
-            // allocations — never exceeds the default and would otherwise be
-            // absent entirely rather than present as zero.
-            let peak = self.peak.entry(key.clone()).or_insert(value);
-            *peak = (*peak).max(value);
-            self.first.entry(key).or_insert(value);
-        }
+        self.peak.raise_to(&sample);
+        self.first.record_first(&sample);
         self.trace.push(sample);
     }
 
@@ -81,46 +81,73 @@ impl Sampler {
     /// Peak, then the growth since the first sample: what accumulated after
     /// startup, which is what separates "allocated on first use" from "still
     /// climbing when we stopped looking".
-    pub(crate) fn summary(&self) -> BTreeMap<String, Metric> {
-        let mut summary: BTreeMap<String, Metric> = self
-            .peak
-            .iter()
-            .map(|(key, value)| (key.clone(), Metric::Whole(*value)))
-            .collect();
-        for (key, first) in &self.first {
-            let peak = self.peak.get(key).copied().unwrap_or(*first);
-            summary.insert(format!("growth_{key}"), Metric::Whole(peak - first));
+    ///
+    /// The final reading, the sample count, and the load time are the caller's
+    /// to fill in — see [`crate::harness::run::assemble::rss_summary`], which
+    /// owns the whole block. Everything a *sample* can say is here.
+    pub(crate) fn summary(&self) -> Rss {
+        let peak = self.peak.rss.unwrap_or_default();
+        let first = self.first.rss.unwrap_or_default();
+        let growth = |peak: u64, first: u64| whole(peak.saturating_sub(first));
+        Rss {
+            rss_total_kb: whole(peak.rss_total_kb),
+            rss_anon_kb: whole(peak.rss_anon_kb),
+            rss_file_kb: whole(peak.rss_file_kb),
+            rss_shmem_kb: whole(peak.rss_shmem_kb),
+            gpu_used_mib: self.peak.gpu.total_mib,
+            per_card: self.peak.gpu.used_mib.clone(),
+            growth_rss_total_kb: growth(peak.rss_total_kb, first.rss_total_kb),
+            growth_rss_anon_kb: growth(peak.rss_anon_kb, first.rss_anon_kb),
+            growth_rss_file_kb: growth(peak.rss_file_kb, first.rss_file_kb),
+            growth_rss_shmem_kb: growth(peak.rss_shmem_kb, first.rss_shmem_kb),
+            ..Rss::default()
         }
-        summary
     }
 }
 
-/// One sample flattened into the metrics a peak is kept per. The GPU total is
-/// absent rather than zero when the driver reported nothing, because a CPU-only
-/// cell has no VRAM reading to peak.
-fn metrics(sample: &Sample) -> Vec<(String, i64)> {
-    let mut metrics = vec![
-        ("rss_total_kb", sample.rss.rss_total_kb),
-        ("rss_anon_kb", sample.rss.rss_anon_kb),
-        ("rss_file_kb", sample.rss.rss_file_kb),
-        ("rss_shmem_kb", sample.rss.rss_shmem_kb),
-    ]
-    .into_iter()
-    .map(|(key, value)| (key.to_owned(), i64::try_from(value).unwrap_or(i64::MAX)))
-    .collect::<Vec<_>>();
-    if let Some(total) = sample.gpu_used_mib {
-        metrics.push((
-            "gpu_used_mib".to_owned(),
-            i64::try_from(total).unwrap_or(i64::MAX),
-        ));
+/// One reading of every counter a peak is kept per.
+///
+/// Every field is optional-until-seen rather than zero-by-default, because zero
+/// is a legitimate reading: a cell with no CUDA holds no pinned memory all run,
+/// and "never measured" has to stay distinguishable from "measured as nothing".
+#[derive(Debug, Default)]
+struct Readings {
+    rss: Option<RssSnapshot>,
+    gpu: GpuUsage,
+}
+
+impl Readings {
+    fn raise_to(&mut self, sample: &Sample) {
+        let rss = self.rss.get_or_insert(sample.rss);
+        rss.rss_total_kb = rss.rss_total_kb.max(sample.rss.rss_total_kb);
+        rss.rss_anon_kb = rss.rss_anon_kb.max(sample.rss.rss_anon_kb);
+        rss.rss_file_kb = rss.rss_file_kb.max(sample.rss.rss_file_kb);
+        rss.rss_shmem_kb = rss.rss_shmem_kb.max(sample.rss.rss_shmem_kb);
+        if let Some(total) = sample.gpu.total_mib {
+            self.gpu.total_mib = Some(self.gpu.total_mib.unwrap_or(total).max(total));
+        }
+        for (card, mib) in &sample.gpu.used_mib {
+            let peak = self.gpu.used_mib.entry(*card).or_insert(*mib);
+            *peak = (*peak).max(*mib);
+        }
     }
-    for (index, mib) in &sample.gpu_per_device.used_mib {
-        metrics.push((
-            format!("gpu{index}_used_mib"),
-            i64::try_from(*mib).unwrap_or(i64::MAX),
-        ));
+
+    /// Keep whatever each counter first read, and nothing after it.
+    fn record_first(&mut self, sample: &Sample) {
+        self.rss.get_or_insert(sample.rss);
+        if self.gpu.total_mib.is_none() {
+            self.gpu.total_mib = sample.gpu.total_mib;
+        }
+        for (card, mib) in &sample.gpu.used_mib {
+            self.gpu.used_mib.entry(*card).or_insert(*mib);
+        }
     }
-    metrics
+}
+
+/// A counter as the record spells it: signed, because the growth beside it is a
+/// difference.
+fn whole(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 /// Take one reading of a pid through the injected `/proc` and driver.
@@ -213,13 +240,12 @@ mod tests {
 
         let summary = sampler.summary();
         assert_eq!(sampler.samples(), 3);
-        assert_eq!(summary["rss_anon_kb"], Metric::Whole(9_000));
-        assert_eq!(summary["growth_rss_anon_kb"], Metric::Whole(8_000));
-        // A metric that was zero throughout is present as zero rather than
-        // absent, which is the difference between "no pinned memory" and "not
-        // measured".
-        assert_eq!(summary["rss_shmem_kb"], Metric::Whole(0));
-        assert_eq!(summary["growth_rss_shmem_kb"], Metric::Whole(0));
+        assert_eq!(summary.rss_anon_kb, 9_000);
+        assert_eq!(summary.growth_rss_anon_kb, 8_000);
+        // A counter that was zero throughout reads as zero rather than as
+        // something that was never measured.
+        assert_eq!(summary.rss_shmem_kb, 0);
+        assert_eq!(summary.growth_rss_shmem_kb, 0);
         assert_eq!(sampler.trace()[2].t_seconds, 4.0);
     }
 
@@ -227,8 +253,8 @@ mod tests {
     fn the_gpu_total_is_absent_without_a_driver_reading_and_summed_with_one() {
         let mut sampler = Sampler::default();
         sampler.observe(0.0, "t0".to_owned(), snapshot(1, 0), BTreeMap::new());
-        assert!(sampler.trace()[0].gpu_used_mib.is_none());
-        assert!(!sampler.summary().contains_key("gpu_used_mib"));
+        assert!(sampler.trace()[0].gpu.total_mib.is_none());
+        assert!(sampler.summary().gpu_used_mib.is_none());
 
         sampler.observe(
             2.0,
@@ -236,10 +262,10 @@ mod tests {
             snapshot(1, 0),
             BTreeMap::from([(0, 12_000), (1, 11_000)]),
         );
-        assert_eq!(sampler.trace()[1].gpu_used_mib, Some(23_000));
+        assert_eq!(sampler.trace()[1].gpu.total_mib, Some(23_000));
         let summary = sampler.summary();
-        assert_eq!(summary["gpu_used_mib"], Metric::Whole(23_000));
-        assert_eq!(summary["gpu1_used_mib"], Metric::Whole(11_000));
+        assert_eq!(summary.gpu_used_mib, Some(23_000));
+        assert_eq!(summary.per_card.get(&1), Some(&11_000));
     }
 
     #[test]

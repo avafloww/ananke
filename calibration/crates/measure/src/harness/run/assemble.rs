@@ -10,19 +10,19 @@
 //! prefixes, so a reader that wants "where did it end up" is not left inferring
 //! it from a peak.
 
-use std::collections::BTreeMap;
-
 use crate::{
     harness::run::sampler::Sampler,
     parse::Parsed,
-    record::{Checkpoint, Factors, Hardware, Metric, Record, RssSnapshot, SCHEMA, Sample, Status},
+    record::{
+        Checkpoint, Factors, Hardware, Provenance, Record, Rss, RssSnapshot, SCHEMA, Sample, Status,
+    },
 };
 
 /// Everything one run produced, ready to be recorded.
 pub(crate) struct Outcome {
     pub(crate) status: Status,
     pub(crate) parsed: Parsed,
-    pub(crate) rss: BTreeMap<String, Metric>,
+    pub(crate) rss: Rss,
     /// The end of a failed run's log, so a bad record says why it is bad.
     pub(crate) log_tail: String,
     /// The archived log's file name.
@@ -39,7 +39,7 @@ impl Outcome {
         Self {
             status,
             parsed: Parsed::default(),
-            rss: BTreeMap::new(),
+            rss: Rss::default(),
             log_tail: String::new(),
             log: String::new(),
             trace: Vec::new(),
@@ -51,7 +51,7 @@ impl Outcome {
 pub(crate) fn record(
     cell: String,
     factors: Factors,
-    provenance: BTreeMap<String, String>,
+    provenance: Provenance,
     hardware: Hardware,
     outcome: Outcome,
 ) -> Record {
@@ -79,43 +79,32 @@ pub(crate) fn record(
 /// `final_reading` stands in for the peaks when the sampler never got a sample —
 /// a load that failed before `/proc` could be read twice — so the block is never
 /// silently empty when something was in fact measured.
-pub(crate) fn rss_summary(
-    sampler: &Sampler,
-    final_reading: RssSnapshot,
-    load_seconds: f64,
-) -> BTreeMap<String, Metric> {
+pub(crate) fn rss_summary(sampler: &Sampler, final_reading: RssSnapshot, load_seconds: f64) -> Rss {
     let mut rss = if sampler.is_empty() {
-        snapshot_metrics("", final_reading)
+        Rss {
+            rss_total_kb: whole(final_reading.rss_total_kb),
+            rss_anon_kb: whole(final_reading.rss_anon_kb),
+            rss_file_kb: whole(final_reading.rss_file_kb),
+            rss_shmem_kb: whole(final_reading.rss_shmem_kb),
+            ..Rss::default()
+        }
     } else {
         sampler.summary()
     };
-    rss.extend(snapshot_metrics("final_", final_reading));
-    rss.insert(
-        "samples".to_owned(),
-        Metric::Whole(i64::try_from(sampler.samples()).unwrap_or(i64::MAX)),
-    );
-    rss.insert(
-        "load_seconds".to_owned(),
-        Metric::Fractional((load_seconds * 10.0).round() / 10.0),
-    );
+    rss.final_rss_total_kb = whole(final_reading.rss_total_kb);
+    rss.final_rss_anon_kb = whole(final_reading.rss_anon_kb);
+    rss.final_rss_file_kb = whole(final_reading.rss_file_kb);
+    rss.final_rss_shmem_kb = whole(final_reading.rss_shmem_kb);
+    rss.samples = i64::try_from(sampler.samples()).unwrap_or(i64::MAX);
+    // A tenth of a second, as every recorded row spells it.
+    rss.load_seconds = (load_seconds * 10.0).round() / 10.0;
     rss
 }
 
-fn snapshot_metrics(prefix: &str, snapshot: RssSnapshot) -> BTreeMap<String, Metric> {
-    [
-        ("rss_total_kb", snapshot.rss_total_kb),
-        ("rss_anon_kb", snapshot.rss_anon_kb),
-        ("rss_file_kb", snapshot.rss_file_kb),
-        ("rss_shmem_kb", snapshot.rss_shmem_kb),
-    ]
-    .into_iter()
-    .map(|(key, value)| {
-        (
-            format!("{prefix}{key}"),
-            Metric::Whole(i64::try_from(value).unwrap_or(i64::MAX)),
-        )
-    })
-    .collect()
+/// A `/proc` counter as the record spells it: signed, because the growth beside
+/// it is a difference.
+fn whole(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 /// The end of a log, for a record that has to say why it is bad.
@@ -151,15 +140,11 @@ mod tests {
         );
         let rss = rss_summary(&sampler, snapshot(5_000, 400, 0), 41.44);
 
-        assert_eq!(
-            rss["rss_anon_kb"],
-            Metric::Whole(9_000),
-            "the peak, not the end"
-        );
-        assert_eq!(rss["final_rss_anon_kb"], Metric::Whole(5_000));
-        assert_eq!(rss["growth_rss_anon_kb"], Metric::Whole(8_000));
-        assert_eq!(rss["samples"], Metric::Whole(2));
-        assert_eq!(rss["load_seconds"], Metric::Fractional(41.4));
+        assert_eq!(rss.rss_anon_kb, 9_000, "the peak, not the end");
+        assert_eq!(rss.final_rss_anon_kb, 5_000);
+        assert_eq!(rss.growth_rss_anon_kb, 8_000);
+        assert_eq!(rss.samples, 2);
+        assert_eq!(rss.load_seconds, 41.4);
     }
 
     /// A run whose process vanished before a second sample still has one reading
@@ -167,10 +152,11 @@ mod tests {
     #[test]
     fn a_run_with_no_samples_falls_back_to_the_final_reading() {
         let rss = rss_summary(&Sampler::default(), snapshot(2_000, 8, 100), 3.0);
-        assert_eq!(rss["rss_anon_kb"], Metric::Whole(2_000));
-        assert_eq!(rss["final_rss_anon_kb"], Metric::Whole(2_000));
-        assert_eq!(rss["samples"], Metric::Whole(0));
-        assert!(!rss.contains_key("growth_rss_anon_kb"));
+        assert_eq!(rss.rss_anon_kb, 2_000);
+        assert_eq!(rss.final_rss_anon_kb, 2_000);
+        assert_eq!(rss.samples, 0);
+        // Nothing was sampled, so nothing grew.
+        assert_eq!(rss.growth_rss_anon_kb, 0);
     }
 
     #[test]
@@ -181,7 +167,10 @@ mod tests {
                 label: "glm-2card".to_owned(),
                 ..Factors::default()
             },
-            BTreeMap::from([("host".to_owned(), "redline".to_owned())]),
+            Provenance {
+                host: "redline".to_owned(),
+                ..Provenance::default()
+            },
             Hardware::default(),
             Outcome::failed(Status::Timeout),
         );

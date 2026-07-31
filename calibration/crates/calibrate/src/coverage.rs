@@ -50,11 +50,11 @@ impl Axis {
         let f = &record.factors;
         match self {
             Axis::Context => f.ctx.to_string(),
-            Axis::Ubatch => f.ubatch.unwrap_or(512).to_string(),
+            Axis::Ubatch => f.ubatch_or_default().to_string(),
             Axis::Gpus => f.gpus.clone(),
-            Axis::Parallel => f.parallel.unwrap_or(1).to_string(),
-            Axis::Concurrency => f.concurrency.unwrap_or(1).to_string(),
-            Axis::PromptTokens => f.probe_prompt_tokens.unwrap_or(4).to_string(),
+            Axis::Parallel => f.parallel.to_string(),
+            Axis::Concurrency => f.concurrency.to_string(),
+            Axis::PromptTokens => f.probe_prompt_tokens.to_string(),
         }
     }
 
@@ -87,43 +87,43 @@ pub struct Regime {
 pub const REGIMES: &[Regime] = &[
     Regime {
         name: "flash attention off",
-        select: |r| r.factors.flash_attn.as_deref() != Some("on"),
+        select: |r| !r.factors.flash_attn_on(),
         axes: &[Axis::Context, Axis::Ubatch, Axis::Gpus],
         constant: "no_flash_attn_rates",
     },
     Regime {
         name: "quantised KV",
-        select: |r| r.factors.kv_type.as_deref() != Some("f16"),
+        select: |r| r.factors.kv_type != "f16",
         axes: &[Axis::Context, Axis::Ubatch],
         constant: "quantised_cache_rates, quantised KV compute",
     },
     Regime {
         name: "tensor split",
-        select: |r| r.factors.split.as_deref() == Some("tensor"),
+        select: |r| r.factors.split_or_layer() == "tensor",
         axes: &[Axis::Context, Axis::Ubatch, Axis::Gpus],
         constant: "tensor_split_baseline",
     },
     Regime {
         name: "shared KV cache",
-        select: |r| r.factors.kv_unified && r.factors.parallel.unwrap_or(1) > 1,
+        select: |r| r.factors.kv_unified && r.factors.parallel > 1,
         axes: &[Axis::Context, Axis::Ubatch],
         constant: "the window-mask count",
     },
     Regime {
         name: "multiple slots",
-        select: |r| r.factors.parallel.unwrap_or(1) > 1,
+        select: |r| r.factors.parallel > 1,
         axes: &[Axis::Context, Axis::Ubatch, Axis::Parallel],
         constant: "mask streams, MTP KV",
     },
     Regime {
         name: "concurrent requests",
-        select: |r| r.factors.concurrency.unwrap_or(1) > 1,
+        select: |r| r.factors.concurrency > 1,
         axes: &[Axis::Concurrency, Axis::Context],
         constant: "per_slot_host_bytes",
     },
     Regime {
         name: "checkpointed prompt",
-        select: |r| r.factors.probe_prompt_tokens.unwrap_or(4) >= 8192,
+        select: |r| r.factors.probe_prompt_tokens >= 8192,
         axes: &[Axis::Context, Axis::Gpus],
         constant: "checkpoint_headroom_bytes",
     },
@@ -135,7 +135,7 @@ pub const REGIMES: &[Regime] = &[
     },
     Regime {
         name: "ik_llama",
-        select: |r| r.factors.runtime == "ik",
+        select: |r| r.factors.runtime_is_ik(),
         axes: &[Axis::Context, Axis::Ubatch, Axis::Gpus],
         constant: "ik_moe_rates, baseline @ik",
     },
@@ -151,7 +151,7 @@ pub const REGIMES: &[Regime] = &[
         // mask-copy constant was fitted under. Four cells are CPU-only and arguably
         // belong in neither bucket, but changing which side they fall on would move a
         // constant rather than only its audit.
-        select: |r| r.gpu_ids().len().max(1) == 1,
+        select: |r| r.factors.gpu_ids().len().max(1) == 1,
         axes: &[Axis::Context, Axis::Ubatch],
         constant: "the mask-copy rule at one copy",
     },
@@ -192,7 +192,7 @@ impl Coverage {
 pub fn audit(records: &[Record]) -> Vec<Coverage> {
     let measured: Vec<&Record> = records
         .iter()
-        .filter(|r| r.status == Status::Ok && r.parsed.arena_mib.is_some_and(|v| v > 0.0))
+        .filter(|r| r.status == Status::Ok && r.parsed.arena_mib > 0.0)
         .collect();
 
     let mut out: Vec<Coverage> = REGIMES

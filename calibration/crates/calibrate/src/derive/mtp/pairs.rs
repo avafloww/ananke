@@ -50,19 +50,19 @@ pub fn mtp_pairs(rows: &[Record], draft: bool) -> Vec<MtpPair<'_>> {
         (
             record.provenance.model_key.clone(),
             f.ctx,
-            f.parallel.unwrap_or(0),
+            f.parallel,
             f.kv_unified,
             f.split.clone().unwrap_or_else(|| "-".to_string()),
             f.gpus.clone(),
-            f.ubatch.unwrap_or(0),
-            f.kv_type.clone().unwrap_or_default(),
+            f.ubatch,
+            f.kv_type.clone(),
             f.served,
         )
     }
 
     let mut grouped: OrderedMap<Identity, BTreeMap<bool, &Record>> = OrderedMap::new();
     for record in rows {
-        if record.parsed.arch.as_deref().is_some_and(|a| !a.is_empty()) {
+        if record.parsed.architecture().is_some() {
             grouped
                 .or_insert_with(identity(record), BTreeMap::new)
                 .insert(record.factors.has_spec(), record);
@@ -78,8 +78,8 @@ pub fn mtp_pairs(rows: &[Record], draft: bool) -> Vec<MtpPair<'_>> {
             continue;
         }
         let (Some(on_used), Some(off_used)) = (
-            on.gpu_used_mib().filter(|v| *v != 0),
-            off.gpu_used_mib().filter(|v| *v != 0),
+            on.rss.gpu_used_mib.filter(|v| *v != 0),
+            off.rss.gpu_used_mib.filter(|v| *v != 0),
         ) else {
             continue;
         };
@@ -129,7 +129,7 @@ pub fn mtp_slot_scaling(rows: &[Record]) -> String {
         by_key
             .entry((name, pair.ctx))
             .or_default()
-            .insert(pair.on.factors.parallel.unwrap_or(0), pair.delta);
+            .insert(pair.on.factors.parallel, pair.delta);
     }
     let series: Vec<String> = by_key
         .iter()

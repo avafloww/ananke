@@ -24,14 +24,15 @@ pub fn layer_split_copies(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         if factors.runtime_is_ik() {
             continue;
         }
-        let Some(arena) = parsed.arena_mib.filter(|v| *v != 0.0) else {
+        let arena = parsed.arena_mib;
+        if arena == 0.0 {
             continue;
-        };
-        if factors.ngl != Some(99) || factors.gpus.is_empty() || !factors.flash_attn_on() {
+        }
+        if !factors.fully_offloaded() || factors.gpus.is_empty() || !factors.flash_attn_on() {
             continue;
         }
         // gemma4 carries its own per-layer term; excluded to keep this clean.
-        if parsed.arch.as_deref() == Some("gemma4") {
+        if parsed.arch == "gemma4" {
             continue;
         }
         // A hybrid does not replicate the masks — that is the point.
@@ -81,16 +82,17 @@ pub fn offload_min_batch(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         if !factors.runtime_is_ik() {
             continue;
         }
-        let Some(arena) = parsed.arena_mib.filter(|v| *v != 0.0) else {
+        let arena = parsed.arena_mib;
+        if arena == 0.0 {
             continue;
-        };
-        let experts = u64::from(parsed.n_expert.unwrap_or(0));
-        let used = u64::from(parsed.n_expert_used.unwrap_or(0));
+        }
+        let experts = parsed.n_expert;
+        let used = parsed.n_expert_used;
         if experts == 0 || used == 0 {
             continue;
         }
         let tokens = factors.tokens();
-        if !factors.flash_attn_on() || factors.ngl != Some(99) {
+        if !factors.flash_attn_on() || !factors.fully_offloaded() {
             continue;
         }
         let terms = arena_terms(record, false, tuning);
@@ -132,20 +134,21 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
     let mut points: Vec<(String, f64)> = Vec::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
-        if factors.runtime != "mainline" || !factors.is_hybrid() {
+        if factors.runtime_is_ik() || !factors.is_hybrid() {
             continue;
         }
-        if factors.split.as_deref() != Some("tensor") || !factors.flash_attn_on() {
+        if factors.split_or_layer() != "tensor" || !factors.flash_attn_on() {
             continue;
         }
         // An MTP run measures without this term entirely.
         if factors.has_spec() {
             continue;
         }
-        let Some(arena) = parsed.arena_mib.filter(|v| *v != 0.0) else {
+        let arena = parsed.arena_mib;
+        if arena == 0.0 {
             continue;
-        };
-        if factors.ngl != Some(99) {
+        }
+        if !factors.fully_offloaded() {
             continue;
         }
         let terms = arena_terms(record, false, tuning);
@@ -154,11 +157,8 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         if excess <= 0.0 {
             continue;
         }
-        let n_embd = f64::from(parsed.n_embd.unwrap_or(0));
-        points.push((
-            parsed.arch.clone().unwrap_or_else(|| "None".to_string()),
-            excess / tokens / n_embd,
-        ));
+        let n_embd = parsed.n_embd as f64;
+        points.push((parsed.arch.clone(), excess / tokens / n_embd));
     }
     if points.is_empty() {
         return Err(DeriveError::no_data(
@@ -207,7 +207,7 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
 /// The table is keyed `{arch}@{cards}` for that reason.
 pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Table)> {
     struct Point {
-        n_embd: u32,
+        n_embd: u64,
         rate: f64,
         arch: String,
         cards: usize,
@@ -218,25 +218,26 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
         if !factors.runtime_is_ik() {
             continue;
         }
-        let Some(arena) = parsed.arena_mib.filter(|v| *v != 0.0) else {
+        let arena = parsed.arena_mib;
+        if arena == 0.0 {
             continue;
-        };
-        let experts = u64::from(parsed.n_expert.unwrap_or(0));
-        let used = u64::from(parsed.n_expert_used.unwrap_or(0));
+        }
+        let experts = parsed.n_expert;
+        let used = parsed.n_expert_used;
         let tokens = factors.tokens();
         if experts == 0 || used == 0 || tokens * used >= 32 * experts {
             continue;
         }
-        if !factors.flash_attn_on() || factors.ngl != Some(99) {
+        if !factors.flash_attn_on() || !factors.fully_offloaded() {
             continue;
         }
         let terms = arena_terms(record, false, tuning);
         let excess = (arena - terms.total()) * 1048576.0 / tokens as f64;
-        let n_embd = parsed.n_embd.unwrap_or(0);
+        let n_embd = parsed.n_embd;
         points.push(Point {
             n_embd,
-            rate: excess / f64::from(n_embd),
-            arch: parsed.arch.clone().unwrap_or_else(|| "None".to_string()),
+            rate: excess / n_embd as f64,
+            arch: parsed.arch.clone(),
             cards: factors.cards_or(1),
         });
     }
@@ -298,7 +299,7 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
         let held = by_key.entry(key).or_insert(0.0);
         *held = held.max(point.rate);
     }
-    let shapes: BTreeSet<(u32, i64, String)> = points
+    let shapes: BTreeSet<(u64, i64, String)> = points
         .iter()
         .map(|p| (p.n_embd, round_tenths_half_even(p.rate), p.arch.clone()))
         .collect();
@@ -308,7 +309,7 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
             let rate = *tenths as f64 / 10.0;
             format!(
                 "{arch} {:.0} B/token at n_embd {embd} ({rate:.1}/unit)",
-                rate * f64::from(*embd)
+                rate * *embd as f64
             )
         })
         .collect::<Vec<_>>()

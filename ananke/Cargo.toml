@@ -66,6 +66,10 @@ mime_guess.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+# The calibration dataset's schema, for the integration test that replays the
+# campaign's measurements against the estimator. A test dependency only: nothing
+# in the daemon reads the dataset.
+ananke-dataset.workspace = true
 proptest.workspace = true
 pretty_assertions.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }

@@ -180,7 +180,14 @@ load log kept gzipped alongside in `data/logs/`. Records from earlier,
 narrower schemas are kept in `data/legacy/` rather than merged, since they
 lack fields the current ones carry.
 
-- `schema` — bump `SCHEMA` in `calibration/crates/measure/src/record.rs` whenever the shape changes. `1` was flat
+`crates/dataset` is the one place the format is declared. It derives both
+halves of serde on every type with `deny_unknown_fields` throughout, and
+`crates/dataset/tests/roundtrip.rs` holds it against every committed row, so a
+column the schema forgets is a test failure rather than a silently dropped
+field. The harness and the calibration tools both read and write these types;
+neither declares its own view of a row.
+
+- `schema` — bump `SCHEMA` in `calibration/crates/dataset/src/record/mod.rs` whenever the shape changes. `1` was flat
   CSV-era rows; `2` added nesting, hardware, and traces; `3` added the generic
   per-device breakdown, per-process GPU memory, and model identity.
 - `provenance` — when, where, which binary, which model, which ananke revision.

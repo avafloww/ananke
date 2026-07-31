@@ -29,6 +29,7 @@ version = "0.2.0"
 dependencies = [
  "ananke-api",
  "ananke-config",
+ "ananke-dataset",
  "ananke-estimate",
  "ananke-fs",
  "ananke-gguf",
@@ -91,6 +92,7 @@ name = "ananke-calibrate"
 version = "0.2.0"
 dependencies = [
  "ananke-config",
+ "ananke-dataset",
  "ananke-estimate",
  "ananke-fs",
  "ananke-gguf",
@@ -158,6 +160,7 @@ dependencies = [
 name = "ananke-measure"
 version = "0.2.0"
 dependencies = [
+ "ananke-dataset",
  "clap",
  "flate2",
  "jiff",

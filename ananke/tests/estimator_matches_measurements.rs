@@ -37,7 +37,7 @@ use ananke::{
     },
     gguf::{GgufSummary, GgufTensor, GgufType, GgufValue},
 };
-use serde_json::Value;
+use ananke_dataset::{Record, Status, read_ndjson};
 
 /// Architectures whose arena the campaign confirmed to within 0.1 MiB.
 ///
@@ -162,10 +162,7 @@ fn every_model_lands_inside_the_correction_band() {
         };
         // Owned host memory the process actually held, less the parts the
         // arena term already accounts for.
-        let Some(owned_kb) = case.owned_kb else {
-            continue;
-        };
-        let owned = owned_kb as f64 * 1024.0;
+        let owned = case.owned_kb as f64 * 1024.0;
         if owned <= 0.0 {
             continue;
         }
@@ -248,7 +245,7 @@ struct Case {
     arch: String,
     summary: GgufSummary,
     arena_mib: f64,
-    owned_kb: Option<u64>,
+    owned_kb: i64,
     context: u32,
     ubatch: u32,
     parallel: u32,
@@ -278,80 +275,54 @@ struct Case {
 }
 
 impl Case {
-    fn from_record(record: &Value) -> Option<Self> {
-        if record.get("status")?.as_str()? != "ok" {
+    fn from_record(record: &Record) -> Option<Self> {
+        if record.status != Status::Ok {
             return None;
         }
-        let factors = record.get("factors")?;
-        let parsed = record.get("parsed")?;
-        let arch = parsed.get("arch")?.as_str()?.to_string();
+        let factors = &record.factors;
+        let parsed = &record.parsed;
+        let arch = parsed.architecture()?.to_owned();
+        // `?` is the parser's own marker for a log that named no architecture.
         if arch == "?" {
             return None;
         }
         // Only fully-offloaded runs with a device: a partly- or un-offloaded
         // process has a different graph, which the arena model does not claim
         // to describe.
-        if factors.get("ngl")?.as_u64()? != 99 {
+        if !factors.fully_offloaded() || factors.gpus.is_empty() {
             return None;
         }
-        let gpus = factors.get("gpus")?.as_str()?;
-        if gpus.is_empty() {
+        if parsed.arena_mib <= 0.0 {
             return None;
         }
-        let arena_mib = parsed.get("arena_mib").and_then(Value::as_f64)?;
-        if arena_mib <= 0.0 {
+        if parsed.n_layer == 0 || parsed.n_embd == 0 {
             return None;
         }
-        let n_layer = parsed.get("n_layer").and_then(Value::as_u64)? as u32;
-        let n_embd = parsed.get("n_embd").and_then(Value::as_u64)? as u32;
-        if n_layer == 0 || n_embd == 0 {
-            return None;
-        }
+        let n_layer = parsed.n_layer as u32;
 
         let mut metadata = BTreeMap::new();
-        let mut put = |key: &str, value: u32| {
+        let mut put = |key: &str, value: u64| {
             if value > 0 {
                 metadata.insert(
                     smol_str::SmolStr::new(format!("{arch}.{key}")),
-                    GgufValue::U32(value),
+                    GgufValue::U32(value as u32),
                 );
             }
         };
-        put("block_count", n_layer);
-        put("embedding_length", n_embd);
-        for (key, field) in [
-            ("expert_count", "n_expert"),
-            ("expert_used_count", "n_expert_used"),
-            ("attention.sliding_window", "n_swa"),
-            ("attention.head_count", "n_head"),
-            ("attention.head_count_kv", "n_head_kv"),
-            ("attention.key_length", "n_embd_head_k"),
-            ("attention.value_length", "n_embd_head_v"),
-        ] {
-            put(
-                key,
-                parsed.get(field).and_then(Value::as_u64).unwrap_or(0) as u32,
-            );
-        }
+        put("block_count", parsed.n_layer);
+        put("embedding_length", parsed.n_embd);
+        put("expert_count", parsed.n_expert);
+        put("expert_used_count", parsed.n_expert_used);
+        put("attention.sliding_window", parsed.n_swa);
+        put("attention.head_count", parsed.n_head);
+        put("attention.head_count_kv", parsed.n_head_kv);
+        put("attention.key_length", parsed.n_embd_head_k);
+        put("attention.value_length", parsed.n_embd_head_v);
 
-        let model_key = record
-            .get("provenance")
-            .and_then(|p| p.get("model_key"))
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-
-        let extra: Vec<String> = factors
-            .get("extra")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let model_key = &record.provenance.model_key;
 
         Some(Self {
-            label: factors.get("label")?.as_str()?.to_string(),
+            label: factors.label.clone(),
             summary: GgufSummary {
                 path: std::path::PathBuf::from("/measured"),
                 total_tensor_bytes: 0,
@@ -379,7 +350,7 @@ impl Case {
                             },
                         );
                     };
-                    if parsed.get("n_expert").and_then(Value::as_u64).unwrap_or(0) > 0 {
+                    if parsed.n_expert > 0 {
                         marker("blk.0.ffn_gate_exps.weight");
                     }
                     // The E-variant carries no metadata key that distinguishes
@@ -396,53 +367,29 @@ impl Case {
                 shards: Vec::new(),
             },
             arch,
-            arena_mib,
-            owned_kb: record.get("rss").and_then(|r| {
-                let anon = r.get("rss_anon_kb")?.as_u64()?;
-                let shmem = r.get("rss_shmem_kb").and_then(Value::as_u64).unwrap_or(0);
-                Some(anon + shmem)
-            }),
-            context: factors.get("ctx")?.as_u64()? as u32,
-            ubatch: factors.get("ubatch")?.as_u64()? as u32,
-            parallel: factors.get("parallel")?.as_u64()? as u32,
-            kv_unified: factors
-                .get("kv_unified")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            flash_attn: factors.get("flash_attn").and_then(Value::as_str) == Some("on"),
-            ik_llama: factors.get("runtime").and_then(Value::as_str) == Some("ik"),
-            ik_dsa: extra.iter().any(|f| f == "-dsa"),
-            devices: gpus.split(',').count() as u32,
+            arena_mib: parsed.arena_mib,
+            owned_kb: record.rss.rss_anon_kb + record.rss.rss_shmem_kb,
+            context: factors.ctx,
+            ubatch: factors.ubatch,
+            parallel: factors.parallel,
+            kv_unified: factors.kv_unified,
+            flash_attn: factors.flash_attn_on(),
+            ik_llama: factors.runtime_is_ik(),
+            ik_dsa: factors.extra.iter().any(|flag| flag == "-dsa"),
+            devices: factors.gpus.split(',').count() as u32,
             // A cell with expert offload is the hybrid regime, where the
             // masks are not replicated across devices.
-            hybrid: factors.get("n_cpu_moe").is_some_and(|v| !v.is_null()),
-            mtp: factors.get("spec_type").is_some_and(|v| !v.is_null()),
-            vision: factors.get("mmproj").is_some_and(|v| !v.is_null()),
+            hybrid: factors.n_cpu_moe.is_some(),
+            mtp: factors.spec_type.is_some(),
+            vision: factors.mmproj.is_some(),
             // Passed through, because a quantised cache costs pinned memory
             // the arena model charges for. Leaving it unset made that term
             // silently unreachable from this test.
-            steady_prompt: factors
-                .get("probe_prompt_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(4)
-                >= 8192,
-            concurrency: factors
-                .get("concurrency")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as u32,
-            no_mmap: factors
-                .get("no_mmap")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            served: factors
-                .get("served")
-                .and_then(Value::as_bool)
-                .unwrap_or(true),
-            kv_type: factors
-                .get("kv_type")
-                .and_then(Value::as_str)
-                .unwrap_or("f16")
-                .to_string(),
+            steady_prompt: factors.probe_prompt_tokens >= 8192,
+            concurrency: factors.concurrency,
+            no_mmap: factors.no_mmap,
+            served: factors.served,
+            kv_type: factors.kv_type.clone(),
             // Compute *plus* what llama.cpp cannot attribute, averaged across
             // all real (non-Meta) devices. The packer charges the same
             // compute_buffer_mb to every GPU, so the fair comparison is the
@@ -450,43 +397,10 @@ impl Case {
             // architectures is the primary GPU and much higher than the
             // secondary). Under tensor split the fused `Meta()` device's
             // columns are not comparable to a per-device reservation.
-            device_target_mib: (|| {
-                let devices = parsed.get("devices")?.as_array()?;
-                let fused = devices
-                    .first()?
-                    .get("device")?
-                    .as_str()?
-                    .starts_with("Meta");
-                let rss = record.get("rss")?;
-                let mut total = 0u64;
-                let mut counted = 0u64;
-                for (index, card) in gpus.split(',').filter(|c| !c.is_empty()).enumerate() {
-                    let used = rss.get(format!("gpu{card}_used_mib"))?.as_u64()?;
-                    // A fused tensor-split row reports one card's share, which
-                    // every card is charged.
-                    let device = if fused {
-                        devices.first()
-                    } else {
-                        devices.get(index)
-                    }?;
-                    let model = device.get("model_mib").and_then(Value::as_u64).unwrap_or(0);
-                    // A card holding no layers is doing no compute; its cost is
-                    // the bare CUDA context.
-                    if model == 0 {
-                        continue;
-                    }
-                    let kv = device.get("kv_mib").and_then(Value::as_u64).unwrap_or(0);
-                    total += used.saturating_sub(model + kv);
-                    counted += 1;
-                }
-                (counted > 0).then(|| total / counted)
-            })(),
-            split: match factors.get("split").and_then(Value::as_str) {
-                // `from_flag` rather than a private match, so the harness's
-                // spelling and the validator's cannot drift.
-                Some(flag) => SplitMode::from_flag(flag).unwrap_or(SplitMode::Layer),
-                None => SplitMode::Layer,
-            },
+            device_target_mib: device_target_mib(record),
+            // `from_flag` rather than a private match, so the harness's
+            // spelling and the validator's cannot drift.
+            split: SplitMode::from_flag(factors.split_or_layer()).unwrap_or(SplitMode::Layer),
         })
     }
 
@@ -517,17 +431,42 @@ impl Case {
     }
 }
 
-fn load() -> Vec<Value> {
+/// The per-card mean of what the driver reported beyond that card's own weights
+/// and context.
+///
+/// A card holding no layers is doing no compute; its cost is the bare CUDA
+/// context, so it is left out of the mean rather than dragging it down.
+fn device_target_mib(record: &Record) -> Option<u64> {
+    let devices = &record.parsed.devices;
+    // A fused tensor-split row reports one card's share, which every card is
+    // charged.
+    let fused = devices.first()?.device.starts_with("Meta");
+    let mut total = 0u64;
+    let mut counted = 0u64;
+    for (index, card) in record.factors.gpu_ids().into_iter().enumerate() {
+        let used = record.gpu_card_used_mib(card)?;
+        let device = if fused {
+            devices.first()
+        } else {
+            devices.get(index)
+        }?;
+        if device.model_mib == 0 {
+            continue;
+        }
+        total += used.saturating_sub(device.model_mib + device.kv_mib);
+        counted += 1;
+    }
+    (counted > 0).then(|| total / counted)
+}
+
+fn load() -> Vec<Record> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("workspace root")
         .join("calibration/data/measurements.ndjson");
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-    raw.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("each line is a record"))
-        .collect()
+    read_ndjson(&raw).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
 }
 
 /// The GPU compute-buffer curves against what llama.cpp reserved per device.

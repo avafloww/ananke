@@ -4,16 +4,17 @@
 //! Nothing here fails: a figure the log does not carry is recorded as its zero
 //! rather than as an error, because a run that logged less than expected is
 //! still a measurement and the record has to say what was seen.
+//!
+//! The result is [`ananke_dataset::Parsed`] — the dataset's own schema, not a
+//! writer's private view of it. That block is flat, so each submodule below
+//! fills the fields it produces rather than returning a group to be flattened
+//! at serialisation time: a `serde(flatten)` group cannot coexist with the
+//! `deny_unknown_fields` that makes a forgotten column a parse error.
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
-
-pub use crate::parse::{
-    breakdown::{DeviceRow, GpuMirrors, HostBreakdown, MAX_GPUS},
-    buffers::{BufferKind, BufferSizes, Series},
-    contexts::{BufferRole, Context, KvPool, RsPool},
-    meta::{MetaFields, MetaKey, MetaValue},
+pub use ananke_dataset::{
+    BufferRole, Context, DeviceRow, HostBreakdown, KvPool, Mapped, Parsed, RsPool,
 };
 
 mod breakdown;
@@ -22,80 +23,17 @@ mod contexts;
 mod meta;
 mod patterns;
 
-/// The model's shape and its logged buffer sizes, as one record's `parsed`
-/// block.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub struct Parsed {
-    #[serde(flatten)]
-    pub buffers: BufferSizes,
-    /// Whether the host-side weights are file-backed.
-    ///
-    /// Read from the loader's own naming (`CPU_Mapped model buffer size`
-    /// against `CPU model buffer size`) rather than inferred from flags,
-    /// because mainline and ik_llama disagree on it for identical
-    /// configurations.
-    pub cpu_model_mapped: Mapped,
-    #[serde(flatten)]
-    pub meta: MetaFields,
-    /// Every numeric GGUF metadata key the loader echoed, first occurrence
-    /// winning.
-    pub gguf_kv: BTreeMap<String, i64>,
-    pub contexts: Vec<Context>,
-    #[serde(flatten)]
-    pub mmproj: Option<Mmproj>,
-    /// llama.cpp's own figure for an MTP context, which it reports per context.
-    pub mtp_context_mib: f64,
-    /// The embedded MTP head's depth.
-    pub nextn_predict_layers: u64,
-    /// Whether the model carries Gemma's per-layer token embeddings.
-    pub per_layer_token_embd: bool,
-    pub arch: String,
-    pub devices: Vec<DeviceRow>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub host_breakdown: Option<HostBreakdown>,
-    #[serde(flatten)]
-    pub gpu_mirrors: GpuMirrors,
-}
-
-/// Whether the host-side weights landed in `RssFile` or in anonymous memory.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Mapped {
-    Yes,
-    #[default]
-    No,
-}
-
-/// What a vision projector cost, as llama.cpp's own accounting states it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub struct Mmproj {
-    /// Per device: the projector's weights *and* its CLIP graph buffer.
-    #[serde(rename = "mmproj_reserved_mib")]
-    pub reserved_mib: BTreeMap<String, f64>,
-    /// The summed tensor sizes, which isolate the graph term from the figure
-    /// above.
-    #[serde(rename = "mmproj_tensor_bytes")]
-    pub tensor_bytes: u64,
-    #[serde(rename = "clip_image_size", skip_serializing_if = "Option::is_none")]
-    pub image_size: Option<u64>,
-    #[serde(rename = "clip_n_merge", skip_serializing_if = "Option::is_none")]
-    pub n_merge: Option<u64>,
-}
-
 /// Pull the model's shape and its logged buffer sizes out of a load log.
 pub fn parse_log(text: &str) -> Parsed {
     let devices = breakdown::parse_devices(text);
-    Parsed {
-        buffers: BufferSizes::parse(text),
+    let mut parsed = Parsed {
         cpu_model_mapped: if text.contains("CPU_Mapped model buffer") {
             Mapped::Yes
         } else {
             Mapped::No
         },
-        meta: MetaFields::parse(text),
         gguf_kv: parse_gguf_kv(text),
         contexts: contexts::parse_contexts(text),
-        mmproj: parse_mmproj(text),
         mtp_context_mib: patterns::MTP
             .captures(text)
             .map(|caps| number(&caps, 1))
@@ -109,10 +47,15 @@ pub fn parse_log(text: &str) -> Parsed {
             .captures(text)
             .map(|caps| text_at(&caps, 1))
             .unwrap_or_else(|| "?".to_owned()),
-        gpu_mirrors: GpuMirrors::from_devices(&devices),
         host_breakdown: breakdown::parse_host(text),
-        devices,
-    }
+        ..Parsed::default()
+    };
+    buffers::fill(text, &mut parsed);
+    meta::fill(text, &mut parsed);
+    breakdown::fill_mirrors(&devices, &mut parsed);
+    fill_mmproj(text, &mut parsed);
+    parsed.devices = devices;
+    parsed
 }
 
 fn parse_gguf_kv(text: &str) -> BTreeMap<String, i64> {
@@ -130,7 +73,12 @@ fn parse_gguf_kv(text: &str) -> BTreeMap<String, i64> {
     keys
 }
 
-fn parse_mmproj(text: &str) -> Option<Mmproj> {
+/// What a vision projector cost, as llama.cpp's own accounting states it.
+///
+/// The four fields travel together — a log either loaded a projector or did not
+/// — but the format nests none of them, so they are four independently optional
+/// fields, left absent together.
+fn fill_mmproj(text: &str, parsed: &mut Parsed) {
     let mut reserved_mib = BTreeMap::new();
     for caps in patterns::MMPROJ_RESERVED.captures_iter(text) {
         if let Some(device) = caps.get(2) {
@@ -138,26 +86,23 @@ fn parse_mmproj(text: &str) -> Option<Mmproj> {
         }
     }
     if reserved_mib.is_empty() {
-        return None;
+        return;
     }
-    Some(Mmproj {
-        reserved_mib,
-        tensor_bytes: patterns::CLIP_TENSOR
+    parsed.mmproj_reserved_mib = Some(reserved_mib);
+    // The summed tensor sizes, which isolate the graph term out of the
+    // reservation above.
+    parsed.mmproj_tensor_bytes = Some(
+        patterns::CLIP_TENSOR
             .captures_iter(text)
             .map(|caps| count(&caps, 1))
             .sum(),
-        image_size: patterns::CLIP_IMAGE_SIZE
-            .captures(text)
-            .map(|caps| count(&caps, 1)),
-        n_merge: patterns::CLIP_MERGE
-            .captures(text)
-            .map(|caps| count(&caps, 1)),
-    })
-}
-
-/// The `<key>_all` spelling a repeated figure is recorded under.
-fn repeats_key(key: &str) -> String {
-    format!("{key}_all")
+    );
+    parsed.clip_image_size = patterns::CLIP_IMAGE_SIZE
+        .captures(text)
+        .map(|caps| count(&caps, 1));
+    parsed.clip_n_merge = patterns::CLIP_MERGE
+        .captures(text)
+        .map(|caps| count(&caps, 1));
 }
 
 /// A capture group the pattern guarantees is present and numeric; anything else

@@ -327,10 +327,10 @@ fn the_arena_terms_are_whole_masks() {
     let record = rows
         .iter()
         .find(|r| {
-            r.parsed.n_swa == Some(0)
+            r.parsed.n_swa == 0
                 && r.factors.flash_attn_on()
-                && r.factors.parallel == Some(1)
-                && r.parsed.n_embd.is_some_and(|v| v > 0)
+                && r.factors.parallel == 1
+                && r.parsed.n_embd > 0
                 && !r.factors.runtime_is_ik()
         })
         .expect("the dataset has a dense single-slot cell");
@@ -339,7 +339,7 @@ fn the_arena_terms_are_whole_masks() {
     let n_kv = pad(u64::from(record.factors.ctx), arena::KV_CACHE_PAD);
     assert_eq!(terms.mask, (n_kv * tokens * 2) as f64 / 1048576.0);
     assert_eq!(terms.swa_mask, 0.0);
-    let n_embd = u64::from(record.parsed.n_embd.unwrap_or(0));
+    let n_embd = record.parsed.n_embd;
     assert_eq!(terms.hidden, (2 * n_embd * tokens * 4) as f64 / 1048576.0);
 }
 
@@ -365,7 +365,7 @@ fn the_head_count_falls_back_where_the_gguf_omits_it() {
     // from `embedding_length / key_length`; a zero there left 9218 MiB unreserved.
     let laguna = rows
         .iter()
-        .find(|r| r.parsed.arch.as_deref() == Some("laguna"))
+        .find(|r| r.parsed.arch == "laguna")
         .expect("the dataset measures laguna");
     assert!(query_head_count(&laguna.parsed) > 0);
 }

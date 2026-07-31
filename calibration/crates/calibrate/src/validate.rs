@@ -43,7 +43,7 @@ pub fn skip_reason(record: &Record, known_models: &[String]) -> Option<String> {
     if record.status != Status::Ok {
         return Some(format!("status {:?}", record.status));
     }
-    if record.gpu_used_mib().is_none_or(|v| v == 0) {
+    if record.rss.gpu_used_mib.is_none_or(|v| v == 0) {
         return Some("no driver reading".into());
     }
     if !f.served {
@@ -55,11 +55,8 @@ pub fn skip_reason(record: &Record, known_models: &[String]) -> Option<String> {
     // An operator-chosen `ngl` is a placement the packer did not choose, so the
     // two are not comparable. Expert offload is different: `--n-cpu-moe` leaves
     // `ngl` at 99 and the packer models it.
-    if f.ngl != Some(99) && f.n_cpu_moe.is_none() {
-        return Some(format!(
-            "operator-chosen placement (ngl {})",
-            f.ngl.unwrap_or(-1)
-        ));
+    if !f.fully_offloaded() && f.n_cpu_moe.is_none() {
+        return Some(format!("operator-chosen placement (ngl {})", f.ngl));
     }
     if f.embeddings {
         return Some("embedding modality".into());
@@ -70,31 +67,31 @@ pub fn skip_reason(record: &Record, known_models: &[String]) -> Option<String> {
 /// The estimator inputs this cell was measured under.
 pub fn estimator_inputs<'a>(record: &'a Record, model: &'a std::path::Path) -> EstimatorInputs<'a> {
     let f = &record.factors;
-    let cards = record.gpu_ids().len().max(1) as u32;
+    let cards = record.factors.gpu_ids().len().max(1) as u32;
     EstimatorInputs {
         name: &f.label,
         model,
         mmproj: f.mmproj.as_deref().map(std::path::Path::new),
         context: f.ctx,
-        ubatch: f.ubatch,
+        ubatch: Some(f.ubatch),
         visible_devices: cards,
         host_resident_experts: f.n_cpu_moe.is_some(),
         split_mode: split_mode(f.split.as_deref()),
-        cache_type_k: f.kv_type.as_deref(),
-        cache_type_v: f.kv_type.as_deref(),
+        cache_type_k: Some(&f.kv_type),
+        cache_type_v: Some(&f.kv_type),
         override_tensor: &[],
         compute_buffer_mb: None,
         allow_fallback: false,
         mtp: f.spec_type.is_some(),
         draft_model: f.draft.as_deref().map(std::path::Path::new),
-        ik_llama: f.runtime == "ik",
+        ik_llama: f.runtime_is_ik(),
         // The fork's sparse-attention path is a separate flag, and the campaign
         // only ran it for the architecture that has one.
-        ik_dsa: f.runtime == "ik" && record.parsed.arch.as_deref() == Some("glm-dsa"),
-        parallel: f.parallel,
-        flash_attn: f.flash_attn.as_deref().map(|v| v == "on"),
+        ik_dsa: f.runtime_is_ik() && record.parsed.arch == "glm-dsa",
+        parallel: Some(f.parallel),
+        flash_attn: Some(f.flash_attn_on()),
         kv_unified: Some(f.kv_unified),
-        cache_ram_mb: f.cram,
+        cache_ram_mb: Some(f.cram),
     }
 }
 
@@ -108,12 +105,12 @@ pub fn placement_inputs(record: &Record) -> PlacementInputs {
             PlacementPolicy::GpuOnly
         },
         split_mode: split_mode(f.split.as_deref()),
-        gpu_allow: record.gpu_ids(),
+        gpu_allow: record.factors.gpu_ids(),
         expert_offload: match f.n_cpu_moe {
             Some(n) => OffloadMode::Layers(n),
             None => OffloadMode::Off,
         },
-        ik_llama: f.runtime == "ik",
+        ik_llama: f.runtime_is_ik(),
         ..PlacementInputs::named(&f.label)
     }
 }
@@ -129,7 +126,7 @@ pub fn snapshot(record: &Record) -> DeviceSnapshot {
         .iter()
         .map(|g| g.memory_total_mib)
         .collect();
-    snapshot_for(&record.gpu_ids(), &capacities)
+    snapshot_for(&record.factors.gpu_ids(), &capacities)
 }
 
 /// The split this cell ran under.

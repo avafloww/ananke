@@ -154,10 +154,6 @@ pub fn column_value(columns: &Columns, name: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// llama.cpp's default micro-batch, which the harness records as null when it did
-/// not pass `-ub`.
-pub const DEFAULT_UBATCH: u32 = 512;
-
 /// What a single set of coefficients is fitted against.
 ///
 /// The variant is carried separately rather than folded into the architecture
@@ -232,13 +228,15 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
     for record in rows {
         let factors = &record.factors;
         let parsed = &record.parsed;
-        let Some(arch) = parsed.arch.as_deref().filter(|a| !a.is_empty()) else {
+        let arch = parsed.arch.as_str();
+        if arch.is_empty() {
             continue;
-        };
-        let Some(n_embd) = parsed.n_embd.filter(|n| *n > 0) else {
+        }
+        let n_embd = parsed.n_embd;
+        if n_embd == 0 {
             continue;
-        };
-        if factors.flash_attn.as_deref() == Some("off") {
+        }
+        if factors.flash_attn == "off" {
             continue;
         }
         if !include_spec && present(factors.spec_type.as_deref()) {
@@ -252,36 +250,28 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
         let fused = devices
             .first()
             .is_some_and(|d| d.device.starts_with("Meta"));
-        let ubatch = factors.ubatch.filter(|u| *u > 0).unwrap_or(DEFAULT_UBATCH);
+        let ubatch = factors.ubatch_or_default();
         let streams = if factors.kv_unified {
             1
         } else {
-            factors.parallel.unwrap_or(1).max(1)
+            factors.parallel.max(1)
         };
         // The E-variants keep their embeddings per layer on the host, which is a
         // different graph under the same architecture string.
-        let variant = parsed
-            .per_layer_token_embd
-            .unwrap_or(false)
-            .then_some("gemma_e");
-        let split = factors
-            .split
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .unwrap_or("layer");
+        let variant = parsed.per_layer_token_embd.then_some("gemma_e");
+        let split = factors.split_or_layer();
         // A tensor split reports one card's share, so its mask is unreplicated in
         // the figure regardless of card count; only a layer split spanning more
         // than one device pays for copies. A hybrid does not replicate them
         // either — measured at 1.00 against 4.00 — so the replication follows the
         // placement, not the model.
-        let hybrid = factors.n_cpu_moe.is_some_and(|n| n > 0);
-        let copies = if split == "layer" && cards.len() > 1 && !hybrid {
+        let copies = if split == "layer" && cards.len() > 1 && !factors.is_hybrid() {
             split_mask_copies
         } else {
             1
         };
         let key = Group {
-            runtime: factors.runtime.clone(),
+            runtime: factors.runtime.name().to_owned(),
             split: split.to_string(),
             arch: arch.to_string(),
             variant,
@@ -293,7 +283,7 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
                 card.parse::<u32>()
                     .ok()
                     .and_then(|id| record.gpu_card_used_mib(id))
-                    .map(|used| (index, used))
+                    .map(|used| (index, used as f64))
             })
             .collect();
         if readings.is_empty() {
@@ -303,11 +293,11 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
             ubatch: f64::from(ubatch),
             n_kv: f64::from(factors.ctx / streams),
             ctx: f64::from(factors.ctx),
-            quantised: factors.kv_type.as_deref() != Some("f16"),
+            quantised: factors.kv_type != "f16",
             head_share,
-            n_vocab: parsed.n_vocab.unwrap_or(0) as f64,
-            n_embd: f64::from(n_embd),
-            offloading: factors.n_cpu_moe.is_some_and(|n| n > 0),
+            n_vocab: parsed.n_vocab as f64,
+            n_embd: parsed.n_embd as f64,
+            offloading: factors.is_hybrid(),
             mask_copies: f64::from(copies),
         };
         if devices.is_empty() {
@@ -328,13 +318,11 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
         }
         if fused {
             let device = &devices[0];
-            if device.model_mib == 0.0 {
+            if device.model_mib == 0 {
                 continue;
             }
-            let targets: Vec<f64> = readings
-                .iter()
-                .map(|(_, used)| used - device.model_mib - device.kv_mib)
-                .collect();
+            let attributed = (device.model_mib + device.kv_mib) as f64;
+            let targets: Vec<f64> = readings.iter().map(|(_, used)| used - attributed).collect();
             if targets.iter().any(|t| *t <= 0.0) {
                 continue;
             }
@@ -353,10 +341,10 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
             // A card holding no layers is not doing compute: its whole cost is the
             // bare CUDA context, and those rows inform the per-device shadow
             // rather than this model.
-            let Some(device) = devices.get(index).filter(|d| d.model_mib != 0.0) else {
+            let Some(device) = devices.get(index).filter(|d| d.model_mib != 0) else {
                 continue;
             };
-            let target = used - device.model_mib - device.kv_mib;
+            let target = used - (device.model_mib + device.kv_mib) as f64;
             if target <= 0.0 {
                 continue;
             }

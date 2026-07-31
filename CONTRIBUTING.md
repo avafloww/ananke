@@ -22,21 +22,23 @@ directories do not.
 | `ananke` | `ananke` | the daemon: supervision, scheduling, HTTP surface, the NVML probe | all of the above |
 | `anankectl` | `anankectl` | the CLI | `ananke-api` |
 
-Two more live under `calibration/crates/`, because nothing shipped links them —
+Three more live under `calibration/crates/`, because nothing shipped links them —
 see [`calibration/README.md`](calibration/README.md):
 
 | crate | path | holds | depends on |
 |---|---|---|---|
-| `ananke-measure` | `calibration/crates/measure` | the measurement harness, its log parser, and the NDJSON record schema | `serde`, `regex`, `nix` |
-| `ananke-calibrate` | `calibration/crates/calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-measure`, `ananke-estimate`, `ananke-placement` |
+| `ananke-dataset` | `calibration/crates/dataset` | the one schema `calibration/data/measurements.ndjson` is written and read with, and the JSON writer that is part of that format | `serde`, `serde_json` |
+| `ananke-measure` | `calibration/crates/measure` | the measurement harness and its log parser | `ananke-dataset`, `regex`, `nix` |
+| `ananke-calibrate` | `calibration/crates/calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-dataset`, `ananke-measure`, `ananke-estimate`, `ananke-placement` |
 
 That boundary is the useful one to hold in mind: `crates/tuning/tuning.json` is the
 entire interface between the two halves. Delete `calibration/` and the daemon still
 builds, runs, and estimates — what is lost is the ability to re-derive that file and
 the evidence for why each number in it is what it is. One exception, and it is a
 test: `ananke/tests/estimator_matches_measurements.rs` holds the shipped estimator
-against the campaign's own cells, so it reads `calibration/data` directly and
-`cargo test --workspace` wants the directory present. That is the point of the test —
+against the campaign's own cells, so it takes `ananke-dataset` as a dev-dependency,
+reads `calibration/data` directly, and `cargo test --workspace` wants the directory
+present. That is the point of the test —
 a fixture copy would drift from the dataset the constants are derived from. The arrow only points inward:
 `ananke-calibrate` runs the real estimator and packer in-process, which is what makes
 `validate` and `scoreboard` mean anything, but nothing shipped links back.

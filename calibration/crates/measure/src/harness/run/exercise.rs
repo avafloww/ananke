@@ -238,15 +238,17 @@ fn checkpoint(
 ) -> Checkpoint {
     let gpu = deps.gpu.per_process_mib(pid);
     Checkpoint {
-        turn,
+        turn: u64::from(turn),
         at_utc: deps.clock.now_utc(),
         prompt_tokens: tokens.prompt,
         completion_tokens: tokens.completion,
         generated_tokens_total: tokens.generated,
         kv_depth_tokens: tokens.kv_depth(),
         rss: deps.procfs.status(pid).unwrap_or_default(),
-        gpu_used_mib: (!gpu.is_empty()).then(|| gpu.values().sum()),
-        gpu_per_device: GpuUsage { used_mib: gpu },
+        gpu: GpuUsage {
+            total_mib: (!gpu.is_empty()).then(|| gpu.values().sum()),
+            used_mib: gpu,
+        },
         conversation,
     }
 }
@@ -419,7 +421,7 @@ mod tests {
         assert_eq!(checkpoints.len(), 3);
         assert_eq!(checkpoints[2].generated_tokens_total, 300, "cumulative");
         assert_eq!(checkpoints[2].kv_depth_tokens, 400);
-        assert_eq!(checkpoints[2].gpu_used_mib, Some(12_000));
+        assert_eq!(checkpoints[2].gpu.total_mib, Some(12_000));
         assert_eq!(checkpoints[2].conversation, Some(0));
         // The warm-up probe, then one request per turn, each carrying the whole
         // conversation so far: system, then user/assistant per completed turn.

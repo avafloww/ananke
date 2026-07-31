@@ -1,37 +1,8 @@
 //! llama.cpp's own memory-breakdown table, per device and for the host.
 
-use serde::{Serialize, Serializer, ser::SerializeMap};
+use ananke_dataset::{DeviceRow, HostBreakdown, Parsed};
 
 use crate::parse::{count, patterns};
-
-/// How many device rows the flat mirrors below cover.
-pub const MAX_GPUS: usize = 4;
-
-/// One device's row, with every column.
-///
-/// `unaccounted_mib` is the difference between what the driver reports for the
-/// process and what llama.cpp can attribute — the term the GPU compute-buffer
-/// bases carry as a margin.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct DeviceRow {
-    pub device: String,
-    pub total_mib: u64,
-    pub free_mib: u64,
-    pub self_mib: u64,
-    pub model_mib: u64,
-    pub kv_mib: u64,
-    pub compute_mib: u64,
-    pub unaccounted_mib: u64,
-}
-
-/// The host row, which has no total/free and no unaccounted column.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct HostBreakdown {
-    pub self_mib: u64,
-    pub model_mib: u64,
-    pub kv_mib: u64,
-    pub compute_mib: u64,
-}
 
 /// Every device row of the table, in the order the loader printed them.
 ///
@@ -70,41 +41,39 @@ pub(crate) fn parse_host(text: &str) -> Option<HostBreakdown> {
     })
 }
 
-/// Flat mirrors of the first `MAX_GPUS` device rows.
+/// Mirror the first four device rows into the record's flat `gpu{n}_*` fields.
 ///
-/// Kept because they are convenient to fit against; `Parsed::devices` is the
-/// authoritative list.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct GpuMirrors {
-    rows: [DeviceRow; MAX_GPUS],
-}
+/// Redundant with `Parsed::devices`, which is authoritative, and kept only
+/// because the flat columns are convenient to fit against. Closed at four
+/// cards, because the schema names exactly that many; a fifth card is a schema
+/// change rather than something to absorb here.
+pub(crate) fn fill_mirrors(devices: &[DeviceRow], parsed: &mut Parsed) {
+    let row = |index: usize| devices.get(index).cloned().unwrap_or_default();
+    let (first, second, third, fourth) = (row(0), row(1), row(2), row(3));
 
-impl GpuMirrors {
-    pub(crate) fn from_devices(devices: &[DeviceRow]) -> Self {
-        let mut rows: [DeviceRow; MAX_GPUS] = Default::default();
-        for (mirror, device) in rows.iter_mut().zip(devices) {
-            *mirror = device.clone();
-        }
-        Self { rows }
-    }
-}
+    parsed.gpu0_model_mib = first.model_mib;
+    parsed.gpu0_kv_mib = first.kv_mib;
+    parsed.gpu0_compute_mib = first.compute_mib;
+    parsed.gpu0_unaccounted_mib = first.unaccounted_mib;
+    parsed.gpu0_self_mib = first.self_mib;
 
-impl Serialize for GpuMirrors {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(None)?;
-        for (index, row) in self.rows.iter().enumerate() {
-            for (column, value) in [
-                ("model", row.model_mib),
-                ("kv", row.kv_mib),
-                ("compute", row.compute_mib),
-                ("unaccounted", row.unaccounted_mib),
-                ("self", row.self_mib),
-            ] {
-                map.serialize_entry(&format!("gpu{index}_{column}_mib"), &value)?;
-            }
-        }
-        map.end()
-    }
+    parsed.gpu1_model_mib = second.model_mib;
+    parsed.gpu1_kv_mib = second.kv_mib;
+    parsed.gpu1_compute_mib = second.compute_mib;
+    parsed.gpu1_unaccounted_mib = second.unaccounted_mib;
+    parsed.gpu1_self_mib = second.self_mib;
+
+    parsed.gpu2_model_mib = third.model_mib;
+    parsed.gpu2_kv_mib = third.kv_mib;
+    parsed.gpu2_compute_mib = third.compute_mib;
+    parsed.gpu2_unaccounted_mib = third.unaccounted_mib;
+    parsed.gpu2_self_mib = third.self_mib;
+
+    parsed.gpu3_model_mib = fourth.model_mib;
+    parsed.gpu3_kv_mib = fourth.kv_mib;
+    parsed.gpu3_compute_mib = fourth.compute_mib;
+    parsed.gpu3_unaccounted_mib = fourth.unaccounted_mib;
+    parsed.gpu3_self_mib = fourth.self_mib;
 }
 
 /// The table the context's teardown printed, which is the only one whose rows
@@ -169,9 +138,9 @@ mod tests {
 
     #[test]
     fn mirrors_cover_the_first_cards_and_zero_the_rest() {
-        let mirrors = GpuMirrors::from_devices(&parse_devices(TABLE));
-        let json = serde_json::to_value(&mirrors).expect("mirrors serialize as a map");
-        assert_eq!(json["gpu1_model_mib"], 13120);
-        assert_eq!(json["gpu3_compute_mib"], 0);
+        let mut parsed = Parsed::default();
+        fill_mirrors(&parse_devices(TABLE), &mut parsed);
+        assert_eq!(parsed.gpu1_model_mib, 13120);
+        assert_eq!(parsed.gpu3_compute_mib, 0);
     }
 }

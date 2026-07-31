@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use ananke_dataset::BufferRole;
+
 use crate::{
     derive::{
         Scalar,
@@ -104,8 +106,8 @@ pub fn mtp_unaccounted(rows: &[Record]) -> Result<Scalar> {
         per_device.push(gap);
         detail.push(format!(
             "{} {cards}card np{} ctx{} {gap:.0}",
-            pair.on.parsed.arch.as_deref().unwrap_or("None"),
-            pair.on.factors.parallel.unwrap_or(0),
+            pair.on.parsed.arch.as_str(),
+            pair.on.factors.parallel,
             pair.ctx,
         ));
     }
@@ -165,7 +167,7 @@ pub fn mtp_draft_compute(rows: &[Record]) -> Result<DraftComputeFit> {
             .buffers
             .iter()
             .filter(|(name, _)| !name.ends_with("_Host") && !name.starts_with("CPU"))
-            .map(|(_, buffers)| buffers.get("compute").copied().unwrap_or(0.0))
+            .map(|(_, buffers)| buffers.get(&BufferRole::Compute).copied().unwrap_or(0.0))
             .sum();
         if share <= 0.0 {
             continue;
@@ -173,19 +175,18 @@ pub fn mtp_draft_compute(rows: &[Record]) -> Result<DraftComputeFit> {
         // Cross-check the runtime's own summary line against the per-buffer lines, so
         // a parse that picked up the wrong context is caught here rather than becoming
         // a coefficient.
-        if let Some(reported) = parsed.mtp_context_mib.filter(|v| *v != 0.0)
-            && (reported - (cache + share)).abs() > 1.0
-        {
+        let reported = parsed.mtp_context_mib;
+        if reported != 0.0 && (reported - (cache + share)).abs() > 1.0 {
             return Err(DeriveError::disagreement(format!(
                 "{} ctx {}: [spec] reports {reported} MiB but the buffer lines sum \
                      to {}",
-                parsed.arch.as_deref().unwrap_or("None"),
+                parsed.arch.as_str(),
                 factors.ctx,
                 cache + share,
             )));
         }
         by_arch
-            .entry(parsed.arch.clone().unwrap_or_else(|| "None".to_string()))
+            .entry(parsed.arch.clone())
             .or_default()
             .insert(factors.ctx, share);
     }

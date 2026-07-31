@@ -199,6 +199,16 @@ pub struct Parsed {
 }
 
 impl Parsed {
+    /// The architecture the loader named, absent where the log did not say.
+    ///
+    /// An empty string is how "the log did not say" is spelled here — a run
+    /// that failed to load has no architecture — and every derivation keys on
+    /// the architecture, so a blank one would pool unrelated models under one
+    /// key rather than being skipped.
+    pub fn architecture(&self) -> Option<&str> {
+        Some(self.arch.as_str()).filter(|arch| !arch.is_empty())
+    }
+
     /// A GGUF metadata integer, absent reading as zero.
     pub fn gguf_int(&self, key: &str) -> i64 {
         self.gguf_kv.get(key).copied().unwrap_or(0)

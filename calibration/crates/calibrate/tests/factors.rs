@@ -1,23 +1,19 @@
-//! Every factor the harness varies is either read by the calibration or listed
+//! Every factor the dataset carries is either read by the calibration or listed
 //! here as deliberately unread.
 //!
-//! Two `Factors` types describe one JSON object: `ananke_measure`'s, which the
-//! harness writes and which is the authority, and `ananke_calibrate`'s, a tolerant
-//! reader declaring only what the derivers use. That is a reasonable split — the
-//! reader should not have to grow a field to keep parsing — but it has one failure
-//! mode, and it is this campaign's signature bug: a factor the harness starts
-//! varying that the derivation silently ignores, so a term is fitted across cells
-//! that differ in a way the fit cannot see. Four wrong constants came from exactly
-//! that shape, including `bool(n_cpu_moe)` in place of the count and a pairing key
-//! missing `ngl`.
+//! One `Factors` describes the JSON object now — [`ananke_dataset`]'s — but the
+//! hazard the split used to carry has not gone away with it: a factor the
+//! harness starts varying that the derivation never consults is a term fitted
+//! across cells that differ in a way the fit cannot see. Four wrong constants in
+//! this campaign came from exactly that shape, including `bool(n_cpu_moe)` in
+//! place of the count and a pairing key missing `ngl`.
 //!
 //! So the omissions are enumerated rather than implicit. Adding a factor to the
-//! harness fails this test until somebody says which list it belongs on.
+//! schema fails this test until somebody says which list it belongs on.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ananke_calibrate::record::read_ndjson;
-use ananke_measure::record::{Factors, Status};
+use ananke_dataset::{Factors, Status, read_ndjson};
 
 const MEASUREMENTS: &str = "../../data/measurements.ndjson";
 
@@ -84,7 +80,7 @@ const NOT_READ: &[&str] = &[
     "verbose_log",
 ];
 
-/// The two lists together are exactly the harness's factor set.
+/// The two lists together are exactly the schema's factor set.
 ///
 /// The assertion runs both ways on purpose. A factor missing from both lists is the
 /// bug this file exists to catch; a name in a list that the harness no longer has is
@@ -108,46 +104,18 @@ fn every_factor_is_classified() {
     let unclassified: Vec<&String> = actual.difference(&classified).collect();
     assert!(
         unclassified.is_empty(),
-        "the harness varies {unclassified:?}, which the calibration neither reads nor \
+        "the schema carries {unclassified:?}, which the calibration neither reads nor \
          declares unread — decide which, and if unread say why"
     );
 
     let stale: Vec<&String> = classified.difference(&actual).collect();
     assert!(
         stale.is_empty(),
-        "{stale:?} are classified but the harness no longer has them"
+        "{stale:?} are classified but the schema no longer has them"
     );
 }
 
-/// Nothing on `READ` has gone missing from the reader.
-///
-/// `every_factor_is_classified` enumerates the *harness's* fields; this one
-/// enumerates the reader's. Without it, `READ` is a hand-maintained list of strings
-/// with no connection to `ananke_calibrate::record::Factors` at all — deleting a
-/// field from the reader while leaving its name here would pass every other test in
-/// this file, which is precisely the silent-omission failure it exists to catch.
-///
-/// Read from the source rather than by reflection: the reader is `Deserialize`
-/// only, so there is no value to serialise and inspect, and giving it a `Serialize`
-/// it does not otherwise need would be a worse trade than parsing the struct block.
-#[test]
-fn the_reader_declares_every_factor_it_is_credited_with() {
-    let fields = struct_fields(
-        &std::fs::read_to_string("src/record.rs").expect("the reader's source is readable"),
-        "pub struct Factors {",
-    );
-    let missing: Vec<&&str> = READ
-        .iter()
-        .filter(|name| !fields.contains(**name))
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "{missing:?} are listed as read, but `ananke_calibrate::record::Factors` has no \
-         such field — the derivers cannot be reading them"
-    );
-}
-
-/// The harness's `Factors` has no serde attribute that hides a field.
+/// The schema's `Factors` has no serde attribute that hides a field.
 ///
 /// `every_factor_is_classified` enumerates the keys of a serialised
 /// `Factors::default()`, which is complete only while every field actually appears
@@ -163,15 +131,15 @@ fn the_reader_declares_every_factor_it_is_credited_with() {
 /// nothing at runtime to interrogate.
 #[test]
 fn no_serde_attribute_hides_a_factor() {
-    let source = std::fs::read_to_string("../measure/src/record.rs")
-        .expect("the harness's source is readable");
+    let source = std::fs::read_to_string("../dataset/src/record/factors.rs")
+        .expect("the schema's source is readable");
     let block = struct_block(&source, "pub struct Factors {");
     for hazard in ["skip_serializing_if", "flatten", "skip)", "skip,", "skip]"] {
         assert!(
             !block.contains(hazard),
-            "`{hazard}` appears in the harness's `Factors`: a field it hides is absent \
-             from a serialised default, so `every_factor_is_classified` would not see \
-             it and the calibration could ignore it in silence"
+            "`{hazard}` appears in `Factors`: a field it hides is absent from a \
+             serialised default, so `every_factor_is_classified` would not see it \
+             and the calibration could ignore it in silence"
         );
     }
 }
@@ -184,16 +152,6 @@ fn struct_block<'a>(source: &'a str, header: &str) -> &'a str {
     let rest = &source[start + header.len()..];
     let end = rest.find("\n}").expect("the struct block is closed");
     &rest[..end]
-}
-
-/// The field names of a named struct.
-fn struct_fields(source: &str, header: &str) -> BTreeSet<String> {
-    struct_block(source, header)
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("pub "))
-        .filter_map(|rest| rest.split_once(':'))
-        .map(|(name, _)| name.trim().to_string())
-        .collect()
 }
 
 /// No factor is on both lists.
@@ -227,9 +185,10 @@ fn the_thread_count_does_not_move_the_arena() {
         let Some(threads) = thread_count(&record.factors.label) else {
             continue;
         };
-        let Some(arena) = record.parsed.arena_mib.filter(|v| *v > 0.0) else {
+        let arena = record.parsed.arena_mib;
+        if arena <= 0.0 {
             continue;
-        };
+        }
         sweeps
             .entry((
                 record.factors.model.as_str(),
@@ -255,14 +214,14 @@ fn the_thread_count_does_not_move_the_arena() {
         let counts: BTreeSet<u32> = points.iter().map(|(threads, _)| *threads).collect();
         assert!(
             counts.len() >= 2,
-            "{model} ctx {ctx} ub {ubatch:?}: the same thread count repeated is not a \
+            "{model} ctx {ctx} ub {ubatch}: the same thread count repeated is not a \
              sweep, got {points:?}"
         );
         let first = points[0].1;
         for (threads, arena) in points {
             assert!(
                 (arena - first).abs() < 0.01,
-                "{model} ctx {ctx} ub {ubatch:?}: the arena moved to {arena} MiB at \
+                "{model} ctx {ctx} ub {ubatch}: the arena moved to {arena} MiB at \
                  {threads} threads, from {first} — the thread count is not the inert \
                  factor this claims"
             );
@@ -272,7 +231,7 @@ fn the_thread_count_does_not_move_the_arena() {
 
 /// Everything but the thread count that sizes the graph arena: the model, the
 /// context, and the micro-batch.
-type Configuration<'a> = (&'a str, u32, Option<u32>);
+type Configuration<'a> = (&'a str, u32, u32);
 
 /// A thread count and the arena measured at it, in MiB.
 type ArenaAt = (u32, f64);

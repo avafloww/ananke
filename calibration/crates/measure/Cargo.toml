@@ -17,6 +17,7 @@ path = "src/bin/probe.rs"
 test-fakes = []
 
 [dependencies]
+ananke-dataset.workspace = true
 clap.workspace = true
 flate2.workspace = true
 jiff.workspace = true

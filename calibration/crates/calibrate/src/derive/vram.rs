@@ -30,7 +30,7 @@ struct ScorePairKey {
     runtime: String,
     n_cpu_moe: u32,
     spec: bool,
-    ngl: i32,
+    ngl: u32,
     embeddings: bool,
     mmproj: bool,
     served: bool,
@@ -59,10 +59,10 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table> {
     let mut paired: BTreeMap<ScorePairKey, (u64, &Record)> = BTreeMap::new();
     for record in rows {
         let (factors, parsed) = (&record.factors, &record.parsed);
-        let Some(total) = record.gpu_used_mib().filter(|v| *v != 0) else {
+        let Some(total) = record.rss.gpu_used_mib.filter(|v| *v != 0) else {
             continue;
         };
-        let Some(arch) = parsed.arch.clone().filter(|a| !a.is_empty()) else {
+        let Some(arch) = parsed.architecture().map(str::to_owned) else {
             continue;
         };
         let key = ScorePairKey {
@@ -70,19 +70,19 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table> {
             model: factors.model.clone(),
             ctx: factors.ctx,
             ubatch: factors.ubatch_or_default(),
-            kv_type: factors.kv_type.clone().unwrap_or_default(),
+            kv_type: factors.kv_type.clone(),
             split: factors.split_or_layer().to_string(),
             gpus: factors.gpus.clone(),
-            parallel: factors.parallel.unwrap_or(0),
+            parallel: factors.parallel,
             kv_unified: factors.kv_unified,
-            runtime: factors.runtime.clone(),
+            runtime: factors.runtime.name().to_owned(),
             n_cpu_moe: factors.n_cpu_moe.unwrap_or(0),
             spec: factors.has_spec(),
-            ngl: factors.ngl.unwrap_or_default(),
+            ngl: factors.ngl,
             embeddings: factors.embeddings,
             mmproj: factors.mmproj.as_deref().is_some_and(|m| !m.is_empty()),
             served: factors.served,
-            flash_attn: factors.flash_attn.clone().unwrap_or_default(),
+            flash_attn: factors.flash_attn.clone(),
         };
         paired.entry(key).or_insert((total, record));
     }
@@ -203,12 +203,13 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table> {
 /// over-reserves gemma-4 by 108 MiB and predicts the Qwen projectors exactly, which
 /// is the right way round given the Qwen shape is the one two of the three cells use.
 pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
-    let mut seen: Vec<(f64, u32, u32)> = Vec::new();
+    let mut seen: Vec<(f64, u64, u64)> = Vec::new();
     for record in rows {
         let parsed = &record.parsed;
         let Some(reserved) = parsed
             .mmproj_reserved_mib
-            .get("CUDA0")
+            .as_ref()
+            .and_then(|per_device| per_device.get("CUDA0"))
             .copied()
             .filter(|v| *v != 0.0)
         else {
@@ -232,7 +233,7 @@ pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
         .iter()
         .map(|(g, _, _)| *g)
         .fold(f64::NEG_INFINITY, f64::max);
-    let shapes: BTreeSet<(u32, u32, i64)> = seen
+    let shapes: BTreeSet<(u64, u64, i64)> = seen
         .iter()
         .map(|(g, i, m)| (*i, *m, round_half_even(g / 1048576.0)))
         .collect();
@@ -275,7 +276,7 @@ pub fn table_less_observations(rows: &[Record]) -> Result<NestedTable> {
         if !parsed.devices.is_empty() {
             continue;
         }
-        let Some(arch) = parsed.arch.clone().filter(|a| !a.is_empty()) else {
+        let Some(arch) = parsed.architecture().map(str::to_owned) else {
             continue;
         };
         if !factors.flash_attn_on() || factors.has_spec() {

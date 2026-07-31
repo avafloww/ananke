@@ -68,7 +68,7 @@ fn main() -> ExitCode {
         if !label.starts_with("prod-") || record.status != Status::Ok {
             continue;
         }
-        let Some(used) = record.gpu_used_mib() else {
+        let Some(used) = record.rss.gpu_used_mib else {
             continue;
         };
         let when = record.provenance.measured_at_utc.clone();

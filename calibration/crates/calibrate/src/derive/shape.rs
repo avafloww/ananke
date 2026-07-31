@@ -1,6 +1,8 @@
 //! Reading a cell's shape: how a record is keyed, how wide its attention is,
 //! and what the runtime reported holding where.
 
+use ananke_dataset::BufferRole;
+
 use crate::record::{Parsed, Record};
 
 /// llama.cpp's `--checkpoint-min-step` default: the prompt length past which a
@@ -26,14 +28,11 @@ pub const CHECKPOINT_MIN_STEP: u32 = 8192;
 /// table's worst rate as its default.
 pub fn variant_key(record: &Record, with_environment: bool) -> String {
     let parsed = &record.parsed;
-    let mut key = match parsed.arch.as_deref() {
-        Some(arch) => arch.to_string(),
-        // The literal `"None"` is a real key, and appears in no table only
-        // because every cell reaching a keyed deriver has an architecture. It is
-        // spelled this way because the committed tables were keyed this way.
-        None => "None".to_string(),
-    };
-    if parsed.n_expert.unwrap_or(0) != 0 {
+    // The literal `"None"` is a real key, and appears in no table only because
+    // every cell reaching a keyed deriver has an architecture. It is spelled this
+    // way because the committed tables were keyed this way.
+    let mut key = parsed.architecture().unwrap_or("None").to_string();
+    if parsed.n_expert != 0 {
         key.push_str("+moe");
     }
     // The same discriminator `compute_buffer::is_gemma_e_variant` uses, read
@@ -41,7 +40,7 @@ pub fn variant_key(record: &Record, with_environment: bool) -> String {
     // replaces would have disagreed with the estimator the moment an E-variant
     // shipped under another name: the analysis would fit one curve while the
     // estimator selected a different one.
-    if parsed.per_layer_token_embd.unwrap_or(false) {
+    if parsed.per_layer_token_embd {
         key.push_str("+e");
     }
     if with_environment && record.factors.runtime_is_ik() {
@@ -62,16 +61,16 @@ pub fn variant_key(record: &Record, with_environment: bool) -> String {
 /// two only ever appear as a product — so the fallback costs accuracy in the
 /// *attribution*, not in the reservation.
 pub fn query_head_count(parsed: &Parsed) -> u64 {
-    if let Some(heads) = parsed.n_head.filter(|h| *h != 0) {
-        return u64::from(heads);
+    if parsed.n_head != 0 {
+        return parsed.n_head;
     }
-    let arch = parsed.arch.as_deref().unwrap_or("");
+    let arch = parsed.arch.as_str();
     let n_embd = match parsed.gguf_int(&format!("{arch}.embedding_length")) {
-        0 => i64::from(parsed.n_embd.unwrap_or(0)),
+        0 => parsed.n_embd as i64,
         value => value,
     };
     let head_dim = match parsed.gguf_int(&format!("{arch}.attention.key_length")) {
-        0 => i64::from(parsed.n_embd_head_k.unwrap_or(0)),
+        0 => parsed.n_embd_head_k as i64,
         value => value,
     };
     if head_dim == 0 {
@@ -84,18 +83,18 @@ pub fn query_head_count(parsed: &Parsed) -> u64 {
 /// Model weights this cell reported holding, host and device together.
 pub fn resident_weight_mib(record: &Record) -> f64 {
     let parsed = &record.parsed;
-    let mut total = parsed.cpu_model_mib.unwrap_or(0.0);
+    let mut total = parsed.cpu_model_mib;
     // The typed breakdown rows, not the flat `gpu{n}_model_mib` mirrors of them:
     // one list, read once, rather than probing eight string keys that may or may
     // not be present.
     total += parsed
         .devices
         .iter()
-        .map(|device| device.model_mib)
+        .map(|device| device.model_mib as f64)
         .sum::<f64>();
     for context in &parsed.contexts {
         for buffers in context.buffers.values() {
-            total += buffers.get("model").copied().unwrap_or(0.0);
+            total += buffers.get(&BufferRole::Model).copied().unwrap_or(0.0);
         }
     }
     total
@@ -132,7 +131,7 @@ pub const WEIGHT_TOLERANCE: f64 = 0.01;
 /// 14064 of weights and 11904 of cache leaves 6370 per card, and the runtime's own
 /// compute-buffer lines account for 6260 of that.
 pub fn table_less_compute(record: &Record) -> Option<f64> {
-    let total = record.gpu_used_mib().filter(|v| *v != 0)? as f64;
+    let total = record.rss.gpu_used_mib.filter(|v| *v != 0)? as f64;
     let devices = record.factors.cards_nonempty() as f64;
     let mut weights = 0.0;
     let mut kv = 0.0;
@@ -141,9 +140,9 @@ pub fn table_less_compute(record: &Record) -> Option<f64> {
             if !name.starts_with("CUDA") || name.ends_with("Host") {
                 continue;
             }
-            weights += buffers.get("model").copied().unwrap_or(0.0);
-            kv += buffers.get("kv").copied().unwrap_or(0.0)
-                + buffers.get("rs").copied().unwrap_or(0.0);
+            weights += buffers.get(&BufferRole::Model).copied().unwrap_or(0.0);
+            kv += buffers.get(&BufferRole::Kv).copied().unwrap_or(0.0)
+                + buffers.get(&BufferRole::Rs).copied().unwrap_or(0.0);
         }
     }
     if weights == 0.0 {
@@ -180,10 +179,10 @@ pub fn device_context_sums(record: &Record) -> Vec<ContextSums> {
             kv: context.kv_pools.iter().map(|p| p.total_mib).sum(),
             rs: device
                 .clone()
-                .map(|(_, b)| b.get("rs").copied().unwrap_or(0.0))
+                .map(|(_, b)| b.get(&BufferRole::Rs).copied().unwrap_or(0.0))
                 .sum(),
             compute: device
-                .map(|(_, b)| b.get("compute").copied().unwrap_or(0.0))
+                .map(|(_, b)| b.get(&BufferRole::Compute).copied().unwrap_or(0.0))
                 .sum(),
         };
         // A repeat collapses only when all three sums match, and the check is

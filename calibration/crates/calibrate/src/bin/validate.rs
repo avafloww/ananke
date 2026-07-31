@@ -68,7 +68,7 @@ fn main() -> ExitCode {
             continue;
         }
         if let Some(want) = &arch_filter
-            && record.parsed.arch.as_deref() != Some(want.as_str())
+            && record.parsed.arch != *want
         {
             continue;
         }
@@ -182,10 +182,10 @@ fn compare(fs: &LocalFs, record: &Record) -> Result<Comparison, String> {
             "placed on {cards_placed} card(s), measured on {cards_measured}"
         ));
     }
-    let measured_mib = record.gpu_used_mib().unwrap_or(0);
+    let measured_mib = record.rss.gpu_used_mib.unwrap_or(0);
     Ok(Comparison {
         label: record.factors.label.clone(),
-        arch: record.parsed.arch.clone().unwrap_or_else(|| "?".into()),
+        arch: record.parsed.arch.clone(),
         predicted_mib,
         measured_mib,
         reserved_mib,

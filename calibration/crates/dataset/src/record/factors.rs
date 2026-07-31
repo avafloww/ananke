@@ -1,5 +1,7 @@
 //! One measurable configuration.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 /// Every field is a factor that could plausibly move host memory, and every one
@@ -86,10 +88,10 @@ impl Default for Factors {
             runtime: Runtime::Mainline,
             gpus: "0".to_owned(),
             ctx: 32768,
-            ubatch: 512,
+            ubatch: DEFAULT_UBATCH,
             batch: None,
             parallel: 1,
-            ngl: 99,
+            ngl: FULLY_OFFLOADED,
             split: None,
             kv_type: "f16".to_owned(),
             kv_unified: false,
@@ -128,6 +130,23 @@ pub enum Runtime {
     Ik,
 }
 
+impl Runtime {
+    /// How the fork is spelled — in the record, in a cell's label, and in every
+    /// report keyed on it, which are deliberately the same word.
+    pub fn name(self) -> &'static str {
+        match self {
+            Runtime::Mainline => "mainline",
+            Runtime::Ik => "ik",
+        }
+    }
+}
+
+impl fmt::Display for Runtime {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
 impl Factors {
     /// The split mode, with llama.cpp's default named rather than left absent.
     pub fn split_or_layer(&self) -> &str {
@@ -149,6 +168,15 @@ impl Factors {
         }
     }
 
+    /// How many cards were named, ignoring empty entries, never below one.
+    pub fn cards_nonempty(&self) -> usize {
+        self.gpus
+            .split(',')
+            .filter(|id| !id.is_empty())
+            .count()
+            .max(1)
+    }
+
     /// The physical GPU ids this cell was pinned to.
     pub fn gpu_ids(&self) -> Vec<u32> {
         self.gpus
@@ -157,4 +185,56 @@ impl Factors {
             .filter_map(|id| id.parse().ok())
             .collect()
     }
+
+    /// Batch tokens the graph actually processes: a context shorter than the
+    /// batch caps it.
+    pub fn tokens(&self) -> u64 {
+        u64::from(self.ctx).min(u64::from(self.ubatch_or_default()))
+    }
+
+    /// The physical batch, with llama.cpp's default named where the cell did
+    /// not set one. A zero reads as absent rather than as a batch of nothing.
+    pub fn ubatch_or_default(&self) -> u32 {
+        match self.ubatch {
+            0 => DEFAULT_UBATCH,
+            value => value,
+        }
+    }
+
+    pub fn flash_attn_on(&self) -> bool {
+        self.flash_attn == "on"
+    }
+
+    /// Whether every layer went to a device.
+    ///
+    /// A partly- or un-offloaded process builds a different graph, so most
+    /// derivations hold this fixed rather than modelling across it.
+    pub fn fully_offloaded(&self) -> bool {
+        self.ngl == FULLY_OFFLOADED
+    }
+
+    /// Whether any expert layers were pushed to the host. A hybrid does not
+    /// replicate the graph's masks across cards, which several derivers turn
+    /// on.
+    pub fn is_hybrid(&self) -> bool {
+        self.n_cpu_moe.unwrap_or(0) != 0
+    }
+
+    pub fn has_spec(&self) -> bool {
+        self.spec_type
+            .as_deref()
+            .is_some_and(|spec| !spec.is_empty())
+    }
+
+    pub fn runtime_is_ik(&self) -> bool {
+        self.runtime == Runtime::Ik
+    }
 }
+
+/// llama.cpp's own micro-batch default, which a cell that names no `-ub` runs
+/// at.
+const DEFAULT_UBATCH: u32 = 512;
+
+/// The `-ngl` the campaign spells "every layer on a device" as. Any count at or
+/// above the model's layer total does it; 99 is the one every cell uses.
+const FULLY_OFFLOADED: u32 = 99;

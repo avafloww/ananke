@@ -67,18 +67,15 @@ pub fn baseline_offset(
     let mut by_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
-        if factors.ngl != Some(99) || factors.gpus.is_empty() || factors.has_spec() {
+        if !factors.fully_offloaded() || factors.gpus.is_empty() || factors.has_spec() {
             continue;
         }
         if factors.is_hybrid() || !factors.served || factors.bench {
             continue;
         }
-        if factors.parallel != Some(1) {
+        if factors.parallel != 1 || parsed.arena_mib == 0.0 {
             continue;
         }
-        let Some(_arena) = parsed.arena_mib.filter(|v| *v != 0.0) else {
-            continue;
-        };
         // `--no-mmap` reads the weights into anonymous memory instead of mapping
         // them, and `host_overhead_bytes` models overhead rather than weights. One
         // such cell put qwen3@ik's offset at 704 MiB and over-predicted every other
@@ -92,10 +89,10 @@ pub fn baseline_offset(
         // including one that never sees a long prompt, which the correction could
         // then never pull back. It is reserved as slop instead; see
         // `checkpoint_headroom`.
-        if factors.probe_prompt_tokens.unwrap_or(4) >= CHECKPOINT_MIN_STEP {
+        if factors.probe_prompt_tokens >= CHECKPOINT_MIN_STEP {
             continue;
         }
-        if factors.split_or_layer() != "layer" || parsed.n_layer.unwrap_or(0) == 0 {
+        if factors.split_or_layer() != "layer" || parsed.n_layer == 0 {
             continue;
         }
         // Flash attention off is kept, under its own key. Pooling it with flash
@@ -137,13 +134,8 @@ pub fn baseline_offset(
             // cell over-predicted, at 0.71 to 0.78.
             rate as f64 * factors.tokens() as f64 * copies
         };
-        let modelled = flat
-            + f64::from(parsed.n_layer.unwrap_or(0)) * per_layer
-            + if parsed.n_expert.unwrap_or(0) != 0 {
-                moe
-            } else {
-                0.0
-            };
+        let modelled =
+            flat + parsed.n_layer as f64 * per_layer + if parsed.n_expert != 0 { moe } else { 0.0 };
         let residual = owned
             - (copies * terms.masks() + terms.hidden) * 1048576.0
             - no_fa
@@ -230,13 +222,13 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
     let mut pairs: BTreeMap<Key, BTreeMap<String, Vec<f64>>> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
-        if factors.ngl != Some(99) || factors.gpus != "0,1" || factors.has_spec() {
+        if !factors.fully_offloaded() || factors.gpus != "0,1" || factors.has_spec() {
             continue;
         }
         if factors.is_hybrid() || !factors.served || factors.bench {
             continue;
         }
-        if factors.parallel != Some(1) || parsed.arena_mib.unwrap_or(0.0) == 0.0 {
+        if factors.parallel != 1 || parsed.arena_mib == 0.0 {
             continue;
         }
         // The same `--no-mmap` exclusion the baseline offset needs, for the same
@@ -244,7 +236,7 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
         if factors.no_mmap {
             continue;
         }
-        if factors.probe_prompt_tokens.unwrap_or(4) >= CHECKPOINT_MIN_STEP {
+        if factors.probe_prompt_tokens >= CHECKPOINT_MIN_STEP {
             continue;
         }
         let owned = record.owned_bytes() as f64;
@@ -255,8 +247,8 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
         let key = (
             record.provenance.model_key.clone(),
             factors.ctx,
-            factors.ubatch.unwrap_or(0),
-            parsed.arch.clone().unwrap_or_else(|| "None".to_string()),
+            factors.ubatch,
+            parsed.arch.clone(),
         );
         pairs
             .entry(key)
@@ -334,7 +326,7 @@ pub fn per_device_bytes(rows: &[Record]) -> Result<Scalar> {
         if !(factors.label.starts_with("devices-") || factors.label.starts_with("offload-ngl0")) {
             continue;
         }
-        if factors.ngl != Some(0) {
+        if factors.ngl != 0 {
             continue;
         }
         let cards = factors.cards_or(0);

@@ -10,16 +10,13 @@
 //! `/sys` file or shells out, and a test passes the [`Hardware`] and provenance it
 //! wants rather than probing for them.
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
 use crate::{
     harness::sys::Deps,
-    record::{Cpu, Factors, Hardware},
+    record::{Cpu, Factors, Hardware, Provenance},
 };
 
 pub(crate) fn hardware(deps: &Deps) -> Hardware {
@@ -48,36 +45,27 @@ pub(crate) fn hardware(deps: &Deps) -> Hardware {
 /// remember when anything happened. The binary's hash is what answers "was this
 /// the same program", which is what separates drift in the runtime from error in a
 /// fit, and what tells a contributor's build from ours.
-pub(crate) fn provenance(
-    deps: &Deps,
-    binary: &str,
-    factors: Option<&Factors>,
-) -> BTreeMap<String, String> {
+pub(crate) fn provenance(deps: &Deps, binary: &str, factors: Option<&Factors>) -> Provenance {
     let resolved = resolve(binary);
-    let mut provenance = BTreeMap::from([
-        ("measured_at_utc".to_owned(), deps.clock.now_utc()),
-        ("measured_at_local".to_owned(), deps.clock.now_local()),
-        ("host".to_owned(), run("uname", &["-n"])),
-        ("binary".to_owned(), resolved.to_string_lossy().into_owned()),
-        (
-            "ananke_rev".to_owned(),
-            some_or_unknown(run("git", &["rev-parse", "--short", "HEAD"])),
-        ),
-        ("runtime_version".to_owned(), binary_version(&resolved)),
-        ("runtime_sha256".to_owned(), file_sha256(&resolved)),
-        (
-            "ananke_dirty".to_owned(),
-            if run("git", &["status", "--porcelain"]).is_empty() {
-                "no".to_owned()
-            } else {
-                "yes".to_owned()
-            },
-        ),
-    ]);
+    let mut provenance = Provenance {
+        measured_at_utc: deps.clock.now_utc(),
+        measured_at_local: deps.clock.now_local(),
+        host: run("uname", &["-n"]),
+        binary: resolved.to_string_lossy().into_owned(),
+        ananke_rev: some_or_unknown(run("git", &["rev-parse", "--short", "HEAD"])),
+        runtime_version: binary_version(&resolved),
+        runtime_sha256: file_sha256(&resolved),
+        ananke_dirty: if run("git", &["status", "--porcelain"]).is_empty() {
+            "no".to_owned()
+        } else {
+            "yes".to_owned()
+        },
+        ..Provenance::default()
+    };
     if let Some(factors) = factors {
         let model = Path::new(&factors.model);
-        provenance.insert("model_file_at".to_owned(), mtime(model));
-        provenance.extend(model_identity(model));
+        provenance.model_file_at = mtime(model);
+        set_model_identity(model, &mut provenance);
     }
     provenance
 }
@@ -88,23 +76,21 @@ pub(crate) fn provenance(
 /// model directory, which is useless for joining one contributor's rows to
 /// another's. The repo-and-file suffix, the byte total across shards, and the
 /// quant string are all portable.
-fn model_identity(path: &Path) -> BTreeMap<String, String> {
+fn set_model_identity(path: &Path, provenance: &mut Provenance) {
     let components: Vec<String> = path
         .components()
         .map(|part| part.as_os_str().to_string_lossy().into_owned())
         .collect();
-    let key = if components.len() >= 3 {
+    provenance.model_key = if components.len() >= 3 {
         components[components.len() - 3..].join("/")
     } else {
         path.file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default()
     };
-    BTreeMap::from([
-        ("model_key".to_owned(), key),
-        ("model_quant".to_owned(), quant(path)),
-        ("model_bytes".to_owned(), model_bytes(path).to_string()),
-    ])
+    provenance.model_quant = quant(path);
+    // Spelled as digits in a string, which is how every committed row has it.
+    provenance.model_bytes = model_bytes(path).to_string();
 }
 
 /// The quant string, taken from the file name's last matching token. Last rather
@@ -339,15 +325,19 @@ mod tests {
         // The last three components, which is what joins one contributor's rows to
         // another's: everything above them is whatever that operator set as the
         // model directory.
-        let identity = model_identity(Path::new(
-            "/nowhere/at/all/LiquidAI/LFM2.5-Embedding-350M-GGUF/LFM2.5-Embedding-350M-Q8_0.gguf",
-        ));
+        let mut identity = Provenance::default();
+        set_model_identity(
+            Path::new(
+                "/nowhere/at/all/LiquidAI/LFM2.5-Embedding-350M-GGUF/LFM2.5-Embedding-350M-Q8_0.gguf",
+            ),
+            &mut identity,
+        );
         assert_eq!(
-            identity["model_key"],
+            identity.model_key,
             "LiquidAI/LFM2.5-Embedding-350M-GGUF/LFM2.5-Embedding-350M-Q8_0.gguf"
         );
-        assert_eq!(identity["model_quant"], "Q8_0");
+        assert_eq!(identity.model_quant, "Q8_0");
         // No such file, so the byte total is zero rather than a guess.
-        assert_eq!(identity["model_bytes"], "0");
+        assert_eq!(identity.model_bytes, "0");
     }
 }

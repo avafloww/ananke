@@ -54,7 +54,7 @@ pub fn measured_at(record: &Record) -> f64 {
 pub fn latest_per_cell(rows: &[Record]) -> Vec<Record> {
     let mut newest: BTreeMap<&str, usize> = BTreeMap::new();
     for (index, record) in rows.iter().enumerate() {
-        let Some(cell) = record.cell.as_deref() else {
+        let Some(cell) = record.cell_id() else {
             continue;
         };
         match newest.get(cell) {
@@ -89,7 +89,7 @@ pub fn report_stale_builds(rows: &[Record]) -> Vec<String> {
             continue;
         }
         by_runtime
-            .entry(&record.factors.runtime)
+            .entry(record.factors.runtime.name())
             .or_default()
             .entry(&record.provenance.runtime_sha256)
             .or_default()
@@ -143,13 +143,13 @@ pub fn report_stale_builds(rows: &[Record]) -> Vec<String> {
 pub fn check_runtime_builds(rows: &[Record], tolerance: f64) -> Result<()> {
     let mut by_cell: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
     for record in rows {
-        let Some(used) = record.gpu_used_mib().filter(|v| *v != 0) else {
+        let Some(used) = record.rss.gpu_used_mib.filter(|v| *v != 0) else {
             continue;
         };
         if record.status != Status::Ok {
             continue;
         }
-        let Some(cell) = record.cell.as_deref() else {
+        let Some(cell) = record.cell_id() else {
             continue;
         };
         by_cell

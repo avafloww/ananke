@@ -1,97 +1,20 @@
-//! JSON text mechanics: writing it the way the dataset is written, and finding
-//! one member of a record without disturbing the rest.
+//! JSON text mechanics: finding one member of a record without disturbing the
+//! rest.
 //!
-//! Both exist for the same reason. The dataset is the campaign's oracle and it is
-//! checked in, so a maintenance pass over it must change only what it means to
-//! change — a status, or a `parsed` block that the parser now reads differently.
-//! Re-serialising a whole record would rewrite every line's key order and
-//! spacing, turning a one-field edit into a five-megabyte diff and destroying the
-//! only way to see what a pass actually did.
+//! The dataset is the campaign's oracle and it is checked in, so a maintenance
+//! pass over it must change only what it means to change — a status, or a
+//! `parsed` block that the parser now reads differently. Re-serialising a whole
+//! record would rewrite every line's key order and spacing, turning a one-field
+//! edit into a five-megabyte diff and destroying the only way to see what a pass
+//! actually did.
 //!
 //! So a rewrite splices the new value into the original bytes ([`member_span`]),
-//! and anything newly written matches the convention the existing lines were
-//! written with ([`to_dataset_json`]): `", "` and `": "` separators, and
-//! non-ASCII escaped as `\uXXXX`. The same writer produces the payload a cell's
-//! identity hashes, where matching byte for byte is not cosmetic but the
-//! difference between recognising the dataset and re-measuring all of it.
+//! and anything newly written goes through [`to_dataset_json`], which lives with
+//! the schema because it *is* part of the format.
 
-use std::{io, ops::Range};
+use std::ops::Range;
 
-use serde::Serialize;
-
-/// Serialize the way every line already in the dataset was written: `", "` and
-/// `": "` separators, and non-ASCII escaped rather than emitted raw.
-///
-/// Floats go through serde_json's own shortest-round-trip writer, which agrees
-/// with the committed lines on every magnitude this dataset holds. The two
-/// diverge only in exponent notation (`1e+22` against `1e22`), which no field
-/// here reaches.
-pub(crate) fn to_dataset_json<T: Serialize>(value: &T) -> String {
-    let mut out = Vec::new();
-    let mut serializer = serde_json::Serializer::with_formatter(&mut out, DatasetFormatter);
-    value
-        .serialize(&mut serializer)
-        .expect("serializing to a Vec cannot fail");
-    String::from_utf8(out).expect("the formatter emits ASCII only")
-}
-
-/// The dataset's spacing and escaping, which is all that separates it from
-/// serde_json's compact form.
-struct DatasetFormatter;
-
-impl serde_json::ser::Formatter for DatasetFormatter {
-    fn begin_object_key<W: ?Sized + io::Write>(
-        &mut self,
-        writer: &mut W,
-        first: bool,
-    ) -> io::Result<()> {
-        if first {
-            Ok(())
-        } else {
-            writer.write_all(b", ")
-        }
-    }
-
-    fn begin_object_value<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(b": ")
-    }
-
-    fn begin_array_value<W: ?Sized + io::Write>(
-        &mut self,
-        writer: &mut W,
-        first: bool,
-    ) -> io::Result<()> {
-        if first {
-            Ok(())
-        } else {
-            writer.write_all(b", ")
-        }
-    }
-
-    /// `ensure_ascii=True` is a default it would be easy to overlook, and it
-    /// changes the bytes a hash is taken over the moment a model path is not
-    /// ASCII.
-    fn write_string_fragment<W: ?Sized + io::Write>(
-        &mut self,
-        writer: &mut W,
-        fragment: &str,
-    ) -> io::Result<()> {
-        if fragment.is_ascii() {
-            return writer.write_all(fragment.as_bytes());
-        }
-        for character in fragment.chars() {
-            if character.is_ascii() {
-                writer.write_all(&[character as u8])?;
-            } else {
-                let mut units = [0u16; 2];
-                for unit in character.encode_utf16(&mut units) {
-                    write!(writer, "\\u{unit:04x}")?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
+pub(crate) use ananke_dataset::to_dataset_json;
 
 /// The byte range of one top-level member's *value* in a JSON object.
 ///
@@ -211,17 +134,6 @@ fn skip_value(bytes: &[u8], at: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn dataset_separators_and_ascii_escaping() {
-        let value = serde_json::json!({"a": 1, "b": [2.0, "x"], "c": "caf\u{e9}"});
-        // The accented byte comes back escaped, exactly as `ensure_ascii` writes
-        // it, because a cell's identity is hashed over these bytes.
-        assert_eq!(
-            to_dataset_json(&value),
-            r#"{"a": 1, "b": [2.0, "x"], "c": "caf\u00e9"}"#
-        );
-    }
 
     #[test]
     fn a_member_is_found_past_a_decoy_in_a_log_tail() {

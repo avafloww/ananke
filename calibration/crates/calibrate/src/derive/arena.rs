@@ -56,9 +56,9 @@ impl ArenaTerms {
 /// it shows up in their residual instead of being subtracted twice.
 pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaTerms {
     let (factors, parsed) = (&record.factors, &record.parsed);
-    let arch = parsed.arch.as_deref().unwrap_or("");
+    let arch = parsed.arch.as_str();
     let ctx = u64::from(factors.ctx);
-    let slots = u64::from(factors.parallel.unwrap_or(0));
+    let slots = u64::from(factors.parallel);
     let unified = factors.kv_unified;
     let ik = factors.runtime_is_ik();
 
@@ -84,7 +84,7 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
         n_kv * tokens * width / if mla { 2 } else { 1 }
     };
 
-    let swa = u64::from(parsed.n_swa.unwrap_or(0));
+    let swa = parsed.n_swa;
     // mainline sizes the second mask to the window plus the batch; ik sizes it to
     // the whole context, which is why an SWA model costs it so much more.
     let swa_rows = if ik {
@@ -114,17 +114,17 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
     };
 
     // Two f32 hidden-state buffers on mainline, one on ik.
-    let n_embd = u64::from(parsed.n_embd.unwrap_or(0));
+    let n_embd = parsed.n_embd;
     let mut hidden = if ik { 1 } else { 2 } * n_embd * tokens * 4;
 
     // ik keeps its MoE op intermediates on the CPU below a batch threshold; see
     // FINDINGS.md. mainline shows the same shape under a tensor split alone.
-    let experts = u64::from(parsed.n_expert.unwrap_or(0));
-    let used = u64::from(parsed.n_expert_used.unwrap_or(0));
+    let experts = parsed.n_expert;
+    let used = parsed.n_expert_used;
     if charge_moe && experts != 0 && used != 0 && tokens * used < 32 * experts {
         if ik {
             hidden += tuning.ik_moe_rate(arch).max(0) as u64 * n_embd * tokens;
-        } else if factors.is_hybrid() && factors.split.as_deref() == Some("tensor") {
+        } else if factors.is_hybrid() && factors.split_or_layer() == "tensor" {
             hidden += tuning.mainline_tensor_moe_per_nembd().max(0) as u64 * n_embd * tokens;
         }
     }
@@ -165,16 +165,17 @@ pub fn check_arena_model(
     let mut worst: BTreeMap<String, (f64, String)> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
-        let Some(arena) = parsed.arena_mib.filter(|v| *v != 0.0) else {
+        let arena = parsed.arena_mib;
+        if arena == 0.0 {
             continue;
-        };
+        }
         if factors.has_spec() || factors.split_or_layer() == "tensor" || factors.is_hybrid() {
             continue;
         }
         // Layers on the GPU only. With `-ngl 0` nothing is pinned and the CPU
         // backend holds op intermediates a GPU run offloads, which is a different
         // graph and not what this models.
-        if factors.ngl != Some(99) {
+        if !factors.fully_offloaded() {
             continue;
         }
         let terms = arena_terms(record, true, tuning);
@@ -193,22 +194,22 @@ pub fn check_arena_model(
         } else {
             0.0
         };
-        let quantised = if factors.kv_type.as_deref() != Some("f16") {
-            table_rate(quant_rates, parsed.arch.as_deref().unwrap_or("None")) as f64 * tokens / MIB
+        let quantised = if factors.kv_type != "f16" {
+            table_rate(quant_rates, &parsed.arch) as f64 * tokens / MIB
         } else {
             0.0
         };
-        let e_variant = if parsed.per_layer_token_embd.unwrap_or(false) {
-            e_variant_rate * f64::from(parsed.n_layer.unwrap_or(0)) * tokens / MIB
+        let e_variant = if parsed.per_layer_token_embd {
+            e_variant_rate * parsed.n_layer as f64 * tokens / MIB
         } else {
             0.0
         };
         let modelled = copies * (terms.masks() + no_fa) + terms.hidden + quantised + e_variant;
         let error = (arena - modelled).abs();
-        let arch = parsed.arch.clone().unwrap_or_else(|| "None".to_string());
+        let arch = parsed.arch.clone();
         let entry = worst.entry(arch).or_insert((0.0, String::new()));
         if error > entry.0 {
-            *entry = (error, record.log.clone().unwrap_or_default());
+            *entry = (error, record.log.clone());
         }
     }
     let bad: Vec<String> = worst

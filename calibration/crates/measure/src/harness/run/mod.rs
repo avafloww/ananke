@@ -335,17 +335,13 @@ fn describe(measurement: &crate::record::Record) -> String {
             .and_then(|status| status.as_str().map(str::to_owned))
             .unwrap_or_else(|| "?".to_owned());
     }
-    let mib = |key: &str| match measurement.rss.get(key) {
-        Some(crate::record::Metric::Whole(kb)) => kb / 1024,
-        Some(crate::record::Metric::Fractional(kb)) => (kb / 1024.0) as i64,
-        None => 0,
-    };
+    let rss = &measurement.rss;
     format!(
         "arena={:.2} anon={} shmem={} file={} MiB",
-        measurement.parsed.buffers[crate::parse::BufferKind::Arena].last,
-        mib("rss_anon_kb"),
-        mib("rss_shmem_kb"),
-        mib("rss_file_kb")
+        measurement.parsed.arena_mib,
+        rss.rss_anon_kb / 1024,
+        rss.rss_shmem_kb / 1024,
+        rss.rss_file_kb / 1024
     )
 }
 

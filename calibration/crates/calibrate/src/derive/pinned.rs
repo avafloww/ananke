@@ -22,13 +22,14 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
     let mut controls = Vec::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
-        if parsed.arch.as_deref() != Some("gemma4") {
+        if parsed.arch != "gemma4" {
             continue;
         }
-        let Some(arena) = parsed.arena_mib.filter(|v| *v != 0.0) else {
+        let arena = parsed.arena_mib;
+        if arena == 0.0 {
             continue;
-        };
-        if factors.ngl != Some(99) || factors.gpus.is_empty() || !factors.flash_attn_on() {
+        }
+        if !factors.fully_offloaded() || factors.gpus.is_empty() || !factors.flash_attn_on() {
             continue;
         }
         if factors.has_spec() {
@@ -38,7 +39,7 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
         // f16's steady 1025-1028 — so the arena model is missing a term that
         // depends on the cache type, and pooling the two would attribute that term
         // to the E-variant.
-        if factors.kv_type.as_deref() != Some("f16") {
+        if factors.kv_type != "f16" {
             continue;
         }
         let terms = arena_terms(record, true, tuning);
@@ -49,7 +50,7 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
         };
         let residual = arena - (copies * terms.masks() + terms.hidden);
         let tokens = factors.tokens() as f64;
-        let per = residual * 1048576.0 / (f64::from(parsed.n_layer.unwrap_or(0)) * tokens);
+        let per = residual * 1048576.0 / (parsed.n_layer as f64 * tokens);
         // The two populations are ~1028 and ~3 bytes per layer per token, so the
         // boundary is nowhere near either. A cell between them is not an E-variant
         // reading and not a control; it is a sign the filter is wrong, and
@@ -100,21 +101,22 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table)> {
     let mut archs: BTreeMap<String, String> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
-        if factors.ngl != Some(99) || factors.gpus.is_empty() || factors.has_spec() {
+        if !factors.fully_offloaded() || factors.gpus.is_empty() || factors.has_spec() {
             continue;
         }
-        let Some(arena) = parsed.arena_mib.filter(|v| *v != 0.0) else {
+        let arena = parsed.arena_mib;
+        if arena == 0.0 {
             continue;
-        };
+        }
         let key = CacheTypePairKey {
             model_key: record.provenance.model_key.clone(),
             ctx: factors.ctx,
-            ubatch: factors.ubatch.unwrap_or(0),
-            parallel: factors.parallel.unwrap_or(0),
+            ubatch: factors.ubatch,
+            parallel: factors.parallel,
             kv_unified: factors.kv_unified,
             split: factors.split.clone().unwrap_or_else(|| "-".to_string()),
             gpus: factors.gpus.clone(),
-            flash_attn: factors.flash_attn.clone().unwrap_or_default(),
+            flash_attn: factors.flash_attn.clone(),
             served: factors.served,
             n_cpu_moe: factors.n_cpu_moe.unwrap_or(0),
             no_mmap: factors.no_mmap,
@@ -124,11 +126,8 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table)> {
         paired
             .entry(key)
             .or_default()
-            .insert(factors.kv_type.clone().unwrap_or_default(), arena);
-        archs.insert(
-            record.provenance.model_key.clone(),
-            parsed.arch.clone().unwrap_or_else(|| "?".to_string()),
-        );
+            .insert(factors.kv_type.clone(), arena);
+        archs.insert(record.provenance.model_key.clone(), parsed.arch.clone());
     }
 
     let mut rates = Vec::new();
@@ -271,10 +270,11 @@ pub fn no_flash_attn_rates(
         if factors.flash_attn_on() {
             continue;
         }
-        let Some(arena) = parsed.arena_mib.filter(|v| *v != 0.0) else {
+        let arena = parsed.arena_mib;
+        if arena == 0.0 {
             continue;
-        };
-        if factors.ngl != Some(99) || factors.gpus.is_empty() || factors.has_spec() {
+        }
+        if !factors.fully_offloaded() || factors.gpus.is_empty() || factors.has_spec() {
             continue;
         }
         if factors.runtime_is_ik() {
@@ -301,13 +301,13 @@ pub fn no_flash_attn_rates(
         // again: an E-variant cell came out 21 MiB over, which is exactly its
         // per-layer term counted twice.
         let mut extra = 0.0;
-        if parsed.per_layer_token_embd.unwrap_or(false) {
-            extra += e_variant_rate * f64::from(parsed.n_layer.unwrap_or(0)) * tokens / 1048576.0;
+        if parsed.per_layer_token_embd {
+            extra += e_variant_rate * parsed.n_layer as f64 * tokens / 1048576.0;
         }
-        if factors.kv_type.as_deref() != Some("f16")
+        if factors.kv_type != "f16"
             && let Some(quant) = quant_rates.filter(|table| !table.is_empty())
         {
-            let arch = parsed.arch.as_deref().unwrap_or("None");
+            let arch = parsed.arch.as_str();
             let rate = quant
                 .get(arch)
                 .copied()

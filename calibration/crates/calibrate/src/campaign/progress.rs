@@ -67,7 +67,7 @@ pub struct Report {
 pub fn report(records: &[Record], lib: &Library) -> Report {
     let mut status_by_cell: BTreeMap<&str, Status> = BTreeMap::new();
     for record in records {
-        let Some(cell) = record.cell.as_deref() else {
+        let Some(cell) = record.cell_id() else {
             continue;
         };
         // The best status any row for this cell reached. A cell retried after a
@@ -174,7 +174,7 @@ pub fn idle_minutes(stamp: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::record::read_ndjson;
+    use crate::record::{Factors, Hardware, Parsed, Provenance, Rss, read_ndjson};
 
     const MEASUREMENTS: &str = "../../data/measurements.ndjson";
 
@@ -209,8 +209,8 @@ mod tests {
     #[test]
     fn the_dataset_contains_retries() {
         let records = dataset();
-        let distinct: BTreeSet<&str> = records.iter().filter_map(|r| r.cell.as_deref()).collect();
-        let with_id = records.iter().filter(|r| r.cell.is_some()).count();
+        let distinct: BTreeSet<&str> = records.iter().filter_map(|r| r.cell_id()).collect();
+        let with_id = records.iter().filter(|r| r.cell_id().is_some()).count();
         assert!(
             with_id > distinct.len(),
             "{with_id} identified rows over {} distinct cells — no cell was retried, so \
@@ -263,21 +263,32 @@ mod tests {
 
     /// Records with the given cell ids and statuses. An empty id means a row from
     /// before the schema carried one.
+    ///
+    /// Built as values rather than parsed from JSON: what is under test is how the
+    /// report merges rows, and a row spelled out in text would be a second, laxer
+    /// statement of the schema beside the one `ananke_dataset` already makes.
     fn synthetic(rows: &[(&str, Status)]) -> Vec<Record> {
-        let text: String = rows
-            .iter()
-            .map(|(cell, status)| {
-                let id = if cell.is_empty() {
-                    "null".to_string()
-                } else {
-                    format!("\"{cell}\"")
-                };
-                let status = serde_json::to_string(status).expect("status serializes");
-                format!(r#"{{"cell":{id},"status":{status},"factors":{{"model":"m","ctx":4096}}}}"#)
+        rows.iter()
+            .map(|(cell, status)| Record {
+                schema: ananke_dataset::SCHEMA,
+                cell: (*cell).to_owned(),
+                status: *status,
+                provenance: Provenance::default(),
+                hardware: Hardware::default(),
+                factors: Factors {
+                    model: "m".to_owned(),
+                    ctx: 4096,
+                    ..Factors::default()
+                },
+                parsed: Parsed::default(),
+                rss: Rss::default(),
+                log_tail: String::new(),
+                log: String::new(),
+                trace: Vec::new(),
+                checkpoints: Vec::new(),
+                reparsed: None,
             })
-            .collect::<Vec<_>>()
-            .join("\n");
-        read_ndjson(&text).expect("the synthetic rows parse")
+            .collect()
     }
 
     /// A gap of days reads as thousands of minutes, not as zero.

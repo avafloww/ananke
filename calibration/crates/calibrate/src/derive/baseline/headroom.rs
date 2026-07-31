@@ -58,22 +58,22 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
         if factors.is_hybrid() {
             continue;
         }
-        let Some(arch) = parsed.arch.clone().filter(|a| !a.is_empty()) else {
+        let Some(arch) = parsed.architecture().map(str::to_owned) else {
             continue;
         };
         let key: Key = (
             arch.clone(),
-            factors.runtime.clone(),
+            factors.runtime.name().to_owned(),
             factors.ctx,
-            factors.ubatch.unwrap_or(0),
+            factors.ubatch,
             factors.gpus.clone(),
             factors.split_or_layer().to_string(),
-            factors.kv_type.clone().unwrap_or_default(),
+            factors.kv_type.clone(),
             factors.kv_unified,
-            factors.soak.unwrap_or(0),
+            factors.soak,
         );
         let owned = record.rss.rss_anon_kb * 1024;
-        let concurrency = factors.concurrency.unwrap_or(1).max(1);
+        let concurrency = factors.concurrency.max(1);
         // The lowest reading at each point: a higher one means the process had done
         // more, and the difference being measured is the slot count.
         groups
@@ -164,27 +164,27 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table> {
         if factors.bench || factors.has_spec() || factors.is_hybrid() {
             continue;
         }
-        if factors.ngl != Some(99) {
+        if !factors.fully_offloaded() {
             continue;
         }
         let key = CheckpointKey {
             variant: variant_key(record, false),
-            runtime: factors.runtime.clone(),
+            runtime: factors.runtime.name().to_owned(),
             ctx: factors.ctx,
-            ubatch: factors.ubatch.unwrap_or(0),
+            ubatch: factors.ubatch,
             gpus: factors.gpus.clone(),
             split: factors.split_or_layer().to_string(),
-            kv_type: factors.kv_type.clone().unwrap_or_default(),
-            parallel: factors.parallel.unwrap_or(0),
-            flash_attn: factors.flash_attn.clone().unwrap_or_default(),
-            soak: factors.soak.unwrap_or(0),
-            concurrency: factors.concurrency.unwrap_or(0),
-            cram: factors.cram.unwrap_or(0),
+            kv_type: factors.kv_type.clone(),
+            parallel: factors.parallel,
+            flash_attn: factors.flash_attn.clone(),
+            soak: factors.soak,
+            concurrency: factors.concurrency,
+            cram: factors.cram,
             no_mmap: factors.no_mmap,
         };
         // The threshold is the checkpoint spacing, not any prompt longer than the
         // default: a 256- or 1024-token prompt still makes one checkpoint.
-        let steady = factors.probe_prompt_tokens.unwrap_or(4) >= CHECKPOINT_MIN_STEP;
+        let steady = factors.probe_prompt_tokens >= CHECKPOINT_MIN_STEP;
         let owned = record.owned_mib();
         matched
             .entry(key)

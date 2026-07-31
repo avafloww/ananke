@@ -1,74 +1,8 @@
 //! One entry per context the server created, in creation order.
 
-use std::collections::BTreeMap;
-
-use serde::Serialize;
+use ananke_dataset::{BufferRole, Context, KvPool, RsPool};
 
 use crate::parse::{count, number, patterns, text_at};
-
-/// Everything the loader printed for one context, up to and including its
-/// `graph nodes` line.
-///
-/// The first segment of a run belongs to llama.cpp's parameter-fitting dry run
-/// — it reports the same shape with no weights loaded — so segments are kept
-/// whole rather than merged, and a reader picks the one it wants by the pools
-/// it holds.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub struct Context {
-    /// Per device, then per role, as the loader logged it. `Meta()` is the
-    /// fused device a tensor split reports, and its figure is ONE card's share.
-    pub buffers: BTreeMap<String, BTreeMap<BufferRole, f64>>,
-    pub kv_pools: Vec<KvPool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rs_pool: Option<RsPool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub graph_nodes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub graph_splits: Option<u64>,
-}
-
-/// What a per-device buffer line was holding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum BufferRole {
-    Model,
-    Kv,
-    Rs,
-    Compute,
-    Output,
-}
-
-/// The attention cache's summary line, term by term.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct KvPool {
-    /// The physical total across devices.
-    pub total_mib: f64,
-    /// Cells per sequence.
-    pub cells: u64,
-    /// The layer count that actually allocates, which excludes an MTP head.
-    pub layers: u64,
-    pub seqs: u64,
-    pub seqs_max: u64,
-    pub k_type: String,
-    pub k_mib: f64,
-    pub v_type: String,
-    pub v_mib: f64,
-}
-
-/// The recurrent module's equivalent.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct RsPool {
-    pub total_mib: f64,
-    pub cells: u64,
-    pub layers: u64,
-    pub seqs: u64,
-    /// The speculative rollback depth: the state is replicated
-    /// `seqs × (rs_seq + 1)` times, and this is non-zero only under
-    /// speculative decoding.
-    pub rs_seq: u64,
-    pub r_mib: f64,
-    pub s_mib: f64,
-}
 
 pub(crate) fn parse_contexts(text: &str) -> Vec<Context> {
     let mut contexts = Vec::new();

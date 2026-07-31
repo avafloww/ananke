@@ -36,7 +36,7 @@ pub fn recurrent_pools(rows: &[Record]) -> Vec<(&RsPool, &Parsed)> {
 /// Returns `None` for a model whose metadata does not describe a recurrent block,
 /// which is how a pool of zero size reads.
 pub fn modelled_recurrent_mib(pool: &RsPool, parsed: &Parsed) -> Option<(f64, f64)> {
-    let arch = parsed.arch.as_deref().unwrap_or("");
+    let arch = parsed.arch.as_str();
     let d_conv = parsed.gguf_int(&format!("{arch}.ssm.conv_kernel"));
     let (n_embd_r, n_embd_s) = if d_conv != 0 {
         let d_inner = parsed.gguf_int(&format!("{arch}.ssm.inner_size"));
@@ -60,7 +60,7 @@ pub fn modelled_recurrent_mib(pool: &RsPool, parsed: &Parsed) -> Option<(f64, f6
     // The layer count the pool itself reports is the span, not the number of
     // allocating layers; the attention layers within it are subtracted the way the
     // estimator does.
-    let span = i64::from(pool.layers);
+    let span = pool.layers as i64;
     let interval = parsed.gguf_int(&format!("{arch}.full_attention_interval"));
     if interval == 0 {
         // Without an interval the pattern is a per-layer property the log does not
@@ -69,7 +69,7 @@ pub fn modelled_recurrent_mib(pool: &RsPool, parsed: &Parsed) -> Option<(f64, f6
         return None;
     }
     let recurrent = span - span / interval;
-    let copies = i64::from(pool.seqs) * i64::from(pool.rs_seq + 1);
+    let copies = pool.seqs as i64 * (pool.rs_seq + 1) as i64;
     let scale = (recurrent * copies * 4) as f64 / 1048576.0;
     Some((n_embd_r as f64 * scale, n_embd_s as f64 * scale))
 }
@@ -89,7 +89,7 @@ pub fn check_recurrent_model(rows: &[Record], tolerance_mib: f64) -> Result<()> 
         let Some((modelled_r, modelled_s)) = modelled_recurrent_mib(pool, parsed) else {
             continue;
         };
-        let arch = parsed.arch.clone().unwrap_or_else(|| "?".to_string());
+        let arch = parsed.arch.clone();
         for (half, got, want) in [("R", modelled_r, pool.r_mib), ("S", modelled_s, pool.s_mib)] {
             let error = (got - want).abs();
             let key = format!("{arch} {half}");
@@ -133,7 +133,7 @@ pub const RECURRENT_TOLERANCE_MIB: f64 = 0.02;
 pub fn spec_rollback_depth(rows: &[Record]) -> Result<Scalar> {
     check_recurrent_model(rows, RECURRENT_TOLERANCE_MIB)?;
     let pools = recurrent_pools(rows);
-    let speculative: BTreeSet<u32> = pools
+    let speculative: BTreeSet<u64> = pools
         .iter()
         .map(|(pool, _)| pool.rs_seq)
         .filter(|d| *d > 0)
@@ -144,7 +144,7 @@ pub fn spec_rollback_depth(rows: &[Record]) -> Result<Scalar> {
         ));
     }
     if speculative.len() > 1 {
-        let listed: Vec<String> = speculative.iter().map(u32::to_string).collect();
+        let listed: Vec<String> = speculative.iter().map(u64::to_string).collect();
         return Err(DeriveError::disagreement(format!(
             "recurrent rollback depth is not one value across the dataset: [{}]. It was \
              a runtime constant; if a flag now moves it, the estimator has to read that \
@@ -153,9 +153,9 @@ pub fn spec_rollback_depth(rows: &[Record]) -> Result<Scalar> {
         )));
     }
     let depth = *speculative.iter().next().expect("non-empty");
-    let slot_counts: BTreeSet<u32> = pools.iter().map(|(pool, _)| pool.seqs).collect();
+    let slot_counts: BTreeSet<u64> = pools.iter().map(|(pool, _)| pool.seqs).collect();
     Ok(Scalar {
-        value: i64::from(depth),
+        value: depth as i64,
         evidence: format!(
             "llama.cpp's own `rs_seq` field, {depth} on every speculative cell and 0 on \
              every other, across {} slot counts. The recurrent module is replicated \

@@ -83,6 +83,16 @@ pub enum Status {
 }
 
 impl Record {
+    /// The cell's identity, absent on a row written before the schema carried
+    /// one.
+    ///
+    /// Empty is how "no identity" is spelled on the wire. Such a row cannot be
+    /// attributed to a question or compared against a rerun of the same
+    /// configuration, so a reader skips it rather than guessing from the label.
+    pub fn cell_id(&self) -> Option<&str> {
+        Some(self.cell.as_str()).filter(|cell| !cell.is_empty())
+    }
+
     /// Host memory the process *owns*, in bytes.
     ///
     /// `RssAnon + RssShmem`, not `VmRSS`: `cudaMallocHost` is accounted as
@@ -95,5 +105,24 @@ impl Record {
     /// The same figure in whole MiB, truncated.
     pub fn owned_mib(&self) -> i64 {
         (self.rss.rss_anon_kb + self.rss.rss_shmem_kb) / 1024
+    }
+
+    /// One card's driver reading, in MiB.
+    ///
+    /// Keyed by the *physical* id: the sampler records `gpu{id}_used_mib` while
+    /// the loader's breakdown rows are in visible order, so a cell pinned to
+    /// GPU 1 has its usage under `gpu1_used_mib` and its breakdown row under
+    /// `CUDA0`. A zero reads as absent, because the driver reports one for a
+    /// card the process never touched and no analysis wants that in its mean.
+    pub fn gpu_card_used_mib(&self, card: u32) -> Option<u64> {
+        self.rss.per_card.get(&card).copied().filter(|mib| *mib > 0)
+    }
+
+    /// How many cards the driver reported usage on.
+    ///
+    /// [`Rss::gpu_used_mib`] is the process total and is deliberately excluded;
+    /// only the per-card keys count, and only where they are non-zero.
+    pub fn cards_measured(&self) -> usize {
+        self.rss.per_card.values().filter(|mib| **mib > 0).count()
     }
 }
