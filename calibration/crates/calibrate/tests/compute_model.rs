@@ -14,6 +14,7 @@ use ananke_calibrate::{
     compute_model::{Groups, collect, dataset::latest_per_cell, fit},
     record::read_ndjson,
 };
+use ananke_measure::record::Status;
 
 /// Relative agreement demanded of every coefficient.
 ///
@@ -155,7 +156,7 @@ fn load() -> (Groups, Fixture) {
     let records: Vec<_> = read_ndjson(&text)
         .expect("every record parses")
         .into_iter()
-        .filter(|r| r.status == "ok")
+        .filter(|r| r.status == Status::Ok)
         .collect();
     let rows = latest_per_cell(&records);
     let copies = ananke_estimate::tuning::MAINLINE_LAYER_SPLIT_MASK_COPIES as u32;

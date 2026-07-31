@@ -14,6 +14,7 @@ use ananke_calibrate::{
     validate::{NEUTRAL, snapshot_for},
 };
 use ananke_fs::LocalFs;
+use ananke_measure::record::Status;
 use ananke_placement::pack_demand;
 
 const MEASUREMENTS: &str = "calibration/data/measurements.ndjson";
@@ -64,7 +65,7 @@ fn main() -> ExitCode {
     let mut production: BTreeMap<&str, (u64, String)> = BTreeMap::new();
     for record in &records {
         let label = record.factors.label.as_str();
-        if !label.starts_with("prod-") || record.status != "ok" {
+        if !label.starts_with("prod-") || record.status != Status::Ok {
             continue;
         }
         let Some(used) = record.gpu_used_mib() else {

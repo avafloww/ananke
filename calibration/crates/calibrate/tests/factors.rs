@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ananke_calibrate::record::read_ndjson;
-use ananke_measure::record::Factors;
+use ananke_measure::record::{Factors, Status};
 
 const MEASUREMENTS: &str = "../../data/measurements.ndjson";
 
@@ -221,7 +221,7 @@ fn the_thread_count_does_not_move_the_arena() {
     // context's effect as the thread count's.
     let mut sweeps: BTreeMap<Configuration<'_>, Vec<ArenaAt>> = BTreeMap::new();
     for record in &records {
-        if record.status != "ok" || !record.factors.label.contains("threads") {
+        if record.status != Status::Ok || !record.factors.label.contains("threads") {
             continue;
         }
         let Some(threads) = thread_count(&record.factors.label) else {

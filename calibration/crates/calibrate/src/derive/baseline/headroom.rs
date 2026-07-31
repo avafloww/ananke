@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use ananke_measure::record::Status;
+
 use crate::{
     derive::{
         Table,
@@ -156,7 +158,7 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table> {
     let mut matched: BTreeMap<CheckpointKey, BTreeMap<bool, i64>> = BTreeMap::new();
     for record in rows {
         let factors = &record.factors;
-        if record.status != "ok" || !factors.served {
+        if record.status != Status::Ok || !factors.served {
             continue;
         }
         if factors.bench || factors.has_spec() || factors.is_hybrid() {

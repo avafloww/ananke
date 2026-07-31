@@ -21,6 +21,7 @@ use ananke_calibrate::{
     derive::tuning::Tuning,
     record::read_ndjson,
 };
+use ananke_measure::record::Status;
 
 const MEASUREMENTS: &str = "calibration/data/measurements.ndjson";
 const TUNING: &str = "crates/tuning/tuning.json";
@@ -62,7 +63,7 @@ fn main() -> ExitCode {
     // document describe one dataset.
     let ok: Vec<_> = records
         .into_iter()
-        .filter(|r| r.status == "ok")
+        .filter(|r| r.status == Status::Ok)
         .collect::<Vec<_>>();
     let rows = latest_per_cell(&ok);
     // Read from the document rather than the compiled constant of the same name.

@@ -183,6 +183,8 @@ fn only(rows: &[Record], model: &str) -> Vec<Record> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_measure::record::Status;
+
     use super::*;
     use crate::record::read_ndjson;
 
@@ -194,7 +196,7 @@ mod tests {
         read_ndjson(&text)
             .expect("the dataset parses")
             .into_iter()
-            .filter(|r| r.status == "ok")
+            .filter(|r| r.status == Status::Ok)
             .collect()
     }
 

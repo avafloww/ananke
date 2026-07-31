@@ -17,6 +17,7 @@ use ananke_config::placement::{
     DeviceSlot, OffloadMode, PlacementInputs, PlacementPolicy, SplitMode,
 };
 use ananke_estimate::EstimatorInputs;
+use ananke_measure::record::Status;
 use ananke_placement::{
     Corrections,
     devices::{DeviceSnapshot, GpuSnapshot},
@@ -43,8 +44,8 @@ pub struct Comparison {
 /// Why a cell was not comparable. Counted and reported, never silently dropped.
 pub fn skip_reason(record: &Record, known_models: &[String]) -> Option<String> {
     let f = &record.factors;
-    if record.status != "ok" {
-        return Some(format!("status {}", record.status));
+    if record.status != Status::Ok {
+        return Some(format!("status {:?}", record.status));
     }
     if record.gpu_used_mib().is_none_or(|v| v == 0) {
         return Some("no driver reading".into());

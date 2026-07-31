@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ananke_measure::harness::cell_id;
+use ananke_measure::{harness::cell_id, record::Status};
 
 use crate::{
     plan::{Library, QUESTIONS, all_cells},
@@ -65,16 +65,16 @@ pub struct Report {
 /// at: their identity cannot be recomputed, and attributing them to a question by
 /// label would credit a question with a cell it may not have asked for.
 pub fn report(records: &[Record], lib: &Library) -> Report {
-    let mut status_by_cell: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut status_by_cell: BTreeMap<&str, Status> = BTreeMap::new();
     for record in records {
         let Some(cell) = record.cell.as_deref() else {
             continue;
         };
         // The best status any row for this cell reached. A cell retried after a
         // load failure has two rows, and it is measured.
-        let entry = status_by_cell.entry(cell).or_insert(&record.status);
-        if record.status == "ok" {
-            *entry = "ok";
+        let entry = status_by_cell.entry(cell).or_insert(record.status);
+        if record.status == Status::Ok {
+            *entry = Status::Ok;
         }
     }
 
@@ -86,8 +86,8 @@ pub fn report(records: &[Record], lib: &Library) -> Report {
             let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
             for id in &ids {
                 match status_by_cell.get(id.as_str()) {
-                    Some(&"ok") => measured += 1,
-                    Some(other) => *counts.entry(other).or_default() += 1,
+                    Some(Status::Ok) => measured += 1,
+                    Some(other) => *counts.entry(status_label(*other)).or_default() += 1,
                     None => {}
                 }
             }
@@ -108,11 +108,11 @@ pub fn report(records: &[Record], lib: &Library) -> Report {
     let planned_ids: BTreeSet<String> = all_cells(lib).iter().map(cell_id).collect();
     let measured = planned_ids
         .iter()
-        .filter(|id| status_by_cell.get(id.as_str()) == Some(&"ok"))
+        .filter(|id| status_by_cell.get(id.as_str()) == Some(&Status::Ok))
         .count();
     let unplanned = status_by_cell
         .iter()
-        .filter(|(id, status)| **status == "ok" && !planned_ids.contains(**id))
+        .filter(|(id, status)| **status == Status::Ok && !planned_ids.contains(**id))
         .count();
 
     Report {
@@ -126,6 +126,23 @@ pub fn report(records: &[Record], lib: &Library) -> Report {
             .max()
             .map(str::to_string),
         unplanned,
+    }
+}
+
+/// The wire form of a non-`Ok` status, for grouping and display.
+///
+/// Written out rather than derived from [`Status`]'s `Serialize` impl: the report
+/// only ever needs the label, and matching exhaustively means a status this module
+/// forgets to name is a compile error rather than a silently blank issue row.
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::Ok => "ok",
+        Status::PortBusy => "port-busy",
+        Status::FailedToLoad => "failed-to-load",
+        Status::Timeout => "timeout",
+        Status::SkippedInsufficientMemory => "skipped-insufficient-memory",
+        Status::HarnessError => "harness-error",
+        Status::StaleRuntime => "stale-runtime",
     }
 }
 
@@ -210,9 +227,9 @@ mod tests {
     #[test]
     fn a_retried_cell_is_measured_once() {
         let records = synthetic(&[
-            ("cell-a", "failed-to-load"),
-            ("cell-a", "ok"),
-            ("cell-a", "ok"),
+            ("cell-a", Status::FailedToLoad),
+            ("cell-a", Status::Ok),
+            ("cell-a", Status::Ok),
         ]);
         let report = report(&records, &Library::from_env());
         assert_eq!(report.unplanned, 1, "one cell, whatever its row count");
@@ -228,7 +245,7 @@ mod tests {
     #[test]
     fn an_unplanned_failure_is_not_an_unplanned_measurement() {
         let report = report(
-            &synthetic(&[("cell-a", "failed-to-load"), ("cell-b", "ok")]),
+            &synthetic(&[("cell-a", Status::FailedToLoad), ("cell-b", Status::Ok)]),
             &Library::from_env(),
         );
         assert_eq!(report.unplanned, 1);
@@ -238,7 +255,7 @@ mod tests {
     #[test]
     fn an_unidentified_row_is_not_counted() {
         let report = report(
-            &synthetic(&[("", "ok"), ("cell-a", "ok")]),
+            &synthetic(&[("", Status::Ok), ("cell-a", Status::Ok)]),
             &Library::from_env(),
         );
         assert_eq!(report.unplanned, 1);
@@ -246,7 +263,7 @@ mod tests {
 
     /// Records with the given cell ids and statuses. An empty id means a row from
     /// before the schema carried one.
-    fn synthetic(rows: &[(&str, &str)]) -> Vec<Record> {
+    fn synthetic(rows: &[(&str, Status)]) -> Vec<Record> {
         let text: String = rows
             .iter()
             .map(|(cell, status)| {
@@ -255,9 +272,8 @@ mod tests {
                 } else {
                     format!("\"{cell}\"")
                 };
-                format!(
-                    r#"{{"cell":{id},"status":"{status}","factors":{{"model":"m","ctx":4096}}}}"#
-                )
+                let status = serde_json::to_string(status).expect("status serializes");
+                format!(r#"{{"cell":{id},"status":{status},"factors":{{"model":"m","ctx":4096}}}}"#)
             })
             .collect::<Vec<_>>()
             .join("\n");

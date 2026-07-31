@@ -13,6 +13,7 @@ use ananke_calibrate::{
     derive::emit::{emit_check, emit_write},
     record::read_ndjson,
 };
+use ananke_measure::record::Status;
 
 const MEASUREMENTS: &str = "calibration/data/measurements.ndjson";
 const TUNING: &str = "crates/tuning/tuning.json";
@@ -46,7 +47,7 @@ fn main() -> ExitCode {
     // the derivers themselves, which report what they skipped.
     let ok: Vec<_> = records
         .iter()
-        .filter(|r| r.status == "ok")
+        .filter(|r| r.status == Status::Ok)
         .cloned()
         .collect();
 

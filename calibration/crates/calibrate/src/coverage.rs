@@ -24,6 +24,8 @@
 
 use std::collections::BTreeSet;
 
+use ananke_measure::record::Status;
+
 use crate::record::Record;
 
 /// An axis a regime's rule can depend on.
@@ -190,7 +192,7 @@ impl Coverage {
 pub fn audit(records: &[Record]) -> Vec<Coverage> {
     let measured: Vec<&Record> = records
         .iter()
-        .filter(|r| r.status == "ok" && r.parsed.arena_mib.is_some_and(|v| v > 0.0))
+        .filter(|r| r.status == Status::Ok && r.parsed.arena_mib.is_some_and(|v| v > 0.0))
         .collect();
 
     let mut out: Vec<Coverage> = REGIMES

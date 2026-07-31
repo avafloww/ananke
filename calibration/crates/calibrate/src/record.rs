@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 
+use ananke_measure::record::Status;
 use serde::Deserialize;
 
 /// One measured cell.
@@ -26,7 +27,7 @@ pub struct Record {
     /// configuration. Absent from the oldest schema versions.
     #[serde(default)]
     pub cell: Option<String>,
-    pub status: String,
+    pub status: Status,
     pub factors: Factors,
     #[serde(default)]
     pub parsed: Parsed,

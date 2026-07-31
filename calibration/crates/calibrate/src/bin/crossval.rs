@@ -17,6 +17,7 @@ use ananke_calibrate::{
     derive::tuning::Tuning,
     record::{Record, read_ndjson},
 };
+use ananke_measure::record::Status;
 
 const MEASUREMENTS: &str = "calibration/data/measurements.ndjson";
 const TUNING: &str = "crates/tuning/tuning.json";
@@ -66,7 +67,7 @@ fn load() -> Result<(Vec<Record>, Tuning), String> {
     let rows: Vec<Record> = read_ndjson(&text)
         .map_err(|e| format!("{MEASUREMENTS}: {e}"))?
         .into_iter()
-        .filter(|r| r.status == "ok")
+        .filter(|r| r.status == Status::Ok)
         .collect();
     let tuning =
         Tuning::parse(&std::fs::read_to_string(TUNING).map_err(|e| format!("{TUNING}: {e}"))?)

@@ -3,6 +3,8 @@
 
 use std::collections::BTreeMap;
 
+use ananke_measure::record::Status;
+
 use crate::{
     derive::error::{DeriveError, Result},
     record::Record,
@@ -21,7 +23,7 @@ pub fn load(text: &str) -> Result<Vec<Record>> {
         }
         let record: Record = serde_json::from_str(line)
             .map_err(|e| DeriveError::malformed(format!("line {}: {e}", index + 1)))?;
-        if record.status == "ok" {
+        if record.status == Status::Ok {
             rows.push(record);
         }
     }
@@ -83,7 +85,7 @@ pub fn latest_per_cell(rows: &[Record]) -> Vec<Record> {
 pub fn report_stale_builds(rows: &[Record]) -> Vec<String> {
     let mut by_runtime: BTreeMap<&str, BTreeMap<&str, Vec<f64>>> = BTreeMap::new();
     for record in rows {
-        if record.status != "ok" {
+        if record.status != Status::Ok {
             continue;
         }
         by_runtime
@@ -144,7 +146,7 @@ pub fn check_runtime_builds(rows: &[Record], tolerance: f64) -> Result<()> {
         let Some(used) = record.gpu_used_mib().filter(|v| *v != 0) else {
             continue;
         };
-        if record.status != "ok" {
+        if record.status != Status::Ok {
             continue;
         }
         let Some(cell) = record.cell.as_deref() else {
