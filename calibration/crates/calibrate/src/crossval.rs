@@ -250,10 +250,11 @@ mod tests {
             let Some(fitted) = report.full.value() else {
                 continue;
             };
-            let committed = tuning.constant(report.constant, i64::MIN);
-            if committed == i64::MIN {
+            // A constant the document does not declare has nothing to agree with;
+            // the sentinel this replaces said the same thing less directly.
+            let Some(committed) = tuning.constant(report.constant) else {
                 continue;
-            }
+            };
             assert_eq!(
                 fitted, committed,
                 "{}: cross-validation fits {fitted}, tuning.json ships {committed}",

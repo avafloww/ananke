@@ -53,11 +53,15 @@ pub fn baseline_offset(
              flat baseline.",
         ));
     }
-    let per_layer = tuning.constant_f64("PROCESS_BASE_BYTES_PER_LAYER", 0.0);
-    let flat = tuning.constant_f64("PROCESS_BASE_BYTES", 0.0);
-    let moe = tuning.constant_f64("PROCESS_BASE_BYTES_MOE", 0.0);
-    let dev = tuning.constant_f64("PROCESS_BASE_BYTES_PER_DEVICE", 0.0);
-    let pinned = tuning.constant_f64("PINNED_EXTRA_BYTES", 0.0);
+    // All five are required rather than defaulted, for the same reason the empty
+    // `no_fa_rates` above is an error: this offset is the residual left by the whole
+    // process-baseline model, so a term read as zero is not a smaller correction but
+    // that term charged twice — once here as offset and again by the estimator.
+    let per_layer = tuning.required_f64("PROCESS_BASE_BYTES_PER_LAYER")?;
+    let flat = tuning.required_f64("PROCESS_BASE_BYTES")?;
+    let moe = tuning.required_f64("PROCESS_BASE_BYTES_MOE")?;
+    let dev = tuning.required_f64("PROCESS_BASE_BYTES_PER_DEVICE")?;
+    let pinned = tuning.required_f64("PINNED_EXTRA_BYTES")?;
     let worst_no_fa = no_fa_rates.values().copied().max().unwrap_or(0);
 
     let mut by_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();

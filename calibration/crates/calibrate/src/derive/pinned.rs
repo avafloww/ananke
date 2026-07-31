@@ -262,7 +262,9 @@ pub fn no_flash_attn_rates(
     tuning: &Tuning,
     quant_rates: Option<&BTreeMap<String, i64>>,
 ) -> Result<Table> {
-    let e_variant_rate = tuning.constant_f64("GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN", 0.0);
+    // Required, not defaulted: the E variant's per-layer term is subtracted out of
+    // this residual, and reading it as zero would fold it into every rate below.
+    let e_variant_rate = tuning.required_f64("GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN")?;
     let mut by_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);

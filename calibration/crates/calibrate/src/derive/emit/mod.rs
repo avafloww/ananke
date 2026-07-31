@@ -154,7 +154,12 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     // The arena's other MoE term, hoisted out of the scalar loop for the same reason:
     // `no_flash_attn_rates` and `baseline_offset` both charge it through the arena.
     match graph::mainline_tensor_moe(&rows, &live) {
-        Ok(scalar) => live.set_constant("MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD", scalar.value),
+        Ok(scalar) => thread(
+            &mut live,
+            "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD",
+            scalar.value,
+            &mut failed,
+        ),
         Err(error) => failed.push(format!(
             "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD: cannot derive — {error}"
         )),
@@ -163,7 +168,12 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     // Likewise the E-variant's per-layer term: the arena subtracts it, and so does the
     // flash-attention residual.
     match pinned::gemma_e_per_layer_token(&rows, &live) {
-        Ok(scalar) => live.set_constant("GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN", scalar.value),
+        Ok(scalar) => thread(
+            &mut live,
+            "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN",
+            scalar.value,
+            &mut failed,
+        ),
         Err(error) => failed.push(format!(
             "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN: cannot derive — {error}"
         )),
@@ -174,7 +184,12 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     // it costs nothing and is the difference between the offset being a residual over
     // this run's model and over the last one's.
     match baseline::per_device_bytes(&rows) {
-        Ok(scalar) => live.set_constant("PROCESS_BASE_BYTES_PER_DEVICE", scalar.value),
+        Ok(scalar) => thread(
+            &mut live,
+            "PROCESS_BASE_BYTES_PER_DEVICE",
+            scalar.value,
+            &mut failed,
+        ),
         Err(error) => failed.push(format!(
             "PROCESS_BASE_BYTES_PER_DEVICE: cannot derive — {error}"
         )),
@@ -257,7 +272,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
             changed.push(format!("{name}: {old} -> {}", derived.value));
         }
         entry["value"] = json!(derived.value);
-        live.set_constant(name, derived.value);
+        thread(&mut live, name, derived.value, &mut failed);
         entry["evidence"] = json!(derived.evidence);
         entry["kind"] = json!("derived");
         document["constants"][name] = entry;
@@ -422,4 +437,20 @@ pub fn derivers() -> Vec<(&'static str, ScalarDeriver)> {
             mtp::mtp_unaccounted(rows)
         }),
     ]
+}
+
+/// Hand this run's derived value to the derivers that read it, recording a name the
+/// document does not declare as a failure.
+///
+/// The ordering above is only worth writing down if a broken link in it is visible:
+/// a rename that lands nowhere leaves the downstream derivers reading the committed
+/// value, which produces a document that looks settled and is fitted against the
+/// previous run.
+fn thread(live: &mut Tuning, name: &str, value: i64, failed: &mut Vec<String>) {
+    if let Err(error) = live.set_constant(name, value) {
+        failed.push(format!(
+            "{error}, so this run's derived value did not reach the derivers that \
+             read it"
+        ));
+    }
 }

@@ -25,6 +25,8 @@ use ananke_measure::record::Status;
 
 const MEASUREMENTS: &str = "calibration/data/measurements.ndjson";
 const TUNING: &str = "crates/tuning/tuning.json";
+/// The constant every design row is normalised by; see the read below.
+const MASK_COPIES: &str = "MAINLINE_LAYER_SPLIT_MASK_COPIES";
 
 fn main() -> ExitCode {
     let check = std::env::args().any(|a| a == "--check");
@@ -70,8 +72,25 @@ fn main() -> ExitCode {
     // `emit` writes that constant into this file, and a compiled copy is one build
     // behind it — which would put a `cargo build` in the middle of the pipeline and
     // make the result depend on whether anyone remembered to run it.
+    //
+    // And it is read as required rather than assumed: the value normalises every
+    // design row, so a missing one does not perturb the fit, it moves every
+    // coefficient in it.
     let copies = match Tuning::parse(&tuning_text) {
-        Ok(tuning) => tuning.constant("MAINLINE_LAYER_SPLIT_MASK_COPIES", 4) as u32,
+        Ok(tuning) => match tuning.constant(MASK_COPIES).map(u32::try_from) {
+            Some(Ok(copies)) => copies,
+            Some(Err(e)) => {
+                eprintln!("{TUNING}'s {MASK_COPIES} is not a mask count: {e}");
+                return ExitCode::from(2);
+            }
+            None => {
+                eprintln!(
+                    "{TUNING} declares no {MASK_COPIES}; run `cargo run -p \
+                     ananke-calibrate --bin emit` to derive it before fitting"
+                );
+                return ExitCode::from(2);
+            }
+        },
         Err(e) => {
             eprintln!("parsing {TUNING}: {e}");
             return ExitCode::from(2);

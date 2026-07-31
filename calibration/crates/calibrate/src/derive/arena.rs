@@ -158,7 +158,10 @@ pub fn check_arena_model(
     quant_rates: &BTreeMap<String, i64>,
     tolerance_mib: f64,
 ) -> Result<()> {
-    let e_variant_rate = tuning.constant_f64("GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN", 0.0);
+    // Required, not defaulted: this compares the model against the measurement, and
+    // a zeroed per-layer term would report the E variant as drifted rather than as
+    // unread.
+    let e_variant_rate = tuning.required_f64("GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN")?;
     let mut worst: BTreeMap<String, (f64, String)> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);

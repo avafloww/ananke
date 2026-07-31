@@ -9,15 +9,59 @@
 //!
 //! So they are read instead: `tuning.json` is the source of truth for the Rust
 //! estimator already, and there is no reason for the analysis to hold its own
-//! opinion. A default applies only before the constant exists, which is the
-//! bootstrap case when a new term is being added.
+//! opinion.
+//!
+//! Absence is the interesting case, and it is split in two rather than papered
+//! over with one defaulting reader. [`Tuning::constant`] and
+//! [`Tuning::constant_f64`] return `Option`, and [`Tuning::required_f64`] turns a
+//! miss into an error, for the reader that cannot proceed without the value — a
+//! renamed or misspelled constant read as `0.0` does not stop a derivation, it
+//! just fits every residual against the wrong model. [`Tuning::constant_or`] is
+//! the one case a default is honest: a term being added for the first time, whose
+//! constant is not in the document yet.
+
+use std::fmt;
 
 use serde_json::Value;
+
+use crate::derive::error::DeriveError;
 
 /// The committed tuning document, as the derivers see it.
 #[derive(Debug, Clone)]
 pub struct Tuning {
     document: Value,
+}
+
+/// A constant the document does not declare.
+///
+/// Its own type rather than a [`DeriveError`]: the fault is in `tuning.json` — a
+/// name renamed, misspelled, or not yet added — not in the dataset, and a value
+/// returned by `Result` is one a caller cannot drop on the floor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownConstant {
+    name: String,
+}
+
+impl UnknownConstant {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl fmt::Display for UnknownConstant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: no such constant in tuning.json", self.name)
+    }
+}
+
+impl std::error::Error for UnknownConstant {}
+
+/// So a deriver reading a constant it needs can `?` the miss like any other
+/// reason it could not produce a value.
+impl From<UnknownConstant> for DeriveError {
+    fn from(error: UnknownConstant) -> Self {
+        DeriveError::malformed(error.to_string())
+    }
 }
 
 /// ik's per-architecture MoE rate to fall back on before the table exists.
@@ -40,14 +84,21 @@ impl Tuning {
 
     /// Replace one constant's value, for [`Self::of`]'s caller to thread the
     /// freshly derived figure through to the derivers that consume it.
-    pub fn set_constant(&mut self, name: &str, value: i64) {
-        if let Some(entry) = self
+    ///
+    /// Errors on a name the document does not declare rather than doing nothing:
+    /// the whole point of the call is an ordering dependency between derivers, and
+    /// a silent no-op leaves every downstream residual fitted against the previous
+    /// run's value with nothing to say so.
+    pub fn set_constant(&mut self, name: &str, value: i64) -> Result<(), UnknownConstant> {
+        let entry = self
             .document
             .get_mut("constants")
             .and_then(|c| c.get_mut(name))
-        {
-            entry["value"] = Value::from(value);
-        }
+            .ok_or_else(|| UnknownConstant {
+                name: name.to_string(),
+            })?;
+        entry["value"] = Value::from(value);
+        Ok(())
     }
 
     /// Replace one table, as [`Self::set_constant`] does for a scalar.
@@ -60,19 +111,38 @@ impl Tuning {
         &self.document
     }
 
-    /// A constant's value as an integer, or `default` if it is not there yet.
-    pub fn constant(&self, name: &str, default: i64) -> i64 {
-        self.constant_f64(name, default as f64) as i64
+    /// A constant's value as an integer, or `None` if the document does not
+    /// declare it.
+    pub fn constant(&self, name: &str) -> Option<i64> {
+        self.constant_f64(name).map(|value| value as i64)
     }
 
-    /// A constant's value as a float.
-    pub fn constant_f64(&self, name: &str, default: f64) -> f64 {
+    /// A constant's value as a float, or `None` if the document does not declare
+    /// it.
+    pub fn constant_f64(&self, name: &str) -> Option<f64> {
         self.document
             .get("constants")
             .and_then(|c| c.get(name))
             .and_then(|e| e.get("value"))
             .and_then(Value::as_f64)
-            .unwrap_or(default)
+    }
+
+    /// [`Self::constant_f64`] for the reader whose model is wrong without the
+    /// value, so the miss stops the derivation instead of zeroing a term of it.
+    pub fn required_f64(&self, name: &str) -> Result<f64, UnknownConstant> {
+        self.constant_f64(name).ok_or_else(|| UnknownConstant {
+            name: name.to_string(),
+        })
+    }
+
+    /// A constant's value, or `default` when the document does not declare it yet.
+    ///
+    /// The bootstrap reader, and the only honest use of a default: a term being
+    /// added for the first time has no entry to read, and the deriver that will
+    /// write one has to run against *something*. Anything that expects the
+    /// constant to be there wants [`Self::constant`] or [`Self::required_f64`].
+    pub fn constant_or(&self, name: &str, default: i64) -> i64 {
+        self.constant(name).unwrap_or(default)
     }
 
     /// The per-architecture ik MoE rate, as the estimator resolves it.
@@ -98,7 +168,71 @@ impl Tuning {
     /// mainline's host-resident MoE rate under a tensor split, per unit of
     /// hidden size. The arena model charges it, and derives it too — so the
     /// value read here is the previous run's.
+    ///
+    /// Defaulting, like [`Self::ik_moe_rate`] beside it, because its one caller —
+    /// [`crate::derive::arena::arena_terms`] — computes three terms and has no
+    /// failure path to return; the default is the value the term was first
+    /// derived against.
     pub fn mainline_tensor_moe_per_nembd(&self) -> i64 {
-        self.constant("MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD", 57)
+        self.constant_or(
+            "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD",
+            MAINLINE_TENSOR_MOE_DEFAULT,
+        )
+    }
+}
+
+/// mainline's per-`n_embd` tensor-split MoE rate to fall back on before the
+/// constant exists.
+const MAINLINE_TENSOR_MOE_DEFAULT: i64 = 57;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn document() -> Tuning {
+        Tuning::parse(r#"{"constants": {"KNOWN": {"value": 7}}}"#).expect("the document parses")
+    }
+
+    /// The defect this file exists to close: a name the document does not declare
+    /// used to be written nowhere and reported nowhere, so the ordering between
+    /// derivers dissolved into every downstream fit reading a stale value.
+    #[test]
+    fn setting_an_unknown_constant_is_reported() {
+        let mut tuning = document();
+        let error = tuning
+            .set_constant("MISSPELLED", 1)
+            .expect_err("an undeclared name is an error, not a no-op");
+        assert_eq!(error.name(), "MISSPELLED");
+        assert!(
+            error.to_string().contains("MISSPELLED"),
+            "the report names the constant, since `emit` joins these into one line"
+        );
+        assert_eq!(
+            tuning.constant("MISSPELLED"),
+            None,
+            "and nothing was written"
+        );
+    }
+
+    #[test]
+    fn setting_a_declared_constant_writes_it() {
+        let mut tuning = document();
+        tuning
+            .set_constant("KNOWN", 9)
+            .expect("the name is declared");
+        assert_eq!(tuning.constant("KNOWN"), Some(9));
+        assert_eq!(tuning.required_f64("KNOWN"), Ok(9.0));
+    }
+
+    #[test]
+    fn a_missing_constant_reads_as_absent_rather_than_zero() {
+        let tuning = document();
+        assert_eq!(tuning.constant_f64("ABSENT"), None);
+        assert!(tuning.required_f64("ABSENT").is_err());
+        assert_eq!(
+            tuning.constant_or("ABSENT", 3),
+            3,
+            "the bootstrap reader defaults"
+        );
     }
 }
