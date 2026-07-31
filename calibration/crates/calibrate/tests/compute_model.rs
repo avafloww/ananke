@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use ananke_calibrate::{
-    compute_model::{Groups, collect, dataset::latest_per_cell, fit},
+    compute_model::{Groups, Section, collect, dataset::latest_per_cell, document_section, fit},
     record::read_ndjson,
 };
 use ananke_measure::record::Status;
@@ -31,7 +31,7 @@ struct Fixture {
     groups: Vec<FixtureGroup>,
     pooled: FixtureFit,
     notes: Vec<String>,
-    section: serde_json::Value,
+    section: Section,
 }
 
 #[derive(serde::Deserialize)]
@@ -129,22 +129,26 @@ fn the_pooled_default_reproduces_the_fixture() {
 /// (variant-guarded first, so a lookup finds the specific graph before the general
 /// one), the rounding, the `runtime: null` convention for mainline, and the
 /// evidence strings — every part of the section a reader trusts.
+///
+/// Both sides go through [`Section`], which is `deny_unknown_fields`, so a key
+/// gained or lost on either side fails here rather than being compared as absent.
 #[test]
 fn the_section_matches_the_committed_one() {
     let (groups, fixture) = load();
-    let (section, notes) =
-        ananke_calibrate::compute_model::document_section(&groups).expect("the section builds");
+    let (section, notes) = document_section(&groups).expect("the section builds");
+    let section: Section =
+        serde_json::from_value(section).expect("the emitted section parses strictly");
     assert_eq!(notes, fixture.notes, "the coverage notes diverged");
     assert_eq!(
-        section["columns"], fixture.section["columns"],
+        section.columns, fixture.section.columns,
         "the column list diverged"
     );
     assert_eq!(
-        section["entries"], fixture.section["entries"],
+        section.entries, fixture.section.entries,
         "the fitted entries diverged"
     );
     assert_eq!(
-        section["default"], fixture.section["default"],
+        section.default, fixture.section.default,
         "the pooled default diverged"
     );
 }

@@ -136,7 +136,7 @@ mod document;
 mod fit;
 mod solve;
 
-pub use document::document_section;
+pub use document::{Entry, Fit, Section, document_section};
 pub use fit::{Coefficients, fit};
 pub use solve::evaluate;
 
