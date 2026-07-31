@@ -191,8 +191,15 @@ impl Parsed {
         Some(self.arch.as_str()).filter(|arch| !arch.is_empty())
     }
 
-    /// A GGUF metadata integer, absent reading as zero.
-    pub fn gguf_int(&self, key: &str) -> i64 {
-        self.gguf_kv.get(key).copied().unwrap_or(0)
+    /// A GGUF metadata integer, by the property name the architecture prefixes.
+    ///
+    /// The caller names the property, not the whole key, so no reader builds
+    /// `format!("{arch}.…")` and none can prefix it differently. `None` covers
+    /// both a key the log did not print and one whose value was not an integer;
+    /// the two are indistinguishable from here, and no caller needs to tell them
+    /// apart.
+    pub fn gguf(&self, property: &str) -> Option<i64> {
+        let arch = self.architecture()?;
+        self.gguf_kv.get(&format!("{arch}.{property}")).copied()
     }
 }

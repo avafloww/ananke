@@ -37,32 +37,35 @@ pub fn recurrent_pools(rows: &[Record]) -> Vec<(&RsPool, &Parsed)> {
 /// Returns `None` for a model whose metadata does not describe a recurrent block,
 /// which is how a pool of zero size reads.
 pub fn modelled_recurrent_mib(pool: &RsPool, parsed: &Parsed) -> Option<(f64, f64)> {
-    let arch = parsed.arch.as_str();
-    let d_conv = parsed.gguf_int(&format!("{arch}.ssm.conv_kernel"));
-    let (n_embd_r, n_embd_s) = if d_conv != 0 {
-        let d_inner = parsed.gguf_int(&format!("{arch}.ssm.inner_size"));
-        let d_state = parsed.gguf_int(&format!("{arch}.ssm.state_size"));
-        let n_group = parsed.gguf_int(&format!("{arch}.ssm.group_count"));
-        (
-            (d_conv - 1) * (d_inner + 2 * n_group * d_state),
-            d_state * d_inner,
-        )
-    } else {
-        let l_cache = parsed.gguf_int(&format!("{arch}.shortconv.l_cache"));
-        if l_cache <= 1 {
-            return None;
+    // A convolution kernel is how an SSM block announces itself; without one the
+    // model is the shortconv shape instead. Absent and zero pick the same branch,
+    // as they did when this read defaulted to zero.
+    let (n_embd_r, n_embd_s) = match parsed.gguf("ssm.conv_kernel").unwrap_or(0) {
+        d_conv if d_conv != 0 => {
+            // Every other SSM dimension must be there if the kernel was. Missing
+            // one used to read as zero and shrink the modelled state silently.
+            let d_inner = parsed.gguf("ssm.inner_size")?;
+            let d_state = parsed.gguf("ssm.state_size")?;
+            let n_group = parsed.gguf("ssm.group_count")?;
+            (
+                (d_conv - 1) * (d_inner + 2 * n_group * d_state),
+                d_state * d_inner,
+            )
         }
-        (
-            parsed.gguf_int(&format!("{arch}.embedding_length")) * (l_cache - 1),
-            0,
-        )
+        _ => {
+            let l_cache = parsed.gguf("shortconv.l_cache").unwrap_or(0);
+            if l_cache <= 1 {
+                return None;
+            }
+            (parsed.gguf("embedding_length")? * (l_cache - 1), 0)
+        }
     };
 
     // The layer count the pool itself reports is the span, not the number of
     // allocating layers; the attention layers within it are subtracted the way the
     // estimator does.
     let span = pool.layers as i64;
-    let interval = parsed.gguf_int(&format!("{arch}.full_attention_interval"));
+    let interval = parsed.gguf("full_attention_interval").unwrap_or(0);
     if interval == 0 {
         // Without an interval the pattern is a per-layer property the log does not
         // carry (LFM2's is a fixed list inside llama.cpp), so the layer count cannot

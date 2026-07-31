@@ -22,12 +22,11 @@ pub fn query_head_count(parsed: &Parsed) -> u64 {
     if parsed.n_head != 0 {
         return parsed.n_head;
     }
-    let arch = parsed.arch.as_str();
-    let n_embd = match parsed.gguf_int(&format!("{arch}.embedding_length")) {
+    let n_embd = match parsed.gguf("embedding_length").unwrap_or(0) {
         0 => parsed.n_embd as i64,
         value => value,
     };
-    let head_dim = match parsed.gguf_int(&format!("{arch}.attention.key_length")) {
+    let head_dim = match parsed.gguf("attention.key_length").unwrap_or(0) {
         0 => parsed.n_embd_head_k as i64,
         value => value,
     };
