@@ -1,5 +1,5 @@
-//! Writing the derived tables into the document, and the one invariant that must hold
-//! before it is written.
+//! Writing the derived tables into the document, and the one invariant
+//! ([`check_table_signs`]) that must hold before it is written.
 
 use std::{borrow::Cow, collections::BTreeMap};
 
@@ -167,11 +167,8 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
 }
 
 /// The `ik_moe_rates` section, as both the document and the live view need it.
-///
-/// Per architecture, because they differ and one number cannot serve all three
-/// without either under-reserving the worst or over-reserving the rest. The
-/// fallback is the worst seen, for an ik mixture of experts this dataset has never
-/// measured.
+/// Per architecture because the rates differ enough that one number would either
+/// under-reserve the worst or over-reserve the rest.
 pub(super) fn ik_moe_value(table: &Table) -> Value {
     value(RateTable {
         comment: Cow::Borrowed(
@@ -190,11 +187,10 @@ pub const SIGNED_TABLES: &[&str] = &["baseline_offset"];
 
 /// Refuse to write a negative into a table read as unsigned.
 ///
-/// `build.rs` reads every table but the signed ones through `as_u64`, which turns a
-/// negative into the table's default rather than raising — the value vanishes with no
-/// error anywhere. That is how the negative baseline offsets would have failed had
-/// they gone out through the unsigned path, so the invariant is asserted here, where
-/// it can still be seen.
+/// `build.rs` reads every table but the signed ones through `as_u64`, which turns
+/// a negative into the table's default rather than raising — the value vanishes
+/// with no error anywhere, which is how the negative baseline offsets would have
+/// failed had they gone out through the unsigned path.
 pub fn check_table_signs(document: &Value) -> Result<()> {
     let Some(tables) = document.as_object() else {
         return Ok(());
@@ -228,11 +224,8 @@ pub fn check_table_signs(document: &Value) -> Result<()> {
     Ok(())
 }
 
-/// The shape nearly every table takes: the prose a reader of `tuning.json` sees, the
-/// rate an unlisted architecture inherits, and the measured rates themselves.
-///
-/// Field order is the document's key order, since `serde_json` serializes a struct in
-/// declaration order.
+/// The shape nearly every table takes. Field order is the document's key order,
+/// since `serde_json` serializes a struct in declaration order.
 #[derive(Serialize)]
 struct RateTable<'a> {
     #[serde(rename = "$comment")]
@@ -250,9 +243,9 @@ struct SlotScalingTable<'a> {
     observed: &'a str,
 }
 
-/// A table of observations keyed by architecture and then by the configuration each
-/// was taken at. There is no `default`: nothing reads these, they are written down so
-/// a hand-held value's justification cannot go stale.
+/// Observations keyed by architecture and then by the configuration each was
+/// taken at. No `default`: nothing reads these, they are written down so a
+/// hand-held value's justification cannot go stale.
 #[derive(Serialize)]
 struct ObservationTable<'a> {
     #[serde(rename = "$comment")]
@@ -260,8 +253,9 @@ struct ObservationTable<'a> {
     by_arch: &'a BTreeMap<String, BTreeMap<String, i64>>,
 }
 
-/// A table's JSON, which cannot fail: every field is a string, an integer, or a map
-/// keyed by one.
+/// # Panics
+///
+/// Never: every field is a string, an integer, or a map keyed by one.
 fn value<T: Serialize>(table: T) -> Value {
     serde_json::to_value(table).expect("a table serializes to JSON")
 }

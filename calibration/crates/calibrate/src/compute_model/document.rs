@@ -8,11 +8,9 @@ use serde_json::Value;
 
 use crate::compute_model::{Coefficients, Group, Groups, Row, evaluate, fit};
 
-/// The `compute_model` section as `tuning.json` carries it.
-///
-/// Named fields rather than a `Value` map, and strict on both sides: a key that
-/// this crate stops writing, or one a hand-edit adds, is a parse error rather
-/// than a silently dropped term.
+/// The `compute_model` section as `tuning.json` carries it. Named fields and
+/// strict on both sides, so a key this crate stops writing — or one a hand-edit
+/// adds — is a parse error rather than a silently dropped term.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Section {
@@ -39,7 +37,6 @@ pub struct Entry {
     pub evidence: String,
 }
 
-/// A set of coefficients with the sentence describing what fitted them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fit {
@@ -50,15 +47,10 @@ pub struct Fit {
 /// The `compute_model` section for `tuning.json`, and per-group coverage notes.
 ///
 /// Entries are ordered variant-guarded first, so a lookup that scans for the
-/// first matching architecture finds the specific graph before the general one,
-/// matching the convention the curve tables already use. The `default` entry
-/// pools every mainline layer-split observation: with the columns dimensionally
-/// normalised, pooling across architectures is what the design is for, and it
-/// gives an architecture nobody has measured a fallback derived from data rather
-/// than borrowed from whichever entry happened to be listed first.
-///
-/// The section is returned as a [`Value`] because the caller splices it into the
-/// wider document, which is a `Value` of sections this crate does not own.
+/// first matching architecture finds the specific graph before the general one.
+/// The `default` entry pools every mainline layer-split observation, so an
+/// unmeasured architecture falls back to data rather than to whichever entry
+/// happened to be listed first.
 pub fn document_section(groups: &Groups) -> Result<(Value, Vec<String>), String> {
     let mut ordered: Vec<(&Group, &[Row])> = groups.iter().collect();
     // Largest group first, then by key. `variant` sorts `None` before `Some`,

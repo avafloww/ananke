@@ -1,24 +1,13 @@
 //! Reading the constants the estimator already compiles in.
 //!
-//! Several derivers need a constant they do not derive: the arena model charges
-//! ik's MoE rate, the flash-attention residual subtracts the E-variant's
-//! per-layer term, and the baseline offset subtracts the whole process-baseline
-//! model. Those were copied by hand once, and the copy went stale the moment the
-//! constant was re-derived — inflating every residual computed for an ik mixture
-//! of experts until it was noticed.
+//! Several derivers need a constant they do not derive. Those were copied by
+//! hand once, and the copy went stale the moment the constant was re-derived,
+//! inflating every residual computed for an ik mixture of experts until someone
+//! noticed. `tuning.json` is read instead.
 //!
-//! So they are read instead: `tuning.json` is the source of truth for the Rust
-//! estimator already, and there is no reason for the analysis to hold its own
-//! opinion.
-//!
-//! Absence is the interesting case, and it is split in two rather than papered
-//! over with one defaulting reader. [`Tuning::constant`] and
-//! [`Tuning::constant_f64`] return `Option`, and [`Tuning::required_f64`] turns a
-//! miss into an error, for the reader that cannot proceed without the value — a
+//! Absence is deliberately not papered over with one defaulting reader: a
 //! renamed or misspelled constant read as `0.0` does not stop a derivation, it
-//! just fits every residual against the wrong model. [`Tuning::constant_or`] is
-//! the one case a default is honest: a term being added for the first time, whose
-//! constant is not in the document yet.
+//! just fits every residual against the wrong model.
 
 use std::fmt;
 
@@ -32,11 +21,9 @@ pub struct Tuning {
     document: Value,
 }
 
-/// A constant the document does not declare.
-///
-/// Its own type rather than a [`DeriveError`]: the fault is in `tuning.json` — a
-/// name renamed, misspelled, or not yet added — not in the dataset, and a value
-/// returned by `Result` is one a caller cannot drop on the floor.
+/// A constant the document does not declare. Its own type rather than a
+/// [`DeriveError`], because the fault is in `tuning.json` rather than in the
+/// dataset.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownConstant {
     name: String,
@@ -56,8 +43,6 @@ impl fmt::Display for UnknownConstant {
 
 impl std::error::Error for UnknownConstant {}
 
-/// So a deriver reading a constant it needs can `?` the miss like any other
-/// reason it could not produce a value.
 impl From<UnknownConstant> for DeriveError {
     fn from(error: UnknownConstant) -> Self {
         DeriveError::malformed(error.to_string())
@@ -85,10 +70,9 @@ impl Tuning {
     /// Replace one constant's value, for [`Self::of`]'s caller to thread the
     /// freshly derived figure through to the derivers that consume it.
     ///
-    /// Errors on a name the document does not declare rather than doing nothing:
-    /// the whole point of the call is an ordering dependency between derivers, and
-    /// a silent no-op leaves every downstream residual fitted against the previous
-    /// run's value with nothing to say so.
+    /// Errors on an undeclared name rather than doing nothing: a silent no-op
+    /// leaves every downstream residual fitted against the previous run's value
+    /// with nothing to say so.
     pub fn set_constant(&mut self, name: &str, value: i64) -> Result<(), UnknownConstant> {
         let entry = self
             .document
@@ -111,14 +95,10 @@ impl Tuning {
         &self.document
     }
 
-    /// A constant's value as an integer, or `None` if the document does not
-    /// declare it.
     pub fn constant(&self, name: &str) -> Option<i64> {
         self.constant_f64(name).map(|value| value as i64)
     }
 
-    /// A constant's value as a float, or `None` if the document does not declare
-    /// it.
     pub fn constant_f64(&self, name: &str) -> Option<f64> {
         self.document
             .get("constants")
@@ -135,11 +115,8 @@ impl Tuning {
         })
     }
 
-    /// A constant's value, or `default` when the document does not declare it yet.
-    ///
     /// The bootstrap reader, and the only honest use of a default: a term being
-    /// added for the first time has no entry to read, and the deriver that will
-    /// write one has to run against *something*. Anything that expects the
+    /// added for the first time has no entry to read. Anything that expects the
     /// constant to be there wants [`Self::constant`] or [`Self::required_f64`].
     pub fn constant_or(&self, name: &str, default: i64) -> i64 {
         self.constant(name).unwrap_or(default)
@@ -147,11 +124,10 @@ impl Tuning {
 
     /// The per-architecture ik MoE rate, as the estimator resolves it.
     ///
-    /// Note that the table is keyed `{arch}@{cards}` while the lookup is by
-    /// architecture alone, so in practice every call lands on `default`. The
-    /// residuals in this file are computed against that behaviour, so it is kept
-    /// rather than corrected here — changing it would move the arena model out
-    /// from under every constant fitted on it.
+    /// The table is keyed `{arch}@{cards}` while the lookup is by architecture
+    /// alone, so in practice every call lands on `default`. Kept rather than
+    /// corrected: changing it would move the arena model out from under every
+    /// constant fitted on it.
     pub fn ik_moe_rate(&self, arch: &str) -> i64 {
         let rates = self.document.get("ik_moe_rates");
         let default = rates
@@ -166,13 +142,9 @@ impl Tuning {
     }
 
     /// mainline's host-resident MoE rate under a tensor split, per unit of
-    /// hidden size. The arena model charges it, and derives it too — so the
-    /// value read here is the previous run's.
-    ///
-    /// Defaulting, like [`Self::ik_moe_rate`] beside it, because its one caller —
-    /// [`crate::derive::arena::arena_terms`] — computes three terms and has no
-    /// failure path to return; the default is the value the term was first
-    /// derived against.
+    /// hidden size. The arena model charges it and derives it too, so the value
+    /// read here is the previous run's. Defaulting because its one caller,
+    /// [`crate::derive::arena::arena_terms`], has no failure path to return.
     pub fn mainline_tensor_moe_per_nembd(&self) -> i64 {
         self.constant_or(
             "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD",

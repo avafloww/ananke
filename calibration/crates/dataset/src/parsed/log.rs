@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// Whether the host-side weights landed in `RssFile` or in anonymous memory.
-///
 /// Read from the loader's own naming (`CPU_Mapped model buffer size` against
 /// `CPU model buffer size`) rather than inferred from flags, because mainline
 /// and ik_llama disagree on it for identical configurations.
@@ -18,16 +17,13 @@ pub enum Mapped {
     No,
 }
 
-/// One device's row of llama.cpp's memory breakdown table, with every column.
+/// One device's row of llama.cpp's memory breakdown table.
 ///
-/// A tensor split reports a single fused row whose `total`, `free`, and `self`
-/// are summed across cards but whose `model`, `kv`, and `compute` columns are
-/// one card's share. The row is recognised by its `device` name starting
-/// `Meta`.
-///
-/// `unaccounted_mib` is the difference between what the driver reports for the
-/// process and what llama.cpp can attribute — the term the GPU compute-buffer
-/// bases carry as a margin.
+/// A tensor split reports a single fused row — recognised by a `device` name
+/// starting `Meta` — whose `total`, `free`, and `self` are summed across cards
+/// but whose `model`, `kv`, and `compute` are one card's share.
+/// `unaccounted_mib` is what the driver reports minus what llama.cpp can
+/// attribute, the term the GPU compute-buffer bases carry as a margin.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeviceRow {
@@ -54,20 +50,16 @@ pub struct HostBreakdown {
 /// Everything the loader printed for one context, up to and including its
 /// `graph nodes` line.
 ///
-/// The first segment of a run belongs to llama.cpp's parameter-fitting dry run
-/// — it reports the same shape with no weights loaded — so segments are kept
-/// whole rather than merged, and a reader picks the one it wants by the pools
-/// it holds.
+/// The first segment of a run belongs to llama.cpp's parameter-fitting dry run,
+/// which reports the same shape with no weights loaded — so segments are kept
+/// whole rather than merged, and a reader picks by the pools each holds.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Context {
     /// Per device, then per role, as the loader logged it. `Meta()` is the
     /// fused device a tensor split reports, and its figure is ONE card's share.
-    ///
-    /// The device names are the one dynamic key here — they are backend names
-    /// (`CUDA0`, `CUDA_Host`, `CPU_Mapped`, `Meta()`) that vary with the build
-    /// and the split, so a struct cannot name them. The *roles* are closed, and
-    /// are an enum for that reason.
+    /// The device names are backend names (`CUDA0`, `CUDA_Host`, `CPU_Mapped`)
+    /// that vary with the build and the split; the roles are closed.
     pub buffers: BTreeMap<String, BTreeMap<BufferRole, f64>>,
     /// The attention caches this context allocated, one entry per span of
     /// layers sharing a pool.
@@ -82,10 +74,8 @@ pub struct Context {
     pub graph_splits: Option<u64>,
 }
 
-/// What a per-device buffer line was holding.
-///
-/// The variant order is the serialized key order, since the map is a
-/// `BTreeMap`: model, then kv, then rs, then compute, then output.
+/// What a per-device buffer line was holding. The variant order is the
+/// serialized key order, since the map is a `BTreeMap`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BufferRole {

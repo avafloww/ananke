@@ -248,6 +248,7 @@ Today the shared DTOs live in the `ananke-api` crate (hand-written, consumed by 
 - Use inline comments to explain "why," not just "what".
 - Don't add narrative comments in function bodies. Only add a comment if what you're doing is non-obvious or special in some way, or if something needs a deeper "why" explanation.
 - Module-level documentation should explain purpose and responsibilities.
+- Item docs are three lines at most, unless the comment is a guardrail. The test: if it vanished, could someone reintroduce a bug it was warning about, or fail to find something they'd need? If so, write as much as it takes. Otherwise cut it — don't restate the identifier, don't describe fields that have names, and don't narrate what the code plainly does.
 - **Always** use periods at the end of code comments.
 - **Never** use title case in headings and titles. Always use sentence case.
 - Always use the Oxford comma.

@@ -270,7 +270,7 @@ fn growth_series() -> Vec<Step> {
     steps
 }
 
-/// How many servers a plan loads, which is what its wall-clock is.
+/// How many servers a plan loads, which is what sets its wall-clock.
 pub fn server_loads(stages: &[Stage]) -> usize {
     stages.len()
 }
@@ -279,13 +279,10 @@ pub fn server_loads(stages: &[Stage]) -> usize {
 mod tests {
     use super::*;
 
-    /// The rule the whole module exists for: nothing that has to be fresh may be
-    /// sampled after a request.
-    ///
     /// A violation does not announce itself. The step happens once, so a "before"
-    /// taken afterwards reports the *stepped* figure — a plausible number, in range,
-    /// simply measuring the wrong thing, and the conclusion drawn from it would be
-    /// that there is no step at all.
+    /// taken afterwards reports the *stepped* figure — a plausible number, in
+    /// range, simply measuring the wrong thing, and the conclusion drawn from it
+    /// would be that there is no step at all.
     #[test]
     fn nothing_fresh_is_sampled_after_a_request() {
         for stage in plan(&Question::ALL) {
@@ -304,8 +301,7 @@ mod tests {
         }
     }
 
-    /// Every stage starts by reading a process that has served nothing, because that
-    /// is the only reading a later one can be compared against.
+    /// A fresh reading is the only thing a later one can be compared against.
     #[test]
     fn every_stage_opens_with_a_fresh_reading() {
         for stage in plan(&Question::ALL) {
@@ -320,9 +316,8 @@ mod tests {
         }
     }
 
-    /// The whole battery costs eight loads, not the eleven of running each question
-    /// separately: the shared stage covers `maps`, `step`, `growth` at `cram 0`, and
-    /// the prefill sweep's `(64, 8)` point.
+    /// Eight loads rather than eleven, because the shared stage covers `maps`,
+    /// `step`, `growth` at `cram 0`, and the prefill sweep's `(64, 8)` point.
     #[test]
     fn sharing_saves_three_loads() {
         let together = server_loads(&plan(&Question::ALL));
@@ -334,11 +329,10 @@ mod tests {
         assert_eq!(apart, 11, "one question at a time");
     }
 
-    /// Every growth series starts at the same point in a process's life.
-    ///
-    /// One anchored before the step and one after differ by the step, which is a
-    /// one-time cost and nothing to do with the cache the series is comparing. The
-    /// totals would then look like a cache difference and be read as one.
+    /// One series anchored before the step and one after differ by the step,
+    /// which is a one-time cost and nothing to do with the cache the series is
+    /// comparing — the totals would look like a cache difference and be read as
+    /// one.
     #[test]
     fn the_growth_series_are_anchored_alike() {
         let stages = plan(&[Question::Growth]);
@@ -369,8 +363,8 @@ mod tests {
         }
     }
 
-    /// A single question still produces a usable plan rather than half of the shared
-    /// one, since `--only` exists for when a full battery is too slow.
+    /// `--only` exists for when a full battery is too slow, so a single question
+    /// has to produce a usable plan rather than half of the shared one.
     #[test]
     fn one_question_plans_only_what_it_needs() {
         assert_eq!(server_loads(&plan(&[Question::Step])), 1);
@@ -382,8 +376,6 @@ mod tests {
         );
     }
 
-    /// The growth series is measured at every cache setting, and each starts from a
-    /// process that has served nothing.
     #[test]
     fn each_cache_setting_gets_its_own_server() {
         let stages = plan(&[Question::Growth]);

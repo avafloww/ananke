@@ -95,11 +95,9 @@ pub(crate) fn exercise(
     Vec::new()
 }
 
-/// An embedding model has no generation, so requests drive it instead.
-///
-/// The equivalent growth question for this modality is whether repeated embedding
-/// calls accumulate anything, so a growth cell issues many and checkpoints the
-/// same way rather than being skipped.
+/// An embedding model has no generation, so requests drive it instead. A growth
+/// cell issues many and checkpoints the same way rather than being skipped: the
+/// question is whether repeated embedding calls accumulate anything.
 fn embeddings(deps: &Deps, factors: &Factors, port: u16, pid: u32) -> Vec<Checkpoint> {
     let rounds = if factors.bench {
         factors.bench_turns
@@ -125,14 +123,8 @@ fn embeddings(deps: &Deps, factors: &Factors, port: u16, pid: u32) -> Vec<Checkp
     checkpoints
 }
 
-/// Drive an agent-shaped conversation, checkpointing memory against tokens.
-///
-/// Each turn is a checkpoint: the conversation so far, the tokens the server
-/// reports for it, and the process's memory read immediately after. That makes
-/// growth fittable against cumulative tokens and against KV depth separately, and
-/// it makes a flat result a *measurement* of no growth rather than an absence of
-/// evidence.
-///
+/// Drive an agent-shaped conversation, checkpointing memory against tokens so
+/// growth is fittable against cumulative tokens and against KV depth separately.
 /// Replies are fed back in, so the context grows the way an agent's does and the
 /// prompt cache sees a real prefix rather than filler.
 fn growth(
@@ -204,8 +196,8 @@ fn growth(
     checkpoints
 }
 
-/// What the server said the turn cost, which is what ties a memory reading to the
-/// work that produced it.
+/// What the server said the turn cost, which is what ties a memory reading to
+/// the work that produced it.
 #[derive(Debug, Default, Clone, Copy)]
 struct Tokens {
     prompt: u64,
@@ -222,8 +214,7 @@ impl Tokens {
         }
     }
 
-    /// The KV depth the server is holding, which is the term that scales with
-    /// context rather than with use.
+    /// The term that scales with context rather than with use.
     fn kv_depth(&self) -> u64 {
         self.prompt + self.completion
     }
@@ -253,8 +244,8 @@ fn checkpoint(
     }
 }
 
-/// A chat message's sender. The harness only ever plays these three parts, so
-/// the role is a closed set rather than an arbitrary string.
+/// The harness only ever plays these three parts, so the role is a closed set
+/// rather than an arbitrary string.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Role {

@@ -4,29 +4,20 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// Every field is a factor that could plausibly move host memory, and every one
-/// is recorded, so a row is a complete description of the process that produced
-/// it.
+/// Every factor that could plausibly move host memory, so a row is a complete
+/// description of the process that produced it.
 ///
-/// `serde(default)` on the container: a record written before a factor existed
-/// simply does not spell it, and the cell identity deliberately excludes
-/// defaulted fields, so adding one has to stay free. It pairs with
-/// `deny_unknown_fields` — a key that is *absent* is a version, a key that is
-/// *unrecognised* is a drift.
-///
-/// The dataset settles two disagreements between the old reader and the old
-/// writer. `ngl` is `u32`, not `i32`: no committed row is negative, and the
-/// harness only ever writes an unsigned count. `ubatch`, `parallel`, `cram`,
-/// `soak`, `concurrency`, and `probe_prompt_tokens` are plain counts rather
-/// than `Option`s, because every committed row spells all six.
+/// `serde(default)` with `deny_unknown_fields`: a key that is *absent* is an
+/// older version and must stay free to add, while a key that is *unrecognised*
+/// is a drift and must fail.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Factors {
     pub label: String,
     pub model: String,
-    /// What questions this configuration answers. A tag rather than a
-    /// schedule: it does not take part in the cell's identity, so one
-    /// measurement serves every question that asked for it.
+    /// What questions this configuration answers. Deliberately outside the
+    /// cell's identity, so one measurement serves every question that asked for
+    /// it.
     pub purpose: Vec<String>,
     pub runtime: Runtime,
     /// `CUDA_VISIBLE_DEVICES`, verbatim.
@@ -51,15 +42,13 @@ pub struct Factors {
     pub rtr: bool,
     pub embeddings: bool,
     pub served: bool,
-    /// How many tokens the warm-up probe generates. Memory does not depend on
-    /// it — the first-request step is identical at `n_predict` 8, 4096, and
-    /// 12288 — so it is a timing knob, not a factor.
+    /// A timing knob, not a factor: the first-request step is identical at
+    /// `n_predict` 8, 4096, and 12288.
     pub probe_tokens: u32,
-    /// How long the warm-up probe's *prompt* is, in tokens. This is what moves
-    /// host memory: llama.cpp's server takes a context checkpoint while
-    /// decoding a prompt, spaced by `--checkpoint-min-step` (8192 tokens), so
-    /// the step measures 11 MiB at one token against 274 at sixty-four, and 431
-    /// once past the spacing.
+    /// The warm-up probe's *prompt* length, which does move host memory:
+    /// llama.cpp's server takes a context checkpoint while decoding a prompt,
+    /// spaced by `--checkpoint-min-step` (8192 tokens), so the step measures 11
+    /// MiB at one token against 274 at sixty-four and 431 past the spacing.
     pub probe_prompt_tokens: u32,
     pub soak: u32,
     pub concurrency: u32,
@@ -68,10 +57,9 @@ pub struct Factors {
     /// on representative tokens.
     pub bench: bool,
     pub bench_turns: u32,
-    /// Whether to raise the loader's log verbosity. Needed to read the buffer
-    /// sizes, but verbose logging serialises graph ops, so growth runs turn it
-    /// off: their subject is memory over time, and the arena is already known
-    /// from the matching non-growth cell.
+    /// Needed to read the buffer sizes, but verbose logging serialises graph
+    /// ops, so growth runs turn it off: their subject is memory over time, and
+    /// the arena is already known from the matching non-growth cell.
     pub verbose_log: bool,
     pub extra: Vec<String>,
     /// Distinguishes otherwise identical cells, so repeats can measure the
@@ -131,8 +119,8 @@ pub enum Runtime {
 }
 
 impl Runtime {
-    /// How the fork is spelled — in the record, in a cell's label, and in every
-    /// report keyed on it, which are deliberately the same word.
+    /// How the fork is spelled in the record, in a cell's label, and in every
+    /// report keyed on it — deliberately the same word in all three.
     pub fn name(self) -> &'static str {
         match self {
             Runtime::Mainline => "mainline",
@@ -177,7 +165,6 @@ impl Factors {
             .max(1)
     }
 
-    /// The physical GPU ids this cell was pinned to.
     pub fn gpu_ids(&self) -> Vec<u32> {
         self.gpus
             .split(',')
@@ -192,8 +179,8 @@ impl Factors {
         u64::from(self.ctx).min(u64::from(self.ubatch_or_default()))
     }
 
-    /// The physical batch, with llama.cpp's default named where the cell did
-    /// not set one. A zero reads as absent rather than as a batch of nothing.
+    /// A zero reads as absent — llama.cpp's default — rather than as a batch of
+    /// nothing.
     pub fn ubatch_or_default(&self) -> u32 {
         match self.ubatch {
             0 => DEFAULT_UBATCH,
@@ -205,17 +192,14 @@ impl Factors {
         self.flash_attn == "on"
     }
 
-    /// Whether every layer went to a device.
-    ///
     /// A partly- or un-offloaded process builds a different graph, so most
     /// derivations hold this fixed rather than modelling across it.
     pub fn fully_offloaded(&self) -> bool {
         self.ngl == FULLY_OFFLOADED
     }
 
-    /// Whether any expert layers were pushed to the host. A hybrid does not
-    /// replicate the graph's masks across cards, which several derivers turn
-    /// on.
+    /// A hybrid does not replicate the graph's masks across cards, which
+    /// several derivers turn on.
     pub fn is_hybrid(&self) -> bool {
         self.n_cpu_moe.unwrap_or(0) != 0
     }

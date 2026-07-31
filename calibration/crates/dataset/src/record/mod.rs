@@ -26,9 +26,9 @@ pub const SCHEMA: u32 = 3;
 
 /// One measured cell.
 ///
-/// `deny_unknown_fields`: the row's top level is closed. Every key a writer has
-/// ever emitted is named below, and a key that is not is a schema drift the
-/// round-trip test should fail on rather than silently drop.
+/// `deny_unknown_fields`: the row's top level is closed, so a key no writer has
+/// emitted is a schema drift the round-trip test fails on rather than silently
+/// drops.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Record {
@@ -37,25 +37,21 @@ pub struct Record {
     /// measured.
     pub cell: String,
     pub status: Status,
-    /// Facts that make a stale row identifiable later: when, on what box, and
-    /// against which binary.
     pub provenance: Provenance,
     pub hardware: Hardware,
     pub factors: Factors,
     #[serde(default)]
     pub parsed: Parsed,
-    /// Peak resident memory, with the final reading and the growth since
-    /// startup alongside it.
     #[serde(default)]
     pub rss: Rss,
     /// The end of a failed run's log, so a bad record says why it is bad.
     pub log_tail: String,
-    /// The archived log's file name, which is what makes a record
-    /// re-parseable rather than merely re-readable.
+    /// The archived log's file name, which is what makes a record re-parseable
+    /// rather than merely re-readable.
     pub log: String,
-    /// The full time series, not just its summary: growth is a shape, and a
-    /// peak alone cannot distinguish "allocated on first use" from "still
-    /// climbing when we stopped looking".
+    /// The full time series, not just its summary: a peak alone cannot
+    /// distinguish "allocated on first use" from "still climbing when we
+    /// stopped looking".
     pub trace: Vec<Sample>,
     /// Memory against tokens, which a time series alone cannot give.
     pub checkpoints: Vec<Checkpoint>,
@@ -84,11 +80,8 @@ pub enum Status {
 
 impl Record {
     /// The cell's identity, absent on a row written before the schema carried
-    /// one.
-    ///
-    /// Empty is how "no identity" is spelled on the wire. Such a row cannot be
-    /// attributed to a question or compared against a rerun of the same
-    /// configuration, so a reader skips it rather than guessing from the label.
+    /// one. Such a row cannot be attributed to a question or compared against a
+    /// rerun, so a reader skips it rather than guessing from the label.
     pub fn cell_id(&self) -> Option<&str> {
         Some(self.cell.as_str()).filter(|cell| !cell.is_empty())
     }
@@ -107,21 +100,17 @@ impl Record {
         (self.rss.rss_anon_kb + self.rss.rss_shmem_kb) / 1024
     }
 
-    /// One card's driver reading, in MiB.
-    ///
-    /// Keyed by the *physical* id: the sampler records `gpu{id}_used_mib` while
-    /// the loader's breakdown rows are in visible order, so a cell pinned to
-    /// GPU 1 has its usage under `gpu1_used_mib` and its breakdown row under
-    /// `CUDA0`. A zero reads as absent, because the driver reports one for a
-    /// card the process never touched and no analysis wants that in its mean.
+    /// One card's driver reading, keyed by the *physical* id: the sampler
+    /// records `gpu{id}_used_mib` while the loader's breakdown rows are in
+    /// visible order, so a cell pinned to GPU 1 has its usage under
+    /// `gpu1_used_mib` and its breakdown row under `CUDA0`. A zero reads as
+    /// absent — the driver reports one for a card the process never touched.
     pub fn gpu_card_used_mib(&self, card: u32) -> Option<u64> {
         self.rss.per_card.get(&card).copied().filter(|mib| *mib > 0)
     }
 
-    /// How many cards the driver reported usage on.
-    ///
-    /// [`Rss::gpu_used_mib`] is the process total and is deliberately excluded;
-    /// only the per-card keys count, and only where they are non-zero.
+    /// How many cards the driver reported usage on. [`Rss::gpu_used_mib`] is
+    /// the process total and is deliberately excluded.
     pub fn cards_measured(&self) -> usize {
         self.rss.per_card.values().filter(|mib| **mib > 0).count()
     }

@@ -1,16 +1,12 @@
 //! The resident-memory blocks: the per-cell summary, the time series, and the
 //! per-turn checkpoints.
 //!
-//! All three carry **dynamic** keys — the driver's per-card readings are
-//! written as `gpu{physical id}_used_mib`, so the card id genuinely lives in
-//! the key name — mixed in among fixed ones at the same nesting level. That is
-//! the one place in this schema where the format admits a key no struct can
-//! name, so all three get a hand-written codec rather than a derive: the fixed
-//! keys stay named fields, the dynamic ones are collected into a
-//! `BTreeMap<u32, u64>` keyed by the id itself, and anything else is an
-//! unknown-field error. An open `BTreeMap<String, Value>` would have been
-//! shorter and is what both previous readers did; it is also how a
-//! physical-versus-visible index mix-up once hid in here.
+//! All three mix **dynamic** keys — the driver's per-card readings are written
+//! as `gpu{physical id}_used_mib` — in among fixed ones at the same nesting
+//! level, hence the hand-written codecs: fixed keys stay named fields, card ids
+//! are parsed out into a `BTreeMap<u32, u64>`, and anything else is an
+//! unknown-field error. The open `BTreeMap<String, Value>` both previous
+//! readers used is how a physical-versus-visible index mix-up once hid here.
 
 use std::{collections::BTreeMap, fmt};
 
@@ -21,28 +17,23 @@ use serde::{
 };
 
 /// The peak resident-memory summary for one cell, with the final reading and
-/// the growth since startup alongside it.
-///
-/// The `kb` figures are signed because `growth_*` is a difference; the driver's
-/// MiB readings are unsigned because nvidia-smi never reports a negative.
+/// the growth since startup alongside it. The `kb` figures are signed because
+/// `growth_*` is a difference.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Rss {
-    /// `VmRSS`, in KiB. Not what the host model compares against — see
+    /// `VmRSS`. Not what the host model compares against — see
     /// [`crate::record::Record::owned_bytes`].
     pub rss_total_kb: i64,
-    /// `RssAnon`, in KiB.
     pub rss_anon_kb: i64,
-    /// `RssFile`, in KiB: the mapped GGUF, which llama.cpp populates and then
-    /// leaves resident as clean reclaimable pages.
+    /// `RssFile`: the mapped GGUF, which llama.cpp populates and then leaves
+    /// resident as clean reclaimable pages.
     pub rss_file_kb: i64,
-    /// `RssShmem`, in KiB. `cudaMallocHost` is accounted here, not in anon.
+    /// `RssShmem`. `cudaMallocHost` is accounted here, not in anon.
     pub rss_shmem_kb: i64,
-    /// The driver's total for the whole process, in MiB.
+    /// The driver's total for the whole process.
     pub gpu_used_mib: Option<u64>,
-    /// Per-card driver readings in MiB, keyed by *physical* GPU id: the sampler
-    /// records `gpu{id}_used_mib` while the loader's breakdown rows are in
-    /// visible order, so a cell pinned to GPU 1 has its usage under
-    /// `gpu1_used_mib` and its breakdown row under `CUDA0`.
+    /// Keyed by *physical* GPU id, while the loader's breakdown rows are in
+    /// visible order — see [`crate::record::Record::gpu_card_used_mib`].
     pub per_card: BTreeMap<u32, u64>,
     /// The same four counters at the end of the run.
     pub final_rss_total_kb: i64,
@@ -56,16 +47,12 @@ pub struct Rss {
     pub growth_rss_shmem_kb: i64,
     /// How many two-second samples the peak was taken over.
     pub samples: i64,
-    /// How long the server took to answer `/health`. A duration rides along
-    /// beside the counts, which is why the harness's old map had to hold two
-    /// number types.
+    /// How long the server took to answer `/health`.
     pub load_seconds: f64,
 }
 
-/// The `/proc/<pid>/status` resident-memory breakdown, in kB — the same three
-/// figures ananke's `ProcFs` reads.
-///
-/// Flattened into [`Sample`] and [`Checkpoint`] by their codecs rather than by
+/// The `/proc/<pid>/status` resident-memory breakdown, flattened into
+/// [`Sample`] and [`Checkpoint`] by their codecs rather than by
 /// `serde(flatten)`, which cannot coexist with the dynamic GPU keys beside it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -76,16 +63,12 @@ pub struct RssSnapshot {
     pub rss_shmem_kb: u64,
 }
 
-/// Per-process VRAM, split by card index.
-///
-/// llama.cpp's own breakdown attributes what it allocated; the driver counts
-/// the CUDA context and everything else besides, and ik_llama does not print
-/// the breakdown table at all, so for every ik cell this is the only per-device
-/// source.
+/// Per-process VRAM as the *driver* reports it, so it counts the CUDA context
+/// and everything else llama.cpp's own breakdown cannot attribute. ik_llama
+/// prints no breakdown table at all, so for every ik cell this is the only
+/// per-device source.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GpuUsage {
-    /// The driver's total for the whole process, absent when it reported
-    /// nothing.
     pub total_mib: Option<u64>,
     /// Per card, keyed by physical id.
     pub used_mib: BTreeMap<u32, u64>,
@@ -110,8 +93,7 @@ pub struct Checkpoint {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub generated_tokens_total: u64,
-    /// What the server is holding, which is the term that scales with context
-    /// rather than with use.
+    /// The term that scales with context rather than with use.
     pub kv_depth_tokens: u64,
     pub rss: RssSnapshot,
     pub gpu: GpuUsage,

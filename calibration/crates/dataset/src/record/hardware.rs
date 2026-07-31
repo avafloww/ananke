@@ -4,10 +4,9 @@ use serde::{Deserialize, Serialize};
 
 /// Facts that make a stale row identifiable later.
 ///
-/// The harness wrote this as a string map, which is why every value here is a
-/// `String` even where it names a number: `model_bytes` is spelled as digits in
-/// a string in all 643 committed rows, and retyping it would change the bytes.
-/// The keys are fixed, so the map is a struct.
+/// Every value is a `String` even where it names a number: the harness wrote
+/// this as a string map, `model_bytes` is spelled as quoted digits in all 643
+/// committed rows, and retyping it would change the bytes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Provenance {
@@ -19,9 +18,9 @@ pub struct Provenance {
     pub binary: String,
     pub ananke_rev: String,
     pub runtime_version: String,
-    /// The runtime binary's digest. A cell id hashes the *factors*, and the
-    /// binary is not one of them, so this is the only thing that distinguishes
-    /// two readings of one configuration taken under different builds.
+    /// A cell id hashes the *factors*, and the binary is not one of them, so
+    /// this digest is the only thing distinguishing two readings of one
+    /// configuration taken under different builds.
     pub runtime_sha256: String,
     pub ananke_dirty: String,
     pub model_file_at: String,
@@ -30,11 +29,9 @@ pub struct Provenance {
     pub model_bytes: String,
 }
 
-/// The machine, in enough detail to key a calibration curve on.
-///
-/// Several terms are hardware-specific rather than universal, so a constant
-/// fitted on one box is only transferable to another if you can tell the two
-/// apart.
+/// The machine, in enough detail to key a calibration curve on: several terms
+/// are hardware-specific, so a constant fitted on one box is only transferable
+/// to another if you can tell the two apart.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Hardware {

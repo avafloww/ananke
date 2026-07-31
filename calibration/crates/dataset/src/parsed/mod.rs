@@ -1,20 +1,17 @@
 //! What the harness read back out of the runtime's own logs.
 //!
-//! The block is flat, and deliberately declared flat here rather than assembled
-//! out of `serde(flatten)` groups. Flatten cannot coexist with
-//! `deny_unknown_fields`, and `deny_unknown_fields` is the whole point of this
-//! crate: a key the schema fails to name has to be a parse error, not a
-//! silently dropped column. Two of the three readers this replaces reached the
-//! per-card mirrors through an open `BTreeMap<String, Value>` catch-all, which
-//! is exactly the shape that lets a column go missing without anyone noticing.
+//! The block is flat rather than assembled out of `serde(flatten)` groups:
+//! flatten cannot coexist with `deny_unknown_fields`, and a key the schema fails
+//! to name has to be a parse error rather than a silently dropped column. The
+//! open `BTreeMap<String, Value>` catch-all the previous readers used is exactly
+//! how a column went missing without anyone noticing.
 //!
 //! Field order is the format — see [`crate::record`].
 //!
 //! Several figures come in pairs: `<key>` is the value to fit against, and
-//! `<key>_all` lists every occurrence, written only when the occurrences
-//! disagreed. A cell with `-md` or `--mmproj` loads two models, so a figure can
-//! genuinely appear more than once with different values, and the list is what
-//! lets a later reader tell the target's figure from the draft's.
+//! `<key>_all` lists every occurrence, written only when they disagreed. A cell
+//! with `-md` or `--mmproj` loads two models, so a figure can genuinely appear
+//! more than once with different values.
 
 use std::collections::BTreeMap;
 
@@ -30,9 +27,8 @@ mod log;
 /// block.
 ///
 /// `serde(default)`: a run that failed to load logged nothing to parse, and
-/// twenty-five committed rows carry a `parsed` block of one or two keys for
-/// that reason. Absent means zero, which is what "the log did not say" has
-/// always meant here.
+/// twenty-five committed rows carry a `parsed` block of one or two keys for that
+/// reason. Absent means zero — "the log did not say".
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Parsed {
@@ -44,11 +40,9 @@ pub struct Parsed {
     pub out_buf_mib: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub out_buf_mib_all: Option<Vec<f64>>,
-    /// The host's share of the attention cache, in MiB.
     pub cpu_kv_mib: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_kv_mib_all: Option<Vec<f64>>,
-    /// Weights the runtime placed on the host, in MiB.
     pub cpu_model_mib: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu_model_mib_all: Option<Vec<f64>>,
@@ -63,7 +57,6 @@ pub struct Parsed {
     pub n_layer: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n_layer_all: Option<Vec<u64>>,
-    /// Hidden width.
     pub n_embd: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n_embd_all: Option<Vec<u64>>,
@@ -122,24 +115,17 @@ pub struct Parsed {
     /// Every numeric GGUF metadata key the loader echoed, first occurrence
     /// winning.
     ///
-    /// The second and last place the format admits a key no struct can name,
-    /// and unlike the per-card mirrors it is genuinely unbounded: the keys are
-    /// architecture-templated (`{arch}.attention.key_length`), so the
-    /// architecture is data inside the key. It stays a map for that reason, but
-    /// a *typed* one — the harness writes `i64`, every one of the 13285 values
-    /// in the dataset is an integer, and a string-valued key would be a format
-    /// change rather than something to absorb silently.
+    /// A map because the keys are architecture-templated
+    /// (`{arch}.attention.key_length`), but a *typed* one: every value in the
+    /// dataset is an integer, so a string-valued key is a format change rather
+    /// than something to absorb silently.
     pub gguf_kv: BTreeMap<String, i64>,
     /// The runtime's own buffer lines, one entry per context it created. The
     /// only route to a per-device figure where there is no breakdown table.
     pub contexts: Vec<Context>,
 
-    /// What a vision projector cost, as llama.cpp's own accounting states it.
-    ///
-    /// The four keys travel together — the harness writes them from one
-    /// `Option<Mmproj>` — but the format nests none of them, so they are four
-    /// independently optional fields here rather than one flattened group.
-    /// Per device: the projector's weights *and* its CLIP graph buffer.
+    /// What a vision projector cost, per device: the projector's weights *and*
+    /// its CLIP graph buffer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mmproj_reserved_mib: Option<BTreeMap<String, f64>>,
     /// The summed `clip_model_loader` tensor sizes, which isolate the graph
@@ -169,13 +155,10 @@ pub struct Parsed {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_breakdown: Option<HostBreakdown>,
 
-    /// Flat mirrors of the first four device rows.
-    ///
-    /// Redundant with [`Self::devices`], which is authoritative, and kept only
-    /// because they are convenient to fit against. The card index lives in the
-    /// key name, but the range is closed at four, so they are twenty named
-    /// fields rather than a dynamic family: a fifth card is a schema change the
-    /// round-trip test should catch.
+    /// Flat mirrors of the first four device rows, redundant with
+    /// [`Self::devices`], which is authoritative. Named fields rather than a
+    /// dynamic family so that a fifth card is a schema change the round-trip
+    /// test catches.
     pub gpu0_model_mib: u64,
     pub gpu0_kv_mib: u64,
     pub gpu0_compute_mib: u64,
@@ -201,10 +184,9 @@ pub struct Parsed {
 impl Parsed {
     /// The architecture the loader named, absent where the log did not say.
     ///
-    /// An empty string is how "the log did not say" is spelled here — a run
-    /// that failed to load has no architecture — and every derivation keys on
-    /// the architecture, so a blank one would pool unrelated models under one
-    /// key rather than being skipped.
+    /// Every derivation keys on the architecture, so the empty string a
+    /// failed-to-load run leaves behind has to read as absent rather than pool
+    /// unrelated models under one key.
     pub fn architecture(&self) -> Option<&str> {
         Some(self.arch.as_str()).filter(|arch| !arch.is_empty())
     }

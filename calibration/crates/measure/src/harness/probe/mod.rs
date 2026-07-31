@@ -146,9 +146,9 @@ fn run_stage(
     result
 }
 
-/// Walk one stage's steps in order, which is the whole of the contamination rule at
-/// runtime: the plan says what may be read when, and this does exactly that and
-/// nothing else.
+/// Walk one stage's steps in order. The plan says what may be read when, and
+/// this does exactly that and nothing else — that is the whole of the
+/// contamination rule at runtime.
 fn walk(
     deps: &Deps,
     options: &Options<'_>,
