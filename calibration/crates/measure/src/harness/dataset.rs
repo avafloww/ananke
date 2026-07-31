@@ -16,13 +16,15 @@
 
 use std::{collections::BTreeSet, io::Read, path::Path};
 
+use serde::Deserialize;
+
 use crate::{
     harness::{
         error::{Error, ErrorKind},
         json::to_dataset_json,
         sys::Files,
     },
-    record::Record,
+    record::{Record, Status},
 };
 
 pub(crate) fn read_lines(files: &dyn Files, path: &Path) -> Result<Vec<String>, Error> {
@@ -51,15 +53,28 @@ pub(crate) fn already_measured(files: &dyn Files, path: &Path) -> Result<BTreeSe
     }
     let mut measured = BTreeSet::new();
     for line in read_lines(files, path)? {
-        let record: serde_json::Value = serde_json::from_str(&line)
+        let probe: MembershipProbe = serde_json::from_str(&line)
             .map_err(|error| Error::new(ErrorKind::Dataset, format!("read a record: {error}")))?;
-        if record["status"] == serde_json::json!("ok")
-            && let Some(cell) = record["cell"].as_str()
-        {
-            measured.insert(cell.to_owned());
+        if probe.status == Status::Ok {
+            measured.insert(probe.cell);
         }
     }
     Ok(measured)
+}
+
+/// Just enough of [`Record`] to answer "does this cell still need measuring".
+///
+/// `Record` itself only derives `Serialize` — the writer side owns the exact
+/// spacing via [`to_dataset_json`] — so this is its own small `Deserialize`
+/// shape rather than a cast through `serde_json::Value`, which let a status
+/// spelling drift or a non-object row compare `Null != "ok"` and silently pass
+/// as "not yet measured", costing a re-measurement of a cell that had already
+/// used the GPU time. `status` uses the crate's own [`Status`] enum so a typo
+/// or a schema change fails to deserialize instead of comparing unequal.
+#[derive(Deserialize)]
+struct MembershipProbe {
+    cell: String,
+    status: Status,
 }
 
 pub(crate) fn append(files: &dyn Files, path: &Path, record: &Record) -> Result<(), Error> {
@@ -82,25 +97,47 @@ pub(crate) fn write_lines(files: &dyn Files, path: &Path, lines: &[String]) -> R
 /// the log itself survives, and a log left in a temporary directory does not. They
 /// compress to tens of KiB, which is a small price for making a record
 /// re-parseable rather than merely re-readable.
-pub(crate) fn archive_log(files: &dyn Files, log_path: &Path, archive_dir: &Path) -> String {
-    let Some(stem) = log_path.file_stem() else {
-        return String::new();
-    };
+///
+/// Returns `Err` rather than an empty name on any failure: an empty
+/// `Record::log` is indistinguishable from archiving being disabled, and this
+/// is the field that makes a record re-parseable later. An archive directory
+/// that silently never receives a file turns every subsequent `ok` row into
+/// one that can never be re-derived, with only a skip count as the symptom.
+pub(crate) fn archive_log(
+    files: &dyn Files,
+    log_path: &Path,
+    archive_dir: &Path,
+) -> Result<String, Error> {
+    let stem = log_path.file_stem().ok_or_else(|| {
+        Error::new(
+            ErrorKind::Dataset,
+            format!("archive {}: no file stem", log_path.display()),
+        )
+    })?;
     let name = format!("{}.log.gz", stem.to_string_lossy());
-    let Some(source) = files.read(log_path) else {
-        return String::new();
-    };
+    let source = files.read(log_path).ok_or_else(|| {
+        Error::new(
+            ErrorKind::Dataset,
+            format!("archive {}: source log is unreadable", log_path.display()),
+        )
+    })?;
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-    if std::io::Write::write_all(&mut encoder, &source).is_err() {
-        return String::new();
-    }
-    let Ok(compressed) = encoder.finish() else {
-        return String::new();
-    };
-    match files.write(&archive_dir.join(&name), &compressed) {
-        Ok(()) => name,
-        Err(_) => String::new(),
-    }
+    std::io::Write::write_all(&mut encoder, &source).map_err(|error| {
+        Error::new(
+            ErrorKind::Dataset,
+            format!("compress {}: {error}", log_path.display()),
+        )
+    })?;
+    let compressed = encoder.finish().map_err(|error| {
+        Error::new(
+            ErrorKind::Dataset,
+            format!("compress {}: {error}", log_path.display()),
+        )
+    })?;
+    files
+        .write(&archive_dir.join(&name), &compressed)
+        .map_err(Error::io)?;
+    Ok(name)
 }
 
 /// Read one archived log back. The originals were decoded with replacement, so a

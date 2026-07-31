@@ -262,7 +262,7 @@ fn measure(deps: &Deps, factors: &Factors, id: &str, options: &Options) -> Run {
             };
             let mut outcome = Outcome::failed(status);
             outcome.log_tail = tail(&child.log(), TAIL_LINES);
-            outcome.log = archive(deps, &log_path, options);
+            outcome.log = archive_or_warn(deps, &log_path, options);
             return finish(outcome);
         }
     };
@@ -284,18 +284,35 @@ fn measure(deps: &Deps, factors: &Factors, id: &str, options: &Options) -> Run {
         parsed,
         rss: rss_summary(&sampler, final_reading, load_seconds),
         log_tail: String::new(),
-        log: archive(deps, &log_path, options),
+        log: archive_or_warn(deps, &log_path, options),
         trace: sampler.trace().to_vec(),
         checkpoints,
     })
 }
 
-fn archive(deps: &Deps, log_path: &Path, options: &Options) -> String {
-    options
-        .archive_dir
-        .as_deref()
-        .map(|archive_dir| dataset::archive_log(deps.files.as_ref(), log_path, archive_dir))
-        .unwrap_or_default()
+/// Archive a cell's log, if archiving is turned on.
+///
+/// `None` (archiving disabled) and `Err` (archiving attempted and failed) are
+/// kept distinct: a disabled archive directory is the operator's choice and
+/// leaves `Record::log` empty on purpose, while a failed attempt must be
+/// reported rather than folded into that same empty string — otherwise a
+/// broken archive directory reads exactly like one that was never configured.
+fn archive(deps: &Deps, log_path: &Path, options: &Options) -> Result<String, Error> {
+    match options.archive_dir.as_deref() {
+        None => Ok(String::new()),
+        Some(archive_dir) => dataset::archive_log(deps.files.as_ref(), log_path, archive_dir),
+    }
+}
+
+/// As [`archive`], but a failure is reported to the operator rather than
+/// propagated: the cell has already been measured at real GPU cost, and losing
+/// only its re-parseability is a smaller loss than discarding the whole row
+/// would be.
+fn archive_or_warn(deps: &Deps, log_path: &Path, options: &Options) -> String {
+    archive(deps, log_path, options).unwrap_or_else(|error| {
+        eprintln!("measure: failed to {error}");
+        String::new()
+    })
 }
 
 /// Which binary a cell's fork means. Overridable because the two are built
