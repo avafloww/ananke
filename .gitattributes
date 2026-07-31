@@ -1,0 +1,4 @@
+# The measurement campaign: one gzipped load log per cell, and the dataset.
+calibration/data/logs/** linguist-generated=true
+calibration/data/legacy/** linguist-generated=true
+calibration/data/measurements.ndjson linguist-generated=true
