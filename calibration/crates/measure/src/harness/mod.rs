@@ -26,6 +26,11 @@
 
 pub mod cli;
 
+/// The dataset's own writer, which lives with the schema because the spacing and
+/// escaping it produces *are* the format — a cell's identity is hashed over those
+/// bytes. Everything the harness writes goes through it.
+pub(crate) use ananke_dataset::to_dataset_json;
+
 /// The seam a driver needs: measure a plan, and name a cell the way the dataset
 /// does. `ananke-calibrate`'s campaign generates the plan and commits the rows as
 /// they land, and both halves have to agree with the harness on what a cell *is* —
@@ -41,7 +46,6 @@ mod cell;
 mod dataset;
 mod error;
 mod host;
-mod json;
 mod maintain;
 mod run;
 

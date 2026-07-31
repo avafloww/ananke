@@ -21,8 +21,8 @@ use serde::Deserialize;
 use crate::{
     harness::{
         error::{Error, ErrorKind},
-        json::to_dataset_json,
         sys::Files,
+        to_dataset_json,
     },
     record::{Record, Status},
 };

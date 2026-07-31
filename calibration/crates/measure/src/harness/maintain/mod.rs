@@ -2,14 +2,21 @@
 //!
 //! Both are pure functions over the file's lines, with the log reader injected, so
 //! either can be held against the checked-in dataset in a test without writing to
-//! it. Both also rewrite only the lines they change — see [`crate::harness::json`]
-//! for why that matters.
+//! it. Both work on the typed row: a line is parsed into a [`Record`], the one
+//! field the pass is about is set, and the record is written back out. The dataset
+//! is canonical, so re-serialising a row it did not change reproduces the original
+//! bytes — which is what keeps a one-field edit a one-field diff.
+//!
+//! Both still return the untouched line for a record they decide against, so a
+//! pass over a file some other writer produced cannot reformat rows it had no
+//! reason to visit.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    harness::json::{member_span, splice_member, to_dataset_json},
+    harness::to_dataset_json,
     parse_log,
+    record::{Record, Status},
 };
 
 /// Rebuild every record's `parsed` block from its archived log.
@@ -67,31 +74,25 @@ enum Reparsed {
 }
 
 fn reparse_line(line: &str, read_log: &dyn Fn(&str) -> Option<String>) -> Reparsed {
-    let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+    let Ok(mut record) = serde_json::from_str::<Record>(line) else {
         return Reparsed::Skipped;
     };
-    // A cell that never loaded carries an empty `parsed` by construction, and its
-    // log holds only the failure. Parsing it anyway replaces that emptiness with a
-    // full block of zeros, which reads as a measurement that found nothing rather
-    // than as no measurement at all.
-    if record["status"] != serde_json::json!("ok") {
+    // A cell that never loaded logged nothing to parse, so its `parsed` block is
+    // the schema's zeroes and its log holds only the failure. Re-deriving it would
+    // read the failure as a measurement that found nothing.
+    if record.status != Status::Ok || record.log.is_empty() {
         return Reparsed::Skipped;
     }
-    let Some(log) = record["log"].as_str().filter(|log| !log.is_empty()) else {
-        return Reparsed::Skipped;
-    };
-    let Some(text) = read_log(log) else {
+    let Some(text) = read_log(&record.log) else {
         return Reparsed::Skipped;
     };
     let parsed = parse_log(&text);
-    let ours = serde_json::to_value(&parsed).expect("Parsed serializes as an object");
-    if equivalent(&ours, &record["parsed"]) {
+    if parsed == record.parsed {
         return Reparsed::Unchanged;
     }
-    let Some(line) = splice_member(line, "parsed", &to_dataset_json(&parsed)) else {
-        return Reparsed::Skipped;
-    };
-    Reparsed::Rewritten(set_member(&line, "reparsed", "true"))
+    record.parsed = parsed;
+    record.reparsed = Some(true);
+    Reparsed::Rewritten(to_dataset_json(&record))
 }
 
 /// Mark rows a runtime upgrade invalidated, so every reader skips them.
@@ -120,9 +121,9 @@ fn reparse_line(line: &str, read_log: &dyn Fn(&str) -> Option<String>) -> Repars
 /// about builds, and one that forgets is looking at a status it understands rather
 /// than being silently wrong.
 pub(crate) fn retire_stale_builds(lines: &[String], tolerance: f64) -> (Vec<String>, RetireReport) {
-    let records: Vec<serde_json::Value> = lines
+    let records: Vec<Option<Record>> = lines
         .iter()
-        .map(|line| serde_json::from_str(line).unwrap_or(serde_json::Value::Null))
+        .map(|line| serde_json::from_str(line).ok())
         .collect();
     let stale = stale_builds(&records, tolerance);
 
@@ -132,14 +133,14 @@ pub(crate) fn retire_stale_builds(lines: &[String], tolerance: f64) -> (Vec<Stri
     };
     let mut out = Vec::with_capacity(lines.len());
     for (line, record) in lines.iter().zip(&records) {
-        let key = (architecture(record), build(record));
-        if record["status"] == serde_json::json!("ok") && stale.contains(&key) {
-            report.retired += 1;
-            out.push(
-                splice_member(line, "status", "\"stale-runtime\"").unwrap_or_else(|| line.clone()),
-            );
-        } else {
-            out.push(line.clone());
+        match record {
+            Some(record) if record.status == Status::Ok && stale.contains(&identity(record)) => {
+                report.retired += 1;
+                let mut retired = record.clone();
+                retired.status = Status::StaleRuntime;
+                out.push(to_dataset_json(&retired));
+            }
+            _ => out.push(line.clone()),
         }
     }
     (out, report)
@@ -154,38 +155,34 @@ pub(crate) struct RetireReport {
 
 /// Which (architecture, build) pairs a later build has been shown to disagree
 /// with, on a cell measured under both.
-fn stale_builds(records: &[serde_json::Value], tolerance: f64) -> BTreeSet<(String, String)> {
+fn stale_builds(records: &[Option<Record>], tolerance: f64) -> BTreeSet<(String, String)> {
     // Per architecture and cell: what each build read, and when it read it.
     let mut readings: BTreeMap<(String, String), BTreeMap<String, (f64, String)>> = BTreeMap::new();
-    for record in records {
-        if record["status"] != serde_json::json!("ok") {
+    for record in records.iter().flatten() {
+        if record.status != Status::Ok {
             continue;
         }
         // The driver's per-process total is the comparison: it is the one figure
         // every cell has on both forks, ik_llama printing no breakdown table at
         // all. A row without it cannot take part.
-        let Some(used) = record["rss"]["gpu_used_mib"]
-            .as_f64()
-            .filter(|mib| *mib > 0.0)
-        else {
+        let Some(used) = record.rss.gpu_used_mib.filter(|mib| *mib > 0) else {
             continue;
         };
-        let cell = record["cell"].as_str().unwrap_or_default().to_owned();
-        let when = record["provenance"]["measured_at_utc"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
+        let (arch, build) = identity(record);
         readings
-            .entry((architecture(record), cell))
+            .entry((arch, record.cell.clone()))
             .or_default()
-            .insert(build(record), (used, when));
+            .insert(
+                build,
+                (used as f64, record.provenance.measured_at_utc.clone()),
+            );
     }
 
     let mut stale = BTreeSet::new();
     for ((arch, _cell), seen) in readings {
         for (build, (value, when)) in &seen {
             for (other_build, (other, other_when)) in &seen {
-                if build == other_build || *value == 0.0 {
+                if build == other_build {
                     continue;
                 }
                 // Older *and* different: a build that disagrees with one measured
@@ -200,55 +197,12 @@ fn stale_builds(records: &[serde_json::Value], tolerance: f64) -> BTreeSet<(Stri
     stale
 }
 
-fn architecture(record: &serde_json::Value) -> String {
-    record["parsed"]["arch"].as_str().unwrap_or("?").to_owned()
-}
-
-fn build(record: &serde_json::Value) -> String {
-    record["provenance"]["runtime_sha256"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned()
-}
-
-/// Set a top-level member, adding it at the end when it is not there, which is
-/// where the records already carrying it have it.
-fn set_member(line: &str, key: &str, value: &str) -> String {
-    if member_span(line, key).is_some() {
-        return splice_member(line, key, value).unwrap_or_else(|| line.to_owned());
-    }
-    match line.rfind('}') {
-        Some(close) => format!("{}, \"{key}\": {value}{}", &line[..close], &line[close..]),
-        None => line.to_owned(),
-    }
-}
-
-/// JSON equality that reads numbers as numbers.
-///
-/// Exact, not tolerant: both sides are transcribed from the same decimal text in
-/// the same log, so any difference at all means the parser now reads something
-/// differently — which is precisely the case a rewrite is for.
-fn equivalent(ours: &serde_json::Value, theirs: &serde_json::Value) -> bool {
-    use serde_json::Value;
-    match (ours, theirs) {
-        (Value::Object(ours), Value::Object(theirs)) => {
-            ours.len() == theirs.len()
-                && ours.iter().all(|(key, ours)| {
-                    theirs
-                        .get(key)
-                        .is_some_and(|theirs| equivalent(ours, theirs))
-                })
-        }
-        (Value::Array(ours), Value::Array(theirs)) => {
-            ours.len() == theirs.len()
-                && ours
-                    .iter()
-                    .zip(theirs)
-                    .all(|(ours, theirs)| equivalent(ours, theirs))
-        }
-        (Value::Number(ours), Value::Number(theirs)) => ours.as_f64() == theirs.as_f64(),
-        (ours, theirs) => ours == theirs,
-    }
+/// The pair the rule is stated over: what ran, and which build ran it.
+fn identity(record: &Record) -> (String, String) {
+    (
+        record.parsed.arch.clone(),
+        record.provenance.runtime_sha256.clone(),
+    )
 }
 
 #[cfg(test)]
@@ -257,15 +211,40 @@ mod oracle;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        Parsed,
+        record::{Factors, Hardware, Provenance, Rss, SCHEMA},
+    };
 
+    /// A row carrying only what the retirement rule reads.
     fn row(cell: &str, arch: &str, build: &str, when: &str, gpu: u64) -> String {
-        to_dataset_json(&serde_json::json!({
-            "cell": cell,
-            "status": "ok",
-            "provenance": {"runtime_sha256": build, "measured_at_utc": when},
-            "parsed": {"arch": arch},
-            "rss": {"gpu_used_mib": gpu},
-        }))
+        let mut record = record();
+        record.cell = cell.to_owned();
+        record.parsed.arch = arch.to_owned();
+        record.provenance.runtime_sha256 = build.to_owned();
+        record.provenance.measured_at_utc = when.to_owned();
+        record.rss.gpu_used_mib = Some(gpu);
+        to_dataset_json(&record)
+    }
+
+    /// An otherwise empty `ok` record, since [`Record`] has no default: a status
+    /// is never absent from a row, so there is no sensible one to pick.
+    fn record() -> Record {
+        Record {
+            schema: SCHEMA,
+            cell: String::new(),
+            status: Status::Ok,
+            provenance: Provenance::default(),
+            hardware: Hardware::default(),
+            factors: Factors::default(),
+            parsed: Parsed::default(),
+            rss: Rss::default(),
+            log_tail: String::new(),
+            log: String::new(),
+            trace: Vec::new(),
+            checkpoints: Vec::new(),
+            reparsed: None,
+        }
     }
 
     /// The whole point of the rule: an architecture whose figure moved is retired
@@ -347,14 +326,17 @@ mod tests {
 
     #[test]
     fn a_record_with_no_archived_log_keeps_the_parsed_block_it_has() {
-        let lines = vec![
-            to_dataset_json(
-                &serde_json::json!({"status": "ok", "log": "", "parsed": {"arch": "x"}}),
-            ),
-            to_dataset_json(
-                &serde_json::json!({"status": "failed-to-load", "log": "a.log.gz", "parsed": {}}),
-            ),
-        ];
+        let no_log = {
+            let mut record = record();
+            record.parsed.arch = "x".to_owned();
+            record
+        };
+        let never_loaded = Record {
+            status: Status::FailedToLoad,
+            log: "a.log.gz".to_owned(),
+            ..record()
+        };
+        let lines = vec![to_dataset_json(&no_log), to_dataset_json(&never_loaded)];
         let (out, report) = reparse(&lines, &|_| Some("arch = llama".to_owned()));
         assert_eq!(out, lines);
         assert_eq!(
@@ -369,9 +351,15 @@ mod tests {
 
     #[test]
     fn a_block_the_parser_now_reads_differently_is_rewritten_and_marked() {
-        let line = to_dataset_json(&serde_json::json!({
-            "status": "ok", "log": "a.log.gz", "parsed": {"arch": "stale"}, "cell": "abc",
-        }));
+        let line = to_dataset_json(&Record {
+            cell: "abc".to_owned(),
+            log: "a.log.gz".to_owned(),
+            parsed: Parsed {
+                arch: "stale".to_owned(),
+                ..Parsed::default()
+            },
+            ..record()
+        });
         let (out, report) = reparse(&[line], &|_| Some("arch = llama\n".to_owned()));
         assert_eq!(report.rewritten, 1);
         assert!(out[0].contains(r#""arch": "llama""#), "{}", out[0]);

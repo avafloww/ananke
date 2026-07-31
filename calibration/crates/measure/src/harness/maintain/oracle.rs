@@ -11,19 +11,22 @@
 //!
 //! `--retire-stale-builds` has to be **reproducible**. The dataset carries the
 //! campaign's own retirement, so undoing it and running the rule again must select
-//! the same rows — and because a status is spliced rather than re-serialised, the
-//! round trip lands on the original bytes.
+//! the same rows — and because the dataset is canonical, the round trip lands on
+//! the original bytes.
 //!
 //! Neither test writes to the dataset. Both read it, and the second edits a copy in
 //! memory.
 
 use std::path::{Path, PathBuf};
 
-use crate::harness::{
-    dataset,
-    json::splice_member,
-    maintain::{reparse, retire_stale_builds},
-    sys::LocalFiles,
+use crate::{
+    harness::{
+        dataset,
+        maintain::{reparse, retire_stale_builds},
+        sys::LocalFiles,
+        to_dataset_json,
+    },
+    record::{Record, Status},
 };
 
 /// The campaign's own figure: the rows it retired when the build last changed.
@@ -62,8 +65,10 @@ fn retiring_reselects_exactly_the_rows_the_campaign_retired() {
     let revived: Vec<String> = lines
         .iter()
         .map(|line| {
-            if line.contains(r#""status": "stale-runtime""#) {
-                splice_member(line, "status", "\"ok\"").expect("status is a member")
+            let mut record: Record = serde_json::from_str(line).expect("every row parses");
+            if record.status == Status::StaleRuntime {
+                record.status = Status::Ok;
+                to_dataset_json(&record)
             } else {
                 line.clone()
             }

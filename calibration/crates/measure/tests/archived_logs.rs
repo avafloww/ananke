@@ -39,8 +39,9 @@ fn parsed_blocks_match_the_recorded_rows() {
         let log = record["log"].as_str().unwrap_or_default();
         let status: Status = serde_json::from_value(record["status"].clone())
             .expect("every status in the dataset is one this crate knows");
-        // A cell that never loaded carries an empty `parsed` by construction,
-        // and its log holds only the failure, so there is nothing to compare.
+        // A cell that never loaded logged nothing to parse, so its `parsed` block
+        // is the schema's zeroes and its log holds only the failure. The status is
+        // what says so; the block itself no longer reads as absent.
         if status != Status::Ok || log.is_empty() || !data.join("logs").join(log).exists() {
             skipped += 1;
             continue;

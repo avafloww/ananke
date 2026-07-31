@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     harness::{
         error::{Error, ErrorKind},
-        json::to_dataset_json,
+        to_dataset_json,
     },
     record::{Factors, Runtime},
 };
