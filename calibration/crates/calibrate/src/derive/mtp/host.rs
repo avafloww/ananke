@@ -10,7 +10,7 @@ use crate::{
     derive::{
         Scalar,
         error::{DeriveError, Result},
-        mtp::pairs::mtp_pairs,
+        mtp::pairs::{MtpShape, mtp_pairs},
         ordered::OrderedMap,
     },
     record::Record,
@@ -27,9 +27,9 @@ use crate::{
 /// Which makes both flat constants wrong in opposite directions: the embedded figure
 /// under-reserves by 117 MiB at ctx 131072 and the separate-draft one over-reserves
 /// by 128.
-pub fn mtp_host_fit(rows: &[Record], draft: bool) -> Result<HostFit> {
+pub fn mtp_host_fit(rows: &[Record], shape: MtpShape) -> Result<HostFit> {
     let mut by_model: OrderedMap<String, BTreeMap<u32, i64>> = OrderedMap::new();
-    for pair in mtp_pairs(rows, draft) {
+    for pair in mtp_pairs(rows, shape) {
         if pair.host_delta <= 0 {
             continue;
         }
@@ -99,7 +99,7 @@ pub struct HostFit {
 
 /// Host cost of an embedded MTP head.
 pub fn mtp_host_embedded(rows: &[Record]) -> Result<Scalar> {
-    let fit = mtp_host_fit(rows, false)?;
+    let fit = mtp_host_fit(rows, MtpShape::Embedded)?;
     Ok(Scalar {
         value: fit.base * 1024 * 1024,
         evidence: fit.evidence,
@@ -108,7 +108,7 @@ pub fn mtp_host_embedded(rows: &[Record]) -> Result<Scalar> {
 
 /// Host cost of a separate MTP draft model.
 pub fn mtp_host_separate(rows: &[Record]) -> Result<Scalar> {
-    let fit = mtp_host_fit(rows, true)?;
+    let fit = mtp_host_fit(rows, MtpShape::SeparateDraft)?;
     Ok(Scalar {
         value: fit.base * 1024 * 1024,
         evidence: fit.evidence,
@@ -117,8 +117,8 @@ pub fn mtp_host_separate(rows: &[Record]) -> Result<Scalar> {
 
 /// The context slope both MTP shapes share, in MiB per 1024 tokens.
 pub fn mtp_host_slope(rows: &[Record]) -> Result<Scalar> {
-    let embedded = mtp_host_fit(rows, false)?.slope;
-    let separate = mtp_host_fit(rows, true)?.slope;
+    let embedded = mtp_host_fit(rows, MtpShape::Embedded)?.slope;
+    let separate = mtp_host_fit(rows, MtpShape::SeparateDraft)?.slope;
     Ok(Scalar {
         value: embedded.max(separate),
         evidence: format!(

@@ -15,7 +15,7 @@ use crate::{
     derive::{
         Scalar,
         error::{DeriveError, Result},
-        mtp::pairs::mtp_pairs,
+        mtp::pairs::{MtpShape, mtp_pairs},
         shape::device_context_sums,
         stats::round_half_even,
     },
@@ -36,7 +36,7 @@ use crate::{
 /// head's slot scaling is its own per-slot cache.
 pub fn draft_compute_slope(rows: &[Record]) -> Result<Scalar> {
     let mut by_ctx: BTreeMap<u32, i64> = BTreeMap::new();
-    for pair in mtp_pairs(rows, true) {
+    for pair in mtp_pairs(rows, MtpShape::SeparateDraft) {
         by_ctx
             .entry(pair.ctx)
             .and_modify(|held| *held = (*held).max(pair.delta))
@@ -83,18 +83,16 @@ pub fn draft_compute_slope(rows: &[Record]) -> Result<Scalar> {
 pub fn mtp_unaccounted(rows: &[Record]) -> Result<Scalar> {
     let mut per_device = Vec::new();
     let mut detail = Vec::new();
-    for pair in mtp_pairs(rows, false) {
+    for pair in mtp_pairs(rows, MtpShape::Embedded) {
         let cards = pair.on.factors.cards_nonempty();
         let (on, off) = (
             device_context_sums(pair.on),
             device_context_sums(pair.without),
         );
-        if on.len() < 2 || off.is_empty() {
+        let (Some(draft), Some(main_on), Some(main_off)) = (on.draft(), on.main(), off.main())
+        else {
             continue;
-        }
-        let draft = on[0];
-        let main_on = on[on.len() - 1];
-        let main_off = off[off.len() - 1];
+        };
         let named = draft.kv
             + cards as f64 * draft.compute
             + cards as f64 * (main_on.rs - main_off.rs)

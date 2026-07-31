@@ -43,6 +43,7 @@ pub mod graph;
 pub mod keys;
 pub mod mtp;
 pub mod ordered;
+pub mod pair;
 pub mod pinned;
 pub mod recurrent;
 pub mod shape;

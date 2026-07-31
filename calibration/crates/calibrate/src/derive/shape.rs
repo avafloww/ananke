@@ -126,7 +126,7 @@ pub fn table_less_compute(record: &Record) -> Option<f64> {
 ///
 /// Identical consecutive entries are collapsed: the load log prints the draft
 /// context twice, once at creation and once at reserve.
-pub fn device_context_sums(record: &Record) -> Vec<ContextSums> {
+pub fn device_context_sums(record: &Record) -> DeviceContexts {
     let mut out: Vec<ContextSums> = Vec::new();
     for context in &record.parsed.contexts {
         let device = context
@@ -149,7 +149,27 @@ pub fn device_context_sums(record: &Record) -> Vec<ContextSums> {
             out.push(entry);
         }
     }
-    out
+    DeviceContexts(out)
+}
+
+/// One cell's contexts, in the order llama.cpp created them.
+///
+/// The order carries the meaning: the draft context is created first and the main
+/// one last, which is a fact about the load log rather than about the sums, so
+/// reading it off an index leaves the argument at the call site.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceContexts(Vec<ContextSums>);
+
+impl DeviceContexts {
+    /// The draft context, present only where a second one was created.
+    pub fn draft(&self) -> Option<ContextSums> {
+        (self.0.len() > 1).then(|| self.0[0])
+    }
+
+    /// The main context, which llama.cpp creates last.
+    pub fn main(&self) -> Option<ContextSums> {
+        self.0.last().copied()
+    }
 }
 
 /// One context's device-side cache, recurrent state, and graph, in MiB.

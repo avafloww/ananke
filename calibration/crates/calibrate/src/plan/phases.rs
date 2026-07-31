@@ -105,7 +105,8 @@ pub fn curves(lib: &Library) -> Vec<Factors> {
     for m in MODELS {
         let gpus = m.preferred_gpus();
         for &runtime in m.runtimes {
-            for (ctx, ubatch, fa) in curve_points(m) {
+            for point in curve_points(m) {
+                let CurvePoint { ctx, ubatch, fa } = point;
                 // Flash attention is a KV-cache property; `-dsa` rejects a
                 // quantised cache and the fa-off point is not meaningful for a
                 // model that must run with it on.
@@ -150,24 +151,44 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
     // (the separate-draft shape) and at ctx 32768 with `-np 2` (the embedded
     // shape), and a single small-context point can neither reproduce those nor
     // test the claim that the separate draft's cost does not scale with context.
-    let shapes: [(&str, &Model, Option<&str>, Option<&str>); 4] = [
-        ("mtp-none-g4", g4, None, None),
-        ("mtp-draft-g4", g4, Some("draft-mtp"), g4.draft),
-        ("mtp-none-q27", q27, None, None),
-        ("mtp-embedded-q27", q27, Some("draft-mtp"), None),
+    let shapes = [
+        MtpCell {
+            label: "mtp-none-g4",
+            model: g4,
+            spec_type: None,
+            draft: None,
+        },
+        MtpCell {
+            label: "mtp-draft-g4",
+            model: g4,
+            spec_type: Some("draft-mtp"),
+            draft: g4.draft,
+        },
+        MtpCell {
+            label: "mtp-none-q27",
+            model: q27,
+            spec_type: None,
+            draft: None,
+        },
+        MtpCell {
+            label: "mtp-embedded-q27",
+            model: q27,
+            spec_type: Some("draft-mtp"),
+            draft: None,
+        },
     ];
-    for (label, m, spec, draft) in shapes {
-        for (ctx, parallel, unified) in [(32768, 1, false), (131072, 4, true)] {
+    for shape in shapes {
+        for slots in MTP_SLOT_SHAPES {
             cells.push(Factors {
-                label: format!("{label}-c{ctx}-np{parallel}"),
-                model: lib.path_of(m.path),
+                label: format!("{}-c{}-np{}", shape.label, slots.ctx, slots.parallel),
+                model: lib.path_of(shape.model.path),
                 gpus: "0,1".to_owned(),
                 split: Some(SplitMode::Tensor),
-                ctx,
-                parallel,
-                kv_unified: unified,
-                spec_type: spec.map(str::to_owned),
-                draft: lib.path_opt(draft),
+                ctx: slots.ctx,
+                parallel: slots.parallel,
+                kv_unified: slots.kv_unified,
+                spec_type: shape.spec_type.map(str::to_owned),
+                draft: lib.path_opt(shape.draft),
                 ..Factors::default()
             });
         }
@@ -186,17 +207,33 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
     // Offload regimes: the arena was measured invariant across them, and a host
     // baseline with no GPU visible is a different shape entirely.
     let q4 = model("qwen3-4b");
-    for (ngl, gpus, label) in [
-        (99, "0", "ngl99"),
-        (18, "0", "ngl18"),
-        (0, "0", "ngl0"),
-        (0, "", "no-cuda"),
+    for regime in [
+        OffloadRegime {
+            label: "ngl99",
+            ngl: 99,
+            gpus: "0",
+        },
+        OffloadRegime {
+            label: "ngl18",
+            ngl: 18,
+            gpus: "0",
+        },
+        OffloadRegime {
+            label: "ngl0",
+            ngl: 0,
+            gpus: "0",
+        },
+        OffloadRegime {
+            label: "no-cuda",
+            ngl: 0,
+            gpus: "",
+        },
     ] {
         cells.push(Factors {
-            label: format!("offload-{label}"),
+            label: format!("offload-{}", regime.label),
             model: lib.path_of(q4.path),
-            gpus: gpus.to_owned(),
-            ngl,
+            gpus: regime.gpus.to_owned(),
+            ngl: regime.ngl,
             ..Factors::default()
         });
     }
@@ -208,19 +245,31 @@ pub fn switches(lib: &Library) -> Vec<Factors> {
     // to ask for it conditionally from here, since the failure looks like any
     // other load failure.
     let lag = model("laguna");
-    for (label, rtr, no_mmap) in [
-        ("plain", false, false),
-        ("rtr", true, false),
-        ("nommap", false, true),
+    for path in [
+        WeightPath {
+            label: "plain",
+            rtr: false,
+            no_mmap: false,
+        },
+        WeightPath {
+            label: "rtr",
+            rtr: true,
+            no_mmap: false,
+        },
+        WeightPath {
+            label: "nommap",
+            rtr: false,
+            no_mmap: true,
+        },
     ] {
         cells.push(Factors {
-            label: format!("ik-laguna-{label}"),
+            label: format!("ik-laguna-{}", path.label),
             model: lib.path_of(lag.path),
             runtime: Runtime::Ik,
             gpus: "0,1".to_owned(),
             n_cpu_moe: lag.n_cpu_moe,
-            rtr,
-            no_mmap,
+            rtr: path.rtr,
+            no_mmap: path.no_mmap,
             ..Factors::default()
         });
     }
@@ -438,14 +487,90 @@ fn significant(lib: &Library, m: &Model, runtime: Runtime) -> Vec<Factors> {
 /// larger batch for the terms that scale with it, and one flash-attention-off
 /// point. A model whose native context is below the standard sweep gets the same
 /// shape scaled into its own range instead of being pushed past it.
-fn curve_points(m: &Model) -> Vec<(u32, u32, FlashAttn)> {
+fn curve_points(m: &Model) -> Vec<CurvePoint> {
     let contexts = match m.max_ctx {
         Some(top) if top < 65536 => [(top / 4).max(512), (top / 2).max(1024), top],
         _ => [8192, 32768, 65536],
     };
     let mid = contexts[1];
-    let mut points: Vec<_> = contexts.iter().map(|&c| (c, 512, FlashAttn::On)).collect();
-    points.push((mid, 2048, FlashAttn::On));
-    points.push((mid, 512, FlashAttn::Off));
+    let mut points: Vec<CurvePoint> = contexts
+        .iter()
+        .map(|&ctx| CurvePoint {
+            ctx,
+            ubatch: DEFAULT_UBATCH,
+            fa: FlashAttn::On,
+        })
+        .collect();
+    points.push(CurvePoint {
+        ctx: mid,
+        ubatch: LARGE_UBATCH,
+        fa: FlashAttn::On,
+    });
+    points.push(CurvePoint {
+        ctx: mid,
+        ubatch: DEFAULT_UBATCH,
+        fa: FlashAttn::Off,
+    });
     points
+}
+
+/// llama.cpp's own default batch, which every curve point but one is taken at.
+const DEFAULT_UBATCH: u32 = 512;
+
+/// The second batch, for the terms that scale with it.
+const LARGE_UBATCH: u32 = 2048;
+
+/// One point on a model's compute-buffer curve.
+#[derive(Debug, Clone, Copy)]
+struct CurvePoint {
+    ctx: u32,
+    ubatch: u32,
+    fa: FlashAttn,
+}
+
+/// One of the three MTP shapes, as the cell that exercises it.
+#[derive(Debug, Clone, Copy)]
+struct MtpCell {
+    label: &'static str,
+    model: &'static Model,
+    spec_type: Option<&'static str>,
+    draft: Option<&'static str>,
+}
+
+/// The two slot configurations every MTP shape is measured at.
+const MTP_SLOT_SHAPES: [MtpSlots; 2] = [
+    MtpSlots {
+        ctx: 32768,
+        parallel: 1,
+        kv_unified: false,
+    },
+    MtpSlots {
+        ctx: 131072,
+        parallel: 4,
+        kv_unified: true,
+    },
+];
+
+/// A context and the slot configuration it is served under.
+#[derive(Debug, Clone, Copy)]
+struct MtpSlots {
+    ctx: u32,
+    parallel: u32,
+    kv_unified: bool,
+}
+
+/// How much of the model is on a GPU, and how many GPUs are visible at all.
+#[derive(Debug, Clone, Copy)]
+struct OffloadRegime {
+    label: &'static str,
+    ngl: u32,
+    gpus: &'static str,
+}
+
+/// An ik path that changes which counter the weights land in.
+#[derive(Debug, Clone, Copy)]
+struct WeightPath {
+    label: &'static str,
+    rtr: bool,
+    no_mmap: bool,
 }

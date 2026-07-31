@@ -207,7 +207,7 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table<ArchKey>> {
 /// over-reserves gemma-4 by 108 MiB and predicts the Qwen projectors exactly, which
 /// is the right way round given the Qwen shape is the one two of the three cells use.
 pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
-    let mut seen: Vec<(f64, u64, u64)> = Vec::new();
+    let mut seen: Vec<MmprojCell> = Vec::new();
     for record in rows {
         let parsed = &record.parsed;
         let Some(reserved) = parsed
@@ -222,11 +222,11 @@ pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
         let Some(tensors) = parsed.mmproj_tensor_bytes.filter(|v| *v != 0) else {
             continue;
         };
-        seen.push((
-            reserved * 1048576.0 - tensors as f64,
-            parsed.clip_image_size.unwrap_or(0),
-            parsed.clip_n_merge.unwrap_or(0),
-        ));
+        seen.push(MmprojCell {
+            graph: reserved * 1048576.0 - tensors as f64,
+            image: parsed.clip_image_size.unwrap_or(0),
+            merge: parsed.clip_n_merge.unwrap_or(0),
+        });
     }
     if seen.is_empty() {
         return Err(DeriveError::no_data(
@@ -235,15 +235,24 @@ pub fn mmproj_graph(rows: &[Record]) -> Result<Scalar> {
     }
     let worst = seen
         .iter()
-        .map(|(g, _, _)| *g)
+        .map(|cell| cell.graph)
         .fold(f64::NEG_INFINITY, f64::max);
-    let shapes: BTreeSet<(u64, u64, i64)> = seen
+    let shapes: BTreeSet<VisionShape> = seen
         .iter()
-        .map(|(g, i, m)| (*i, *m, round_half_even(g / 1048576.0)))
+        .map(|cell| VisionShape {
+            image: cell.image,
+            merge: cell.merge,
+            mib: round_half_even(cell.graph / 1048576.0),
+        })
         .collect();
     let detail = shapes
         .iter()
-        .map(|(image, merge, mib)| format!("image {image}/merge {merge} takes {mib} MiB"))
+        .map(|shape| {
+            format!(
+                "image {}/merge {} takes {} MiB",
+                shape.image, shape.merge, shape.mib
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     Ok(Scalar {
@@ -307,4 +316,24 @@ pub fn table_less_observations(rows: &[Record]) -> Result<NestedTable> {
         by_arch: observed,
         evidence,
     })
+}
+
+/// One cell's vision reservation net of its projector tensors, with the vision
+/// settings that shaped it.
+#[derive(Debug, Clone, Copy)]
+struct MmprojCell {
+    graph: f64,
+    image: u64,
+    merge: u64,
+}
+
+/// A distinct vision configuration and what it takes.
+///
+/// The field order is the evidence string's order and a `BTreeSet` sorts by it, so
+/// it is also what `tuning.json` records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct VisionShape {
+    image: u64,
+    merge: u64,
+    mib: i64,
 }

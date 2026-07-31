@@ -148,16 +148,23 @@ pub(crate) fn retire_stale_builds(lines: &[String], tolerance: f64) -> (Vec<Stri
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct RetireReport {
-    /// The (architecture, build) pairs a later build disagreed with.
-    pub(crate) builds: Vec<(String, String)>,
+    /// The builds a later build disagreed with, per architecture.
+    pub(crate) builds: Vec<BuildIdentity>,
     pub(crate) retired: usize,
+}
+
+/// The pair the rule is stated over: what ran, and which build ran it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct BuildIdentity {
+    pub(crate) arch: String,
+    pub(crate) build: String,
 }
 
 /// Which (architecture, build) pairs a later build has been shown to disagree
 /// with, on a cell measured under both.
-fn stale_builds(records: &[Option<Record>], tolerance: f64) -> BTreeSet<(String, String)> {
+fn stale_builds(records: &[Option<Record>], tolerance: f64) -> BTreeSet<BuildIdentity> {
     // Per architecture and cell: what each build read, and when it read it.
-    let mut readings: BTreeMap<(String, String), BTreeMap<String, (f64, String)>> = BTreeMap::new();
+    let mut readings: BTreeMap<ArchCell, BTreeMap<String, Reading>> = BTreeMap::new();
     for record in records.iter().flatten() {
         if record.status != Status::Ok {
             continue;
@@ -168,28 +175,38 @@ fn stale_builds(records: &[Option<Record>], tolerance: f64) -> BTreeSet<(String,
         let Some(used) = record.rss.gpu_used_mib.filter(|mib| *mib > 0) else {
             continue;
         };
-        let (arch, build) = identity(record);
+        let id = identity(record);
         readings
-            .entry((arch, record.cell.clone()))
+            .entry(ArchCell {
+                arch: id.arch,
+                cell: record.cell.clone(),
+            })
             .or_default()
             .insert(
-                build,
-                (used as f64, record.provenance.measured_at_utc.clone()),
+                id.build,
+                Reading {
+                    used_mib: used as f64,
+                    measured_at: record.provenance.measured_at_utc.clone(),
+                },
             );
     }
 
     let mut stale = BTreeSet::new();
-    for ((arch, _cell), seen) in readings {
-        for (build, (value, when)) in &seen {
-            for (other_build, (other, other_when)) in &seen {
+    for (key, seen) in readings {
+        for (build, reading) in &seen {
+            for (other_build, other) in &seen {
                 if build == other_build {
                     continue;
                 }
                 // Older *and* different: a build that disagrees with one measured
                 // before it is the newer program, and it is the older row that is
                 // stale.
-                if (other - value).abs() / value > tolerance && when < other_when {
-                    stale.insert((arch.clone(), build.clone()));
+                let apart = (other.used_mib - reading.used_mib).abs() / reading.used_mib;
+                if apart > tolerance && reading.measured_at < other.measured_at {
+                    stale.insert(BuildIdentity {
+                        arch: key.arch.clone(),
+                        build: build.clone(),
+                    });
                 }
             }
         }
@@ -197,12 +214,26 @@ fn stale_builds(records: &[Option<Record>], tolerance: f64) -> BTreeSet<(String,
     stale
 }
 
-/// The pair the rule is stated over: what ran, and which build ran it.
-fn identity(record: &Record) -> (String, String) {
-    (
-        record.parsed.arch.clone(),
-        record.provenance.runtime_sha256.clone(),
-    )
+/// One architecture's readings of one cell are what the rule compares.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ArchCell {
+    arch: String,
+    cell: String,
+}
+
+/// What one build read for a cell, and when.
+#[derive(Debug, Clone)]
+struct Reading {
+    used_mib: f64,
+    measured_at: String,
+}
+
+/// What ran, and which build ran it.
+fn identity(record: &Record) -> BuildIdentity {
+    BuildIdentity {
+        arch: record.parsed.arch.clone(),
+        build: record.provenance.runtime_sha256.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -285,7 +316,10 @@ mod tests {
         let (out, report) = retire_stale_builds(&lines, 0.02);
         assert_eq!(
             report.builds,
-            vec![("glm-dsa".to_owned(), "oldbuild".to_owned())]
+            vec![BuildIdentity {
+                arch: "glm-dsa".to_owned(),
+                build: "oldbuild".to_owned(),
+            }]
         );
         assert_eq!(report.retired, 1);
         assert!(

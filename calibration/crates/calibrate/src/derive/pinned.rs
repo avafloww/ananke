@@ -10,7 +10,7 @@ use ananke_dataset::{FlashAttn, KvType};
 use crate::{
     derive::{
         Scalar, Table,
-        arena::arena_terms,
+        arena::{MoeCharge, arena_terms},
         error::{DeriveError, Result},
         keys::{ArchKey, VariantKey},
         stats::{consensus, consensus_default, median, round_half_even},
@@ -45,7 +45,7 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
         if factors.kv_quantised() {
             continue;
         }
-        let terms = arena_terms(record, true, tuning);
+        let terms = arena_terms(record, MoeCharge::On, tuning);
         let copies = if factors.cards_or(1) > 1 && factors.split_or_layer() == SplitMode::Layer {
             4.0
         } else {
@@ -286,7 +286,7 @@ pub fn no_flash_attn_rates(
         if factors.runtime_is_ik() {
             continue;
         }
-        let terms = arena_terms(record, true, tuning);
+        let terms = arena_terms(record, MoeCharge::On, tuning);
         let cards = if factors.gpus.is_empty() {
             1
         } else {

@@ -342,7 +342,7 @@ fn the_arena_terms_are_whole_masks() {
                 && !r.factors.runtime_is_ik()
         })
         .expect("the dataset has a dense single-slot cell");
-    let terms = arena::arena_terms(record, true, tuning());
+    let terms = arena::arena_terms(record, arena::MoeCharge::On, tuning());
     let tokens = record.factors.tokens();
     let n_kv = pad(u64::from(record.factors.ctx), arena::KV_CACHE_PAD);
     assert_eq!(terms.mask, (n_kv * tokens * 2) as f64 / 1048576.0);

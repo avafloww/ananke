@@ -84,7 +84,7 @@ pub fn modelled_recurrent_mib(pool: &RsPool, parsed: &Parsed) -> Option<(f64, f6
 /// The tolerance is the log's own rounding — these figures are printed to two
 /// decimals — not a fitting margin. The formula reproduces every pool.
 pub fn check_recurrent_model(rows: &[Record], tolerance_mib: f64) -> Result<()> {
-    let mut worst: BTreeMap<String, (f64, String)> = BTreeMap::new();
+    let mut worst: BTreeMap<String, WorstPool> = BTreeMap::new();
     for (pool, parsed) in recurrent_pools(rows) {
         let Some((modelled_r, modelled_s)) = modelled_recurrent_mib(pool, parsed) else {
             continue;
@@ -93,22 +93,22 @@ pub fn check_recurrent_model(rows: &[Record], tolerance_mib: f64) -> Result<()> 
         for (half, got, want) in [("R", modelled_r, pool.r_mib), ("S", modelled_s, pool.s_mib)] {
             let error = (got - want).abs();
             let key = format!("{arch} {half}");
-            let entry = worst.entry(key).or_insert((0.0, String::new()));
-            if error > entry.0 {
-                *entry = (
+            let entry = worst.entry(key).or_default();
+            if error > entry.error {
+                *entry = WorstPool {
                     error,
-                    format!(
+                    why: format!(
                         "modelled {got:.2} vs {want:.2} MiB at {} seqs, {} rs_seq",
                         pool.seqs, pool.rs_seq
                     ),
-                );
+                };
             }
         }
     }
     let bad: Vec<String> = worst
         .iter()
-        .filter(|(_, (error, _))| *error > tolerance_mib)
-        .map(|(key, (error, why))| format!("{key} off by {error:.2} MiB ({why})"))
+        .filter(|(_, pool)| pool.error > tolerance_mib)
+        .map(|(key, pool)| format!("{key} off by {:.2} MiB ({})", pool.error, pool.why))
         .collect();
     if bad.is_empty() {
         return Ok(());
@@ -164,4 +164,11 @@ pub fn spec_rollback_depth(rows: &[Record]) -> Result<Scalar> {
             slot_counts.len(),
         ),
     })
+}
+
+/// The pool one half of the formula reproduces worst, and what it read there.
+#[derive(Debug, Default, Clone)]
+struct WorstPool {
+    error: f64,
+    why: String,
 }

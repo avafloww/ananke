@@ -68,16 +68,29 @@ pub fn interior(lib: &Library) -> Vec<Factors> {
     // the first in the model's tuple: laguna's production runtime is ik, and
     // anchoring its curve on mainline measures a combination nobody runs — and, at
     // this context, one that does not fit.
-    for (key, ctx, runtime) in [
-        ("dsv4f", 131072, Runtime::Mainline),
-        ("glm52", 131072, Runtime::Ik),
-        ("laguna", 131072, Runtime::Ik),
+    for anchor in [
+        LongContextAnchor {
+            key: "dsv4f",
+            ctx: 131072,
+            runtime: Runtime::Mainline,
+        },
+        LongContextAnchor {
+            key: "glm52",
+            ctx: 131072,
+            runtime: Runtime::Ik,
+        },
+        LongContextAnchor {
+            key: "laguna",
+            ctx: 131072,
+            runtime: Runtime::Ik,
+        },
     ] {
-        let m = model(key);
+        let m = model(anchor.key);
+        let ctx = anchor.ctx;
         cells.push(Factors {
             label: format!("longctx-{}-c{ctx}", m.key),
             model: lib.path_of(m.path),
-            runtime,
+            runtime: anchor.runtime,
             gpus: "0,1".to_owned(),
             split: Some(SplitMode::Layer),
             ctx,
@@ -88,13 +101,13 @@ pub fn interior(lib: &Library) -> Vec<Factors> {
     // runs it in production differs in kv-head count — the factor the KV formula
     // multiplies by and which one model cannot verify.
     let q35 = model("qwen36-35b-a3b");
-    for (spec, name) in [(None, "none"), (Some("draft-mtp"), "embedded")] {
+    for arm in MTP_ARMS_EMBEDDED {
         cells.push(Factors {
-            label: format!("mtp-{name}-35b"),
+            label: format!("mtp-{}-35b", arm.name),
             model: lib.path_of(q35.path),
             gpus: "0,1".to_owned(),
             split: Some(SplitMode::Tensor),
-            spec_type: spec.map(str::to_owned),
+            spec_type: arm.spec_type.map(str::to_owned),
             ..q35.flags("0,1")
         });
     }
@@ -198,15 +211,15 @@ pub fn review_followup(lib: &Library) -> Vec<Factors> {
         ("gemma4-31b-qat", 65536),
     ] {
         let m = model(key);
-        for (spec, name) in [(None, "none"), (Some("draft-mtp"), "mtp")] {
+        for arm in MTP_ARMS {
             cells.push(Factors {
-                label: format!("mtprev-{}-{name}-c{ctx}", m.key),
+                label: format!("mtprev-{}-{}-c{ctx}", m.key, arm.name),
                 model: lib.path_of(m.path),
                 gpus: "0,1".to_owned(),
                 split: Some(SplitMode::Tensor),
                 ctx,
-                spec_type: spec.map(str::to_owned),
-                draft: spec.and_then(|_| lib.path_opt(m.draft)),
+                spec_type: arm.spec_type.map(str::to_owned),
+                draft: arm.spec_type.and_then(|_| lib.path_opt(m.draft)),
                 ..m.flags("0,1")
             });
         }
@@ -234,17 +247,17 @@ pub fn mtp_slots(lib: &Library) -> Vec<Factors> {
     for key in ["qwen36-27b", "qwen36-35b-a3b", "gemma4-31b-qat"] {
         let m = model(key);
         for parallel in [1, 2, 4] {
-            for (spec, name) in [(None, "none"), (Some("draft-mtp"), "mtp")] {
+            for arm in MTP_ARMS {
                 cells.push(Factors {
-                    label: format!("mtpslot-{}-{name}-np{parallel}", m.key),
+                    label: format!("mtpslot-{}-{}-np{parallel}", m.key, arm.name),
                     purpose: vec!["mtp-slots".to_owned()],
                     model: lib.path_of(m.path),
                     gpus: "0,1".to_owned(),
                     split: Some(SplitMode::Tensor),
                     parallel,
                     kv_unified: true,
-                    spec_type: spec.map(str::to_owned),
-                    draft: spec.and_then(|_| lib.path_opt(m.draft)),
+                    spec_type: arm.spec_type.map(str::to_owned),
+                    draft: arm.spec_type.and_then(|_| lib.path_opt(m.draft)),
                     ..m.flags("0,1")
                 });
             }
@@ -298,20 +311,36 @@ pub fn replication(lib: &Library) -> Vec<Factors> {
 /// unallocated — `soak` with `concurrency` is what reaches them.
 pub fn concurrency(lib: &Library) -> Vec<Factors> {
     let m = model("qwen36-27b");
-    [(4, 4, false), (4, 4, true), (2, 2, false)]
-        .into_iter()
-        .map(|(parallel, conc, unified)| Factors {
-            label: format!("slots-np{parallel}-c{conc}"),
-            model: lib.path_of(m.path),
-            gpus: "0,1".to_owned(),
-            split: Some(SplitMode::Layer),
-            parallel,
-            kv_unified: unified,
-            soak: 6,
-            concurrency: conc,
-            ..Factors::default()
-        })
-        .collect()
+    [
+        SlotShape {
+            parallel: 4,
+            concurrency: 4,
+            kv_unified: false,
+        },
+        SlotShape {
+            parallel: 4,
+            concurrency: 4,
+            kv_unified: true,
+        },
+        SlotShape {
+            parallel: 2,
+            concurrency: 2,
+            kv_unified: false,
+        },
+    ]
+    .into_iter()
+    .map(|shape| Factors {
+        label: format!("slots-np{}-c{}", shape.parallel, shape.concurrency),
+        model: lib.path_of(m.path),
+        gpus: "0,1".to_owned(),
+        split: Some(SplitMode::Layer),
+        parallel: shape.parallel,
+        kv_unified: shape.kv_unified,
+        soak: 6,
+        concurrency: shape.concurrency,
+        ..Factors::default()
+    })
+    .collect()
 }
 
 /// Separate the per-device CUDA cost from everything that scales with model.
@@ -331,11 +360,11 @@ pub fn device_scaling(lib: &Library) -> Vec<Factors> {
     let mut cells = Vec::new();
     for key in ["qwen3-4b", "gemma3-27b", "qwen36-35b-a3b"] {
         let m = model(key);
-        for (gpus, name) in [("", "none"), ("0", "one"), ("0,1", "two")] {
+        for visible in DEVICE_COUNTS {
             cells.push(Factors {
-                label: format!("devices-{}-{name}", m.key),
+                label: format!("devices-{}-{}", m.key, visible.name),
                 model: lib.path_of(m.path),
-                gpus: gpus.to_owned(),
+                gpus: visible.gpus.to_owned(),
                 ngl: 0,
                 split: None,
                 extra: m.extra.iter().map(|s| (*s).to_owned()).collect(),
@@ -360,4 +389,73 @@ pub fn device_scaling(lib: &Library) -> Vec<Factors> {
         });
     }
     cells
+}
+
+/// A model whose curve is anchored at one long context, on the runtime the
+/// operator actually serves it with.
+#[derive(Debug, Clone, Copy)]
+struct LongContextAnchor {
+    key: &'static str,
+    ctx: u32,
+    runtime: Runtime,
+}
+
+/// The two arms of an MTP comparison: the flag off, and the flag on.
+#[derive(Debug, Clone, Copy)]
+struct MtpArm {
+    spec_type: Option<&'static str>,
+    name: &'static str,
+}
+
+const MTP_ARMS: [MtpArm; 2] = [
+    MtpArm {
+        spec_type: None,
+        name: "none",
+    },
+    MtpArm {
+        spec_type: Some("draft-mtp"),
+        name: "mtp",
+    },
+];
+
+/// The same two arms, named for the shape the second one exercises.
+const MTP_ARMS_EMBEDDED: [MtpArm; 2] = [
+    MtpArm {
+        spec_type: None,
+        name: "none",
+    },
+    MtpArm {
+        spec_type: Some("draft-mtp"),
+        name: "embedded",
+    },
+];
+
+/// How many CUDA devices a cell can see, with placement pinned to the CPU.
+#[derive(Debug, Clone, Copy)]
+struct VisibleDevices {
+    gpus: &'static str,
+    name: &'static str,
+}
+
+const DEVICE_COUNTS: [VisibleDevices; 3] = [
+    VisibleDevices {
+        gpus: "",
+        name: "none",
+    },
+    VisibleDevices {
+        gpus: "0",
+        name: "one",
+    },
+    VisibleDevices {
+        gpus: "0,1",
+        name: "two",
+    },
+];
+
+/// How many slots a cell serves, and how many requests reach them at once.
+#[derive(Debug, Clone, Copy)]
+struct SlotShape {
+    parallel: u32,
+    concurrency: u32,
+    kv_unified: bool,
 }

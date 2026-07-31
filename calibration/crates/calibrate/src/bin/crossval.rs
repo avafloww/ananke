@@ -119,7 +119,12 @@ fn print(report: &ConstantReport) {
 /// is 108 MiB — around a quarter of a percent of the estimate it lands in. A
 /// constant's error is not its estimate's error, and a summary that printed only
 /// percentages would suggest otherwise.
-type Worst<'a> = (&'a str, &'a str, f64, i64);
+struct Worst<'a> {
+    constant: &'a str,
+    model: &'a str,
+    error: f64,
+    delta: i64,
+}
 
 fn summarise(reports: &[ConstantReport], tolerance: f64, check: bool) -> ExitCode {
     let mut worst: Vec<Worst<'_>> = Vec::new();
@@ -129,7 +134,12 @@ fn summarise(reports: &[ConstantReport], tolerance: f64, check: bool) -> ExitCod
         match report.worst() {
             Some((fold, error)) => {
                 let delta = fold.without.value().unwrap_or(0) - fold.alone.value().unwrap_or(0);
-                worst.push((report.constant, fold.model.as_str(), error, delta));
+                worst.push(Worst {
+                    constant: report.constant,
+                    model: fold.model.as_str(),
+                    error,
+                    delta,
+                });
             }
             None => unevaluable.push(report.constant),
         }
@@ -137,7 +147,7 @@ fn summarise(reports: &[ConstantReport], tolerance: f64, check: bool) -> ExitCod
             single_support.push(report.constant);
         }
     }
-    worst.sort_by(|a, b| b.2.abs().total_cmp(&a.2.abs()));
+    worst.sort_by(|a, b| b.error.abs().total_cmp(&a.error.abs()));
 
     println!("\n{} constant(s) cross-validated", reports.len());
     if !unevaluable.is_empty() {
@@ -158,11 +168,12 @@ fn summarise(reports: &[ConstantReport], tolerance: f64, check: bool) -> ExitCod
 
     let over: Vec<_> = worst
         .iter()
-        .filter(|(_, _, e, _)| e.abs() > tolerance)
+        .filter(|fold| fold.error.abs() > tolerance)
         .collect();
-    for (constant, model, error, delta) in &worst {
+    for fold in &worst {
         println!(
-            "  worst fold  {constant:<40} {model:<44} {error:+.1}%  ({delta:+} in its own units)"
+            "  worst fold  {:<40} {:<44} {:+.1}%  ({:+} in its own units)",
+            fold.constant, fold.model, fold.error, fold.delta
         );
     }
     if worst.is_empty() {
@@ -171,7 +182,7 @@ fn summarise(reports: &[ConstantReport], tolerance: f64, check: bool) -> ExitCod
     }
     println!(
         "\nworst generalisation error: {:+.1}% (tolerance {tolerance}%)",
-        worst[0].2
+        worst[0].error
     );
     if check && !over.is_empty() {
         eprintln!(

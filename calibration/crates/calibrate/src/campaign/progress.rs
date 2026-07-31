@@ -39,7 +39,14 @@ pub struct QuestionProgress {
     /// Of those, cells that produced a measurement.
     pub measured: usize,
     /// Of those, cells recorded with some other status, commonest first.
-    pub issues: Vec<(String, usize)>,
+    pub issues: Vec<StatusCount>,
+}
+
+/// How many of a question's cells stopped at one non-`ok` status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatusCount {
+    pub status: String,
+    pub cells: usize,
 }
 
 /// The campaign as a whole.
@@ -87,11 +94,14 @@ pub fn report(records: &[Record], lib: &Library) -> Report {
                     None => {}
                 }
             }
-            let mut issues: Vec<(String, usize)> = counts
+            let mut issues: Vec<StatusCount> = counts
                 .into_iter()
-                .map(|(status, n)| (status.to_string(), n))
+                .map(|(status, cells)| StatusCount {
+                    status: status.to_string(),
+                    cells,
+                })
                 .collect();
-            issues.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            issues.sort_by(|a, b| b.cells.cmp(&a.cells).then_with(|| a.status.cmp(&b.status)));
             QuestionProgress {
                 name,
                 planned: ids.len(),

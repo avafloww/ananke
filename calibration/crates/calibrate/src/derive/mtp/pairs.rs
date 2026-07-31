@@ -14,7 +14,7 @@ use ananke_dataset::KvType;
 use jiff::SignedDuration;
 
 use crate::{
-    derive::{dataset::measured_at, ordered::OrderedMap},
+    derive::{dataset::measured_at, ordered::OrderedMap, pair::Pair},
     record::Record,
 };
 
@@ -26,6 +26,18 @@ use crate::{
 /// without. Repeats taken back to back reproduce to the megabyte, so the machine is
 /// not noisy; the pairing was.
 pub const SAME_SITTING: SignedDuration = SignedDuration::from_hours(1);
+
+/// Where the MTP head lives, which is the thing a pair is selected on.
+///
+/// The two shapes cost different things — an embedded head adds a draft context, a
+/// separate GGUF adds weights — so every MTP constant is derived over one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MtpShape {
+    /// A head shipped inside the target model, run without a draft GGUF.
+    Embedded,
+    /// A head loaded from its own file with `-md`.
+    SeparateDraft,
+}
 
 /// A with-MTP cell and the without-MTP twin it is measured against.
 #[derive(Debug, Clone)]
@@ -47,48 +59,22 @@ pub struct MtpPair<'a> {
 /// across it reads that whole step as MTP overhead: one such pair showed 568 MiB of
 /// host delta where every same-sitting served pair of the same configuration shows
 /// 239 to 243.
-pub fn mtp_pairs(rows: &[Record], draft: bool) -> Vec<MtpPair<'_>> {
-    type Identity = (
-        String,
-        u32,
-        u32,
-        bool,
-        Option<SplitMode>,
-        String,
-        u32,
-        KvType,
-        bool,
-    );
-    fn identity(record: &Record) -> Identity {
-        let f = &record.factors;
-        (
-            record.provenance.model_key.clone(),
-            f.ctx,
-            f.parallel,
-            f.kv_unified,
-            f.split,
-            f.gpus.clone(),
-            f.ubatch,
-            f.kv_type,
-            f.served,
-        )
-    }
-
-    let mut grouped: OrderedMap<Identity, BTreeMap<bool, &Record>> = OrderedMap::new();
+pub fn mtp_pairs(rows: &[Record], shape: MtpShape) -> Vec<MtpPair<'_>> {
+    let mut grouped: OrderedMap<Identity, Pair<&Record>> = OrderedMap::new();
     for record in rows {
         if record.parsed.architecture().is_some() {
-            grouped
-                .or_insert_with(identity(record), BTreeMap::new)
-                .insert(record.factors.has_spec(), record);
+            *grouped
+                .or_insert_with(Identity::of(record), Pair::default)
+                .half_mut(record.factors.has_spec()) = Some(record);
         }
     }
     let mut out = Vec::new();
     for (key, pair) in grouped.iter() {
-        if pair.len() != 2 {
+        let Some((on, off)) = pair.both() else {
             continue;
-        }
-        let (on, off) = (pair[&true], pair[&false]);
-        if on.factors.draft.as_deref().is_some_and(|d| !d.is_empty()) != draft {
+        };
+        let (on, off) = (*on, *off);
+        if shape_of(on) != shape {
             continue;
         }
         let (Some(on_used), Some(off_used)) = (
@@ -105,8 +91,8 @@ pub fn mtp_pairs(rows: &[Record], draft: bool) -> Vec<MtpPair<'_>> {
             continue;
         }
         out.push(MtpPair {
-            model: key.0.clone(),
-            ctx: key.1,
+            model: key.model.clone(),
+            ctx: key.ctx,
             delta,
             host_delta: on.owned_mib() - off.owned_mib(),
             on,
@@ -129,8 +115,8 @@ pub fn mtp_pairs(rows: &[Record], draft: bool) -> Vec<MtpPair<'_>> {
 /// trustworthy.
 pub fn mtp_slot_scaling(rows: &[Record]) -> String {
     let mut by_key: BTreeMap<(String, u32), BTreeMap<u32, i64>> = BTreeMap::new();
-    let embedded = mtp_pairs(rows, false);
-    let separate = mtp_pairs(rows, true);
+    let embedded = mtp_pairs(rows, MtpShape::Embedded);
+    let separate = mtp_pairs(rows, MtpShape::SeparateDraft);
     for pair in embedded.iter().chain(separate.iter()) {
         let name: String = pair
             .model
@@ -161,4 +147,43 @@ pub fn mtp_slot_scaling(rows: &[Record]) -> String {
         return "no fixed-context slot series measured".to_string();
     }
     series.join("; ")
+}
+
+/// Which shape a cell actually ran, read from whether it names a draft file.
+fn shape_of(record: &Record) -> MtpShape {
+    match record.factors.draft.as_deref() {
+        Some(path) if !path.is_empty() => MtpShape::SeparateDraft,
+        _ => MtpShape::Embedded,
+    }
+}
+
+/// Every factor a pair must agree on, so the MTP flag is the only difference left.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Identity {
+    model: String,
+    ctx: u32,
+    parallel: u32,
+    kv_unified: bool,
+    split: Option<SplitMode>,
+    gpus: String,
+    ubatch: u32,
+    kv_type: KvType,
+    served: bool,
+}
+
+impl Identity {
+    fn of(record: &Record) -> Self {
+        let f = &record.factors;
+        Self {
+            model: record.provenance.model_key.clone(),
+            ctx: f.ctx,
+            parallel: f.parallel,
+            kv_unified: f.kv_unified,
+            split: f.split,
+            gpus: f.gpus.clone(),
+            ubatch: f.ubatch,
+            kv_type: f.kv_type,
+            served: f.served,
+        }
+    }
 }

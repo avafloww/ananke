@@ -18,6 +18,7 @@ use crate::{
         Table,
         error::{DeriveError, Result},
         keys::{ArchKey, VariantKey},
+        pair::Pair,
         shape::CHECKPOINT_MIN_STEP,
         stats::{OUTLIER_TOLERANCE, check_no_outlier_dominates, round_half_even},
     },
@@ -43,26 +44,7 @@ use crate::{
 /// The arena does not move at all across the series, so this is a baseline term and
 /// not an arena one.
 pub fn per_slot_bytes(rows: &[Record]) -> Result<Table<ArchKey>> {
-    // Every factor that would otherwise be measured alongside the slot count.
-    // `soak` belongs here: it grows the prompt over six rounds and costs memory of
-    // its own, so pooling a soak-free single-request cell with a soaked concurrent
-    // one measures both at once — which put gemma3 at 211 MiB per slot against the
-    // 89 its own series shows. `parallel` deliberately does not: an idle slot costs
-    // nothing, so a cell with four slots and one request is a valid one-slot
-    // reading, and excluding it would drop every series whose slot count moves
-    // alongside its concurrency.
-    type Key = (
-        ArchKey,
-        String,
-        u32,
-        u32,
-        String,
-        SplitMode,
-        KvType,
-        bool,
-        u32,
-    );
-    let mut groups: BTreeMap<Key, BTreeMap<u32, i64>> = BTreeMap::new();
+    let mut groups: BTreeMap<SlotKey, BTreeMap<u32, i64>> = BTreeMap::new();
     for record in rows {
         let factors = &record.factors;
         if !factors.served || factors.bench || factors.has_spec() {
@@ -74,17 +56,17 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table<ArchKey>> {
         let Some(arch) = ArchKey::named(record) else {
             continue;
         };
-        let key: Key = (
-            arch.clone(),
-            factors.runtime.name().to_owned(),
-            factors.ctx,
-            factors.ubatch,
-            factors.gpus.clone(),
-            factors.split_or_layer(),
-            factors.kv_type,
-            factors.kv_unified,
-            factors.soak,
-        );
+        let key = SlotKey {
+            arch: arch.clone(),
+            runtime: factors.runtime.name().to_owned(),
+            ctx: factors.ctx,
+            ubatch: factors.ubatch,
+            gpus: factors.gpus.clone(),
+            split: factors.split_or_layer(),
+            kv_type: factors.kv_type,
+            kv_unified: factors.kv_unified,
+            soak: factors.soak,
+        };
         let owned = record.rss.rss_anon_kb * 1024;
         let concurrency = factors.concurrency.max(1);
         // The lowest reading at each point: a higher one means the process had done
@@ -113,7 +95,7 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table<ArchKey>> {
             .filter(|(c, _)| **c > lo)
             .map(|(c, value)| (value - points[&lo]) as f64 / f64::from(c - lo))
             .fold(f64::NEG_INFINITY, f64::max);
-        by_arch.entry(key.0.clone()).or_default().push(worst);
+        by_arch.entry(key.arch.clone()).or_default().push(worst);
     }
     if by_arch.is_empty() {
         return Err(DeriveError::no_data(
@@ -168,7 +150,7 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table<ArchKey>> {
 /// so it has to model what a process holds; a service that never sees a long prompt
 /// would otherwise read as a 1.6 GiB over-reservation and clamp unreachably.
 pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table<VariantKey>> {
-    let mut matched: BTreeMap<CheckpointKey, BTreeMap<bool, i64>> = BTreeMap::new();
+    let mut matched: BTreeMap<CheckpointKey, Pair<i64>> = BTreeMap::new();
     for record in rows {
         let factors = &record.factors;
         if record.status != Status::Ok || !factors.served {
@@ -199,24 +181,19 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table<VariantKey>> {
         // default: a 256- or 1024-token prompt still makes one checkpoint.
         let steady = factors.probe_prompt_tokens >= CHECKPOINT_MIN_STEP;
         let owned = record.owned_mib();
-        matched
-            .entry(key)
-            .or_default()
-            .entry(steady)
-            .and_modify(|held| *held = (*held).max(owned))
-            .or_insert(owned);
+        let held = matched.entry(key).or_default().half_mut(steady);
+        *held = Some(held.map_or(owned, |seen| seen.max(owned)));
     }
 
     let mut by_variant: BTreeMap<VariantKey, Vec<i64>> = BTreeMap::new();
     for (key, pair) in &matched {
-        if pair.len() == 2 {
-            let steady = pair[&true];
-            let probe = pair[&false];
-            by_variant
-                .entry(key.variant.clone())
-                .or_default()
-                .push((steady - probe).max(0));
-        }
+        let Some((steady, probe)) = pair.both() else {
+            continue;
+        };
+        by_variant
+            .entry(key.variant.clone())
+            .or_default()
+            .push((steady - probe).max(0));
     }
     if by_variant.is_empty() {
         return Err(DeriveError::no_data("no probe/steady-state pairs"));
@@ -252,6 +229,28 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table<VariantKey>> {
              being named --swa-checkpoints for that reason."
         ),
     })
+}
+
+/// Every factor that would otherwise be measured alongside the slot count.
+///
+/// `soak` belongs here: it grows the prompt over six rounds and costs memory of its
+/// own, so pooling a soak-free single-request cell with a soaked concurrent one
+/// measures both at once — which put gemma3 at 211 MiB per slot against the 89 its
+/// own series shows. `parallel` deliberately does not: an idle slot costs nothing,
+/// so a cell with four slots and one request is a valid one-slot reading, and
+/// excluding it would drop every series whose slot count moves alongside its
+/// concurrency.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SlotKey {
+    arch: ArchKey,
+    runtime: String,
+    ctx: u32,
+    ubatch: u32,
+    gpus: String,
+    split: SplitMode,
+    kv_type: KvType,
+    kv_unified: bool,
+    soak: u32,
 }
 
 /// Every factor that moves host memory, so the only difference left between a pair

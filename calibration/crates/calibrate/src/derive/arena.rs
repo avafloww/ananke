@@ -47,16 +47,23 @@ impl ArenaTerms {
     }
 }
 
+/// Whether the modelled arena includes the CPU-resident MoE intermediates.
+///
+/// [`MoeCharge::Off`] belongs to the derivers that are *fitting* that term, so it
+/// shows up in their residual instead of being subtracted twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoeCharge {
+    On,
+    Off,
+}
+
 /// The modelled arena for one cell.
 ///
 /// mainline sizes the KQ mask against one slot's share of the context unless the
 /// cache is unified; ik does not divide by slots at all. An interleaved SWA model
 /// carries a second mask sized to the window plus the batch, not to the window
 /// alone.
-///
-/// `charge_moe` is turned off by the derivers that are *fitting* the MoE term, so
-/// it shows up in their residual instead of being subtracted twice.
-pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaTerms {
+pub fn arena_terms(record: &Record, charge_moe: MoeCharge, tuning: &Tuning) -> ArenaTerms {
     let (factors, parsed) = (&record.factors, &record.parsed);
     let arch = parsed.arch.as_str();
     let ctx = u64::from(factors.ctx);
@@ -123,7 +130,7 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
     // FINDINGS.md. mainline shows the same shape under a tensor split alone.
     let experts = parsed.n_expert;
     let used = parsed.n_expert_used;
-    if charge_moe && experts != 0 && used != 0 && tokens * used < 32 * experts {
+    if charge_moe == MoeCharge::On && experts != 0 && used != 0 && tokens * used < 32 * experts {
         if ik {
             hidden += tuning
                 .ik_moe_rate_frozen_arch_miss(&ArchKey::recorded(record))
@@ -168,7 +175,7 @@ pub fn check_arena_model(
     // a zeroed per-layer term would report the E variant as drifted rather than as
     // unread.
     let e_variant_rate = tuning.required_f64("GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN")?;
-    let mut worst: BTreeMap<String, (f64, String)> = BTreeMap::new();
+    let mut worst: BTreeMap<String, WorstArenaCell> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
         let arena = parsed.arena_mib;
@@ -187,7 +194,7 @@ pub fn check_arena_model(
         if !factors.fully_offloaded() {
             continue;
         }
-        let terms = arena_terms(record, true, tuning);
+        let terms = arena_terms(record, MoeCharge::On, tuning);
         let cards = factors.cards_or(1);
         let copies = if cards > 1 && !factors.runtime_is_ik() {
             4.0
@@ -216,17 +223,20 @@ pub fn check_arena_model(
         let modelled = copies * (terms.masks() + no_fa) + terms.hidden + quantised + e_variant;
         let error = (arena - modelled).abs();
         let arch = parsed.arch.clone();
-        let entry = worst.entry(arch).or_insert((0.0, String::new()));
-        if error > entry.0 {
-            *entry = (error, record.log.clone());
+        let entry = worst.entry(arch).or_default();
+        if error > entry.error {
+            *entry = WorstArenaCell {
+                error,
+                log: record.log.clone(),
+            };
         }
     }
     let bad: Vec<String> = worst
         .iter()
-        .filter(|(_, (error, _))| *error > tolerance_mib)
-        .map(|(arch, (error, log))| {
-            let head: String = log.chars().take(40).collect();
-            format!("{arch} off by {error:.1} MiB on {head}")
+        .filter(|(_, cell)| cell.error > tolerance_mib)
+        .map(|(arch, cell)| {
+            let head: String = cell.log.chars().take(40).collect();
+            format!("{arch} off by {:.1} MiB on {head}", cell.error)
         })
         .collect();
     if bad.is_empty() {
@@ -244,6 +254,13 @@ pub fn check_arena_model(
 pub const ARENA_TOLERANCE_MIB: f64 = 5.0;
 
 const MIB: f64 = (1024 * 1024) as f64;
+
+/// The cell an architecture's model reproduces worst, and the log line naming it.
+#[derive(Debug, Default, Clone)]
+struct WorstArenaCell {
+    error: f64,
+    log: String,
+}
 
 /// A rate, falling back to the table's worst where the key has no row — the same
 /// fallback the estimator applies.

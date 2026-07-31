@@ -9,7 +9,7 @@ use ananke_config::placement::SplitMode;
 use crate::{
     derive::{
         Scalar, Table,
-        arena::arena_terms,
+        arena::{MoeCharge, arena_terms},
         error::{DeriveError, Result},
         keys::{ArchCardsKey, ArchKey},
         stats::{consensus_default, median, round_half_even, round_tenths_half_even},
@@ -42,7 +42,7 @@ pub fn layer_split_copies(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         if factors.is_hybrid() {
             continue;
         }
-        let terms = arena_terms(record, true, tuning);
+        let terms = arena_terms(record, MoeCharge::On, tuning);
         if terms.masks() <= 0.0 {
             continue;
         }
@@ -98,7 +98,7 @@ pub fn offload_min_batch(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         if !factors.flash_attn_on() || !factors.fully_offloaded() {
             continue;
         }
-        let terms = arena_terms(record, false, tuning);
+        let terms = arena_terms(record, MoeCharge::Off, tuning);
         // Whether the term is there at all, judged from the measurement rather
         // than from the threshold being solved for. A present term is tens of
         // MiB; an absent one leaves hundredths.
@@ -154,7 +154,7 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
         if !factors.fully_offloaded() {
             continue;
         }
-        let terms = arena_terms(record, false, tuning);
+        let terms = arena_terms(record, MoeCharge::Off, tuning);
         let tokens = factors.tokens() as f64;
         let excess = (arena - terms.total()) * 1048576.0;
         if excess <= 0.0 {
@@ -234,7 +234,7 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
         if !factors.flash_attn_on() || !factors.fully_offloaded() {
             continue;
         }
-        let terms = arena_terms(record, false, tuning);
+        let terms = arena_terms(record, MoeCharge::Off, tuning);
         let excess = (arena - terms.total()) * 1048576.0 / tokens as f64;
         let n_embd = parsed.n_embd;
         points.push(Point {

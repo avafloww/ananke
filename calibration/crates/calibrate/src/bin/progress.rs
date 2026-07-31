@@ -85,7 +85,7 @@ fn print(report: &Report) {
             question
                 .issues
                 .iter()
-                .map(|(status, n)| format!("{n}x {status}"))
+                .map(|issue| format!("{}x {}", issue.cells, issue.status))
                 .collect::<Vec<_>>()
                 .join(", ")
         };

@@ -14,7 +14,7 @@ use ananke_config::placement::SplitMode;
 use crate::{
     derive::{
         Scalar, Table,
-        arena::arena_terms,
+        arena::{MoeCharge, arena_terms},
         error::{DeriveError, Result},
         keys::{ArchKey, VariantEnvironmentKey, VariantKey},
         ordered::OrderedMap,
@@ -112,7 +112,7 @@ pub fn baseline_offset(
         // sit 24 to 192 MiB higher. Excluding them left every ik configuration with
         // no correction at all.
         let owned = record.owned_bytes() as f64;
-        let terms = arena_terms(record, true, tuning);
+        let terms = arena_terms(record, MoeCharge::On, tuning);
         let cards = factors.cards_or(1);
         // ik does not replicate masks across cards at any count, so including its
         // cells means the multiplier can no longer be read off the card count alone.
@@ -221,8 +221,7 @@ pub fn baseline_offset(
 /// so every tensor-split service was under-predicted by that much — and tensor
 /// split is what the operator runs for several of them.
 pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Table<ArchKey>)> {
-    type Key = (String, u32, u32, ArchKey);
-    let mut pairs: BTreeMap<Key, BTreeMap<SplitMode, Vec<f64>>> = BTreeMap::new();
+    let mut pairs: BTreeMap<SplitPairKey, BTreeMap<SplitMode, Vec<f64>>> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
         if !factors.fully_offloaded() || factors.gpus != "0,1" || factors.has_spec() {
@@ -243,16 +242,16 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
             continue;
         }
         let owned = record.owned_bytes() as f64;
-        let terms = arena_terms(record, true, tuning);
+        let terms = arena_terms(record, MoeCharge::On, tuning);
         let split = factors.split_or_layer();
         let copies = if split == SplitMode::Layer { 4.0 } else { 1.0 };
         let base = (owned - (copies * terms.masks() + terms.hidden) * 1048576.0) / 1048576.0;
-        let key = (
-            record.provenance.model_key.clone(),
-            factors.ctx,
-            factors.ubatch,
-            ArchKey::recorded(record),
-        );
+        let key = SplitPairKey {
+            model: record.provenance.model_key.clone(),
+            ctx: factors.ctx,
+            ubatch: factors.ubatch,
+            arch: ArchKey::recorded(record),
+        };
         pairs
             .entry(key)
             .or_default()
@@ -272,12 +271,12 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
         };
         let delta = median(tensor) - median(layer);
         deltas.push(delta);
-        by_arch.entry(key.3.clone()).or_default().push(delta);
+        by_arch.entry(key.arch.clone()).or_default().push(delta);
         let name: String = key
-            .0
+            .model
             .rsplit('/')
             .next()
-            .unwrap_or(&key.0)
+            .unwrap_or(&key.model)
             .chars()
             .take(18)
             .collect();
@@ -370,4 +369,14 @@ pub fn per_device_bytes(rows: &[Record]) -> Result<Scalar> {
             detail.join("; "),
         ),
     })
+}
+
+/// One model at one shape, so the only difference left between the grouped cells is
+/// the split mode.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SplitPairKey {
+    model: String,
+    ctx: u32,
+    ubatch: u32,
+    arch: ArchKey,
 }

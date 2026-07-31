@@ -161,8 +161,8 @@ fn reparse(files: &dyn Files, out: &Path, archive_dir: &Path) -> Result<ExitCode
 fn retire(files: &dyn Files, out: &Path) -> Result<ExitCode, Error> {
     let lines = dataset::read_lines(files, out)?;
     let (rewritten, report) = maintain::retire_stale_builds(&lines, STALE_TOLERANCE);
-    for (arch, build) in &report.builds {
-        println!("retired {arch} rows measured under {build}");
+    for id in &report.builds {
+        println!("retired {} rows measured under {}", id.arch, id.build);
     }
     if rewritten != lines {
         dataset::write_lines(files, out, &rewritten)?;

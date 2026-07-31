@@ -23,14 +23,40 @@ const MODELS_TOML: &str = "calibration/models.toml";
 const TOLERANCE_PCT: f64 = 5.0;
 
 /// A `models.toml` entry name against the `factors.label` of its production cell.
-const PROD_LABELS: &[(&str, &str)] = &[
-    ("qwen3.6-35b-a3b", "prod-qwen36-35b-a3b"),
-    ("qwen3.6-27b", "prod-qwen36-27b"),
-    ("gemma-4-31b-it-qat", "prod-gemma4-31b-qat"),
-    ("deepseek-v4-flash", "prod-dsv4f"),
-    ("glm-5.2", "prod-glm52"),
-    ("laguna-s-2.1-iq4-nl", "prod-laguna"),
-    ("talkie-1930-13b-it", "prod-talkie"),
+struct ProdModel {
+    config: &'static str,
+    label: &'static str,
+}
+
+const PROD_LABELS: &[ProdModel] = &[
+    ProdModel {
+        config: "qwen3.6-35b-a3b",
+        label: "prod-qwen36-35b-a3b",
+    },
+    ProdModel {
+        config: "qwen3.6-27b",
+        label: "prod-qwen36-27b",
+    },
+    ProdModel {
+        config: "gemma-4-31b-it-qat",
+        label: "prod-gemma4-31b-qat",
+    },
+    ProdModel {
+        config: "deepseek-v4-flash",
+        label: "prod-dsv4f",
+    },
+    ProdModel {
+        config: "glm-5.2",
+        label: "prod-glm52",
+    },
+    ProdModel {
+        config: "laguna-s-2.1-iq4-nl",
+        label: "prod-laguna",
+    },
+    ProdModel {
+        config: "talkie-1930-13b-it",
+        label: "prod-talkie",
+    },
 ];
 
 fn main() -> ExitCode {
@@ -79,8 +105,10 @@ fn main() -> ExitCode {
             .map(|(head, _)| head)
             .unwrap_or(label);
         for candidate in [label, base] {
-            if let Some((_, target)) = PROD_LABELS.iter().find(|(_, l)| *l == candidate) {
-                let entry = production.entry(*target).or_insert((used, when.clone()));
+            if let Some(target) = PROD_LABELS.iter().find(|m| m.label == candidate) {
+                let entry = production
+                    .entry(target.label)
+                    .or_insert((used, when.clone()));
                 if instant(&when) > instant(&entry.1) {
                     *entry = (used, when.clone());
                 }
@@ -94,7 +122,11 @@ fn main() -> ExitCode {
         "Model", "Est GPU", "Prod GPU", "Drift"
     );
     let mut worst = 0.0_f64;
-    for (name, label) in PROD_LABELS {
+    for ProdModel {
+        config: name,
+        label,
+    } in PROD_LABELS
+    {
         let Some(config) = configs.iter().find(|c| c.name == *name) else {
             println!("{name:<24} {:>9} {:>9} {:>8}", "-", "-", "missing");
             continue;
