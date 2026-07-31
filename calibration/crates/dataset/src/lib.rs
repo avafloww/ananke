@@ -5,8 +5,8 @@
 //! write-only `Record`, the calibration tools' read-only one, and a
 //! hand-extracting `serde_json::Value` walk in the estimator's integration
 //! test. They disagreed — the two `Parsed` blocks differed by seven fields —
-//! and neither could round-trip, which is why a maintenance pass over the
-//! dataset splices raw bytes instead of re-serialising a row.
+//! and neither could round-trip, so a maintenance pass over the dataset had to
+//! splice raw bytes rather than re-serialise a row.
 //!
 //! This crate is the union of the two, taking the better-typed side of each
 //! disagreement, and it derives both halves of serde on every type. That makes

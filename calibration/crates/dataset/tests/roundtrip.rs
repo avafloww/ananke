@@ -11,11 +11,10 @@
 //! and does not come out is a schema bug, and fails the run unconditionally.
 //!
 //! *Canonicity* says the schema also agrees with the committed lines on key
-//! order and number formatting. The dataset does not yet satisfy that — it was
-//! written by more than one writer over the campaign's life — so this one
-//! reports what a one-time canonical rewrite would change rather than failing.
-//! Once that rewrite lands, flip [`ROWS_MUST_BE_CANONICAL`] and it becomes the
-//! gate.
+//! order and number formatting. A one-time rewrite put every row in that form,
+//! so this is now a gate: a row that does not come back byte for byte fails the
+//! build, and the report says which keys, which order, and which spellings
+//! moved.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -25,10 +24,8 @@ use std::{
 use ananke_dataset::{Record, to_dataset_json};
 
 /// Whether the committed dataset is expected to be in canonical form already.
-///
-/// False until the one-time rewrite lands; the non-canonical rows are counted
-/// and described instead of failing the run.
-const ROWS_MUST_BE_CANONICAL: bool = false;
+/// True since the one-time rewrite; a row that is not is a failure, not a note.
+const ROWS_MUST_BE_CANONICAL: bool = true;
 
 const DATASET: &str = include_str!("../../../data/measurements.ndjson");
 
