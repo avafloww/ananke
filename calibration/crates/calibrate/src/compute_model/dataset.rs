@@ -1,50 +1,13 @@
-//! The two dataset helpers the fit needs.
+//! The one dataset helper the fit needs and nothing else does.
 //!
-//! They live here rather than in a general dataset module because the fit is
-//! their only consumer.
-
-use std::collections::{HashMap, HashSet};
+//! Superseding a cell by a later measurement of it is *not* here: that rule is
+//! [`crate::derive::dataset::latest_per_cell`], which the fit calls. A second copy
+//! lived here and ordered the stamps as strings, which agrees with the timestamps
+//! only while every one of them is the same fixed width at the same offset.
 
 use ananke_dataset::BufferRole;
 
 use crate::record::Record;
-
-/// Drop rows superseded by a later measurement of the same cell.
-///
-/// A cell id hashes the factors, so two rows sharing one describe the same
-/// configuration — and when they were taken under different runtime builds, the
-/// older one describes a program that is no longer installed. Fitting across both
-/// fits two programs at once.
-///
-/// Keeping the newest is the rule rather than averaging because the quantity is
-/// deterministic within a build: repeats taken back to back reproduce to the
-/// megabyte, so a disagreement is a change in the runtime, not noise. GLM-5.2's
-/// production cell reads 38708 MiB on one build and 34978 on the next.
-pub fn latest_per_cell(rows: &[Record]) -> Vec<&Record> {
-    let mut newest: HashMap<&str, usize> = HashMap::new();
-    for (index, record) in rows.iter().enumerate() {
-        let Some(cell) = record.cell_id() else {
-            continue;
-        };
-        let supersedes = match newest.get(cell) {
-            None => true,
-            Some(&current) => {
-                record.provenance.measured_at_utc > rows[current].provenance.measured_at_utc
-            }
-        };
-        if supersedes {
-            newest.insert(cell, index);
-        }
-    }
-    // Order preserved from the input, so an analysis that walks the dataset sees
-    // it in measurement order rather than hash order.
-    let keep: HashSet<usize> = newest.into_values().collect();
-    rows.iter()
-        .enumerate()
-        .filter(|(index, _)| keep.contains(index))
-        .map(|(_, record)| record)
-        .collect()
-}
 
 /// Per-device `compute + unaccounted` for a cell with no breakdown table.
 ///

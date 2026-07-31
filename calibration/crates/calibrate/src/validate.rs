@@ -11,7 +11,7 @@
 //! production Qwen3.6-27B cell the two differ by 472 MiB, which is the
 //! difference between +1.1% and −0.1%.
 
-use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy};
+use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode};
 use ananke_estimate::EstimatorInputs;
 use ananke_measure::record::Status;
 use ananke_placement::{
@@ -19,7 +19,7 @@ use ananke_placement::{
     devices::{DeviceSnapshot, GpuSnapshot},
 };
 
-use crate::record::Record;
+use crate::record::{FlashAttn, KvType, Record, Runtime};
 
 /// Host memory the packer is told it has. The campaign machine has 256 GiB and
 /// nothing here depends on the exact figure — it only has to be large enough not
@@ -131,29 +131,83 @@ pub fn snapshot(record: &Record) -> DeviceSnapshot {
 
 /// A key identifying the configuration, so repeats of one cell are counted once.
 ///
-/// Two labels can share a configuration — a re-measurement, or the same point
-/// reached from two sweeps — and they measure the same thing.
-pub fn configuration_key(record: &Record) -> String {
+/// Every factor `tests/factors.rs` classifies as read is pinned, [`KEY_EXCLUDED`]
+/// aside, and `tests/factors.rs::the_validate_key_pins_every_read_factor` holds
+/// the two in step.
+///
+/// A key that omits a factor is not a narrower key, it is a wrong one: cells
+/// differing only in the omitted factor collide and all but the first are
+/// discarded as duplicates. The sixteen-field `format!` this replaces dropped 53
+/// comparable cells that way, `extra` — which carries ik's `-dsa`, worth
+/// gigabytes of VRAM — among the factors it could not see.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ConfigurationKey<'a> {
+    model: &'a str,
+    runtime: Runtime,
+    gpus: &'a str,
+    ctx: u32,
+    ubatch: u32,
+    parallel: u32,
+    ngl: u32,
+    split: Option<SplitMode>,
+    kv_type: KvType,
+    kv_unified: bool,
+    flash_attn: FlashAttn,
+    n_cpu_moe: Option<u32>,
+    mmproj: Option<&'a str>,
+    draft: Option<&'a str>,
+    spec_type: Option<&'a str>,
+    no_mmap: bool,
+    rtr: bool,
+    cram: u32,
+    soak: u32,
+    concurrency: u32,
+    probe_prompt_tokens: u32,
+    embeddings: bool,
+    bench: bool,
+    served: bool,
+    numa: Option<&'a str>,
+    extra: &'a [String],
+}
+
+/// The one read factor [`ConfigurationKey`] leaves out, and why.
+///
+/// A label names a cell; it does not describe the process. Two labels sharing a
+/// configuration — a re-measurement, or the same point reached from two sweeps —
+/// measure the same thing, and collapsing them is what the key is for.
+pub const KEY_EXCLUDED: &[&str] = &["label"];
+
+/// The configuration this cell was measured under.
+pub fn configuration_key(record: &Record) -> ConfigurationKey<'_> {
     let f = &record.factors;
-    format!(
-        "{}|{}|{:?}|{:?}|{}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{}|{:?}|{:?}",
-        f.model,
-        f.ctx,
-        f.ubatch,
-        f.parallel,
-        f.kv_unified,
-        f.split,
-        f.gpus,
-        f.kv_type,
-        f.ngl,
-        f.n_cpu_moe,
-        f.mmproj,
-        f.draft,
-        f.spec_type,
-        f.runtime,
-        f.flash_attn,
-        f.cram,
-    )
+    ConfigurationKey {
+        model: &f.model,
+        runtime: f.runtime,
+        gpus: &f.gpus,
+        ctx: f.ctx,
+        ubatch: f.ubatch,
+        parallel: f.parallel,
+        ngl: f.ngl,
+        split: f.split,
+        kv_type: f.kv_type,
+        kv_unified: f.kv_unified,
+        flash_attn: f.flash_attn,
+        n_cpu_moe: f.n_cpu_moe,
+        mmproj: f.mmproj.as_deref(),
+        draft: f.draft.as_deref(),
+        spec_type: f.spec_type.as_deref(),
+        no_mmap: f.no_mmap,
+        rtr: f.rtr,
+        cram: f.cram,
+        soak: f.soak,
+        concurrency: f.concurrency,
+        probe_prompt_tokens: f.probe_prompt_tokens,
+        embeddings: f.embeddings,
+        bench: f.bench,
+        served: f.served,
+        numa: f.numa.as_deref(),
+        extra: &f.extra,
+    }
 }
 
 /// A snapshot of the given cards at the given capacities.

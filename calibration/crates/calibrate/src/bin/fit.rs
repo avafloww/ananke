@@ -17,8 +17,8 @@
 use std::{path::Path, process::ExitCode};
 
 use ananke_calibrate::{
-    compute_model::{collect, dataset::latest_per_cell, document_section},
-    derive::tuning::Tuning,
+    compute_model::{collect, document_section},
+    derive::{dataset::latest_per_cell, tuning::Tuning},
     record::read_ndjson,
 };
 use ananke_measure::record::Status;

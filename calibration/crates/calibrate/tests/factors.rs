@@ -13,9 +13,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ananke_calibrate::validate::KEY_EXCLUDED;
 use ananke_dataset::{Factors, Status, read_ndjson};
 
 const MEASUREMENTS: &str = "../../data/measurements.ndjson";
+
+/// The source `the_validate_key_pins_every_read_factor` reads its key from.
+const VALIDATE: &str = "src/validate.rs";
 
 /// Factors the derivers read. Each is a knob that changes what a process holds.
 const READ: &[&str] = &[
@@ -142,6 +146,50 @@ fn no_serde_attribute_hides_a_factor() {
              and the calibration could ignore it in silence"
         );
     }
+}
+
+/// `validate`'s configuration key pins every factor the calibration reads.
+///
+/// The key decides which measured cells are distinct, so a factor missing from it
+/// is a group of cells collapsing into one and all but the first being discarded
+/// as duplicates — silently, and in the tool that reports the estimator's
+/// accuracy. Ten omissions cost 53 comparable cells before this ran.
+#[test]
+fn the_validate_key_pins_every_read_factor() {
+    let source = std::fs::read_to_string(VALIDATE).expect("validate's source is readable");
+    let block = struct_block(&source, "pub struct ConfigurationKey<'a> {");
+    let pinned: BTreeSet<&str> = field_names(block);
+
+    let wanted: BTreeSet<&str> = READ
+        .iter()
+        .copied()
+        .filter(|factor| !KEY_EXCLUDED.contains(factor))
+        .collect();
+
+    let missing: Vec<&&str> = wanted.difference(&pinned).collect();
+    assert!(
+        missing.is_empty(),
+        "`ConfigurationKey` omits {missing:?}: cells differing only in one of those \
+         collide and all but the first are dropped as duplicates. Pin it, or move it \
+         to `KEY_EXCLUDED` with a reason"
+    );
+
+    let stale: Vec<&&str> = pinned.difference(&wanted).collect();
+    assert!(
+        stale.is_empty(),
+        "`ConfigurationKey` pins {stale:?}, which is not a factor the calibration \
+         declares read"
+    );
+}
+
+/// The names of a struct block's fields, skipping doc comments and attributes.
+fn field_names(block: &str) -> BTreeSet<&str> {
+    block
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("//") && !line.starts_with('#'))
+        .filter_map(|line| line.split_once(':').map(|(name, _)| name.trim()))
+        .collect()
 }
 
 /// The body of a named struct, up to its closing brace.

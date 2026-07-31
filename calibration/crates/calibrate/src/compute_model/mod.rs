@@ -224,7 +224,7 @@ impl Groups {
 /// A cell whose runtime prints no memory breakdown has its per-device target
 /// recovered by [`dataset::table_less_compute`], so ik's cells and the reporting
 /// that predates this model agree by construction.
-pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> Groups {
+pub fn collect(rows: &[Record], split_mask_copies: u32, include_spec: bool) -> Groups {
     let mut groups = Groups::default();
     for record in rows {
         let factors = &record.factors;

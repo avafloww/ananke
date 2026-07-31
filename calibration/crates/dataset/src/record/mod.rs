@@ -79,11 +79,11 @@ pub enum Status {
 }
 
 impl Record {
-    /// The cell's identity, absent on a row written before the schema carried
-    /// one. Such a row cannot be attributed to a question or compared against a
-    /// rerun, so a reader skips it rather than guessing from the label.
-    pub fn cell_id(&self) -> Option<&str> {
-        Some(self.cell.as_str()).filter(|cell| !cell.is_empty())
+    /// The cell's identity, which every row carries: [`Record::cell`] has no
+    /// serde default, so a row written before the schema carried one fails to
+    /// parse rather than arriving without an identity to group it by.
+    pub fn cell_id(&self) -> &str {
+        &self.cell
     }
 
     /// Host memory the process *owns*, in bytes.

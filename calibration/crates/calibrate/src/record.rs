@@ -16,6 +16,6 @@
 //! reaching across crates at every use.
 
 pub use ananke_dataset::{
-    Context, DeviceRow, Factors, Gpu, Hardware, KvPool, Parsed, Provenance, Record, RsPool, Rss,
-    Runtime, Status, read_ndjson,
+    Context, DeviceRow, Factors, FlashAttn, Gpu, Hardware, KvPool, KvType, Parsed, Provenance,
+    Record, RsPool, Rss, Runtime, Status, read_ndjson,
 };

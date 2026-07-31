@@ -11,7 +11,8 @@
 use std::collections::BTreeMap;
 
 use ananke_calibrate::{
-    compute_model::{Groups, Section, collect, dataset::latest_per_cell, document_section, fit},
+    compute_model::{Groups, Section, collect, document_section, fit},
+    derive::dataset::latest_per_cell,
     record::read_ndjson,
 };
 use ananke_config::placement::SplitMode;

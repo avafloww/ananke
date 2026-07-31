@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 
 use ananke_config::placement::SplitMode;
 use ananke_dataset::KvType;
+use jiff::SignedDuration;
 
 use crate::{
     derive::{dataset::measured_at, ordered::OrderedMap},
@@ -24,7 +25,7 @@ use crate::{
 /// *negative* delta once, a with-MTP process apparently using less VRAM than
 /// without. Repeats taken back to back reproduce to the megabyte, so the machine is
 /// not noisy; the pairing was.
-pub const SAME_SITTING_SECONDS: f64 = 3600.0;
+pub const SAME_SITTING: SignedDuration = SignedDuration::from_hours(1);
 
 /// A with-MTP cell and the without-MTP twin it is measured against.
 #[derive(Debug, Clone)]
@@ -96,7 +97,7 @@ pub fn mtp_pairs(rows: &[Record], draft: bool) -> Vec<MtpPair<'_>> {
         ) else {
             continue;
         };
-        if (measured_at(on) - measured_at(off)).abs() > SAME_SITTING_SECONDS {
+        if measured_at(on).duration_since(measured_at(off)).abs() > SAME_SITTING {
             continue;
         }
         let delta = on_used as i64 - off_used as i64;

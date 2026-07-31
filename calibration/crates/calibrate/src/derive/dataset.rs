@@ -4,10 +4,11 @@
 use std::collections::BTreeMap;
 
 use ananke_measure::record::Status;
+use jiff::Timestamp;
 
 use crate::{
     derive::error::{DeriveError, Result},
-    record::Record,
+    record::{Record, read_ndjson},
 };
 
 /// Every completed measurement in an NDJSON dataset.
@@ -16,28 +17,25 @@ use crate::{
 /// `stale-runtime` row was recorded against a binary that is no longer
 /// installed, so only `ok` survives.
 pub fn load(text: &str) -> Result<Vec<Record>> {
-    let mut rows = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let record: Record = serde_json::from_str(line)
-            .map_err(|e| DeriveError::malformed(format!("line {}: {e}", index + 1)))?;
-        if record.status == Status::Ok {
-            rows.push(record);
-        }
-    }
-    Ok(rows)
+    let rows = read_ndjson(text).map_err(DeriveError::malformed)?;
+    Ok(rows
+        .into_iter()
+        .filter(|record| record.status == Status::Ok)
+        .collect())
 }
 
-/// When a record was taken, as a POSIX timestamp.
-pub fn measured_at(record: &Record) -> f64 {
-    record
-        .provenance
-        .measured_at_utc
-        .parse::<jiff::Timestamp>()
-        .map(|t| t.as_millisecond() as f64 / 1000.0)
-        .unwrap_or(0.0)
+/// When a record was taken.
+pub fn measured_at(record: &Record) -> Timestamp {
+    instant(&record.provenance.measured_at_utc)
+}
+
+/// An ISO-8601 stamp as an instant, the epoch if it cannot be read.
+///
+/// Every consumer goes through this rather than comparing the strings. The two
+/// agree only while every stamp in the file is the same fixed width at the same
+/// offset, which is a property of today's dataset and not of the format.
+pub fn instant(stamp: &str) -> Timestamp {
+    stamp.parse().unwrap_or(Timestamp::UNIX_EPOCH)
 }
 
 /// Drop rows superseded by a later measurement of the same cell.
@@ -51,12 +49,13 @@ pub fn measured_at(record: &Record) -> f64 {
 /// deterministic within a build: repeats taken back to back reproduce to the
 /// megabyte, so a disagreement is a change in the runtime, not noise. GLM-5.2's
 /// production cell reads 38708 MiB on one build and 34978 MiB on the next.
+///
+/// This is the only statement of the rule; the compute-model fit calls it too,
+/// having previously carried a second copy that ordered the stamps as strings.
 pub fn latest_per_cell(rows: &[Record]) -> Vec<Record> {
     let mut newest: BTreeMap<&str, usize> = BTreeMap::new();
     for (index, record) in rows.iter().enumerate() {
-        let Some(cell) = record.cell_id() else {
-            continue;
-        };
+        let cell = record.cell_id();
         match newest.get(cell) {
             // Strictly later, so the first of two rows sharing a timestamp wins.
             Some(&held) if measured_at(record) <= measured_at(&rows[held]) => {}
@@ -83,7 +82,7 @@ pub fn latest_per_cell(rows: &[Record]) -> Vec<Record> {
 /// real work in that sentence, so the split is reported rather than assumed, per
 /// runtime, with the newest build named.
 pub fn report_stale_builds(rows: &[Record]) -> Vec<String> {
-    let mut by_runtime: BTreeMap<&str, BTreeMap<&str, Vec<f64>>> = BTreeMap::new();
+    let mut by_runtime: BTreeMap<&str, BTreeMap<&str, Vec<Timestamp>>> = BTreeMap::new();
     for record in rows {
         if record.status != Status::Ok {
             continue;
@@ -102,10 +101,7 @@ pub fn report_stale_builds(rows: &[Record]) -> Vec<String> {
         }
         let newest = builds
             .iter()
-            .max_by(|a, b| {
-                let (a, b) = (latest(a.1), latest(b.1));
-                a.partial_cmp(&b).expect("timestamps are never NaN")
-            })
+            .max_by_key(|(_, times)| latest(times))
             .map(|(build, _)| *build)
             .expect("the map is non-empty");
         let current = builds[newest].len();
@@ -149,11 +145,8 @@ pub fn check_runtime_builds(rows: &[Record], tolerance: f64) -> Result<()> {
         if record.status != Status::Ok {
             continue;
         }
-        let Some(cell) = record.cell_id() else {
-            continue;
-        };
         by_cell
-            .entry(cell)
+            .entry(record.cell_id())
             .or_default()
             .insert(&record.provenance.runtime_sha256, used);
     }
@@ -186,6 +179,6 @@ pub fn check_runtime_builds(rows: &[Record], tolerance: f64) -> Result<()> {
 /// The default tolerance `check_runtime_builds` allows between two builds.
 pub const BUILD_TOLERANCE: f64 = 0.10;
 
-fn latest(times: &[f64]) -> f64 {
-    times.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+fn latest(times: &[Timestamp]) -> Timestamp {
+    times.iter().copied().max().unwrap_or(Timestamp::UNIX_EPOCH)
 }

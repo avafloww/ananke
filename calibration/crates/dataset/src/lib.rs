@@ -34,12 +34,27 @@ pub use crate::{
 ///
 /// Errors name the line, because a dataset of six hundred rows is not something
 /// a bare serde message locates.
+///
+/// A blank `cell` is rejected here rather than tolerated downstream. Every reader
+/// groups rows by that identity — superseding a stale measurement, attributing a
+/// cell to a question — and a row without one either disappears from the group or
+/// joins a bucket of everything else that has none. Checking once at the boundary
+/// is what lets [`Record::cell_id`] be total.
 pub fn read_ndjson(text: &str) -> Result<Vec<Record>, String> {
     text.lines()
         .filter(|line| !line.trim().is_empty())
         .enumerate()
         .map(|(index, line)| {
-            serde_json::from_str(line).map_err(|error| format!("line {}: {error}", index + 1))
+            let record: Record = serde_json::from_str(line)
+                .map_err(|error| format!("line {}: {error}", index + 1))?;
+            if record.cell.is_empty() {
+                return Err(format!(
+                    "line {}: the row carries no cell id, so nothing can group it \
+                     with the other measurements of its configuration",
+                    index + 1
+                ));
+            }
+            Ok(record)
         })
         .collect()
 }

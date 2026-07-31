@@ -25,6 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use ananke_measure::{harness::cell_id, record::Status};
 
 use crate::{
+    derive::dataset::instant,
     plan::{Library, QUESTIONS, all_cells},
     record::Record,
 };
@@ -60,19 +61,14 @@ pub struct Report {
 }
 
 /// Build the report.
-///
-/// Rows from before the schema carried a cell id are ignored rather than guessed
-/// at: their identity cannot be recomputed, and attributing them to a question by
-/// label would credit a question with a cell it may not have asked for.
 pub fn report(records: &[Record], lib: &Library) -> Report {
     let mut status_by_cell: BTreeMap<&str, Status> = BTreeMap::new();
     for record in records {
-        let Some(cell) = record.cell_id() else {
-            continue;
-        };
         // The best status any row for this cell reached. A cell retried after a
         // load failure has two rows, and it is measured.
-        let entry = status_by_cell.entry(cell).or_insert(record.status);
+        let entry = status_by_cell
+            .entry(record.cell_id())
+            .or_insert(record.status);
         if record.status == Status::Ok {
             *entry = Status::Ok;
         }
@@ -123,7 +119,7 @@ pub fn report(records: &[Record], lib: &Library) -> Report {
             .iter()
             .map(|r| r.provenance.measured_at_utc.as_str())
             .filter(|when| !when.is_empty())
-            .max()
+            .max_by_key(|when| instant(when))
             .map(str::to_string),
         unplanned,
     }
@@ -173,6 +169,8 @@ pub fn idle_minutes(stamp: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_dataset::to_dataset_json;
+
     use super::*;
     use crate::record::{Factors, Hardware, Parsed, Provenance, Rss, read_ndjson};
 
@@ -209,12 +207,12 @@ mod tests {
     #[test]
     fn the_dataset_contains_retries() {
         let records = dataset();
-        let distinct: BTreeSet<&str> = records.iter().filter_map(|r| r.cell_id()).collect();
-        let with_id = records.iter().filter(|r| r.cell_id().is_some()).count();
+        let distinct: BTreeSet<&str> = records.iter().map(Record::cell_id).collect();
         assert!(
-            with_id > distinct.len(),
-            "{with_id} identified rows over {} distinct cells — no cell was retried, so \
+            records.len() > distinct.len(),
+            "{} rows over {} distinct cells — no cell was retried, so \
              `a_retried_cell_is_measured_once` is testing a case the data does not have",
+            records.len(),
             distinct.len()
         );
     }
@@ -251,18 +249,16 @@ mod tests {
         assert_eq!(report.unplanned, 1);
     }
 
-    /// A row from before the schema carried a cell id is ignored, not guessed at.
+    /// A row without a cell id never reaches the report: [`read_ndjson`] refuses
+    /// it, which is what lets everything downstream group by that id unconditionally.
     #[test]
-    fn an_unidentified_row_is_not_counted() {
-        let report = report(
-            &synthetic(&[("", Status::Ok), ("cell-a", Status::Ok)]),
-            &Library::from_env(),
-        );
-        assert_eq!(report.unplanned, 1);
+    fn an_unidentified_row_is_refused_by_the_reader() {
+        let row = to_dataset_json(&synthetic(&[("", Status::Ok)])[0]);
+        let error = read_ndjson(&row).expect_err("a blank cell id is refused");
+        assert!(error.contains("no cell id"), "{error}");
     }
 
-    /// Records with the given cell ids and statuses. An empty id means a row from
-    /// before the schema carried one.
+    /// Records with the given cell ids and statuses.
     ///
     /// Built as values rather than parsed from JSON: what is under test is how the
     /// report merges rows, and a row spelled out in text would be a second, laxer

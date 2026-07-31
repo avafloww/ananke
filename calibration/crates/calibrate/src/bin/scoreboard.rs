@@ -9,6 +9,7 @@
 use std::{collections::BTreeMap, path::Path, process::ExitCode};
 
 use ananke_calibrate::{
+    derive::dataset::instant,
     models,
     record::read_ndjson,
     validate::{NEUTRAL, snapshot_for},
@@ -80,7 +81,7 @@ fn main() -> ExitCode {
         for candidate in [label, base] {
             if let Some((_, target)) = PROD_LABELS.iter().find(|(_, l)| *l == candidate) {
                 let entry = production.entry(*target).or_insert((used, when.clone()));
-                if when > entry.1 {
+                if instant(&when) > instant(&entry.1) {
                     *entry = (used, when.clone());
                 }
             }

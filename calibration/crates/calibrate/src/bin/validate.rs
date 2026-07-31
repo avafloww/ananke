@@ -4,13 +4,17 @@
 //! `cargo run --example estimate` instead would be two hundred-odd process
 //! launches, each re-reading its GGUF.
 
-use std::{collections::BTreeMap, path::Path, process::ExitCode};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+    process::ExitCode,
+};
 
 use ananke_calibrate::{
     record::{Record, read_ndjson},
     validate::{
-        Comparison, NEUTRAL, configuration_key, estimator_inputs, placement_inputs, skip_reason,
-        snapshot,
+        Comparison, ConfigurationKey, NEUTRAL, configuration_key, estimator_inputs,
+        placement_inputs, skip_reason, snapshot,
     },
 };
 use ananke_fs::LocalFs;
@@ -59,7 +63,7 @@ fn main() -> ExitCode {
 
     let fs = LocalFs;
     let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
-    let mut seen: Vec<String> = Vec::new();
+    let mut seen: HashSet<ConfigurationKey<'_>> = HashSet::new();
     let mut results: Vec<Comparison> = Vec::new();
 
     for record in &records {
@@ -72,12 +76,10 @@ fn main() -> ExitCode {
         {
             continue;
         }
-        let key = configuration_key(record);
-        if seen.contains(&key) {
+        if !seen.insert(configuration_key(record)) {
             *skipped.entry("duplicate configuration".into()).or_default() += 1;
             continue;
         }
-        seen.push(key);
 
         match compare(&fs, record) {
             Ok(comparison) => results.push(comparison),
