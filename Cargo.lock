@@ -116,6 +116,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ananke-dataset"
+version = "0.2.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ananke-estimate"
 version = "0.2.0"
 dependencies = [

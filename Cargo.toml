@@ -10,6 +10,7 @@ members = [
     "crates/placement",
     "crates/tuning",
     "calibration/crates/calibrate",
+    "calibration/crates/dataset",
     "calibration/crates/measure",
     "xtask",
 ]
@@ -27,6 +28,7 @@ default-members = [
     "crates/placement",
     "crates/tuning",
     "calibration/crates/calibrate",
+    "calibration/crates/dataset",
     "calibration/crates/measure",
 ]
 resolver = "2"
@@ -45,6 +47,7 @@ ananke-gguf = { path = "crates/gguf" }
 ananke-placement = { path = "crates/placement" }
 ananke-tuning = { path = "crates/tuning" }
 ananke-calibrate = { path = "calibration/crates/calibrate" }
+ananke-dataset = { path = "calibration/crates/dataset" }
 ananke-measure = { path = "calibration/crates/measure" }
 
 # Async + HTTP
