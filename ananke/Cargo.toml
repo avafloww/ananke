@@ -18,7 +18,6 @@ ananke-estimate.workspace = true
 ananke-fs.workspace = true
 ananke-gguf.workspace = true
 ananke-placement.workspace = true
-ananke-tuning.workspace = true
 
 tokio.workspace = true
 hyper.workspace = true

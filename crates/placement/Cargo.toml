@@ -11,5 +11,4 @@ tracing.workspace = true
 
 [dev-dependencies]
 ananke-fs.workspace = true
-ananke-gguf.workspace = true
 serde_json.workspace = true
