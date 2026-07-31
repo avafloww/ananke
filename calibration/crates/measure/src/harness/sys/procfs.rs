@@ -110,14 +110,32 @@ fn parse_smaps_anon(content: &str) -> BTreeMap<String, u64> {
                 .unwrap_or(0);
             *by.entry(current.clone()).or_default() += kb * 1024;
         } else if is_mapping_header(line) {
-            current = line
-                .split_whitespace()
-                .nth(5)
-                .unwrap_or("[anon]")
-                .to_string();
+            current = mapping_name(line);
         }
     }
     by
+}
+
+/// The pathname from a mapping header, or `[anon]` where there is none.
+///
+/// Taken as everything after the fifth field rather than as the sixth, because the
+/// path is the rest of the line and may contain spaces — model directories routinely
+/// do. Splitting on whitespace keys `/models/My Model.gguf` under `/models/My`, which
+/// attributes its bytes to a label that matches nothing.
+fn mapping_name(line: &str) -> String {
+    // addr, perms, offset, dev, inode — then the remainder is the path.
+    let mut rest = line.trim_start();
+    for _ in 0..5 {
+        let Some(end) = rest.find(char::is_whitespace) else {
+            return "[anon]".to_string();
+        };
+        rest = rest[end..].trim_start();
+    }
+    if rest.is_empty() {
+        "[anon]".to_string()
+    } else {
+        rest.to_string()
+    }
 }
 
 /// Whether a line opens a new mapping, as against continuing one's fields.
@@ -144,6 +162,58 @@ fn meminfo_gib(keys: &[&str]) -> f64 {
 }
 
 /// A `/proc` that is whatever a test says it is, including a pid that has gone
+#[cfg(test)]
+mod smaps_tests {
+    use super::parse_smaps_anon;
+
+    /// A real dump, trimmed: a named mapping, the heap, a bare anonymous one, and a
+    /// path with a space in it. Model directories routinely have spaces, and the
+    /// mapping the probe most wants to name is the one most likely to carry one.
+    const SAMPLE: &str = "7f0000000000-7f0000200000 r-xp 00000000 fd:00 1234    /usr/lib/libcuda.so
+Anonymous:            64 kB
+VmFlags: rd ex mr mw me
+7f0000200000-7f0000400000 rw-p 00000000 00:00 0       [heap]
+Anonymous:          2048 kB
+7f0000400000-7f0000600000 rw-p 00000000 00:00 0
+Anonymous:           512 kB
+7f0000600000-7f0000800000 r--p 00000000 fd:00 5678    /models/My Model.gguf
+Anonymous:           128 kB
+";
+
+    #[test]
+    fn sums_anonymous_bytes_per_mapping() {
+        let by = parse_smaps_anon(SAMPLE);
+        assert_eq!(by.get("/usr/lib/libcuda.so"), Some(&(64 * 1024)));
+        assert_eq!(by.get("[heap]"), Some(&(2048 * 1024)));
+    }
+
+    /// A mapping with no pathname is anonymous memory, which is where the heap and
+    /// most of what the probe hunts actually lives. Dropping it would lose the term.
+    #[test]
+    fn a_mapping_without_a_path_is_grouped_as_anonymous() {
+        assert_eq!(parse_smaps_anon(SAMPLE).get("[anon]"), Some(&(512 * 1024)));
+    }
+
+    /// The pathname is the rest of the line, not the sixth whitespace field.
+    /// Splitting on whitespace keys this under `/models/My`, which names nothing and
+    /// silently misattributes the mapping's bytes.
+    #[test]
+    fn a_path_containing_a_space_keeps_all_of_it() {
+        let by = parse_smaps_anon(SAMPLE);
+        assert_eq!(by.get("/models/My Model.gguf"), Some(&(128 * 1024)));
+        assert!(!by.contains_key("/models/My"), "the path was truncated");
+    }
+
+    /// `VmFlags:` and the other per-mapping fields are not mapping headers, and a
+    /// dump that ends mid-mapping yields what it has rather than panicking.
+    #[test]
+    fn field_lines_do_not_open_a_mapping() {
+        let by = parse_smaps_anon(SAMPLE);
+        assert!(!by.keys().any(|k| k.starts_with("rd ")), "{by:?}");
+        assert!(parse_smaps_anon("7f00-7f01 rw-p 0 00:00 0").is_empty());
+    }
+}
+
 /// away and a swap figure that climbs on every read.
 #[cfg(any(test, feature = "test-fakes"))]
 #[derive(Default)]
