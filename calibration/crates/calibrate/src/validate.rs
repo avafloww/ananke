@@ -11,11 +11,7 @@
 //! production Qwen3.6-27B cell the two differ by 472 MiB, which is the
 //! difference between +1.1% and −0.1%.
 
-use std::collections::BTreeMap;
-
-use ananke_config::placement::{
-    DeviceSlot, OffloadMode, PlacementInputs, PlacementPolicy, SplitMode,
-};
+use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode};
 use ananke_estimate::EstimatorInputs;
 use ananke_measure::record::Status;
 use ananke_placement::{
@@ -172,19 +168,6 @@ pub fn configuration_key(record: &Record) -> String {
         f.flash_attn,
         f.cram,
     )
-}
-
-/// Per-GPU reservation and prediction totals out of a packed allocation.
-pub fn gpu_totals(per_device: &BTreeMap<DeviceSlot, u64>) -> (u64, usize) {
-    let mut total = 0;
-    let mut cards = 0;
-    for (slot, &bytes) in per_device {
-        if matches!(slot, DeviceSlot::Gpu(_)) && bytes > 0 {
-            total += bytes;
-            cards += 1;
-        }
-    }
-    (total / (1024 * 1024), cards)
 }
 
 /// A snapshot of the given cards at the given capacities.

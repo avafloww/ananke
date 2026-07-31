@@ -14,9 +14,6 @@ use crate::{
     record::Record,
 };
 
-/// An f16 KQ mask costs two bytes per (batch token, cache token).
-pub const MASK_BYTES_PER_TOKEN_PAIR: u64 = 2;
-
 /// How far apart two halves of a pair may have been measured.
 ///
 /// Cell identity ignores the label, so a freshly-measured cell can pair with one

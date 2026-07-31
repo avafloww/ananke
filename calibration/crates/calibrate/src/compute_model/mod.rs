@@ -178,24 +178,6 @@ pub struct Row {
     pub columns: Columns,
     /// MiB the card held beyond its own weights and context.
     pub target: f64,
-    pub tag: Tag,
-}
-
-/// Where a row came from. Carried for reporting; the fit itself never reads it.
-#[derive(Debug, Clone)]
-pub struct Tag {
-    pub ctx: u32,
-    pub ubatch: u32,
-    pub kv_type: Option<String>,
-    pub cards: usize,
-    pub model: String,
-    pub parallel: Option<u32>,
-    pub n_cpu_moe: Option<u32>,
-    pub mmproj: bool,
-    pub label: String,
-    /// The visible device index, or `-1` where the observation is an average over
-    /// every card the cell spanned.
-    pub device: i32,
 }
 
 /// Every usable per-device observation, grouped, in the order first seen.
@@ -328,18 +310,6 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
             offloading: factors.n_cpu_moe.is_some_and(|n| n > 0),
             mask_copies: f64::from(copies),
         };
-        let tag = |device: i32| Tag {
-            ctx: factors.ctx,
-            ubatch,
-            kv_type: factors.kv_type.clone(),
-            cards: cards.len(),
-            model: record.provenance.model_key.clone(),
-            parallel: factors.parallel,
-            n_cpu_moe: factors.n_cpu_moe,
-            mmproj: present(factors.mmproj.as_deref()),
-            label: factors.label.clone(),
-            device,
-        };
         if devices.is_empty() {
             // No breakdown table — ik. One averaged observation, recovered from
             // the driver total and the runtime's own buffer lines.
@@ -352,7 +322,6 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
                 Row {
                     columns: Columns::from_scalars(scalars(share)),
                     target,
-                    tag: tag(-1),
                 },
             );
             continue;
@@ -376,7 +345,6 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
                 Row {
                     columns: Columns::from_scalars(scalars(share)),
                     target: mean,
-                    tag: tag(-1),
                 },
             );
             continue;
@@ -398,7 +366,6 @@ pub fn collect(rows: &[&Record], split_mask_copies: u32, include_spec: bool) -> 
                 Row {
                     columns: Columns::from_scalars(scalars(share)),
                     target,
-                    tag: tag(index as i32),
                 },
             );
         }
