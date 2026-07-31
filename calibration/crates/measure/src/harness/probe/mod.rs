@@ -17,7 +17,7 @@
 
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
-use serde::Serialize;
+use serde::{Serialize, de::IgnoredAny};
 
 use crate::{
     harness::{
@@ -177,7 +177,7 @@ fn walk(
                     // hit would measure the cache instead.
                     cache_prompt: false,
                 };
-                if post_json::<_, serde_json::Value>(
+                if post_json::<_, IgnoredAny>(
                     deps.http.as_ref(),
                     options.port,
                     "/completion",
