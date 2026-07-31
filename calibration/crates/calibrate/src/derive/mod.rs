@@ -40,6 +40,7 @@ pub mod dataset;
 pub mod emit;
 pub mod error;
 pub mod graph;
+pub mod keys;
 pub mod mtp;
 pub mod ordered;
 pub mod pinned;
@@ -61,23 +62,29 @@ pub struct Scalar {
     pub evidence: String,
 }
 
-/// A per-architecture rate table.
+/// A rate table, keyed at one of the vocabularies in [`keys`].
 ///
 /// Several terms genuinely differ by architecture — ik's MoE rate by a third, the
 /// quantised-cache rate by a factor of forty — and one value would either
 /// under-reserve the worst or over-reserve the rest. A table says so instead of
 /// picking.
+///
+/// `K` is the whole point of the type. Four tables here are keyed four ways and a
+/// lookup that misses takes [`Self::worst`] rather than raising, so a mismatched
+/// vocabulary is silently the wrong rate; naming it in the type makes that a
+/// compile error. The *serialised* field stays `by_arch`, which is the committed
+/// document's spelling for every one of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Table {
-    pub by_arch: BTreeMap<String, i64>,
+pub struct Table<K> {
+    pub by_key: BTreeMap<K, i64>,
     pub evidence: String,
 }
 
-impl Table {
-    /// The largest rate, which is what an unmeasured architecture inherits: it
+impl<K> Table<K> {
+    /// The largest rate, which is what an unmeasured key inherits: it
     /// over-reserves rather than OOMs.
     pub fn worst(&self) -> i64 {
-        self.by_arch.values().copied().max().unwrap_or(0)
+        self.by_key.values().copied().max().unwrap_or(0)
     }
 }
 
@@ -85,7 +92,8 @@ impl Table {
 /// the configuration each was taken at.
 ///
 /// Recorded, not fitted. These are the measurements behind a value that has to be
-/// held by hand, written down where they cannot go stale.
+/// held by hand, written down where they cannot go stale. Nothing looks a row up,
+/// so its architecture keys stay plain strings rather than [`keys::ArchKey`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NestedTable {
     pub by_arch: BTreeMap<String, BTreeMap<String, i64>>,

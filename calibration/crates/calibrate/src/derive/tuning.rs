@@ -9,11 +9,14 @@
 //! renamed or misspelled constant read as `0.0` does not stop a derivation, it
 //! just fits every residual against the wrong model.
 
-use std::fmt;
+use std::{fmt, marker::PhantomData};
 
 use serde_json::Value;
 
-use crate::derive::error::DeriveError;
+use crate::derive::{
+    error::DeriveError,
+    keys::{ArchCardsKey, ArchKey},
+};
 
 /// The committed tuning document, as the derivers see it.
 #[derive(Debug, Clone)]
@@ -122,23 +125,24 @@ impl Tuning {
         self.constant(name).unwrap_or(default)
     }
 
-    /// The per-architecture ik MoE rate, as the estimator resolves it.
+    /// ik's MoE rate table, keyed `{arch}@{cards}` as
+    /// [`crate::derive::graph::ik_moe_per_nembd`] writes it.
+    pub fn ik_moe_rates(&self) -> RateTableView<'_, ArchCardsKey> {
+        RateTableView::new(self.document.get("ik_moe_rates"), IK_MOE_DEFAULT)
+    }
+
+    /// The ik MoE rate the arena model charges, looked up by architecture alone
+    /// against a table no row of which is keyed that way — so every call misses
+    /// and takes `default`.
     ///
-    /// The table is keyed `{arch}@{cards}` while the lookup is by architecture
-    /// alone, so in practice every call lands on `default`. Kept rather than
-    /// corrected: changing it would move the arena model out from under every
-    /// constant fitted on it.
-    pub fn ik_moe_rate(&self, arch: &str) -> i64 {
-        let rates = self.document.get("ik_moe_rates");
-        let default = rates
-            .and_then(|r| r.get("default"))
-            .and_then(Value::as_i64)
-            .unwrap_or(IK_MOE_DEFAULT);
-        rates
-            .and_then(|r| r.get("by_arch"))
-            .and_then(|b| b.get(arch))
-            .and_then(Value::as_i64)
-            .unwrap_or(default)
+    /// Frozen, not overlooked. Every constant in the document was fitted against
+    /// an arena that charged the default here, so resolving the lookup properly
+    /// would move the model out from under all of them. The miss is spelled out
+    /// by [`ArchCardsKey::without_cards_frozen_miss`] rather than left to a
+    /// vocabulary mismatch that reads like a working lookup.
+    pub fn ik_moe_rate_frozen_arch_miss(&self, arch: &ArchKey) -> i64 {
+        self.ik_moe_rates()
+            .rate(&ArchCardsKey::without_cards_frozen_miss(arch))
     }
 
     /// mainline's host-resident MoE rate under a tensor split, per unit of
@@ -150,6 +154,46 @@ impl Tuning {
             "MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD",
             MAINLINE_TENSOR_MOE_DEFAULT,
         )
+    }
+}
+
+/// One committed rate table, read at the vocabulary its rows are keyed by.
+///
+/// The document is JSON, so nothing in it distinguishes a table keyed by
+/// architecture from one keyed `{arch}@{cards}`, and a lookup at the wrong
+/// vocabulary quietly takes `default`. `K` is the reader stating which it is, so
+/// the mismatch has to be written on purpose.
+pub struct RateTableView<'a, K> {
+    entry: Option<&'a Value>,
+    fallback: i64,
+    key: PhantomData<fn(&K)>,
+}
+
+impl<'a, K: fmt::Display> RateTableView<'a, K> {
+    /// The rate for one key, or the table's `default`, or the caller's fallback
+    /// where the document declares no table at all.
+    pub fn rate(&self, key: &K) -> i64 {
+        self.entry
+            .and_then(|table| table.get("by_arch"))
+            .and_then(|rows| rows.get(key.to_string()))
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| self.default())
+    }
+
+    /// What an unlisted key inherits.
+    pub fn default(&self) -> i64 {
+        self.entry
+            .and_then(|table| table.get("default"))
+            .and_then(Value::as_i64)
+            .unwrap_or(self.fallback)
+    }
+
+    fn new(entry: Option<&'a Value>, fallback: i64) -> Self {
+        Self {
+            entry,
+            fallback,
+            key: PhantomData,
+        }
     }
 }
 

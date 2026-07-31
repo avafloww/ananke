@@ -7,16 +7,14 @@
 
 use std::{
     collections::BTreeMap,
+    fmt::Display,
     sync::{Arc, OnceLock},
 };
 
 use ananke_calibrate::{
     derive::{
-        arena, baseline, dataset, emit, graph, mtp, pinned, recurrent,
-        shape::{query_head_count, variant_key},
-        stats::pad,
-        tuning::Tuning,
-        vram,
+        Table, arena, baseline, dataset, emit, graph, keys::VariantKey, mtp, pinned, recurrent,
+        shape::query_head_count, stats::pad, tuning::Tuning, vram,
     },
     record::Record,
 };
@@ -84,10 +82,20 @@ fn table(name: &str) -> BTreeMap<String, i64> {
 }
 
 /// The same shape a deriver's table takes, so the comparison is one assertion.
-fn derived(table: &ananke_calibrate::derive::Table) -> BTreeMap<String, i64> {
-    let mut out = table.by_arch.clone();
+/// Keyed by the rendering, since that is what the document holds whichever
+/// vocabulary the table is keyed at.
+fn derived<K: Display>(table: &Table<K>) -> BTreeMap<String, i64> {
+    let mut out = rendered(&table.by_key);
     out.insert("default".to_string(), table.worst());
     out
+}
+
+/// A typed table's keys as the document spells them.
+fn rendered<K: Display>(by_key: &BTreeMap<K, i64>) -> BTreeMap<String, i64> {
+    by_key
+        .iter()
+        .map(|(key, value)| (key.to_string(), *value))
+        .collect()
 }
 
 // --- The whole document -------------------------------------------------------
@@ -239,10 +247,10 @@ fn no_flash_attn_rates_match() {
 fn baseline_offsets_match() {
     let rates = pinned::no_flash_attn_rates(&rows(), tuning(), None).expect("derives");
     let (_scalar, offsets) =
-        baseline::baseline_offset(&rows(), tuning(), &rates.by_arch).expect("derives");
+        baseline::baseline_offset(&rows(), tuning(), &rates.by_key).expect("derives");
     // `default` is zero here rather than the worst offset: an unmeasured architecture
     // has no evidence either way, so it is not charged one.
-    assert_eq!(offsets.by_arch, table_only("baseline_offset"));
+    assert_eq!(rendered(&offsets.by_key), table_only("baseline_offset"));
     assert_eq!(committed()["baseline_offset"]["default"].as_i64(), Some(0));
 }
 
@@ -348,7 +356,7 @@ fn the_variant_key_splits_the_gemma_family() {
     let rows = rows();
     let keys: Vec<String> = rows
         .iter()
-        .map(|record| variant_key(record, false))
+        .map(|record| VariantKey::of(record).to_string())
         .collect();
     for expected in ["gemma4", "gemma4+e", "gemma4+moe"] {
         assert!(

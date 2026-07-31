@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use crate::{
     derive::{
         error::{DeriveError, Result},
-        shape::variant_key,
+        keys::{ArchKey, VariantKey},
         stats::pad,
         tuning::Tuning,
     },
@@ -123,7 +123,11 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
     let used = parsed.n_expert_used;
     if charge_moe && experts != 0 && used != 0 && tokens * used < 32 * experts {
         if ik {
-            hidden += tuning.ik_moe_rate(arch).max(0) as u64 * n_embd * tokens;
+            hidden += tuning
+                .ik_moe_rate_frozen_arch_miss(&ArchKey::recorded(record))
+                .max(0) as u64
+                * n_embd
+                * tokens;
         } else if factors.is_hybrid() && factors.split_or_layer() == "tensor" {
             hidden += tuning.mainline_tensor_moe_per_nembd().max(0) as u64 * n_embd * tokens;
         }
@@ -154,8 +158,8 @@ pub fn arena_terms(record: &Record, charge_moe: bool, tuning: &Tuning) -> ArenaT
 pub fn check_arena_model(
     rows: &[Record],
     tuning: &Tuning,
-    no_fa_rates: &BTreeMap<String, i64>,
-    quant_rates: &BTreeMap<String, i64>,
+    no_fa_rates: &BTreeMap<VariantKey, i64>,
+    quant_rates: &BTreeMap<ArchKey, i64>,
     tolerance_mib: f64,
 ) -> Result<()> {
     // Required, not defaulted: this compares the model against the measurement, and
@@ -190,12 +194,12 @@ pub fn check_arena_model(
         // the table's default apply here would compare against a model the
         // estimator does not use.
         let no_fa = if !factors.runtime_is_ik() && !factors.flash_attn_on() {
-            table_rate(no_fa_rates, &variant_key(record, false)) as f64 * tokens / MIB
+            table_rate(no_fa_rates, &VariantKey::of(record)) as f64 * tokens / MIB
         } else {
             0.0
         };
         let quantised = if factors.kv_type != "f16" {
-            table_rate(quant_rates, &parsed.arch) as f64 * tokens / MIB
+            table_rate(quant_rates, &ArchKey::recorded(record)) as f64 * tokens / MIB
         } else {
             0.0
         };
@@ -236,9 +240,9 @@ pub const ARENA_TOLERANCE_MIB: f64 = 5.0;
 
 const MIB: f64 = (1024 * 1024) as f64;
 
-/// A per-architecture rate, falling back to the table's worst where the
-/// architecture has no row — the same fallback the estimator applies.
-fn table_rate(table: &BTreeMap<String, i64>, key: &str) -> i64 {
+/// A rate, falling back to the table's worst where the key has no row — the same
+/// fallback the estimator applies.
+fn table_rate<K: Ord>(table: &BTreeMap<K, i64>, key: &K) -> i64 {
     match table.get(key) {
         Some(rate) => *rate,
         None => table.values().copied().max().unwrap_or(0),

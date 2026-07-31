@@ -15,7 +15,8 @@ use crate::{
     derive::{
         Table,
         error::{DeriveError, Result},
-        shape::{CHECKPOINT_MIN_STEP, variant_key},
+        keys::{ArchKey, VariantKey},
+        shape::CHECKPOINT_MIN_STEP,
         stats::{OUTLIER_TOLERANCE, check_no_outlier_dominates, round_half_even},
     },
     record::Record,
@@ -39,7 +40,7 @@ use crate::{
 ///
 /// The arena does not move at all across the series, so this is a baseline term and
 /// not an arena one.
-pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
+pub fn per_slot_bytes(rows: &[Record]) -> Result<Table<ArchKey>> {
     // Every factor that would otherwise be measured alongside the slot count.
     // `soak` belongs here: it grows the prompt over six rounds and costs memory of
     // its own, so pooling a soak-free single-request cell with a soaked concurrent
@@ -48,17 +49,17 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
     // nothing, so a cell with four slots and one request is a valid one-slot
     // reading, and excluding it would drop every series whose slot count moves
     // alongside its concurrency.
-    type Key = (String, String, u32, u32, String, String, String, bool, u32);
+    type Key = (ArchKey, String, u32, u32, String, String, String, bool, u32);
     let mut groups: BTreeMap<Key, BTreeMap<u32, i64>> = BTreeMap::new();
     for record in rows {
-        let (parsed, factors) = (&record.parsed, &record.factors);
+        let factors = &record.factors;
         if !factors.served || factors.bench || factors.has_spec() {
             continue;
         }
         if factors.is_hybrid() {
             continue;
         }
-        let Some(arch) = parsed.architecture().map(str::to_owned) else {
+        let Some(arch) = ArchKey::named(record) else {
             continue;
         };
         let key: Key = (
@@ -84,7 +85,7 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
             .or_insert(owned);
     }
 
-    let mut by_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut by_arch: BTreeMap<ArchKey, Vec<f64>> = BTreeMap::new();
     for (key, points) in &groups {
         if points.len() < 2 {
             continue;
@@ -114,7 +115,7 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
             OUTLIER_TOLERANCE,
         )?;
     }
-    let table: BTreeMap<String, i64> = by_arch
+    let table: BTreeMap<ArchKey, i64> = by_arch
         .iter()
         .map(|(arch, group)| {
             let worst = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -127,7 +128,7 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
         .collect::<Vec<_>>()
         .join(", ");
     Ok(Table {
-        by_arch: table,
+        by_key: table,
         evidence: format!(
             "anonymous memory against the number of concurrent requests, all else \
              equal: {detail}. Idle slots cost nothing — the same models at parallel 1, \
@@ -154,7 +155,7 @@ pub fn per_slot_bytes(rows: &[Record]) -> Result<Table> {
 /// `host_overhead_bytes` is what the rolling correction divides an observation by,
 /// so it has to model what a process holds; a service that never sees a long prompt
 /// would otherwise read as a 1.6 GiB over-reservation and clamp unreachably.
-pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table> {
+pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table<VariantKey>> {
     let mut matched: BTreeMap<CheckpointKey, BTreeMap<bool, i64>> = BTreeMap::new();
     for record in rows {
         let factors = &record.factors;
@@ -168,7 +169,7 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table> {
             continue;
         }
         let key = CheckpointKey {
-            variant: variant_key(record, false),
+            variant: VariantKey::of(record),
             runtime: factors.runtime.name().to_owned(),
             ctx: factors.ctx,
             ubatch: factors.ubatch,
@@ -194,44 +195,44 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table> {
             .or_insert(owned);
     }
 
-    let mut by_arch: BTreeMap<String, Vec<i64>> = BTreeMap::new();
+    let mut by_variant: BTreeMap<VariantKey, Vec<i64>> = BTreeMap::new();
     for (key, pair) in &matched {
         if pair.len() == 2 {
             let steady = pair[&true];
             let probe = pair[&false];
-            by_arch
+            by_variant
                 .entry(key.variant.clone())
                 .or_default()
                 .push((steady - probe).max(0));
         }
     }
-    if by_arch.is_empty() {
+    if by_variant.is_empty() {
         return Err(DeriveError::no_data("no probe/steady-state pairs"));
     }
-    for (arch, group) in &by_arch {
+    for (variant, group) in &by_variant {
         let values: Vec<f64> = group.iter().map(|v| *v as f64).collect();
         check_no_outlier_dominates(
             &values,
-            &format!("checkpoint headroom for {arch}"),
+            &format!("checkpoint headroom for {variant}"),
             OUTLIER_TOLERANCE,
         )?;
     }
-    let table: BTreeMap<String, i64> = by_arch
+    let table: BTreeMap<VariantKey, i64> = by_variant
         .iter()
-        .map(|(arch, group)| {
+        .map(|(variant, group)| {
             (
-                arch.clone(),
+                variant.clone(),
                 group.iter().copied().max().unwrap_or(0) * 1024 * 1024,
             )
         })
         .collect();
     let detail = table
         .iter()
-        .map(|(arch, value)| format!("{arch} {} MiB", value / 1024 / 1024))
+        .map(|(variant, value)| format!("{variant} {} MiB", value / 1024 / 1024))
         .collect::<Vec<_>>()
         .join(", ");
     Ok(Table {
-        by_arch: table,
+        by_key: table,
         evidence: format!(
             "measured as the difference between a cell with a prompt past the \
              8192-token checkpoint spacing and its short-probe twin, matched on every \
@@ -248,7 +249,7 @@ pub fn checkpoint_headroom(rows: &[Record]) -> Result<Table> {
 /// 3467 MiB with the plain ones and drove gemma3's difference negative.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CheckpointKey {
-    variant: String,
+    variant: VariantKey,
     runtime: String,
     ctx: u32,
     ubatch: u32,

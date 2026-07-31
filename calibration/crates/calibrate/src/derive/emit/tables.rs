@@ -6,21 +6,26 @@ use std::{borrow::Cow, collections::BTreeMap};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::derive::{NestedTable, Table, error::Result, mtp};
+use crate::derive::{
+    NestedTable, Table,
+    error::Result,
+    keys::{ArchCardsKey, ArchKey, VariantEnvironmentKey, VariantKey},
+    mtp,
+};
 
 /// Every table `emit` writes, gathered so the writer takes one argument.
 pub(super) struct Tables<'a> {
-    pub(super) baseline: Option<&'a Table>,
-    pub(super) tensor_base: Option<&'a Table>,
+    pub(super) baseline: Option<&'a Table<VariantEnvironmentKey>>,
+    pub(super) tensor_base: Option<&'a Table<ArchKey>>,
     pub(super) draft_compute: Option<&'a mtp::DraftComputeFit>,
     pub(super) slot_scaling: &'a str,
-    pub(super) checkpoint: Option<&'a Table>,
-    pub(super) per_slot: Option<&'a Table>,
+    pub(super) checkpoint: Option<&'a Table<VariantKey>>,
+    pub(super) per_slot: Option<&'a Table<ArchKey>>,
     pub(super) table_less: Option<&'a NestedTable>,
-    pub(super) score: Option<&'a Table>,
-    pub(super) no_fa: Option<&'a Table>,
-    pub(super) quantised: Option<&'a Table>,
-    pub(super) ik_moe: Option<&'a Table>,
+    pub(super) score: Option<&'a Table<ArchKey>>,
+    pub(super) no_fa: Option<&'a Table<VariantKey>>,
+    pub(super) quantised: Option<&'a Table<ArchKey>>,
+    pub(super) ik_moe: Option<&'a Table<ArchCardsKey>>,
 }
 
 pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
@@ -34,7 +39,7 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
                  architecture has no evidence either way.",
             ),
             default: 0,
-            by_arch: &table.by_arch,
+            by_arch: &table.by_key,
         });
     }
     if let Some(table) = tables.tensor_base {
@@ -45,7 +50,7 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
                  not listed.",
             ),
             default: table.worst(),
-            by_arch: &table.by_arch,
+            by_arch: &table.by_key,
         });
     }
     if let Some(fit) = tables.draft_compute {
@@ -88,7 +93,7 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
                  over-reservation and clamp unreachably.",
             ),
             default: table.worst(),
-            by_arch: &table.by_arch,
+            by_arch: &table.by_key,
         });
     }
     if let Some(table) = tables.per_slot {
@@ -103,7 +108,7 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
                  allowance belongs in the packer's slop, beside the prompt cache.",
             ),
             default: table.worst(),
-            by_arch: &table.by_arch,
+            by_arch: &table.by_key,
         });
     }
     if let Some(table) = tables.table_less {
@@ -132,7 +137,7 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
                  buffer's rate.",
             ),
             default: table.worst(),
-            by_arch: &table.by_arch,
+            by_arch: &table.by_key,
         });
     }
     if let Some(table) = tables.no_fa {
@@ -145,7 +150,7 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
                  architecture not listed.",
             ),
             default: table.worst(),
-            by_arch: &table.by_arch,
+            by_arch: &table.by_key,
         });
     }
     if let Some(table) = tables.quantised {
@@ -158,7 +163,7 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
                  not listed.",
             ),
             default: table.worst(),
-            by_arch: &table.by_arch,
+            by_arch: &table.by_key,
         });
     }
     if let Some(table) = tables.ik_moe {
@@ -169,7 +174,7 @@ pub(super) fn write_tables(document: &mut Value, tables: Tables<'_>) {
 /// The `ik_moe_rates` section, as both the document and the live view need it.
 /// Per architecture because the rates differ enough that one number would either
 /// under-reserve the worst or over-reserve the rest.
-pub(super) fn ik_moe_value(table: &Table) -> Value {
+pub(super) fn ik_moe_value(table: &Table<ArchCardsKey>) -> Value {
     value(RateTable {
         comment: Cow::Borrowed(
             "Bytes per batch token per unit of hidden size for ik's \
@@ -177,7 +182,7 @@ pub(super) fn ik_moe_value(table: &Table) -> Value {
              applies to an architecture not listed.",
         ),
         default: table.worst(),
-        by_arch: &table.by_arch,
+        by_arch: &table.by_key,
     })
 }
 
@@ -227,11 +232,11 @@ pub fn check_table_signs(document: &Value) -> Result<()> {
 /// The shape nearly every table takes. Field order is the document's key order,
 /// since `serde_json` serializes a struct in declaration order.
 #[derive(Serialize)]
-struct RateTable<'a> {
+struct RateTable<'a, K> {
     #[serde(rename = "$comment")]
     comment: Cow<'a, str>,
     default: i64,
-    by_arch: &'a BTreeMap<String, i64>,
+    by_arch: &'a BTreeMap<K, i64>,
 }
 
 /// `mtp_slot_scaling`, which reports what was observed rather than a fitted rate and

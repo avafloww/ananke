@@ -14,8 +14,9 @@ use crate::{
         Scalar, Table,
         arena::arena_terms,
         error::{DeriveError, Result},
+        keys::{ArchKey, VariantEnvironmentKey, VariantKey},
         ordered::OrderedMap,
-        shape::{CHECKPOINT_MIN_STEP, variant_key},
+        shape::CHECKPOINT_MIN_STEP,
         stats::{consensus, consensus_default, median, round_half_even},
         tuning::Tuning,
     },
@@ -43,8 +44,8 @@ use crate::{
 pub fn baseline_offset(
     rows: &[Record],
     tuning: &Tuning,
-    no_fa_rates: &BTreeMap<String, i64>,
-) -> Result<(Scalar, Table)> {
+    no_fa_rates: &BTreeMap<VariantKey, i64>,
+) -> Result<(Scalar, Table<VariantEnvironmentKey>)> {
     if no_fa_rates.is_empty() {
         return Err(DeriveError::disagreement(
             "baseline offset needs the flash-attention rates and they are empty, \
@@ -64,7 +65,7 @@ pub fn baseline_offset(
     let pinned = tuning.required_f64("PINNED_EXTRA_BYTES")?;
     let worst_no_fa = no_fa_rates.values().copied().max().unwrap_or(0);
 
-    let mut by_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut by_variant: BTreeMap<VariantEnvironmentKey, Vec<f64>> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
         if !factors.fully_offloaded() || factors.gpus.is_empty() || factors.has_spec() {
@@ -125,7 +126,7 @@ pub fn baseline_offset(
             0.0
         } else {
             let rate = no_fa_rates
-                .get(&variant_key(record, false))
+                .get(&VariantKey::of(record))
                 .copied()
                 .unwrap_or(worst_no_fa);
             // Times `copies`, matching `pinned_graph_bytes`: the term is replicated
@@ -142,12 +143,12 @@ pub fn baseline_offset(
             - pinned
             - dev * (cards as f64 - 1.0)
             - modelled;
-        by_arch
-            .entry(variant_key(record, true))
+        by_variant
+            .entry(VariantEnvironmentKey::of(record))
             .or_default()
             .push(residual);
     }
-    if by_arch.is_empty() {
+    if by_variant.is_empty() {
         return Err(DeriveError::no_data("no resident served cells"));
     }
     // No `consensus` call here, deliberately. That guard exists to stop a *median*
@@ -165,30 +166,30 @@ pub fn baseline_offset(
     // correction can travel. gemma3 sat at 0.78 against a floor of 0.8, which no
     // amount of observation can pull back, so the "safe" direction had become the
     // unreachable one.
-    let table: BTreeMap<String, i64> = by_arch
+    let table: BTreeMap<VariantEnvironmentKey, i64> = by_variant
         .iter()
-        .map(|(arch, group)| {
+        .map(|(variant, group)| {
             (
-                arch.clone(),
+                variant.clone(),
                 round_half_even(group.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
             )
         })
         .collect();
-    let detail = by_arch
+    let detail = by_variant
         .iter()
-        .map(|(arch, group)| {
+        .map(|(variant, group)| {
             let lo = group.iter().copied().fold(f64::INFINITY, f64::min) / 1048576.0;
             let hi = group.iter().copied().fold(f64::NEG_INFINITY, f64::max) / 1048576.0;
             if hi - lo > 32.0 {
-                format!("{arch} {hi:+.0} (spans {lo:+.0})")
+                format!("{variant} {hi:+.0} (spans {lo:+.0})")
             } else {
-                format!("{arch} {hi:+.0}")
+                format!("{variant} {hi:+.0}")
             }
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let cells: usize = by_arch.values().map(Vec::len).sum();
-    let worst = by_arch
+    let cells: usize = by_variant.values().map(Vec::len).sum();
+    let worst = by_variant
         .values()
         .map(|group| group.iter().copied().fold(f64::NEG_INFINITY, f64::max))
         .fold(f64::NEG_INFINITY, f64::max);
@@ -205,7 +206,7 @@ pub fn baseline_offset(
             ),
         },
         Table {
-            by_arch: table,
+            by_key: table,
             evidence: String::new(),
         },
     ))
@@ -217,8 +218,8 @@ pub fn baseline_offset(
 /// and card count: between 96 and 184 MiB more. The estimator had no term for it,
 /// so every tensor-split service was under-predicted by that much — and tensor
 /// split is what the operator runs for several of them.
-pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Table)> {
-    type Key = (String, u32, u32, String);
+pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Table<ArchKey>)> {
+    type Key = (String, u32, u32, ArchKey);
     let mut pairs: BTreeMap<Key, BTreeMap<String, Vec<f64>>> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
@@ -248,7 +249,7 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
             record.provenance.model_key.clone(),
             factors.ctx,
             factors.ubatch,
-            parsed.arch.clone(),
+            ArchKey::recorded(record),
         );
         pairs
             .entry(key)
@@ -260,7 +261,7 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
 
     let mut deltas = Vec::new();
     let mut detail = Vec::new();
-    let mut by_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut by_arch: BTreeMap<ArchKey, Vec<f64>> = BTreeMap::new();
     for (key, group) in &pairs {
         let (Some(layer), Some(tensor)) = (group.get("layer"), group.get("tensor")) else {
             continue;
@@ -292,7 +293,7 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
         )?;
     }
     detail.sort();
-    let table: BTreeMap<String, i64> = by_arch
+    let table: BTreeMap<ArchKey, i64> = by_arch
         .iter()
         .map(|(arch, group)| {
             let worst = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -312,7 +313,7 @@ pub fn tensor_split_baseline(rows: &[Record], tuning: &Tuning) -> Result<(Scalar
             ),
         },
         Table {
-            by_arch: table,
+            by_key: table,
             evidence: String::new(),
         },
     ))

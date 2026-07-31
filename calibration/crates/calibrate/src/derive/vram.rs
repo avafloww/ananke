@@ -8,6 +8,7 @@ use crate::{
     derive::{
         NestedTable, Scalar, Table,
         error::{DeriveError, Result},
+        keys::ArchKey,
         shape::{WEIGHT_TOLERANCE, query_head_count, same_resident_weights, table_less_compute},
         stats::round_half_even,
     },
@@ -18,7 +19,7 @@ use crate::{
 /// pair is the flash-attention state itself.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ScorePairKey {
-    arch: String,
+    arch: ArchKey,
     model: String,
     ctx: u32,
     ubatch: u32,
@@ -55,14 +56,14 @@ struct ScorePairKey {
 /// gemma4 by 20 to 40%, and it does not exist at all under ik — so every ik cell was
 /// silently skipped, which is how laguna came to have no entry despite being the
 /// largest single miss in the set.
-pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table> {
+pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table<ArchKey>> {
     let mut paired: BTreeMap<ScorePairKey, (u64, &Record)> = BTreeMap::new();
     for record in rows {
-        let (factors, parsed) = (&record.factors, &record.parsed);
+        let factors = &record.factors;
         let Some(total) = record.rss.gpu_used_mib.filter(|v| *v != 0) else {
             continue;
         };
-        let Some(arch) = parsed.architecture().map(str::to_owned) else {
+        let Some(arch) = ArchKey::named(record) else {
             continue;
         };
         let key = ScorePairKey {
@@ -86,7 +87,7 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table> {
         };
         paired.entry(key).or_insert((total, record));
     }
-    let mut per_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut per_arch: BTreeMap<ArchKey, Vec<f64>> = BTreeMap::new();
     for (key, (total, record)) in &paired {
         if key.flash_attn != "off" {
             continue;
@@ -143,7 +144,7 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table> {
     // 3.3 and 4.2, and charging the 5 that `ceil` gives inflates a term worth
     // thousands of MiB by a fifth, which is the whole of the +6.7% its worst cell
     // showed.
-    let table: BTreeMap<String, i64> = per_arch
+    let table: BTreeMap<ArchKey, i64> = per_arch
         .iter()
         .map(|(arch, values)| {
             let worst = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -162,7 +163,7 @@ pub fn no_flash_attn_score(rows: &[Record]) -> Result<Table> {
         .collect::<Vec<_>>()
         .join(", ");
     Ok(Table {
-        by_arch: table,
+        by_key: table,
         evidence: format!(
             "paired against each cell's own flash-attention-on sibling on the driver \
              total: {detail} bytes per (head x cache token x batch token), stored in \

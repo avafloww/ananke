@@ -9,7 +9,7 @@ use crate::{
         Scalar, Table,
         arena::arena_terms,
         error::{DeriveError, Result},
-        shape::variant_key,
+        keys::{ArchKey, VariantKey},
         stats::{consensus, consensus_default, median, round_half_even},
         tuning::Tuning,
     },
@@ -96,9 +96,9 @@ pub fn gemma_e_per_layer_token(rows: &[Record], tuning: &Tuning) -> Result<Scala
 /// mechanism is not identified, the worst observed rate is charged to all of them.
 /// Doing so costs 12 MiB at the largest batch measured, which is cheap insurance
 /// against an under-prediction whose size is not understood.
-pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table)> {
+pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)> {
     let mut paired: BTreeMap<CacheTypePairKey, BTreeMap<String, f64>> = BTreeMap::new();
-    let mut archs: BTreeMap<String, String> = BTreeMap::new();
+    let mut archs: BTreeMap<String, ArchKey> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
         if !factors.fully_offloaded() || factors.gpus.is_empty() || factors.has_spec() {
@@ -127,11 +127,14 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table)> {
             .entry(key)
             .or_default()
             .insert(factors.kv_type.clone(), arena);
-        archs.insert(record.provenance.model_key.clone(), parsed.arch.clone());
+        archs.insert(
+            record.provenance.model_key.clone(),
+            ArchKey::recorded(record),
+        );
     }
 
     let mut rates = Vec::new();
-    let mut by_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut by_arch: BTreeMap<ArchKey, Vec<f64>> = BTreeMap::new();
     for (key, pair) in &paired {
         if pair.len() != 2 {
             continue;
@@ -173,7 +176,7 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table)> {
         )?;
     }
     let table = Table {
-        by_arch: by_arch
+        by_key: by_arch
             .iter()
             .map(|(arch, group)| {
                 (
@@ -259,12 +262,12 @@ struct CacheTypePairKey {
 pub fn no_flash_attn_rates(
     rows: &[Record],
     tuning: &Tuning,
-    quant_rates: Option<&BTreeMap<String, i64>>,
-) -> Result<Table> {
+    quant_rates: Option<&BTreeMap<ArchKey, i64>>,
+) -> Result<Table<VariantKey>> {
     // Required, not defaulted: the E variant's per-layer term is subtracted out of
     // this residual, and reading it as zero would fold it into every rate below.
     let e_variant_rate = tuning.required_f64("GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN")?;
-    let mut by_arch: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+    let mut by_variant: BTreeMap<VariantKey, Vec<f64>> = BTreeMap::new();
     for record in rows {
         let (parsed, factors) = (&record.parsed, &record.factors);
         if factors.flash_attn_on() {
@@ -307,9 +310,8 @@ pub fn no_flash_attn_rates(
         if factors.kv_type != "f16"
             && let Some(quant) = quant_rates.filter(|table| !table.is_empty())
         {
-            let arch = parsed.arch.as_str();
             let rate = quant
-                .get(arch)
+                .get(&ArchKey::recorded(record))
                 .copied()
                 .unwrap_or_else(|| quant.values().copied().max().unwrap_or(0));
             extra += rate as f64 * tokens / 1048576.0;
@@ -319,22 +321,22 @@ pub fn no_flash_attn_rates(
         // the masks are. Single-card cells measure a quarter of what two-card ones
         // do, which is the copy factor and not the slot count — gemma3 and qwen35
         // both measure the same rate at one slot and four.
-        by_arch
-            .entry(variant_key(record, false))
+        by_variant
+            .entry(VariantKey::of(record))
             .or_default()
             .push(residual * 1048576.0 / tokens / copies);
     }
-    if by_arch.is_empty() {
+    if by_variant.is_empty() {
         return Err(DeriveError::no_data(
             "no mainline cells with flash attention off",
         ));
     }
-    for (arch, group) in &by_arch {
+    for (variant, group) in &by_variant {
         // 4 KiB per token: below that the term is under a megabyte at the largest
         // batch measured, which is not worth splitting a group over.
         consensus(
             group,
-            &format!("no-flash-attention rate for {arch}"),
+            &format!("no-flash-attention rate for {variant}"),
             0.10,
             4096.0,
         )?;
@@ -342,28 +344,28 @@ pub fn no_flash_attn_rates(
     // Negative rates mean the current constant over-charges that architecture;
     // clamping at zero keeps the term from *subtracting* pinned memory, which no
     // mechanism supports.
-    let table: BTreeMap<String, i64> = by_arch
+    let table: BTreeMap<VariantKey, i64> = by_variant
         .iter()
-        .map(|(arch, group)| {
+        .map(|(variant, group)| {
             let worst = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            (arch.clone(), round_half_even(worst).max(0))
+            (variant.clone(), round_half_even(worst).max(0))
         })
         .collect();
-    let cells: usize = by_arch.values().map(Vec::len).sum();
+    let cells: usize = by_variant.values().map(Vec::len).sum();
     let rates = table
         .iter()
-        .map(|(arch, rate)| format!("{arch} {:.0} KiB", *rate as f64 / 1024.0))
+        .map(|(variant, rate)| format!("{variant} {:.0} KiB", *rate as f64 / 1024.0))
         .collect::<Vec<_>>()
         .join(", ");
     Ok(Table {
-        by_arch: table,
+        by_key: table,
         evidence: format!(
             "{cells} mainline cells with flash attention off across {} \
              architectures. The residual over the modelled arena is flat in context \
              and proportional to batch tokens, so it is a per-token rate: {rates}. \
              ik_llama is excluded — its fa-off arena is already modelled to within a \
              megabyte.",
-            by_arch.len(),
+            by_variant.len(),
         ),
     })
 }

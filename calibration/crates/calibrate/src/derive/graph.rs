@@ -9,6 +9,7 @@ use crate::{
         Scalar, Table,
         arena::arena_terms,
         error::{DeriveError, Result},
+        keys::{ArchCardsKey, ArchKey},
         stats::{consensus_default, median, round_half_even, round_tenths_half_even},
         tuning::Tuning,
     },
@@ -205,11 +206,11 @@ pub fn mainline_tensor_moe(rows: &[Record], tuning: &Tuning) -> Result<Scalar> {
 /// it is bounded by taking the maximum.
 ///
 /// The table is keyed `{arch}@{cards}` for that reason.
-pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Table)> {
+pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Table<ArchCardsKey>)> {
     struct Point {
         n_embd: u64,
         rate: f64,
-        arch: String,
+        arch: ArchKey,
         cards: usize,
     }
     let mut points: Vec<Point> = Vec::new();
@@ -237,7 +238,7 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
         points.push(Point {
             n_embd,
             rate: excess / n_embd as f64,
-            arch: parsed.arch.clone(),
+            arch: ArchKey::recorded(record),
             cards: factors.cards_or(1),
         });
     }
@@ -253,7 +254,7 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
     // device count rather than a separate term. Above the MoE threshold the two
     // card counts agree exactly, which is what localises it here rather than in
     // the arena.
-    let by_arch_cards: BTreeSet<(String, usize)> =
+    let by_arch_cards: BTreeSet<(ArchKey, usize)> =
         points.iter().map(|p| (p.arch.clone(), p.cards)).collect();
     for (arch, cards) in &by_arch_cards {
         let group: Vec<f64> = points
@@ -266,11 +267,11 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
             &format!("ik MoE rate for {arch} on {cards} card(s)"),
         )?;
     }
-    let archs: BTreeSet<&str> = points.iter().map(|p| p.arch.as_str()).collect();
+    let archs: BTreeSet<&ArchKey> = points.iter().map(|p| &p.arch).collect();
     for arch in &archs {
         let group: Vec<f64> = points
             .iter()
-            .filter(|p| p.arch == *arch)
+            .filter(|p| p.arch == **arch)
             .map(|p| p.rate)
             .collect();
         if let Err(error) = consensus_default(&group, &format!("ik MoE rate for {arch}")) {
@@ -284,7 +285,7 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
             // laguna shows the same shape — 36.0 on one card against 53.7 on two —
             // though its expert offload differs between them too, so its cause is
             // confounded where glm's is not.
-            if !matches!(*arch, "glm-dsa" | "laguna") {
+            if !matches!(arch.as_str(), "glm-dsa" | "laguna") {
                 return Err(error);
             }
         }
@@ -293,13 +294,13 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
         .iter()
         .map(|p| p.rate)
         .fold(f64::NEG_INFINITY, f64::max);
-    let mut by_key: BTreeMap<String, f64> = BTreeMap::new();
+    let mut by_key: BTreeMap<ArchCardsKey, f64> = BTreeMap::new();
     for point in &points {
-        let key = format!("{}@{}", point.arch, point.cards);
+        let key = ArchCardsKey::new(&point.arch, point.cards);
         let held = by_key.entry(key).or_insert(0.0);
         *held = held.max(point.rate);
     }
-    let shapes: BTreeSet<(u64, i64, String)> = points
+    let shapes: BTreeSet<(u64, i64, ArchKey)> = points
         .iter()
         .map(|p| (p.n_embd, round_tenths_half_even(p.rate), p.arch.clone()))
         .collect();
@@ -315,7 +316,7 @@ pub fn ik_moe_per_nembd(rows: &[Record], tuning: &Tuning) -> Result<(Scalar, Tab
         .collect::<Vec<_>>()
         .join(", ");
     let table = Table {
-        by_arch: by_key
+        by_key: by_key
             .into_iter()
             .map(|(k, v)| (k, round_half_even(v)))
             .collect(),

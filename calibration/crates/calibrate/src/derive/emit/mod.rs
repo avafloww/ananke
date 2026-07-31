@@ -30,7 +30,9 @@ use crate::{
         NestedTable, Scalar, Table, baseline, dataset,
         emit::tables::{Tables, write_tables},
         error::Result,
-        graph, mtp, pinned, recurrent,
+        graph,
+        keys::{ArchCardsKey, ArchKey, VariantEnvironmentKey, VariantKey},
+        mtp, pinned, recurrent,
         tuning::Tuning,
         vram,
     },
@@ -90,8 +92,8 @@ pub struct Emitted {
     pub measurements: usize,
     /// Kept on the outcome because `check_arena_model` needs them: the arena the
     /// derived constants were fitted against is only complete with these two terms.
-    pub no_flash_attn_rates: Option<Table>,
-    pub quantised_cache_rates: Option<Table>,
+    pub no_flash_attn_rates: Option<Table<VariantKey>>,
+    pub quantised_cache_rates: Option<Table<ArchKey>>,
 }
 
 /// Recompute every derived constant and table, and return the document to commit.
@@ -142,7 +144,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     // folds a per-token arena term into a flat baseline.
     let mut live = Tuning::of(&document);
 
-    let mut ik_moe: Option<Table> = None;
+    let mut ik_moe: Option<Table<ArchCardsKey>> = None;
     match graph::ik_moe_per_nembd(&rows, &live) {
         Ok((_scalar, table)) => {
             live.set_table("ik_moe_rates", tables::ik_moe_value(&table));
@@ -197,13 +199,13 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
 
     let slot_scaling = mtp::mtp_slot_scaling(&rows);
 
-    let mut checkpoint: Option<Table> = None;
+    let mut checkpoint: Option<Table<VariantKey>> = None;
     match baseline::checkpoint_headroom(&rows) {
         Ok(table) => checkpoint = Some(table),
         Err(error) => failed.push(format!("checkpoint headroom: cannot derive — {error}")),
     }
 
-    let mut per_slot: Option<Table> = None;
+    let mut per_slot: Option<Table<ArchKey>> = None;
     match baseline::per_slot_bytes(&rows) {
         Ok(table) => per_slot = Some(table),
         Err(error) => failed.push(format!("per-slot host bytes: cannot derive — {error}")),
@@ -217,7 +219,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
         )),
     }
 
-    let mut score: Option<Table> = None;
+    let mut score: Option<Table<ArchKey>> = None;
     match vram::no_flash_attn_score(&rows) {
         Ok(table) => score = Some(table),
         Err(error) => failed.push(format!(
@@ -228,27 +230,27 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     // `None` for the quantised rates: that table is filled by a deriver running
     // *after* this one, so the term is absent from the residual the committed rates
     // were fitted against.
-    let mut no_fa: Option<Table> = None;
+    let mut no_fa: Option<Table<VariantKey>> = None;
     match pinned::no_flash_attn_rates(&rows, &live, None) {
         Ok(table) => no_fa = Some(table),
         Err(error) => failed.push(format!("no-flash-attention rates: cannot derive — {error}")),
     }
 
-    let mut baseline_table: Option<Table> = None;
+    let mut baseline_table: Option<Table<VariantEnvironmentKey>> = None;
     let empty = BTreeMap::new();
-    let no_fa_rates = no_fa.as_ref().map(|t| &t.by_arch).unwrap_or(&empty);
+    let no_fa_rates = no_fa.as_ref().map(|t| &t.by_key).unwrap_or(&empty);
     match baseline::baseline_offset(&rows, &live, no_fa_rates) {
         Ok((_scalar, table)) => baseline_table = Some(table),
         Err(error) => failed.push(format!("baseline offset: cannot derive — {error}")),
     }
 
-    let mut tensor_base: Option<Table> = None;
+    let mut tensor_base: Option<Table<ArchKey>> = None;
     match baseline::tensor_split_baseline(&rows, &live) {
         Ok((_scalar, table)) => tensor_base = Some(table),
         Err(error) => failed.push(format!("tensor-split baseline: cannot derive — {error}")),
     }
 
-    let mut quantised: Option<Table> = None;
+    let mut quantised: Option<Table<ArchKey>> = None;
     match pinned::quantised_cache_bytes(&rows) {
         Ok((_scalar, table)) => quantised = Some(table),
         Err(error) => failed.push(format!("quantised-cache rates: cannot derive — {error}")),
@@ -339,20 +341,21 @@ pub fn emit_write(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
     let committed = Tuning::parse(tuning_text)
         .map_err(|e| crate::derive::error::DeriveError::malformed(e.to_string()))?;
     let rows = dataset::latest_per_cell(rows);
-    let empty = BTreeMap::new();
+    let no_fa_fallback = BTreeMap::new();
+    let quant_fallback = BTreeMap::new();
     crate::derive::arena::check_arena_model(
         &rows,
         &committed,
         emitted
             .no_flash_attn_rates
             .as_ref()
-            .map(|t| &t.by_arch)
-            .unwrap_or(&empty),
+            .map(|t| &t.by_key)
+            .unwrap_or(&no_fa_fallback),
         emitted
             .quantised_cache_rates
             .as_ref()
-            .map(|t| &t.by_arch)
-            .unwrap_or(&empty),
+            .map(|t| &t.by_key)
+            .unwrap_or(&quant_fallback),
         crate::derive::arena::ARENA_TOLERANCE_MIB,
     )?;
     check_table_signs(&emitted.document)?;

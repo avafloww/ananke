@@ -1,5 +1,5 @@
-//! Reading a cell's shape: how a record is keyed, how wide its attention is,
-//! and what the runtime reported holding where.
+//! Reading a cell's shape: how wide its attention is, and what the runtime
+//! reported holding where. How a record is *keyed* lives in [`crate::derive::keys`].
 
 use ananke_dataset::BufferRole;
 
@@ -9,48 +9,6 @@ use crate::record::{Parsed, Record};
 /// second context checkpoint is taken, and so the line between a cell that
 /// measures the probe's state and one that measures a real service's.
 pub const CHECKPOINT_MIN_STEP: u32 = 8192;
-
-/// The architecture, plus the distinctions that split one arch string.
-///
-/// `gemma4` covers three models whose host terms differ by more than the rolling
-/// correction can travel: a mixture of experts, a dense model, and an E-variant.
-/// Both discriminators are ones `host_buffer` already applies — `has_experts` and
-/// `compute_buffer::is_gemma_e_variant` — so a key built from them is one the
-/// estimator can construct at lookup time.
-///
-/// `with_environment` is asked for by the baseline offset alone. It differs by
-/// runtime (ik sits 24 to 192 MiB above mainline on the same architecture) and by
-/// flash attention, which shifts it by +21 to +33 MiB on most architectures and
-/// +131 on lfm2 — on top of the per-token arena rate, which is a separate term.
-///
-/// The flash-attention *rates* must not be keyed this way: ik is excluded from
-/// that derivation, so an ik-suffixed key would have no row and would inherit the
-/// table's worst rate as its default.
-pub fn variant_key(record: &Record, with_environment: bool) -> String {
-    let parsed = &record.parsed;
-    // The literal `"None"` is a real key, and appears in no table only because
-    // every cell reaching a keyed deriver has an architecture. It is spelled this
-    // way because the committed tables were keyed this way.
-    let mut key = parsed.architecture().unwrap_or("None").to_string();
-    if parsed.n_expert != 0 {
-        key.push_str("+moe");
-    }
-    // The same discriminator `compute_buffer::is_gemma_e_variant` uses, read
-    // from the load log rather than guessed from the filename. The proxy this
-    // replaces would have disagreed with the estimator the moment an E-variant
-    // shipped under another name: the analysis would fit one curve while the
-    // estimator selected a different one.
-    if parsed.per_layer_token_embd {
-        key.push_str("+e");
-    }
-    if with_environment && record.factors.runtime_is_ik() {
-        key.push_str("@ik");
-    }
-    if with_environment && !record.factors.flash_attn_on() {
-        key.push_str("@nofa");
-    }
-    key
-}
 
 /// Query heads, falling back to `n_embd / key_length` where the GGUF omits them.
 ///
