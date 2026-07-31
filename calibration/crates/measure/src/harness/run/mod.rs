@@ -40,14 +40,23 @@ use crate::{
 
 mod assemble;
 mod bench;
-mod child;
 mod exercise;
-mod readiness;
 mod sampler;
-mod watchdog;
+
+// The server lifecycle is shared with `probe`, which asks different questions of the
+// same kind of process. A probe that spawned its own way would drift from how a
+// measured cell is started, and the two would stop being comparable.
+pub(crate) mod child;
+pub(crate) mod readiness;
+pub(crate) mod watchdog;
 
 /// Long enough for the previous cell's `TIME_WAIT` to clear.
-const PORT_WAIT: Duration = Duration::from_secs(180);
+///
+/// Shared with `probe`, which spawns servers on the same port in the same way. A
+/// second opinion about this number is a second thing to get wrong: too short and
+/// the successor loses the bind, which reads as a dead stage rather than as a wait
+/// that ended early.
+pub(crate) const PORT_WAIT: Duration = Duration::from_secs(180);
 /// Let a served process settle before the final reading: the last request's
 /// allocations are not all visible the instant it returns.
 const SETTLE: Duration = Duration::from_secs(3);

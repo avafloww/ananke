@@ -7,6 +7,10 @@ version.workspace = true
 name = "measure"
 path = "src/bin/measure.rs"
 
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+
 [features]
 # The harness's in-memory fakes, so a consumer outside this crate can drive a
 # measurement without a process, a driver, or a clock.

@@ -68,11 +68,15 @@ model, run the campaign, refit, and decide whether to trust the result. It is th
 single source of truth for the loop; what follows is why the code is arranged the
 way it is, which is a separate question from how to run it.
 
-The nine binaries split three ways. `plan` and `campaign` schedule and drive the
-measurement; `fit` and `emit` turn the dataset into constants; `coverage`,
-`validate`, `scoreboard`, `crossval`, and `estimates` say whether the result is
-worth shipping. Only the first four produce anything, and only `fit --check`,
-`emit --check`, and `coverage --check` gate the build.
+`ananke-calibrate`'s ten binaries split three ways. `plan` and `campaign` schedule
+and drive the measurement; `fit` and `emit` turn the dataset into constants;
+`coverage`, `validate`, `scoreboard`, `crossval`, and `estimates` say whether the
+result is worth shipping. Only the first four produce anything, and only
+`fit --check`, `emit --check`, and `coverage --check` gate the build.
+
+`ananke-measure` carries two: `measure` runs a cell, and `probe` answers what a
+harness sampling each process once cannot — whether a term is allocated once or
+accumulates with use.
 
 `fit` and `emit` are separate operations in a fixed order: `emit` first, then
 `fit`. `emit` derives `MAINLINE_LAYER_SPLIT_MASK_COPIES`, which `fit` reads to

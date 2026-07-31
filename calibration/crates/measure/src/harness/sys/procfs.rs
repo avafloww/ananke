@@ -7,9 +7,17 @@
 //! pinned graph arena lands there and not in `RssAnon`), while `RssFile` is the
 //! mapped GGUF and is the discriminator for whether host weights are anonymous.
 
+use std::collections::BTreeMap;
+
 use crate::record::RssSnapshot;
 
 pub trait ProcFs: Send + Sync {
+    /// Anonymous resident bytes per mapping, from `/proc/<pid>/smaps`, keyed by the
+    /// mapping's name. A total says a process holds more than the model predicts;
+    /// this says whether that is the heap, a library arena, or a pinned CUDA
+    /// allocation. `None` when the pid has exited.
+    fn smaps_anon(&self, pid: u32) -> Option<BTreeMap<String, u64>>;
+
     /// `None` once the process is gone — a sampler that treated that as zero
     /// would record a cliff instead of the end of a trace.
     fn status(&self, pid: u32) -> Option<RssSnapshot>;
@@ -27,6 +35,12 @@ pub trait ProcFs: Send + Sync {
 pub struct LocalProcFs;
 
 impl ProcFs for LocalProcFs {
+    fn smaps_anon(&self, pid: u32) -> Option<BTreeMap<String, u64>> {
+        Some(parse_smaps_anon(
+            &std::fs::read_to_string(format!("/proc/{pid}/smaps")).ok()?,
+        ))
+    }
+
     fn status(&self, pid: u32) -> Option<RssSnapshot> {
         let text = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
         let mut snapshot = RssSnapshot::default();
@@ -78,6 +92,43 @@ impl ProcFs for LocalProcFs {
 /// One `/proc/meminfo` field, converted from its kB to GiB. A field the kernel
 /// does not carry reads as zero, which is the conservative direction for both
 /// callers: no memory available, and no swap in use to have grown from.
+/// Sum `Anonymous:` over each mapping in an `smaps` dump, keyed by mapping name.
+///
+/// A mapping header is `addr perms offset dev inode [path]`; the path is absent for
+/// anonymous memory, which is where the heap and most of what is being hunted lives,
+/// so those are grouped under `[anon]` rather than dropped.
+fn parse_smaps_anon(content: &str) -> BTreeMap<String, u64> {
+    let mut by: BTreeMap<String, u64> = BTreeMap::new();
+    let mut current = "[anon]".to_string();
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("Anonymous:") {
+            let kb: u64 = rest
+                .trim()
+                .trim_end_matches("kB")
+                .trim()
+                .parse()
+                .unwrap_or(0);
+            *by.entry(current.clone()).or_default() += kb * 1024;
+        } else if is_mapping_header(line) {
+            current = line
+                .split_whitespace()
+                .nth(5)
+                .unwrap_or("[anon]")
+                .to_string();
+        }
+    }
+    by
+}
+
+/// Whether a line opens a new mapping, as against continuing one's fields.
+///
+/// The header's first field is a hex address range; a field line is `Key: value`.
+fn is_mapping_header(line: &str) -> bool {
+    line.split_whitespace()
+        .next()
+        .is_some_and(|first| first.contains('-') && !first.ends_with(':'))
+}
+
 fn meminfo_gib(keys: &[&str]) -> f64 {
     let Ok(text) = std::fs::read_to_string("/proc/meminfo") else {
         return 0.0;
@@ -104,6 +155,7 @@ pub struct FakeProcFs {
 #[derive(Default)]
 struct FakeProcFsState {
     status: Option<RssSnapshot>,
+    smaps: BTreeMap<String, u64>,
     available_gib: f64,
     swap_gib: f64,
     /// Added to `swap_used_gib` on every read, so a watchdog test can watch it
@@ -115,6 +167,12 @@ struct FakeProcFsState {
 impl FakeProcFs {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Preload the per-mapping anonymous breakdown a probe will read.
+    pub fn with_smaps(self, smaps: BTreeMap<String, u64>) -> Self {
+        self.inner.lock().smaps = smaps;
+        self
     }
 
     pub fn with_status(self, status: RssSnapshot) -> Self {
@@ -140,6 +198,10 @@ impl FakeProcFs {
 
 #[cfg(any(test, feature = "test-fakes"))]
 impl ProcFs for FakeProcFs {
+    fn smaps_anon(&self, _pid: u32) -> Option<BTreeMap<String, u64>> {
+        Some(self.inner.lock().smaps.clone())
+    }
+
     fn status(&self, _pid: u32) -> Option<RssSnapshot> {
         self.inner.lock().status
     }

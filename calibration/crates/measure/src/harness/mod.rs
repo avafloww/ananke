@@ -49,4 +49,5 @@ mod run;
 /// substitutes the world to check the contract it depends on. The in-memory
 /// implementations inside stay behind `test-fakes` — the seams are API, the fakes
 /// are a test aid.
+pub mod probe;
 pub mod sys;

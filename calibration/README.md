@@ -15,7 +15,7 @@ record of what each one rests on.
 | `docs/findings.md` | what was measured and what it showed, written as results landed |
 | `docs/plan.md` | the campaign's original specification and what it deliberately does not establish |
 | `models.toml` | which models the scoreboard checks, and their production settings |
-| `probes/` | standalone diagnostics that answer what a single-sample harness cannot |
+| `crates/measure` | the harness, and the `probe` diagnostic for what a single sample cannot separate |
 
 The tools are Rust crates, not scripts: `ananke-measure` runs a cell,
 `ananke-calibrate` plans the campaign and derives the constants. This page is
@@ -243,16 +243,29 @@ but do not settle them.
 
 ## Probes
 
-The harness samples one process once per configuration, which cannot separate
-a term allocated once from one that accumulates with use. `probe_host_growth.py`
-varies one thing at a time against a fresh server and reports the series:
+The harness samples one process once per configuration, which cannot separate a
+term allocated once from one that accumulates with use — both read as "this model
+holds more than the model predicts". The `probe` binary varies one thing at a time
+against a fresh server and reports the series, which is what separates them:
 
 ```sh
-python probes/probe_host_growth.py maps    qwen36-27b gemma3-27b   # where it lives
-python probes/probe_host_growth.py growth  qwen36-27b              # leak or prompt cache
-python probes/probe_host_growth.py prefill qwen36-27b              # what triggers it
+cargo run -p ananke-measure --bin probe -- --model /path/to/model.gguf
+cargo run -p ananke-measure --bin probe -- --model … --only step,maps
+cargo run -p ananke-measure --bin probe -- --model … --dry-run   # the plan, and how many loads
 ```
 
-These load real models and read real memory, so run them one at a time against
-an idle machine. What they settled is in `docs/findings.md` under "The
-per-model residual is a first-request step".
+Four questions, answered in one run: where the anonymous memory lives (`maps`),
+which mapping the first request's allocation lands in (`step`), whether the
+footprint accumulates with use and whether the prompt cache is why (`growth`), and
+whether the one-time step is sized by the prompt or the generation (`prefill`).
+
+The whole battery is eight server loads, because the step it hunts happens on a
+process's *first* request and never again: a point measured on a server that has
+already served something measures nothing, and measures it plausibly. Stages share
+a server only where the ordering allows, which the plan states once and a test
+checks without needing a GPU.
+
+Nothing is written — the output is for a reader. It loads real models and reads
+real memory, so run it against an idle machine with nothing else on the GPUs. What
+it settled is in `docs/findings.md` under "The per-model residual is a
+first-request step".
