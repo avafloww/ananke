@@ -116,7 +116,7 @@ These fields appear at the top level of every `[[service]]` block, regardless of
 | `priority` | u8 | `50` (or `[defaults]` value) | Eviction priority; higher wins eviction contests. |
 | `idle_timeout` | duration string | `10m` (or `[defaults]` value) | Idle timeout for on-demand services. |
 | `description` | string | none | Human-readable description exposed through `/v1/models` and `/api/services`. |
-| `modality` | string | `"chat"` | `"chat"` or `"embedding"` (see [Embedding Services](#embedding-services)). On `llama-cpp` services, `"embedding"` also passes `--embeddings` to llama-server. Any other string is a hard config error. |
+| `modality` | string | `"chat"` | `"chat"`, `"embedding"` (see [Embedding Services](#embedding-services)), or `"transcription"` (see [Transcription Services](#transcription-services); `command` template only). On `llama-cpp` services, `"embedding"` also passes `--embeddings` to llama-server. Any other string is a hard config error. |
 | `extra_args` | array of string | none | Extra argv appended to the service's launch command. |
 | `extra_args_append` | array of string | none | Extra argv appended to the inherited list (use with `extends`; concatenated with parent's list). |
 | `env` | map string → string | none | Environment variables set on the spawned process. Accepts `${port}`, `${gpu_ids}`, `${reserve_mb}`, `${model}`, `${name}` placeholders. |
@@ -664,7 +664,7 @@ http = "/health"
 upstream_model = "jina-embeddings-v5-text-small-retrieval"
 ```
 
-Valid values are `"chat"` (the default) and `"embedding"`; any other string is a hard config error rather than a silent fall-back. The field is elided from `/v1/models` and `/api/services` JSON when it equals `"chat"`, so chat-only deployments see byte-identical wire output to what they shipped before this field landed.
+Valid values are `"chat"` (the default), `"embedding"`, and `"transcription"` (see [Transcription Services](#transcription-services)); any other string is a hard config error rather than a silent fall-back. The field is elided from `/v1/models` and `/api/services` JSON when it equals `"chat"`, so chat-only deployments see byte-identical wire output to what they shipped before this field landed.
 
 Once registered, hit the endpoint as you would any OpenAI embedding API:
 
@@ -678,6 +678,48 @@ curl -s -X POST http://localhost:7070/v1/embeddings \
 ```
 
 ananke ensures the upstream container is started (cold-starting it on first request if needed), rewrites `model` to `upstream_model`, and relays the embedding vectors back unchanged. The static VRAM pledge is held only while the service is running; on-demand services drain back to idle after `idle_timeout` elapses with no traffic.
+
+#### Transcription Services
+
+Speech-to-text servers — parakeet.cpp's `parakeet-server` and whisper.cpp's `whisper-server` — run as `command` services with `modality = "transcription"`. The modality alone puts the service on the OpenAI multiplexer (it appears in `GET /v1/models` and receives `POST /v1/audio/transcriptions` traffic addressed to its `name`); no `[service.openai_proxy]` block is needed, because ASR upstreams ignore the `model` form field entirely and there is no upstream model name to rewrite. The modality is only valid on the `command` template — llama-server has no ASR endpoint, so `modality = "transcription"` on a `llama-cpp` service is a hard config error.
+
+Requests are multipart/form-data. ananke parses the body only far enough to read the `model` field, then forwards it byte-for-byte to the upstream — `[service.filters]` does not apply. The upstream must serve `POST /v1/audio/transcriptions` on its private port: parakeet-server does so natively; whisper-server needs `--inference-path /v1/audio/transcriptions` in its argv. Audio uploads are bounded by `openai_api.max_body_mb` — raise it if clients send more than a few minutes of WAV.
+
+```toml
+[[service]]
+name = "parakeet-tdt-0.6b-v3"
+template = "command"
+port = 8220
+modality = "transcription"
+command = [
+  "/opt/parakeet.cpp/build/examples/server/parakeet-server",
+  "--model", "/opt/models/parakeet-tdt-0.6b-v3/tdt-0.6b-v3-f16.gguf",
+  "--port", "{port}",
+]
+lifecycle = "on_demand"
+idle_timeout = "15m"
+
+[service.allocation]
+mode = "static"
+reserve_gb = 3
+
+[service.devices]
+placement = "gpu-only"
+placement_override = { "gpu:0" = 3000 }
+
+[service.health]
+http = "/health"
+```
+
+Once registered, hit the endpoint as you would the OpenAI transcription API:
+
+```sh
+curl -s -X POST http://localhost:7070/v1/audio/transcriptions \
+  -F model="parakeet-tdt-0.6b-v3" \
+  -F file="@clip.wav" | jq .text
+```
+
+Mind the upstream servers' own limits: parakeet-server accepts WAV only and serves one request at a time (no batching; concurrent requests queue on its single inference thread), and whisper-server serialises inference behind a global lock. For parallel transcription, run N services and spread clients across them.
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |

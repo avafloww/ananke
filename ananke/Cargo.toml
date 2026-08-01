@@ -39,6 +39,7 @@ http.workspace = true
 http-body-util.workspace = true
 bytes.workspace = true
 axum.workspace = true
+multer.workspace = true
 tower.workspace = true
 tower-http.workspace = true
 reqwest.workspace = true

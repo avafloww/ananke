@@ -61,7 +61,7 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "modality",
                     "string",
                     "`\"chat\"`",
-                    "`\"chat\"` or `\"embedding\"` (see [Embedding Services](#embedding-services)). On `llama-cpp` services, `\"embedding\"` also passes `--embeddings` to llama-server. Any other string is a hard config error.",
+                    "`\"chat\"`, `\"embedding\"` (see [Embedding Services](#embedding-services)), or `\"transcription\"` (see [Transcription Services](#transcription-services); `command` template only). On `llama-cpp` services, `\"embedding\"` also passes `--embeddings` to llama-server. Any other string is a hard config error.",
                 ),
                 field(
                     "extra_args",

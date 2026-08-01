@@ -136,18 +136,33 @@ pub(crate) fn validate_service(
     let modality = match common.modality.as_deref() {
         None | Some("chat") => Modality::Chat,
         Some("embedding") => Modality::Embedding,
+        Some("transcription") => Modality::Transcription,
         Some(other) => {
             return Err(fail(format!(
-                "service {name}: unknown modality `{other}` (valid: `chat`, `embedding`)"
+                "service {name}: unknown modality `{other}` (valid: `chat`, `embedding`, `transcription`)"
             )));
         }
     };
+    // llama-server has no ASR endpoint; transcription is served by
+    // dedicated command-template children (parakeet-server, whisper-server).
+    if modality == Modality::Transcription
+        && matches!(&template_config, TemplateConfig::LlamaCpp(_))
+    {
+        return Err(fail(format!(
+            "service {name}: modality `transcription` is only valid for command services (llama-server does not serve /v1/audio/transcriptions)"
+        )));
+    }
     // llama-cpp always speaks OpenAI. Command services opt in by
-    // setting `[service.openai_proxy] upstream_model = ...`; that's
-    // also where the model-name rewrite to the upstream lives.
+    // setting `[service.openai_proxy] upstream_model = ...` — or, for
+    // transcription services, by the modality alone: ASR upstreams
+    // ignore the `model` form field entirely, so there is no upstream
+    // model name to rewrite and requiring an `openai_proxy` block would
+    // demand a meaningless `upstream_model` value.
     let openai_compat = match &template_config {
         TemplateConfig::LlamaCpp(_) => true,
-        TemplateConfig::Command(cmd) => cmd.openai_proxy.is_some(),
+        TemplateConfig::Command(cmd) => {
+            cmd.openai_proxy.is_some() || modality == Modality::Transcription
+        }
     };
 
     let dev = common.devices.clone().unwrap_or_default();
@@ -415,6 +430,12 @@ pub(crate) fn validate_service(
                     .map_err(|e| fail(format!("service {name} filters.set_params[{k}]: {e}")))?;
                 filters.set_params.insert(k.clone(), json_val);
             }
+        }
+        if modality == Modality::Transcription {
+            warn!(
+                service = %name,
+                "filters are ignored for transcription services (requests are multipart/form-data, not JSON)"
+            );
         }
     }
 

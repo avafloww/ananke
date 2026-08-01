@@ -5,7 +5,7 @@
 004|failed to parse config at <config>: service a: expert_offload `x` is invalid (expected "off", "auto", or an integer layer count)
 005|failed to parse config at <config>: service a: unknown devices.split `x` (expected "layer", "row", "tensor")
 006|failed to parse config at <config>: service a: unknown lifecycle `x`
-007|failed to parse config at <config>: service a: unknown modality `x` (valid: `chat`, `embedding`)
+007|failed to parse config at <config>: service a: unknown modality `x` (valid: `chat`, `embedding`, `transcription`)
 008|failed to parse config at <config>: service a: lifecycle `oneshot` is invalid in a [[service]] block (API-only)
 009|failed to parse config at <config>: service a: draft_model requires spec_type to be set (e.g. spec_type = "draft-mtp")
 010|failed to parse config at <config>: service a: launcher is present but empty

@@ -88,6 +88,9 @@ export function ServiceDetailView() {
         {d.modality === "embedding" && (
           <Badge variant="embedding">embedding</Badge>
         )}
+        {d.modality === "transcription" && (
+          <Badge variant="transcription">transcription</Badge>
+        )}
         <div className="ml-auto flex flex-wrap items-center gap-4">
           <Stat label={t("serviceDetail.port")} value={`:${d.port}`} />
           <Stat label={t("serviceDetail.pid")} value={d.pid ?? "—"} />
@@ -110,7 +113,7 @@ export function ServiceDetailView() {
                 <ExternalLinkIcon />
                 {t("serviceDetail.open")}
               </a>
-              {d.modality !== "embedding" && (
+              {d.modality !== "embedding" && d.modality !== "transcription" && (
                 <ButtonLink
                   variant="iris"
                   to={`/chat?model=${encodeURIComponent(d.name)}`}
@@ -182,7 +185,9 @@ export function ServiceDetailView() {
         </div>
 
         {/* Per-service stats */}
-        {d.modality !== "embedding" && <ServiceMetrics name={d.name} />}
+        {d.modality !== "embedding" && d.modality !== "transcription" && (
+          <ServiceMetrics name={d.name} />
+        )}
 
         {/* Auto-restart history */}
         {(d.recent_restarts?.length ?? 0) > 0 && (

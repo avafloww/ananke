@@ -79,6 +79,8 @@ pub(crate) fn command_uses_port_placeholder(
 
 #[cfg(test)]
 mod tests {
+    use ananke_api::shared::modality::Modality;
+
     use crate::validate::{test_fixtures::parse_and_merge, validate};
 
     #[test]
@@ -274,6 +276,93 @@ allocation.max_reserve_gb = 8
         // The placeholder dry-run checker is injected by the daemon; ananke-config's
         // own `validate` uses the no-op checker, so the daemon-side tests in
         // `ananke/src/config/validate/placeholders.rs` cover the rejection path.
+        let cfg = parse_and_merge(
+            r#"
+[[service]]
+name = "ext"
+template = "command"
+command = ["run", "--port={prot}"]
+port = 8500
+allocation.mode = "static"
+allocation.reserve_gb = 1
+"#,
+        );
+        assert!(validate(&cfg).is_ok());
+    }
+
+    #[test]
+    fn transcription_command_service_is_listed_without_openai_proxy() {
+        let cfg = parse_and_merge(
+            r#"
+[[service]]
+name = "parakeet"
+template = "command"
+command = ["/opt/parakeet.cpp/parakeet-server", "--port", "{port}"]
+port = 8600
+modality = "transcription"
+allocation.mode = "static"
+allocation.reserve_gb = 2
+"#,
+        );
+        let eff = validate(&cfg).expect("validate");
+        let svc = &eff.services[0];
+        assert_eq!(svc.modality, Modality::Transcription);
+        assert!(
+            svc.openai_compat,
+            "transcription modality should imply openai_compat without an openai_proxy block"
+        );
+        assert!(
+            svc.command()
+                .expect("command template")
+                .openai_proxy
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn transcription_modality_is_rejected_on_llama_cpp() {
+        let cfg = parse_and_merge(
+            r#"
+[[service]]
+name = "demo"
+template = "llama-cpp"
+model = "/m/x.gguf"
+port = 11435
+modality = "transcription"
+devices.placement_override = { "gpu:0" = 18944 }
+"#,
+        );
+        let err = validate(&cfg).expect_err("transcription on llama-cpp is rejected");
+        assert!(
+            format!("{err}").contains("only valid for command services"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn unknown_modality_lists_transcription_as_valid() {
+        let cfg = parse_and_merge(
+            r#"
+[[service]]
+name = "ext"
+template = "command"
+command = ["/bin/true"]
+port = 8500
+modality = "audio"
+allocation.mode = "static"
+allocation.reserve_gb = 1
+"#,
+        );
+        let err = validate(&cfg).expect_err("unknown modality is rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("unknown modality") && msg.contains("`transcription`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn command_service_rejects_typo_in_placeholder() {
         let cfg = parse_and_merge(
             r#"
 [[service]]

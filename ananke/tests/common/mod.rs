@@ -38,9 +38,9 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use ananke::{
     config::{
-        AllocationMode, AutoRestartSettings, DaemonSettings, DeviceReserves, DeviceSlot,
-        EffectiveConfig, Filters, HealthSettings, Lifecycle, LlamaCppConfig, OffloadMode,
-        PlacementPolicy, ServiceConfig, SplitMode, TemplateConfig,
+        AllocationMode, AutoRestartSettings, CommandConfig, DaemonSettings, DeviceReserves,
+        DeviceSlot, EffectiveConfig, Filters, HealthSettings, Lifecycle, LlamaCppConfig,
+        OffloadMode, PlacementPolicy, ServiceConfig, SplitMode, TemplateConfig,
         manager::ConfigManager,
         parse::{DEFAULT_START_QUEUE_DEPTH, EstimationConfig, SamplingConfig},
     },
@@ -322,6 +322,23 @@ pub fn minimal_llama_service(name: &str, port: u16) -> ServiceConfig {
         })),
         container: None,
     }
+}
+
+/// Build a minimal on-demand transcription `ServiceConfig` (command
+/// template, `modality = transcription`). Mirrors `minimal_llama_service`
+/// otherwise: CPU placement so the allocator never blocks, `/health`
+/// probe against the echo server.
+pub fn minimal_transcription_service(name: &str, port: u16) -> ServiceConfig {
+    let mut s = minimal_llama_service(name, port);
+    s.modality = ananke_api::shared::Modality::Transcription;
+    s.template_config = TemplateConfig::Command(CommandConfig {
+        command: vec!["/fake/asr-server".into(), "--port".into(), "{port}".into()],
+        workdir: None,
+        shutdown_command: None,
+        private_port_override: None,
+        openai_proxy: None,
+    });
+    s
 }
 
 /// Build a minimal on-demand `ServiceConfig` with a capped start queue.

@@ -90,6 +90,11 @@ export function ServiceRow({
             embedding
           </span>
         )}
+        {svc.modality === "transcription" && (
+          <span className="shrink-0 font-mono text-xs text-transcription">
+            transcription
+          </span>
+        )}
         {(svc.inflight_count ?? 0) > 0 && (
           <span className="shrink-0 font-mono text-xs text-accent">
             {svc.inflight_count} in-flight

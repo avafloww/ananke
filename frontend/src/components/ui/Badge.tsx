@@ -10,7 +10,8 @@ export type BadgeVariant =
   | "danger"
   | "accent"
   | "vision"
-  | "embedding";
+  | "embedding"
+  | "transcription";
 
 type BadgeProps = {
   variant?: BadgeVariant;
@@ -26,6 +27,7 @@ const VARIANT_CLASSES: Record<BadgeVariant, string> = {
   accent: "bg-accent/12 text-accent ring-accent/25",
   vision: "bg-vision/12 text-vision ring-vision/25",
   embedding: "bg-embedding/12 text-embedding ring-embedding/25",
+  transcription: "bg-transcription/12 text-transcription ring-transcription/25",
 };
 
 // Modality/state tags use the eyebrow register — tracked mono capitals —

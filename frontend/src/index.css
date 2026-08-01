@@ -53,6 +53,7 @@
   --color-danger: #ef5a5a;
   --color-vision: #d96fb8; /* moved off purple so iris owns the brand */
   --color-embedding: #38bdc4;
+  --color-transcription: #e0834c;
 
   /* Shared header height for the sidebar header and every view header,
    * so their bottom borders align on the same horizontal line. */
@@ -99,6 +100,7 @@
   --color-danger: #d6453f;
   --color-vision: #c14a98;
   --color-embedding: #1f9aa1;
+  --color-transcription: #c2662e;
 }
 
 @layer base {

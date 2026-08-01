@@ -1,7 +1,9 @@
 //! Unified OpenAI listener — Axum router factory.
 
+pub mod audio;
 pub mod errors;
 pub mod filters;
+pub mod forward;
 pub mod handlers;
 pub mod llamacpp;
 pub mod metrics;

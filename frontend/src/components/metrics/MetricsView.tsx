@@ -102,7 +102,10 @@ export function MetricsView() {
           >
             <option value="">{t("stats.allServices")}</option>
             {(services.data ?? [])
-              .filter((s) => s.modality !== "embedding")
+              .filter(
+                (s) =>
+                  s.modality !== "embedding" && s.modality !== "transcription",
+              )
               .map((s) => (
                 <option key={s.name} value={s.name}>
                   {s.name}

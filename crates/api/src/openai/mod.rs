@@ -4,6 +4,7 @@
 //! and `anankectl` can use them directly as `ananke_api::openai`. The
 //! daemon's OpenAI handlers import them from here.
 
+pub mod audio;
 pub mod chat;
 pub mod completions;
 pub mod embeddings;
@@ -11,6 +12,7 @@ pub mod models;
 pub mod response;
 pub mod unimplemented;
 
+pub use audio::TranscriptionEnvelope;
 pub use chat::ChatCompletionEnvelope;
 pub use completions::CompletionEnvelope;
 pub use embeddings::EmbeddingEnvelope;

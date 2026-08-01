@@ -1,10 +1,7 @@
 //! Handlers for /v1/models and the three POST body-rewriting endpoints.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use std::{
-    task::Poll,
-    time::{Duration, Instant},
-};
+use std::time::Instant;
 
 use ananke_api::{
     openai::{
@@ -12,90 +9,42 @@ use ananke_api::{
     },
     shared::errors::ApiError,
 };
-use ananke_tracking::{inflight::InflightGuard, progress::ProgressCell};
 use axum::{
     Json,
-    body::Body,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{Router, get, post},
 };
 use bytes::Bytes;
-use futures::TryStreamExt;
-use http_body_util::{BodyExt, StreamBody};
-use hyper::body::{Frame, SizeHint};
 use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::{
     api::openai::{
-        errors, filters,
-        metrics::{MetricsBody, MetricsRecorder, RequestMetricsRecorder},
-        stall::{self, StallDisarm},
+        audio, errors, filters,
+        forward::{UpstreamPost, ensure_ready, forward_upstream},
     },
     daemon::app_state::AppState,
-    supervise::{EnsureFailure, EnsureOutcome, await_ensure, state::ServiceState},
+    supervise::state::ServiceState,
 };
-
-pin_project_lite::pin_project! {
-    /// Wraps a body and holds an [`InflightGuard`] so the counter stays elevated
-    /// until the full response body (including SSE streams) has been consumed.
-    /// On each forwarded data frame it stamps the per-service `progress` cell
-    /// (feeding the stall watchdog's run-level liveness check) and, on the
-    /// first frame, disarms this request's stall timer.
-    struct GuardedBody<B> {
-        #[pin]
-        body: B,
-        _guard: InflightGuard,
-        stall: Option<StallDisarm>,
-        progress: Option<ProgressCell>,
-    }
-}
-
-impl<B: hyper::body::Body> hyper::body::Body for GuardedBody<B> {
-    type Data = B::Data;
-    type Error = B::Error;
-
-    fn poll_frame(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        let this = self.project();
-        let polled = this.body.poll_frame(cx);
-        if let Poll::Ready(Some(Ok(frame))) = &polled
-            && frame.data_ref().is_some()
-        {
-            // Any data frame is proof the child is producing output: record
-            // service-level progress, and disarm this request's stall timer.
-            if let Some(progress) = this.progress.as_ref() {
-                progress.record();
-            }
-            if let Some(stall) = this.stall.as_mut() {
-                stall.disarm();
-            }
-        }
-        polled
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.body.is_end_stream()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        self.body.size_hint()
-    }
-}
 
 pub fn register(router: Router, state: AppState) -> Router {
     // Build the main routes against AppState, collapse to Router<()>, then
     // merge the unimplemented stubs (which already return Router<()>) and
-    // the caller's router.
+    // the caller's router. The literal /v1/audio/transcriptions route takes
+    // precedence over the stubs' /v1/audio/*rest wildcard (static paths win
+    // in axum's matchit router), so the other audio endpoints keep
+    // returning 501.
     let implemented: Router = Router::new()
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/completions", post(completions))
         .route("/v1/embeddings", post(embeddings))
+        .route(
+            "/v1/audio/transcriptions",
+            post(audio::audio_transcriptions),
+        )
         .with_state(state.clone());
     let stubs: Router = crate::api::openai::unimplemented::register(Router::new(), state);
     router.merge(implemented).merge(stubs)
@@ -108,8 +57,8 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
     let effective = state.config.effective();
     for (name, handle) in state.registry.all() {
         // Hide services whose template doesn't speak OpenAI. llama-cpp
-        // does; `command` services don't (wrap them in a llama-cpp-
-        // compatible proxy if you need to list one here).
+        // does; `command` services opt in via openai_proxy or the
+        // transcription modality.
         let Some(svc) = effective.services.iter().find(|s| s.name == name) else {
             continue;
         };
@@ -237,32 +186,8 @@ async fn forward_json_post(
         return errors::not_found_model(&model);
     };
 
-    // Ensure the service is running (coalescing concurrent first-requests).
-    let max_request_duration = Duration::from_millis(svc.max_request_duration_ms);
-    match await_ensure(&handle, max_request_duration).await {
-        EnsureOutcome::Ready { .. } => {}
-        EnsureOutcome::Failed(EnsureFailure::InsufficientCapacity(msg)) => {
-            warn!(model = %model, endpoint = path, reason = %msg, "request rejected: insufficient_capacity");
-            return errors::insufficient_capacity(&model, &msg);
-        }
-        EnsureOutcome::Failed(EnsureFailure::ServiceDisabled(msg)) => {
-            warn!(model = %model, endpoint = path, reason = %msg, "request rejected: service_disabled");
-            return errors::service_disabled(&model, &msg);
-        }
-        EnsureOutcome::Failed(EnsureFailure::StartQueueFull) => {
-            warn!(model = %model, endpoint = path, "request rejected: start_queue_full");
-            return errors::start_queue_full(&model);
-        }
-        EnsureOutcome::Failed(EnsureFailure::StartFailed(msg)) => {
-            warn!(model = %model, endpoint = path, reason = %msg, "request rejected: start_failed");
-            return errors::start_failed(&model, &msg);
-        }
-        EnsureOutcome::Failed(EnsureFailure::Blocked { busy_peers }) => {
-            warn!(model = %model, endpoint = path, ?busy_peers, "request rejected: service_blocked");
-            return errors::service_blocked(&model, &busy_peers);
-        } // Every `EnsureFailure` is exhausted above; `errors::*` helpers
-          // each project to the same `ApiErrorCode` so the wire body is
-          // consistent with the per-service proxy's hyper data plane.
+    if let Err(resp) = ensure_ready(&handle, svc, &model, path).await {
+        return resp;
     }
 
     // Apply filters.
@@ -298,156 +223,22 @@ async fn forward_json_post(
         Err(e) => return errors::bad_request(format!("re-serialise failed: {e}")),
     };
 
-    // Bump activity and acquire an in-flight guard before forwarding.
-    state.activity.ping(&svc.name);
-    let counter = state.inflight.counter(&svc.name);
-    let guard = InflightGuard::new(counter);
-
-    // Per-service last-frame stamp for the stall watchdog. Present whenever the
-    // watchdog is enabled; every forwarded frame (streaming or not) bumps it,
-    // so a stalled request can tell "the whole service is silent" (wedge) from
-    // "another request is streaming fine" (just queued).
-    let progress = svc
-        .auto_restart
-        .ttft_stall
-        .map(|_| state.progress.stamp(&svc.name));
-
     let is_streaming = parsed
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    // Arm the stall watchdog only for streaming requests. A streaming upstream
-    // returns headers before any token, so silence on the body is the wedge
-    // signal. Non-streaming responses only arrive once fully buffered, making
-    // TTFT indistinguishable from a slow-but-healthy generation — those are
-    // bounded by `max_request_duration`, not this watchdog. Armed before the
-    // request is sent so it also covers a child that never returns headers.
-    let mut stall = match (
-        svc.auto_restart.ttft_stall,
+    forward_upstream(UpstreamPost {
+        state: &state,
+        svc,
+        handle: &handle,
+        model: &model,
+        path,
+        headers: &headers,
+        content_type: HeaderValue::from_static("application/json"),
+        body: Bytes::from(new_body),
         is_streaming,
-        handle.peek().run_id,
-    ) {
-        (Some(trigger), true, Some(run_id)) => progress.clone().map(|prog| {
-            stall::arm(
-                handle.clone(),
-                run_id,
-                Duration::from_millis(trigger.timeout_ms),
-                prog,
-            )
-        }),
-        _ => None,
-    };
-
-    // Build hyper client and forward to the upstream service.
-    let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-        .build_http::<http_body_util::combinators::BoxBody<
-        Bytes,
-        Box<dyn std::error::Error + Send + Sync>,
-    >>();
-
-    // Invariant: the port is a validated `u16` and `path` is a static route
-    // string, so the constructed http URL always parses.
-    let uri = format!("http://127.0.0.1:{}{}", svc.private_port, path)
-        .parse::<hyper::Uri>()
-        .unwrap_or_else(|_| unreachable!("uri from a validated port and static route path parses"));
-    let mut req = hyper::Request::builder().method("POST").uri(uri);
-    for (k, v) in headers.iter() {
-        if k == hyper::header::HOST || k == hyper::header::CONTENT_LENGTH {
-            continue;
-        }
-        req = req.header(k, v);
-    }
-    req = req.header(hyper::header::CONTENT_TYPE, "application/json");
-    req = req.header(hyper::header::CONTENT_LENGTH, new_body.len());
-    let upstream_body = http_body_util::Full::new(Bytes::from(new_body))
-        .map_err(|never| match never {})
-        .boxed();
-    let req = match req.body(upstream_body) {
-        Ok(r) => r,
-        Err(e) => {
-            // Never left the ground — disarm so the timer doesn't fire against
-            // a healthy run five minutes from now.
-            if let Some(s) = stall.as_mut() {
-                s.disarm();
-            }
-            return errors::bad_request(format!("build request: {e}"));
-        }
-    };
-
-    let resp = match client.request(req).await {
-        Ok(r) => r,
-        Err(e) => {
-            // A synchronous upstream failure (e.g. connection reset during a
-            // drain race) is not a stall — disarm before returning.
-            if let Some(s) = stall.as_mut() {
-                s.disarm();
-            }
-            warn!(error = %e, model = %model, "upstream request failed");
-            return errors::start_failed(&model, "upstream unavailable");
-        }
-    };
-
-    let (parts, upstream_body) = resp.into_parts();
-    let status_code = parts.status.as_u16();
-    // Convert the upstream body into a stream of data frames for axum to proxy.
-    // Wrap in GuardedBody so the in-flight counter stays elevated for the full
-    // duration of the response, including SSE streams. Then wrap in MetricsBody
-    // to extract usage/TTFT and record per-request metrics on stream completion.
-    let stream = upstream_body.into_data_stream().map_ok(Frame::data);
-    let boxed: http_body_util::combinators::BoxBody<
-        Bytes,
-        Box<dyn std::error::Error + Send + Sync>,
-    > = BodyExt::map_err(
-        StreamBody::new(stream),
-        |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) },
-    )
-    .boxed();
-    let guarded = GuardedBody {
-        body: boxed,
-        _guard: guard,
-        stall,
-        progress,
-    };
-
-    // Resolve the service_id and run_id for metric recording. If the
-    // service can't be resolved (not yet in the DB), skip metrics —
-    // the proxy still works, we just don't record this request.
-    let service_id = state.db.resolve_service_id(&model).await.ok().flatten();
-    let run_id = handle.peek().run_id;
-
-    let axum_body = if let Some(service_id) = service_id {
-        let recorder = MetricsRecorder::new(
-            request_start,
-            service_id,
-            run_id,
-            model.clone(),
-            path,
-            is_streaming,
-        );
-        let metrics_body = MetricsBody::new(
-            guarded,
-            Box::new(RequestMetricsRecorder {
-                recorder,
-                db: state.db.clone(),
-            }),
-            status_code,
-        );
-        Body::new(metrics_body)
-    } else {
-        Body::new(guarded)
-    };
-
-    let mut out = Response::from_parts(parts, axum_body);
-    // Strip hop-by-hop headers. These are per-connection directives
-    // between the proxy and its upstream (llama.cpp); forwarding them
-    // to the browser is incorrect and can cause the browser to close
-    // the connection prematurely (e.g. llama.cpp sends
-    // `keep-alive: timeout=5`, which the browser interprets as a
-    // 5-second inactivity deadline — cutting off slow streaming
-    // responses like image inference that takes >5s to first token).
-    out.headers_mut().remove(hyper::header::CONNECTION);
-    out.headers_mut().remove("transfer-encoding");
-    out.headers_mut().remove("keep-alive");
-    out
+        request_start,
+    })
+    .await
 }

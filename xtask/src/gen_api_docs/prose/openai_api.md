@@ -13,9 +13,13 @@ The OpenAI-compatible API (`/v1/*`) is the primary inference surface. Ananke act
   stripped from upstream responses so the browser doesn't misinterpret
   them.
 
+### Audio transcription
+
+`POST /v1/audio/transcriptions` routes multipart/form-data requests to services with `modality = "transcription"`. The `model` form field selects the service; the body is then forwarded byte-for-byte (original multipart boundary included) to the upstream ASR server, which ignores the `model` part and reads `file`, `response_format`, and its other knobs itself. JSON filters and the `openai_proxy` model rewrite do not apply. Audio uploads are bounded by `openai_api.max_body_mb`.
+
 ### Streaming
 
-Streaming responses (SSE) are supported on all three POST endpoints. Set `"stream": true` in the request body. The upstream's SSE chunks are proxied to the client as they arrive — there is no buffering.
+Streaming responses (SSE) are supported on all three JSON POST endpoints. Set `"stream": true` in the request body. The upstream's SSE chunks are proxied to the client as they arrive — there is no buffering.
 
 ### Llama.cpp-native endpoints
 
@@ -36,7 +40,7 @@ Filters do not apply to these requests (they expect OpenAI-shaped bodies), and t
 
 The following OpenAI endpoints return `501 Not Implemented`:
 
-- `/v1/audio/*`
+- `/v1/audio/*` (except `/v1/audio/transcriptions`)
 - `/v1/images/*`
 - `/v1/files/*`
 - `/v1/fine_tuning/*`

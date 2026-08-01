@@ -26,6 +26,10 @@ pub enum Modality {
     /// Vector embeddings: `/v1/embeddings`. Pooling-only models such as
     /// jina-embeddings-v5, BGE, E5, etc.
     Embedding,
+    /// Speech-to-text: `/v1/audio/transcriptions`. ASR servers such as
+    /// parakeet.cpp's `parakeet-server` and whisper.cpp's `whisper-server`,
+    /// run as `command` services.
+    Transcription,
 }
 
 impl Modality {

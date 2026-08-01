@@ -23,7 +23,8 @@ use ananke_api::{
         get::OneshotStatus,
     },
     openai::{
-        ChatCompletionEnvelope, CompletionEnvelope, EmbeddingEnvelope, ModelListing, ModelsResponse,
+        ChatCompletionEnvelope, CompletionEnvelope, EmbeddingEnvelope, ModelListing,
+        ModelsResponse, TranscriptionEnvelope,
     },
     services::{
         command::{
@@ -60,7 +61,7 @@ use crate::{
             config as mgmt_config, handlers as mgmt_handlers, info as mgmt_info,
             lifecycle as mgmt_lifecycle, logs as mgmt_logs, metrics as mgmt_metrics,
         },
-        openai::handlers as openai_handlers,
+        openai::{audio as openai_audio, handlers as openai_handlers},
     },
     daemon::app_state::AppState,
     oneshot::handlers as oneshot_handlers,
@@ -73,6 +74,7 @@ use crate::{
         openai_handlers::chat_completions,
         openai_handlers::completions,
         openai_handlers::embeddings,
+        openai_audio::audio_transcriptions,
         mgmt_handlers::list_services,
         mgmt_handlers::service_detail,
         mgmt_handlers::service_command,
@@ -101,6 +103,7 @@ use crate::{
         ChatCompletionEnvelope,
         CompletionEnvelope,
         EmbeddingEnvelope,
+        TranscriptionEnvelope,
         ananke_api::shared::errors::ApiError,
         ApiErrorCodeSlug,
         ApiErrorKind,

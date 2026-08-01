@@ -44,7 +44,9 @@ export function ChatView() {
   const chatModels = (services.data ?? [])
     .filter(
       (s) =>
-        s.modality !== "embedding" && !s.name.toLowerCase().includes("comfyui"),
+        s.modality !== "embedding" &&
+        s.modality !== "transcription" &&
+        !s.name.toLowerCase().includes("comfyui"),
     )
     .sort((a, b) => {
       const ar = a.state === "running" ? 0 : 1;

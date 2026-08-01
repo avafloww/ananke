@@ -54,6 +54,7 @@ The daemon binds to loopback by default. Do **not** expose the management API or
 | `POST` | `/api/services/{name}/restart` | Restart a service |
 | `POST` | `/api/services/{name}/start` | Start a service |
 | `POST` | `/api/services/{name}/stop` | Stop a service |
+| `POST` | `/v1/audio/transcriptions` | Audio transcription (OpenAI-compatible proxy) |
 | `POST` | `/v1/chat/completions` | Chat completion (OpenAI-compatible proxy) |
 | `POST` | `/v1/completions` | Text completion (OpenAI-compatible proxy) |
 | `POST` | `/v1/embeddings` | Embeddings (OpenAI-compatible proxy) |
@@ -76,9 +77,13 @@ The OpenAI-compatible API (`/v1/*`) is the primary inference surface. Ananke act
   stripped from upstream responses so the browser doesn't misinterpret
   them.
 
+### Audio transcription
+
+`POST /v1/audio/transcriptions` routes multipart/form-data requests to services with `modality = "transcription"`. The `model` form field selects the service; the body is then forwarded byte-for-byte (original multipart boundary included) to the upstream ASR server, which ignores the `model` part and reads `file`, `response_format`, and its other knobs itself. JSON filters and the `openai_proxy` model rewrite do not apply. Audio uploads are bounded by `openai_api.max_body_mb`.
+
 ### Streaming
 
-Streaming responses (SSE) are supported on all three POST endpoints. Set `"stream": true` in the request body. The upstream's SSE chunks are proxied to the client as they arrive — there is no buffering.
+Streaming responses (SSE) are supported on all three JSON POST endpoints. Set `"stream": true` in the request body. The upstream's SSE chunks are proxied to the client as they arrive — there is no buffering.
 
 ### Llama.cpp-native endpoints
 
@@ -99,11 +104,23 @@ Filters do not apply to these requests (they expect OpenAI-shaped bodies), and t
 
 The following OpenAI endpoints return `501 Not Implemented`:
 
-- `/v1/audio/*`
+- `/v1/audio/*` (except `/v1/audio/transcriptions`)
 - `/v1/images/*`
 - `/v1/files/*`
 - `/v1/fine_tuning/*`
 - `/v1/batches`
+
+### POST /v1/audio/transcriptions
+
+Audio transcription (OpenAI-compatible proxy)
+
+| Status | Description | Body |
+| --- | --- | --- |
+| 200 | Proxied from upstream | — |
+| 400 | invalid_request_error | `ApiError` |
+| 404 | model_not_found | `ApiError` |
+| 502 | upstream_unavailable | `ApiError` |
+| 503 | service_disabled, start_queue_full, start_failed, insufficient_capacity, service_blocked | `ApiError` |
 
 ### POST /v1/chat/completions
 
@@ -184,7 +201,7 @@ List available models (OpenAI-compatible)
     ananke_metadata?: Record<string, any>
     created: number
     id: string
-    modality?: "chat" | "embedding"
+    modality?: "chat" | "embedding" | "transcription"
     object: string
     owned_by: string
   }[]
@@ -579,7 +596,7 @@ List all services
     inflight_count?: number
     last_used_ms?: number | null
     lifecycle: string
-    modality?: "chat" | "embedding"
+    modality?: "chat" | "embedding" | "transcription"
     name: string
     pid?: number | null
     port: number
@@ -627,7 +644,7 @@ Get service detail
   idle_timeout_ms: number
   last_used_ms?: number | null
   lifecycle: string
-  modality?: "chat" | "embedding"
+  modality?: "chat" | "embedding" | "transcription"
   model_info?: {
     architecture: string
     block_count?: number | null
