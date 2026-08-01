@@ -108,43 +108,13 @@ fn generate_compute_model(model: &Section) -> String {
          update COMPUTE_MODEL_COLUMNS in build.rs and the evaluator together"
     );
 
-    let mut out = String::from(
-        "\n/// Coefficients of the unified per-device compute model, one set per\n\
-         /// (runtime, split, architecture, variant). Each multiplies the like-named\n\
-         /// column built by [`crate::estimator::compute_model::Columns`]; the total is\n\
-         /// that card's compute reservation in MiB.\n\
-         ///\n\
-         /// `flat`, `head_flat`, and `doubling` are MiB outright. The rest are bytes\n\
-         /// per element, their columns having been divided by 2^20 when built, so the\n\
-         /// dot product comes out in MiB throughout.\n\
-         #[derive(Debug, Clone, Copy, PartialEq)]\n\
-         pub struct ComputeCoefficients {\n",
-    );
+    let mut out = String::from(COMPUTE_COEFFICIENTS_HEADER);
     for column in COMPUTE_MODEL_COLUMNS {
         out.push_str(&format!("    pub {column}: f64,\n"));
     }
-    out.push_str(
-        "}\n\n\
-         /// One fitted group of the compute model.\n\
-         #[derive(Debug, Clone, Copy)]\n\
-         pub struct ComputeEntry {\n\
-         \x20   /// Architectures this entry applies to.\n\
-         \x20   pub archs: &'static [&'static str],\n\
-         \x20   /// A variant discriminator the caller must also match, where one\n\
-         \x20   /// architecture string covers models with different graphs.\n\
-         \x20   pub variant: Option<&'static str>,\n\
-         \x20   /// The serving runtime this group was fitted against, or `None` for\n\
-         \x20   /// one that applies to either fork.\n\
-         \x20   pub runtime: Option<&'static str>,\n\
-         \x20   /// `\"layer\"` or `\"tensor\"`.\n\
-         \x20   pub split: &'static str,\n\
-         \x20   pub coefficients: ComputeCoefficients,\n\
-         }\n\n",
-    );
+    out.push_str(COMPUTE_ENTRY_DEF);
 
-    out.push_str(
-        "/// Ordered; first match wins.\npub static COMPUTE_MODEL: &[ComputeEntry] = &[\n",
-    );
+    out.push_str(COMPUTE_MODEL_HEADER);
     for entry in &model.entries {
         let archs = entry
             .archs
@@ -158,29 +128,67 @@ fn generate_compute_model(model: &Section) -> String {
         };
         let split = &entry.split;
         out.push_str(&format!(
-            "    ComputeEntry {{\n\
-             \x20       archs: &[{archs}],\n\
-             \x20       variant: {},\n\
-             \x20       runtime: {},\n\
-             \x20       split: {split:?},\n\
-             \x20       coefficients: {},\n\
-             \x20   }},\n",
-            optional(&entry.variant),
-            optional(&entry.runtime),
-            coefficients_literal(&entry.coefficients),
+            r#"    ComputeEntry {{
+        archs: &[{archs}],
+        variant: {variant},
+        runtime: {runtime},
+        split: {split:?},
+        coefficients: {coefficients},
+    }},
+"#,
+            variant = optional(&entry.variant),
+            runtime = optional(&entry.runtime),
+            coefficients = coefficients_literal(&entry.coefficients),
         ));
     }
     out.push_str("];\n\n");
 
-    out.push_str(
-        "/// Used by any (runtime, split, architecture) without its own entry.\n\
-         pub static COMPUTE_MODEL_DEFAULT: ComputeCoefficients = ",
-    );
+    out.push_str(COMPUTE_MODEL_DEFAULT_HEADER);
     let Fit { coefficients, .. } = &model.default;
     out.push_str(&coefficients_literal(coefficients));
     out.push_str(";\n");
     out
 }
+
+const COMPUTE_COEFFICIENTS_HEADER: &str = r#"
+/// Coefficients of the unified per-device compute model, one set per
+/// (runtime, split, architecture, variant). Each multiplies the like-named
+/// column built by [`crate::estimator::compute_model::Columns`]; the total is
+/// that card's compute reservation in MiB.
+///
+/// `flat`, `head_flat`, and `doubling` are MiB outright. The rest are bytes
+/// per element, their columns having been divided by 2^20 when built, so the
+/// dot product comes out in MiB throughout.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ComputeCoefficients {
+"#;
+
+const COMPUTE_ENTRY_DEF: &str = r#"}
+
+/// One fitted group of the compute model.
+#[derive(Debug, Clone, Copy)]
+pub struct ComputeEntry {
+    /// Architectures this entry applies to.
+    pub archs: &'static [&'static str],
+    /// A variant discriminator the caller must also match, where one
+    /// architecture string covers models with different graphs.
+    pub variant: Option<&'static str>,
+    /// The serving runtime this group was fitted against, or `None` for
+    /// one that applies to either fork.
+    pub runtime: Option<&'static str>,
+    /// `"layer"` or `"tensor"`.
+    pub split: &'static str,
+    pub coefficients: ComputeCoefficients,
+}
+
+"#;
+
+const COMPUTE_MODEL_HEADER: &str = r#"/// Ordered; first match wins.
+pub static COMPUTE_MODEL: &[ComputeEntry] = &[
+"#;
+
+const COMPUTE_MODEL_DEFAULT_HEADER: &str = r#"/// Used by any (runtime, split, architecture) without its own entry.
+pub static COMPUTE_MODEL_DEFAULT: ComputeCoefficients = "#;
 
 /// A `ComputeCoefficients` literal from one group's coefficients, filling every
 /// column the fit left out with zero.
@@ -227,8 +235,7 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             table: &document.ik_moe_rates,
             slice: "IK_MOE_RATES",
             default: "IK_MOE_RATE_DEFAULT",
-            doc: "Bytes per batch token per unit of hidden size for ik's CPU-resident\n\
-                  /// MoE intermediates, by architecture.",
+            doc: "Bytes per batch token per unit of hidden size for ik's CPU-resident MoE intermediates, by architecture.",
             default_doc: "Applied to an ik mixture of experts this dataset has not measured.",
         },
         Generated {
@@ -236,8 +243,7 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             table: &document.tensor_split_baseline,
             slice: "TENSOR_SPLIT_BASELINE",
             default: "TENSOR_SPLIT_BASELINE_DEFAULT",
-            doc: "Extra host baseline bytes a tensor split costs beyond a layer split,\n\
-                  /// by architecture.",
+            doc: "Extra host baseline bytes a tensor split costs beyond a layer split, by architecture.",
             default_doc: UNMEASURED,
         },
         Generated {
@@ -245,9 +251,7 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             table: &document.baseline_offset,
             slice: "BASELINE_OFFSET",
             default: "BASELINE_OFFSET_DEFAULT",
-            doc: "Correction to the process baseline the layer-count model leaves behind,\n\
-                  /// by architecture and variant. Keys carry a `+moe`/`+e` suffix where those\n\
-                  /// distinctions separate models that share an architecture string.",
+            doc: "Correction to the process baseline the layer-count model leaves behind, by architecture and variant. Keys carry a `+moe`/`+e` suffix where those distinctions separate models that share an architecture string.",
             default_doc: UNMEASURED,
         },
         Generated {
@@ -255,8 +259,7 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             table: &document.checkpoint_headroom_bytes,
             slice: "CHECKPOINT_HEADROOM_BYTES",
             default: "CHECKPOINT_HEADROOM_DEFAULT",
-            doc: "Host memory a real prompt adds over a short one, by architecture,\n\
-                  /// from llama.cpp's context checkpoints. Reserved as slop.",
+            doc: "Host memory a real prompt adds over a short one, by architecture, from llama.cpp's context checkpoints. Reserved as slop.",
             default_doc: UNMEASURED,
         },
         Generated {
@@ -264,8 +267,7 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             table: &document.per_slot_host_bytes,
             slice: "PER_SLOT_HOST_BYTES",
             default: "PER_SLOT_HOST_BYTES_DEFAULT",
-            doc: "Host memory each concurrently active slot costs beyond the first, by\n\
-                  /// architecture. Reserved as slop, never charged to the correction.",
+            doc: "Host memory each concurrently active slot costs beyond the first, by architecture. Reserved as slop, never charged to the correction.",
             default_doc: UNMEASURED,
         },
         Generated {
@@ -273,8 +275,7 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             table: &document.mtp_draft_compute_base_mib,
             slice: "MTP_DRAFT_COMPUTE_BASE_MIB",
             default: "MTP_DRAFT_COMPUTE_BASE_MIB_DEFAULT",
-            doc: "The MTP draft context's own per-device compute buffer at zero context, by\n\
-                  /// architecture.",
+            doc: "The MTP draft context's own per-device compute buffer at zero context, by architecture.",
             default_doc: UNMEASURED,
         },
         Generated {
@@ -290,8 +291,7 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             table: &document.no_flash_attn_score_centibytes,
             slice: "NO_FLASH_ATTN_SCORE_CENTIBYTES",
             default: "NO_FLASH_ATTN_SCORE_CENTIBYTES_DEFAULT",
-            doc: "Bytes of unfused attention score matrix per (head x cache token x batch\n\
-                  /// token), by architecture.",
+            doc: "Bytes of unfused attention score matrix per (head x cache token x batch token), by architecture.",
             default_doc: UNMEASURED,
         },
         Generated {
@@ -299,8 +299,7 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             table: &document.no_flash_attn_rates,
             slice: "NO_FLASH_ATTN_RATES",
             default: "NO_FLASH_ATTN_RATE_DEFAULT",
-            doc: "Extra pinned bytes per batch token when flash attention is off, by\n\
-                  /// architecture and variant. Flat in context, proportional to batch.",
+            doc: "Extra pinned bytes per batch token when flash attention is off, by architecture and variant. Flat in context, proportional to batch.",
             default_doc: UNMEASURED,
         },
         Generated {
@@ -308,8 +307,7 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             table: &document.quantised_cache_rates,
             slice: "QUANTISED_CACHE_RATES",
             default: "QUANTISED_CACHE_RATE_DEFAULT",
-            doc: "Extra pinned bytes per batch token when the KV cache is quantised, by\n\
-                  /// architecture.",
+            doc: "Extra pinned bytes per batch token when the KV cache is quantised, by architecture.",
             default_doc: UNMEASURED,
         },
     ];
@@ -340,7 +338,10 @@ fn generate_rate_table(generated: &Generated<'_>) -> String {
     } = generated;
     let ty = if name.signed() { "i64" } else { "u64" };
     let fallback = render(table.default, name.signed(), 0);
-    let mut out = format!("\n/// {doc}\npub static {slice}: &[(&str, {ty})] = &[\n");
+    let mut out = format!(
+        "\n{}pub static {slice}: &[(&str, {ty})] = &[\n",
+        doc_lines(doc)
+    );
     for (arch, value) in &table.by_arch {
         out.push_str(&format!(
             "    ({arch:?}, {}),\n",
@@ -348,9 +349,18 @@ fn generate_rate_table(generated: &Generated<'_>) -> String {
         ));
     }
     out.push_str(&format!(
-        "];\n\n/// {default_doc}\npub const {default}: {ty} = {fallback};\n"
+        "];\n\n{}pub const {default}: {ty} = {fallback};\n",
+        doc_lines(default_doc)
     ));
     out
+}
+
+/// Prose as a block of `///` lines, each already terminated.
+fn doc_lines(text: &str) -> String {
+    wrap(text, 72)
+        .into_iter()
+        .map(|line| format!("/// {line}\n"))
+        .collect()
 }
 
 /// One entry, as the generated table spells it. An unsigned table cannot carry a
