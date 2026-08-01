@@ -134,14 +134,11 @@ pub fn apply(estimate: &mut Estimate, summary: &GgufSummary, rules: &[OverrideRu
     // breakdown, the loop above mutated `per_layer_bytes` + `non_layer`
     // in-place and we sum those back up.
     //
-    // The fallback estimator, however, sets `per_layer_bytes = None` and
-    // leaves `non_layer` all-zero — it only populates the coarse
-    // `weights_bytes` number. Recomputing from zero in that case would
-    // clobber the only sensible weights estimate the fallback produced —
-    // glm4moe with a CPU-offload regex lands at 400 MiB predicted against
-    // 27 GiB observed. Instead, subtract the redirected bytes from
-    // the fallback's coarse total so the remaining on-device weights
-    // still account for what stays.
+    // An estimate with no per-layer breakdown sets `per_layer_bytes = None` and
+    // leaves `non_layer` all-zero, populating only the coarse `weights_bytes`
+    // total. Recomputing from zero would clobber the one sensible number it
+    // does have, so subtract the redirected bytes from that total instead and
+    // let the remainder account for what stays on the device.
     if estimate.per_layer_bytes.is_some() {
         let per_layer_sum = estimate
             .per_layer_bytes
@@ -289,14 +286,14 @@ mod tests {
 
     /// Regression: when the architecture-specific estimator doesn't run —
     /// an architecture in no family's list — `apply` receives
-    /// a fallback-style estimate whose `per_layer_bytes` is `None` and
+    /// an estimate whose `per_layer_bytes` is `None` and
     /// whose non-layer fields are all zero. The recompute step must not
     /// zero `weights_bytes` in that case — that gives a 400 MiB prediction
     /// for a 26 GiB model — but subtract the redirected bytes from the
-    /// fallback's coarse weights total, so the remaining on-device weights
+    /// coarse weights total, so the remaining on-device weights
     /// are still accounted for.
     #[test]
-    fn preserves_fallback_weights_when_no_per_layer_breakdown() {
+    fn preserves_the_coarse_weights_when_there_is_no_per_layer_breakdown() {
         let tensors = vec![
             tensor("blk.0.attn_q.weight", 1024 * 1024),
             tensor("blk.0.ffn_up_exps.weight", 10 * 1024 * 1024),
@@ -304,7 +301,7 @@ mod tests {
         ];
         let summary = summary_with(tensors);
 
-        // Mimic the fallback estimator: coarse `weights_bytes` with no
+        // An estimate with no per-layer breakdown: coarse `weights_bytes` with no
         // per-layer breakdown and empty non_layer.
         let total_on_disk: u64 = summary.total_tensor_bytes;
         let mut est = Estimate {

@@ -8,16 +8,33 @@ The tuned constants themselves live in `crates/tuning/tuning.json`, each with
 its own evidence attached. [`calibration/README.md`](../calibration/README.md)
 is how to re-derive them.
 
-## Deriving a compute-buffer curve
+## The compute buffer
 
-An architecture needing its own curve gets a match arm in `crates/estimate/src/compute_buffer.rs::tuning_for()`. The formula is `base + slope * (ctx / 1024)` MiB per device. Derive it like this:
+Per-device graph memory, beyond weights and KV. One fitted linear model covers
+every architecture: `crates/estimate/src/compute_model.rs` evaluates it, its
+design columns dimensionally normalised so architectures of different width
+share coefficients, and `tuning.json`'s
+`compute_model` section carries one coefficient set per (runtime, split,
+architecture, variant). `compute_buffer::per_device_for` adds the head card's
+extra on top and the unfused-attention score matrix where flash attention is
+off.
 
-- Sweep `llama-server -m <model> -c <ctx> -ngl 99` over a few context lengths, pinning one card with `CUDA_VISIBLE_DEVICES=0`. For an embedding model, add `--embeddings` (the modality implies the same flag in production); the calibration is otherwise identical.
-- Read each run's process VRAM from `nvidia-smi --query-compute-apps=pid,used_memory`. Match the row to the server's actual pid and wait for each server to fully exit before the next run — a leftover server silently wins the port bind and you measure the same process at every "ctx".
-- Compute the residual `compute_buffer = used - gpu_weights - kv_total`, where `gpu_weights` is the estimator's `weights_bytes` minus its `token_embd_bytes` (llama.cpp keeps token embeddings on CPU) and `kv_total = kv_per_token * ctx`. Both terms come straight from `cargo run -p ananke-placement --example estimate -- --model <model> --context <ctx>`.
-- Fit `base + slope * (ctx / 1024)` to the residuals: pick a base that covers the worst case with a little headroom, and keep the slope as low as the data allows. A flat residual across the sweep also confirms `kv_per_token` is right — a wrong KV term makes the residual trend with context.
-- One gotcha: the `estimate` example's printed `gpu_vram_mib` doubles the compute buffer (`active_devices.min(2)`) for a 2-GPU split, so pass `--active-devices 1` when comparing its total to a single-card `nvidia-smi` reading.
-- Most architectures' compute buffers are effectively independent of `--ubatch-size`, so the curve is calibrated at llama.cpp's default (512) and `tuning_for` ignores ubatch. A minority scale with it — notably `deepseek4`, whose NSA "lightning indexer" scores every one of the `ubatch` query tokens against the whole context, so its residual is `≈ k * ubatch * ctx`. For such an arch, take the slope as a function of ubatch (`deepseek4_cb_slope` scales the calibrated 512-slope linearly) and thread the service's `ubatch` through `EstimatorInputs` → `compute_buffer::default_for`. Sweep a second ubatch (e.g. 1024) to confirm the scaling before trusting the extrapolation.
+Adding an architecture therefore does not mean writing a curve. Measure it into
+the dataset and re-run the campaign's `fit`; the coefficients follow.
+[`calibration/README.md`](../calibration/README.md) is that loop. An
+architecture nobody has measured falls to the pooled default, which is what the
+`coverage` gate is for.
+
+Two things worth knowing before measuring one:
+
+- Read the residual as `used - gpu_weights - kv_total`, where `gpu_weights`
+  excludes the token-embedding table — llama.cpp keeps it on the CPU. A
+  residual that trends with context means `kv_per_token` is wrong, not the
+  compute model.
+- Most architectures' compute buffers are near-independent of `--ubatch-size`,
+  but a minority scale with it: a sparse-attention indexer scores every one of
+  the `ubatch` query tokens against the whole context, so its residual goes as
+  `ubatch x context`. Sweep a second ubatch before trusting an extrapolation.
 
 ## Host-side memory
 
@@ -80,10 +97,8 @@ architectures cannot be measured with a mainline build at all; keep the fork
 constant across a sweep or the fork's own differences will be read as model
 differences.
 
-**Measure both forks before trusting a host model.** Laguna-S-2.1 under
-`--n-cpu-moe 30` on two GPUs, same model and same flags:
-
-Qwen3.6-35B-A3B under `--n-cpu-moe 40`, one GPU, no `--no-mmap` on either:
+**Measure both forks before trusting a host model.** Qwen3.6-35B-A3B under
+`--n-cpu-moe 40`, one GPU, no `--no-mmap` on either:
 
 | runtime | load log | owned (anon+shmem) | mapped (`RssFile`) |
 |---|---|---|---|

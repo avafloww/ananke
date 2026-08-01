@@ -55,16 +55,29 @@ use ananke_gguf::{Architecture, keys, keys::suffix};
 ///
 /// These are ceilings, so they can only be tightened. Raising one to make a
 /// change pass would be defeating the test.
-const CONFIRMED: &[(&str, f64)] = &[
-    ("lfm2", 2.1),
-    ("llama", 2.4),
-    ("qwen3", 2.4),
-    ("talkie", 2.0),
-    ("gemma3", 2.6),
-    ("qwen35", 2.3),
-    ("qwen35moe", 3.1),
-    ("glm-dsa", 0.7),
+const CONFIRMED: &[(Architecture, f64)] = &[
+    (Architecture::Lfm2, 2.1),
+    (Architecture::Llama, 2.4),
+    (Architecture::Qwen3, 2.4),
+    (Architecture::Talkie, 2.0),
+    (Architecture::Gemma3, 2.6),
+    (Architecture::Qwen35, 2.3),
+    (Architecture::Qwen35Moe, 3.1),
+    (Architecture::GlmDsa, 0.7),
 ];
+
+/// A tolerance table keyed on an architecture the enum does not know would be
+/// skipped in silence, taking its whole architecture out of the assertion with
+/// it. Hold both tables to variants that exist.
+#[test]
+fn the_tolerance_tables_name_only_architectures_that_exist() {
+    for (arch, _) in CONFIRMED {
+        assert!(
+            !arch.is_unknown(),
+            "CONFIRMED names {arch}, which no Architecture variant covers"
+        );
+    }
+}
 
 #[test]
 fn arena_reproduces_the_measured_pinned_buffer() {
@@ -77,12 +90,15 @@ fn arena_reproduces_the_measured_pinned_buffer() {
 
     let mut checked = 0usize;
     let mut worst: Option<(String, f64)> = None;
-    let mut by_arch: Vec<(String, f64)> = Vec::new();
+    let mut by_arch: Vec<(Architecture, f64)> = Vec::new();
     for record in &records {
         let Some(case) = Case::from_record(record) else {
             continue;
         };
-        let Some((_, tolerance)) = CONFIRMED.iter().find(|(a, _)| *a == case.arch) else {
+        let Some((_, tolerance)) = CONFIRMED
+            .iter()
+            .find(|(a, _)| *a == case.summary.architecture)
+        else {
             continue;
         };
         // Flash attention off is excluded: the excess over the widened mask is
@@ -115,14 +131,14 @@ fn arena_reproduces_the_measured_pinned_buffer() {
         let measured = case.arena_mib * 1024.0 * 1024.0;
         let delta = (predicted - measured).abs() / 1024.0 / 1024.0;
         checked += 1;
-        by_arch.push((case.arch.clone(), delta));
+        by_arch.push((case.summary.architecture.clone(), delta));
         if delta > *tolerance {
             worst = Some((case.label.clone(), delta));
         }
     }
 
     assert!(checked > 100, "too few comparable cells: {checked}");
-    let mut per_arch: std::collections::BTreeMap<String, f64> = Default::default();
+    let mut per_arch: std::collections::BTreeMap<Architecture, f64> = Default::default();
     for (arch, delta) in &by_arch {
         let entry = per_arch.entry(arch.clone()).or_insert(0.0);
         if *delta > *entry {
@@ -242,7 +258,6 @@ fn every_model_lands_inside_the_correction_band() {
 /// One measured configuration, rebuilt from its record.
 struct Case {
     label: String,
-    arch: String,
     summary: GgufSummary,
     arena_mib: f64,
     owned_kb: i64,
@@ -282,11 +297,11 @@ impl Case {
         let factors = &record.factors;
         let parsed = &record.parsed;
         let arch = parsed.architecture()?.to_owned();
-        let architecture = Architecture::from(arch.as_str());
         // `?` is the parser's own marker for a log that named no architecture.
         if arch == "?" {
             return None;
         }
+        let architecture = Architecture::from(arch.as_str());
         // Only fully-offloaded runs with a device: a partly- or un-offloaded
         // process has a different graph, which the arena model does not claim
         // to describe.
@@ -367,7 +382,6 @@ impl Case {
                 architecture: architecture.clone(),
                 shards: Vec::new(),
             },
-            arch,
             arena_mib: parsed.arena_mib,
             owned_kb: record.rss.rss_anon_kb + record.rss.rss_shmem_kb,
             context: factors.ctx,
@@ -472,7 +486,7 @@ fn load() -> Vec<Record> {
 /// The GPU compute-buffer curves against what llama.cpp reserved per device.
 ///
 /// A third tier, and the one that reaches the constants the host checks
-/// cannot. `compute_buffer::default_for` is what the packer reserves per
+/// cannot. `compute_buffer::per_device_for` is what the packer reserves per
 /// active device; llama.cpp's own memory-breakdown table reports what it
 /// actually took. Those are comparable, with one asymmetry that decides how
 /// this asserts: reserving *less* than the runtime takes is what OOMs a load,
@@ -486,7 +500,7 @@ fn load() -> Vec<Record> {
 fn compute_buffer_covers_what_the_runtime_took() {
     let records = load();
     let mut under = Vec::new();
-    let mut over: std::collections::BTreeMap<String, f64> = Default::default();
+    let mut over: std::collections::BTreeMap<Architecture, f64> = Default::default();
     let mut checked = 0usize;
 
     for record in &records {
@@ -524,7 +538,7 @@ fn compute_buffer_covers_what_the_runtime_took() {
                 ),
             ));
         }
-        let entry = over.entry(case.arch.clone()).or_insert(0.0);
+        let entry = over.entry(case.summary.architecture.clone()).or_insert(0.0);
         if headroom > *entry {
             *entry = headroom;
         }
@@ -596,29 +610,29 @@ fn compute_buffer_covers_what_the_runtime_took() {
     //
     // Over-reserving does not OOM, it refuses a model room it could have used,
     // so these are a ratchet: today's numbers, which may only come down.
-    const CEILINGS: &[(&str, f64)] = &[
-        ("talkie", 1.2),
-        ("lfm2", 1.1),
-        ("llama", 1.2),
-        ("laguna", 1.35),
+    const CEILINGS: &[(Architecture, f64)] = &[
+        (Architecture::Talkie, 1.2),
+        (Architecture::Lfm2, 1.1),
+        (Architecture::Llama, 1.2),
+        (Architecture::Laguna, 1.35),
         // The qwen35moe curve is fitted across 48 cells; the wide fit finds a
         // higher worst-case unaccounted remainder, so the base is larger on
         // more evidence, not less.
-        ("qwen35moe", 1.45),
-        ("qwen35", 2.5),
+        (Architecture::Qwen35Moe, 1.45),
+        (Architecture::Qwen35, 2.5),
         // Driven by the single-card cell at ctx 65536 rather than by the
         // curve: gemma3's measured compute is nearly flat in context (530 MiB
         // at ctx 32768, 562 at 65536) while the curve charges about 17 MiB per
         // 1024, so it over-reserves at long context. Wasteful, not unsafe.
-        ("gemma3", 2.65),
-        ("qwen3", 1.15),
-        ("gemma4", 1.3),
+        (Architecture::Gemma3, 2.65),
+        (Architecture::Qwen3, 1.15),
+        (Architecture::Gemma4, 1.3),
         // Not a curve error. Its worst cell is the one flash-attention
         // -off run, where the estimator reserves 12066 MiB against the 2435 the
         // runtime took; with flash attention on the same configuration sits at
         // 2.4x, in line with every other architecture. The no-flash-attention
-        // multiplier is unfitted here — see FINDINGS.md.
-        ("deepseek4", 1.5),
+        // multiplier is unfitted here — see calibration/docs/findings.md.
+        (Architecture::DeepSeek4, 1.5),
     ];
     // Recorded ceilings. The unified compute model carries a per-token term
     // and a head-card term, so it does not have to cover a batch it cannot

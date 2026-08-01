@@ -27,11 +27,10 @@ pub const MOE_FAMILY: &[Architecture] = &[
     Architecture::GptOss,
     // GLM-4.5 series (including glm-4-5-air) uses the standard MoE tensor
     // layout: `blk.N.ffn_{gate,up,down}_exps.weight` + shared expert tensors
-    // (`_shexp`). Without this entry the dispatcher falls through to the
-    // generic fallback, which has no per-layer breakdown — and the
-    // operator's CPU-offload `override_tensor` regex then zeroes the
-    // weight estimate entirely, leading to 400 MiB predicted vs 27 GiB
-    // observed (a 67× under-reservation).
+    // (`_shexp`). Registered here because the dispatcher would otherwise
+    // refuse it outright, and because it was once estimated without a
+    // per-layer breakdown: a CPU-offload `override_tensor` regex then zeroed
+    // the weight estimate entirely, a 67x under-reservation.
     Architecture::Glm4Moe,
     // Qwen 3.5+ MoE is a hybrid: every `full_attention_interval`-th layer
     // runs full attention (with KV cache); the others run a linear-
@@ -68,7 +67,7 @@ pub const MOE_FAMILY: &[Architecture] = &[
     // `nextn_predict_layers` MTP block carries no main-context KV. The
     // generic `kv_for_hybrid` would add a phantom `value_length` V term
     // (a ~1.9× over-reservation), so glm-dsa routes to
-    // `mla_kv_per_token` below. Despite the Architecture::Dsa in the name, the
+    // `mla_kv_per_token` below. Despite the "dsa" in the name, the
     // pinned llama.cpp runs this arch as dense MLA (the deepseek2
     // graph, plain KV cache); the sparse-attention indexer tensors are
     // loaded but only the deepseek32 arch gets the DSA indexer cache.

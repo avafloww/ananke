@@ -10,7 +10,7 @@
 //!      pointed the service at a different file.
 //!   2. The estimator-relevant config fingerprint changes (context,
 //!      override_tensor, cache_type_*, compute_buffer_mb,
-//!      allow_fallback). The model on disk is the same but the
+//!      cache types). The model on disk is the same but the
 //!      estimate's numbers aren't, so the cached entry is stale.
 //!
 //! Cache lifetime is per daemon run. Editing the GGUF in place

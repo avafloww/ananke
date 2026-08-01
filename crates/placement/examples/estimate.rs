@@ -1,7 +1,7 @@
 //! Run the estimator against a GGUF and dump JSON.
 //!
 //! Usage:
-//!   cargo run --example estimate -- \
+//!   cargo run -p ananke-placement --example estimate -- \
 //!     --model /path/to/model.gguf \
 //!     --context 8192 \
 //!     [--mmproj /path/to/mmproj.gguf] \
@@ -12,7 +12,6 @@
 //!     [--active-devices N] \
 //!     [--mtp] \
 //!     [--draft-model /path/to/draft.gguf] \
-//!     [--allow-fallback] \
 //!     [--parallel N] \
 //!     [--flash-attn on|off] \
 //!     [--kv-unified on|off] \
@@ -33,8 +32,8 @@
 //! is shorthand for `expert_offload = auto`, which spills only the surplus
 //! that does not fit on the GPUs.
 //!
-//! Unknown architectures hard-reject by default; pass `--allow-fallback`
-//! to accept the coarse fallback (see `ananke_estimate::fallback`).
+//! An architecture no family estimator covers is refused: there is nothing
+//! here that can price its KV cache or its graph.
 
 use std::{path::PathBuf, process};
 

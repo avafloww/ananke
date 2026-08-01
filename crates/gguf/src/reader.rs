@@ -61,13 +61,13 @@ pub fn read_single(fs: &dyn Fs, path: &Path) -> Result<GgufSummary, ReadError> {
         metadata.insert(SmolStr::new(&key), value);
     }
 
-    // A file with no architecture at all is `Unknown("")`, which refuses the
-    // same way a name we do not recognise does.
+    // A file declaring no architecture refuses the same way an unrecognised one
+    // does; the placeholder is so the diagnostic has something to name.
     let architecture = Architecture::from(
         metadata
             .get(keys::ARCHITECTURE)
             .and_then(|v| v.as_str())
-            .unwrap_or_default(),
+            .unwrap_or("unknown"),
     );
 
     let block_count = metadata

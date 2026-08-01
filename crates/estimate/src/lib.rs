@@ -151,7 +151,7 @@ pub fn estimate_with_summary(
     // applies uniformly to whichever family dispatched above rather than
     // living in each one.
     let draft_summary = match inputs.speculation.draft_model() {
-        Some(path) if inputs.speculation.is_mtp() => match ananke_gguf::read(fs, path) {
+        Some(path) => match ananke_gguf::read(fs, path) {
             Ok(s) => Some(s),
             Err(e) => {
                 warn!(

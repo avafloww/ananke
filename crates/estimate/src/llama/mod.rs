@@ -27,11 +27,10 @@ pub const LLAMA_FAMILY: &[Architecture] = &[
     Architecture::Gemma3,
     Architecture::Phi3,
     Architecture::Glm4,
-    // NVIDIA Nemotron (Architecture::Deci) is a Llama derivative with a compressed attention
+    // NVIDIA Nemotron ("deci") is a Llama derivative with a compressed attention
     // stack. Same `blk.N.*` tensor naming and same `{arch}.attention.*` metadata
-    // keys so the llama-family estimator works unchanged; added here so
-    // `dispatch` routes it away from the weights-only fallback that leaves
-    // `per_layer_bytes = None` and breaks multi-GPU layer splits.
+    // keys so the llama-family estimator works unchanged; registered here so
+    // `dispatch` routes it to this family rather than refusing it.
     Architecture::Deci,
     // Gemma 4: attention.head_count_kv is a per-layer array (like deci),
     // attention.sliding_window_pattern is a per-layer bool mask, and
@@ -51,7 +50,7 @@ pub const LLAMA_FAMILY: &[Architecture] = &[
     Architecture::Gemma3n,
     // Talkie: a dense transformer with the standard `blk.N.*` attention +
     // dense-FFN layout and `talkie.attention.*` metadata keys. It adds a
-    // handful of per-tensor Architecture::Gain scalars (`attn_q_gain`, `ffn_output_gain`,
+    // handful of per-tensor "gain" scalars (`attn_q_gain`, `ffn_output_gain`,
     // `token_embd_skip_gain`, `output_gain`, …) that are a few bytes each and
     // fall through `collect_per_layer` / `collect_non_layer` harmlessly. It
     // omits `attention.head_count_kv` entirely (full MHA, no GQA), which
@@ -82,10 +81,8 @@ mod tests {
 
     #[test]
     fn deci_is_llama_family() {
-        // Regression: Nemotron-49B (arch = "deci") must be recognised as
-        // llama-family so the per-layer walk runs. Falling through to the
-        // fallback estimator returns `per_layer_bytes = None`, which breaks
-        // multi-GPU layer splits.
+        // Regression: Nemotron ("deci") must be recognised as llama-family so
+        // the per-layer walk runs. Unregistered, it is refused outright.
         assert!(is_llama_family(&Architecture::Deci));
     }
 
@@ -100,8 +97,7 @@ mod tests {
     #[test]
     fn talkie_is_llama_family() {
         // Talkie is a dense transformer with the standard llama-family tensor
-        // layout; it must dispatch here rather than falling through to the
-        // weights-only fallback (which leaves `per_layer_bytes = None`).
+        // layout, so it must dispatch here rather than being refused.
         assert!(is_llama_family(&Architecture::Talkie));
     }
 

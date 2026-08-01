@@ -32,13 +32,12 @@ impl<'a> Packer<'a> {
         // and at `blk.1` for laguna (`--n-cpu-moe 39`, block 0 dense: blocks
         // 1-38) — so `N` bounds *blocks*, not expert layers.
         //
-        // Which end matters whenever the quant gives later blocks wider experts:
-        // The two ends of the layer range differ by enough that taking the
-        // wrong one leaves the cards short.
-        //
-        // Confirmed against a production cell: the physical GPU model buffer
-        // comes to all attention plus the one retained
-        // block's experts (568) + output head (242) + nextn tensors (~215).
+        // Which end matters whenever the quant gives later blocks wider
+        // experts: the two ends of the range differ by enough that taking the
+        // wrong one leaves the cards short. Confirmed against a production
+        // cell, where the physical GPU model buffer comes to all attention plus
+        // the retained block's experts, the output head, and the nextn
+        // tensors.
         //
         // ik_llama takes the other end and counts expert layers rather than
         // blocks; [`crate::experts_ncmoe::Ncmoe`] holds

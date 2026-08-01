@@ -28,6 +28,9 @@ pub const SPLIT_NO: &str = "split.no";
 pub mod suffix {
     pub const BLOCK_COUNT: &str = "block_count";
     pub const EMBEDDING_LENGTH: &str = "embedding_length";
+    /// The context the model was trained for, which is a ceiling on `-c` rather
+    /// than an input to any estimate.
+    pub const CONTEXT_LENGTH: &str = "context_length";
     /// Blocks of embedded multi-token-prediction head, zero or absent on a
     /// model that ships none.
     pub const NEXTN_PREDICT_LAYERS: &str = "nextn_predict_layers";

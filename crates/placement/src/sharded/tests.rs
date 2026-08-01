@@ -146,10 +146,10 @@ fn tensor_split_shards_output_head_and_mtp_across_gpus() {
 /// than one card, because the head's matmul is sharded and a CPU-resident
 /// weight cannot be. The CPU copy stays too.
 ///
-/// Measured against the same model on one card, where nothing is sharded and no
-/// copy appears: a tied-embedding model's two-way tensor split holds 761 MiB more than
-/// its layer split against a 756 MiB table, Qwen3-4B 305 against 304, and
-/// gemma-3-27B 1108 against 1103.
+/// Measured against the same model on one card, where nothing is sharded and
+/// no copy appears: across three tied-embedding models, the two-way tensor
+/// split holds one extra table's worth over the layer split, to within a few
+/// MiB each time.
 #[test]
 fn a_tied_head_is_copied_onto_the_cards_only_when_sharded() {
     let gib = 1024 * 1024 * 1024u64;

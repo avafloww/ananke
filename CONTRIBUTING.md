@@ -89,6 +89,7 @@ struct — `EstimatorInputs` and `PlacementInputs` — built by free functions i
 `ananke::config::service_inputs`. Reading a service config is the daemon's
 business; estimating and packing are pure functions over the fields they actually
 need. Prefer that shape for anything else that wants to come out.
+
 ### Platform scope
 
 v1 targets Linux only — the daemon depends on NVML, `/proc`, and `prctl`, none of which have direct equivalents elsewhere. Linux-specific code is fine; don't invent cross-platform shims on speculation.
@@ -332,7 +333,7 @@ When a new model family ships with a `general.architecture` value that ananke do
 
    b. Add that variant to the chosen family's `*_FAMILY` constant, with a comment describing the quirks it brings.
 
-   c. If the architecture needs a custom compute-buffer curve, derive one — [`docs/memory-model.md`](docs/memory-model.md) has the procedure — and add a match arm in `crates/estimate/src/compute_buffer.rs::tuning_for()`.
+   c. Measure the architecture into the calibration dataset and re-run the campaign, so the compute model picks up coefficients for it rather than falling to the pooled default. [`calibration/README.md`](calibration/README.md) is that loop.
 
    d. Add a unit test in the family module that exercises the key behaviour (KV computation, layer collection, expert detection, etc.). Use `synth_gguf::Builder` from `ananke/tests/common/mod.rs` to construct a fake GGUF summary, or write one inline with the same pattern.
 

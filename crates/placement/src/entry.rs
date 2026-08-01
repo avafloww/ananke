@@ -160,8 +160,8 @@ fn pack_inner(
     // layer walk. Taken only when the service opts in, at least two GPUs are
     // available to span, and the estimator gave a per-layer breakdown to
     // shard. Otherwise fall through to the layer path: a single-GPU "tensor
-    // split" is just an ordinary placement, and a fallback-arch model (no
-    // per-layer detail) can't be evenly sharded.
+    // split" is just an ordinary placement, and a model with no per-layer
+    // detail cannot be evenly sharded.
     if packer.placement.split_mode.is_sharded()
         && packer.allowed_gpus.len() >= 2
         && !packer.per_layer.is_empty()

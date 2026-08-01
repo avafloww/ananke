@@ -43,14 +43,14 @@ fn main() {
         suffix::ATTENTION_SHARED_KV_LAYERS,
         suffix::ATTENTION_LAYER_TYPES,
         suffix::FULL_ATTENTION_INTERVAL,
-        "context_length",
+        suffix::CONTEXT_LENGTH,
         suffix::EMBEDDING_LENGTH,
         suffix::BLOCK_COUNT,
     ];
     let keys: Vec<_> = summary.metadata.keys().cloned().collect();
-    for suffix in prefixes_of_interest {
+    for wanted in prefixes_of_interest {
         for k in &keys {
-            if k.ends_with(suffix) {
+            if k.ends_with(wanted) {
                 // Some keys are u32 scalars (head_count, context_length);
                 // others are u32 arrays (sliding_window_pattern as a
                 // per-layer mask, head_count_kv on variable-KV families).

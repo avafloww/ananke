@@ -19,7 +19,10 @@ use smol_str::SmolStr;
 ///
 /// [`Architecture::Unknown`] carries the name it was given so a diagnostic can
 /// print it. It is deliberately not `PartialEq`-equal to any known variant.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// `Ord` is declaration order, not anything meaningful — it is here so reports
+/// can key a `BTreeMap` on an architecture and come out deterministic.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Architecture {
     Llama,
     Llama4,
