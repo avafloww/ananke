@@ -35,8 +35,8 @@ pub struct EstimatorInputs<'a> {
     /// Each one costs host memory for its context — measured at ~20 MiB per
     /// device beyond the first, with placement pinned to the CPU so nothing
     /// but the context count varied. It has to be charged per device rather
-    /// than folded into the process baseline, which would only be right on the
-    /// two-card machine the baseline was fitted on.
+    /// than folded into the process baseline, which would only be right at the
+    /// card count the baseline was fitted at.
     pub visible_devices: u32,
     /// Whether the child will hold expert tensors on the host.
     ///

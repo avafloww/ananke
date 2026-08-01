@@ -147,7 +147,7 @@ fn tensor_split_shards_output_head_and_mtp_across_gpus() {
 /// weight cannot be. The CPU copy stays too.
 ///
 /// Measured against the same model on one card, where nothing is sharded and no
-/// copy appears: gemma-4-31B-QAT's two-card tensor split holds 761 MiB more than
+/// copy appears: a tied-embedding model's two-way tensor split holds 761 MiB more than
 /// its layer split against a 756 MiB table, Qwen3-4B 305 against 304, and
 /// gemma-3-27B 1108 against 1103.
 #[test]

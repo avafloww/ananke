@@ -6,31 +6,16 @@
 //! rather than paying a bus round-trip per token — and a packer that divides
 //! them under-reserves every card by the difference.
 //!
-//! Measured against ananke's own `gpu_weight_bytes`, two-card tensor cells:
+//! Against measured tensor-split cells, a dense model with none of these
+//! tensors already comes out exact, while every architecture that has them is
+//! short by very nearly what they weigh. That is what makes this a real effect
+//! rather than a fitted correction.
 //!
-//! | model | measured | modelled | short |
-//! |---|---|---|---|
-//! | Qwen3.6-35B-A3B | 2862 | 2641 | 221 |
-//! | gemma-4-E4B | 4266 | 4002 | 264 |
-//! | gemma-4-31B-QAT | 17232 | 17228 | 4 |
-//! | talkie-13B | 10774 | 10775 | -1 |
-//!
-//! The two dense models are already exact, which is what makes this a real
-//! effect rather than a fitted correction: only architectures that *have* these
-//! tensors are short, and by very nearly what the tensors weigh.
-//!
-//! - Qwen3.6-35B-A3B: `ffn_*_shexp` 132 MiB + `ffn_gate_inp` 81 = 213 against
-//!   221 measured. The remaining 8 MiB is unattributed; the architecture's other
-//!   narrow tensors come to 283 MiB and would overshoot badly, so the replicated
-//!   set is a specific subset rather than "everything small".
-//! - gemma-4-E4B: `blk.*.inp_gate` and `blk.*.proj` at 2.5 MiB each over its
-//!   blocks = 210, plus `per_layer_model_proj` 52.5, plus norms 2 — 264.5 against
-//!   264 measured.
-//!
-//! Every figure here is read from the GGUF's own tensor table, so this scales
-//! with the model rather than carrying a per-architecture constant. gemma-4-31B
-//! ships none of these tensors, which is why it needs no entry to come out at
-//! zero.
+//! The replicated set is a specific list rather than "everything small": an
+//! architecture's other narrow tensors overshoot the shortfall badly. Every
+//! figure is read from the GGUF's own tensor table, so this scales with the
+//! model instead of carrying a per-architecture constant, and a model shipping
+//! none of these tensors needs no entry to come out at zero.
 
 use ananke_gguf::GgufSummary;
 

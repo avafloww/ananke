@@ -2,30 +2,22 @@
 //!
 //! MTP ships in two shapes, and the estimator models both:
 //!
-//! **Embedded head (Qwen 3.6).** With `--spec-type draft-mtp` and no separate
-//! draft GGUF, llama.cpp creates a second context against the *same* target
-//! model. Its KV cache covers only the trailing `nextn_predict_layers` blocks
-//! — the dense-attention MTP head — and uses the *draft* cache types, which
-//! default to f16 regardless of the main context's `--cache-type-*`. No extra
-//! weights load: the nextn-layer tensors live in the target GGUF and are
-//! resident even without MTP. So the cost is `nextn KV (f16) + a roughly
-//! constant compute buffer`. Calibrated against llama.cpp's own `[spec]
-//! estimated memory usage of MTP context` figure on Qwen 3.6 27B (`qwen35`,
-//! 4 KV heads) and 35B-A3B (`qwen35moe`, 2 KV heads) across context
-//! (262144/524288) and parallelism (np 1/2): the KV term tracks `kv_heads ×
-//! context` exactly, and the compute term sits at ~1.55–1.61 GiB independent
-//! of both knobs (it is driven by the shared-tokenizer logit buffer at
-//! `n_ubatch`, not model width).
+//! **Embedded head.** With `--spec-type draft-mtp` and no separate draft GGUF,
+//! llama.cpp creates a second context against the *same* target model. Its KV
+//! cache covers only the trailing `nextn_predict_layers` blocks — the
+//! dense-attention MTP head — and uses the *draft* cache types, which default
+//! to f16 regardless of the main context's `--cache-type-*`. No extra weights
+//! load: the nextn-layer tensors live in the target GGUF and are resident even
+//! without MTP. So the cost is the nextn KV plus a compute buffer that is
+//! roughly constant, being driven by the shared-tokenizer logit buffer at
+//! `n_ubatch` rather than by model width.
 //!
-//! **Separate draft model (Gemma 4).** With `-md <file>` the MTP head is a
-//! standalone GGUF (Gemma 4's `gemma4-assistant`, a 4-block model). Its
-//! attention layers *share the target model's KV cache* — confirmed in the
-//! load log (`llama_kv_cache: layer 3: sharing with layer 59`) — so it adds
-//! no context-scaling KV. The whole cost is its GPU-resident weights
-//! (everything but the CPU-side token embeddings) plus a small, roughly
-//! constant draft compute/logit buffer. Calibrated against the production
-//! 2×3090 run (peak 40858 MiB total) minus the target+mmproj estimate: the
-//! draft contributes ~400 MiB, of which ~108 MiB is weights.
+//! **Separate draft model.** With `-md <file>` the MTP head is a standalone
+//! GGUF. Its attention layers *share the target model's KV cache* — the load
+//! log says so (`llama_kv_cache: layer 3: sharing with layer 59`) — so it adds
+//! no context-scaling KV. The whole cost is its GPU-resident weights,
+//! everything but the CPU-side token embeddings, plus a small and roughly
+//! constant draft compute buffer.
 
 use ananke_gguf::{Architecture, GgufSummary, keys};
 
@@ -54,15 +46,13 @@ fn draft_model_gpu_weight_bytes(draft: &GgufSummary) -> u64 {
 /// weights plus a fixed draft compute buffer. The draft's attention layers
 /// reuse the target's KV cache, so there is no context-scaling KV term.
 fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32) -> u64 {
-    // The draft shares the target's KV cache — the load log shows `layer 3:
-    // sharing with layer 59` — so there is no context-scaling cache term. Its
-    // *compute* scales anyway, so the term has to as well: gemma-4-31B-QAT
-    // measures a driver delta of 724, 788, and 920 MiB at ctx 32768, 65536, and
-    // 131072, which a flat 407 MiB would under-reserve by 317 to 513 MiB.
+    // The draft shares the target's KV cache, so there is no context-scaling
+    // cache term. Its *compute* scales anyway, so this term has to as well; a
+    // flat constant under-reserves badly at long contexts.
     //
-    // Flat in the slot count, unlike an embedded head: 724, 724, and 728 MiB
-    // at one, two, and four slots. That is the control confirming the embedded
-    // head's slot scaling comes from keeping its own cache per slot.
+    // Flat in the slot count, unlike an embedded head. That is the control
+    // confirming the embedded head's slot scaling comes from keeping its own
+    // cache per slot.
     let compute =
         DRAFT_MODEL_COMPUTE_MIB + DRAFT_MODEL_COMPUTE_MIB_PER_1K * u64::from(context) / 1024;
     draft_model_gpu_weight_bytes(draft) + compute * 1024 * 1024
@@ -136,15 +126,13 @@ pub fn mtp_overhead_bytes(
     //     [spec] estimated memory usage of MTP context is N MiB
     //
     // is exactly the draft cache's *physical* size plus **one** device's share
-    // of that context's compute buffer — verified to the second decimal on all
-    // 13 measured MTP cells, across two architectures, four contexts, and slot
-    // counts 1, 2, and 4. So the two terms are modelled separately, because
-    // they land differently: the cache is split across the spanned devices
+    // of that context's compute buffer. The two are modelled separately because
+    // they land differently: the cache is split across the spanned devices,
     // while the compute buffer is built on each of them.
     //
-    // Neither term scales with the slot count. There is one MTP context, not
-    // one per slot, and its cache covers the whole context budget however that
-    // budget is divided: `mtpslot-*-mtp-np{1,2,4}` all report the same figure.
+    // Neither term scales with the slot count. There is one MTP context, not one
+    // per slot, and its cache covers the whole context budget however that
+    // budget is divided.
     let key_length = summary
         .meta_u32(&keys::attention_key_length(arch))
         .unwrap_or(0) as u64;
@@ -170,9 +158,8 @@ pub fn mtp_overhead_bytes(
 /// This is the draft context's own graph. Two other things MTP costs are
 /// modelled elsewhere and must not be added here, or they are counted twice:
 /// the recurrent module's speculative rollback copies, which
-/// [`crate::recurrent`] scales by `parallel x (rs_seq + 1)` and which
-/// account for most of the driver delta's growth with the slot count (188 MiB at
-/// one slot against 754 at four, on Qwen3.6-35B-A3B), and the main context's own
+/// [`crate::recurrent`] scales by `parallel x (rs_seq + 1)` and which account
+/// for most of the growth with the slot count, and the main context's own
 /// compute, which the unified compute model covers.
 ///
 /// The same two terms as the main context's — see
@@ -279,7 +266,7 @@ mod tests {
     /// the context would cost.
     ///
     /// `[spec] estimated memory usage of MTP context is N MiB` is the draft
-    /// cache's physical size plus **one** device's compute share, so a two-card
+    /// cache's physical size plus **one** device's compute share, so a split
     /// span pays the reported figure plus a second copy of the share. That is
     /// the whole model, and these are the only two configurations it has been
     /// measured against at production scale.

@@ -193,14 +193,11 @@ impl<'a> Packer<'a> {
             None => DeviceSlot::Cpu,
         };
         // A tied model's table is GPU-resident *as well as* CPU-mapped: it is
-        // the output head, and the logits are computed on the device. Measured
-        // across every no-offload mainline cell, the GPU model buffer comes to
-        // the whole GGUF for a tied model — lfm2 359 MiB, Qwen3-4B 2759,
-        // gemma-3-27B 15773, gemma-4-31B-QAT 16471 — and to the GGUF *less*
-        // the table for one that ships its own head: talkie 10774 against
-        // 11037, magidonia 15539 against 15980, Qwen3.6-27B 18563 against
-        // 19397. Charging it to the CPU alone under-reserves every tied model
-        // by the table's whole size, 6-8% of its weights.
+        // the output head, and the logits are computed on the device. Across
+        // every no-offload mainline cell, the GPU model buffer comes to the
+        // whole GGUF for a tied model, and to the GGUF *less* the table for one
+        // that ships its own head. Charging it to the CPU alone under-reserves
+        // every tied model by the table's whole size.
         //
         // Only `token_embd.weight`; a Gemma 4 E-variant's
         // `per_layer_token_embd.weight` stack stays on the CPU, which is why

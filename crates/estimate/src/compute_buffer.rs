@@ -41,8 +41,8 @@ use crate::{
 /// *subtracts* this from the secondaries, so under-estimating the real logits
 /// buffer keeps them safe (they simply keep a little extra headroom), whereas
 /// over-estimating would under-reserve and OOM them. The measured head-only
-/// delta on Laguna (2×3090, ub2048) was ~660 MiB, comfortably above this
-/// `× 2` figure, confirming the direction. `n_vocab` is read from the output
+/// delta measured at a large ubatch sits comfortably above this `× 2` figure,
+/// confirming the direction. `n_vocab` is read from the output
 /// head's shape, falling back to the token-embedding table for tied-embedding
 /// models that ship no separate `output.weight`.
 pub fn output_logits_bytes(summary: &GgufSummary, ubatch: Option<u32>) -> u64 {
@@ -61,12 +61,11 @@ pub fn output_logits_bytes(summary: &GgufSummary, ubatch: Option<u32>) -> u64 {
 /// will split the model across devices.
 ///
 /// The two splits build genuinely different graphs and the gap is not a scale
-/// factor: at ctx 32768 gemma4 needs 212 MiB per device sharded against 337
-/// layer-split, while laguna needs 166 against 558. Neither figure predicts the
-/// other, so each split has its own model — and the sharded packer charges the
-/// result to *every* spanned GPU rather than dividing it, because llama.cpp
-/// builds the same graph on each device. The measured compute column reads
-/// identically on one card and on two at every context in the dataset.
+/// factor — neither split's figure predicts the other's, on any architecture —
+/// so each has its own model. The sharded packer charges the result to *every*
+/// spanned GPU rather than dividing it, because llama.cpp builds the same graph
+/// on each device: the compute column reads identically on one card and on two
+/// at every context.
 pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u32 {
     if let Some(mb) = inputs.compute_buffer_mb {
         return mb;
@@ -88,13 +87,12 @@ pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u3
 
 /// Query heads, falling back to `n_embd / key_length` where the GGUF omits them.
 ///
-/// Not every architecture writes `attention.head_count`: laguna carries only
-/// `head_count_kv`, and a term built on the query head count then evaluated to
-/// zero and left 9218 MiB of unfused score matrix unreserved — the largest single
-/// miss in the dataset. Where the count has to be inferred, any error in it is
-/// absorbed by the per-architecture rate, the two only ever appearing as a
-/// product, so the fallback costs accuracy in the attribution rather than in the
-/// reservation.
+/// Not every architecture writes `attention.head_count`. Where it is missing, a
+/// term built on the query head count evaluates to zero and leaves the whole
+/// unfused score matrix unreserved, which was the largest single miss in the
+/// dataset. Any error in the inferred count is absorbed by the per-architecture
+/// rate, the two only ever appearing as a product, so the fallback costs
+/// accuracy in the attribution rather than in the reservation.
 fn query_head_count(summary: &GgufSummary) -> u64 {
     let arch = &summary.architecture;
     if let Some(heads) = summary

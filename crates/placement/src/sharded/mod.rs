@@ -33,11 +33,11 @@ impl<'a> Packer<'a> {
         // 1-38) — so `N` bounds *blocks*, not expert layers.
         //
         // Which end matters whenever the quant gives later blocks wider experts:
-        // laguna's trailing 39 come to 43188 MiB against the leading 38's 41496,
-        // so taking the wrong end leaves its cards 1692 MiB short.
+        // The two ends of the layer range differ by enough that taking the
+        // wrong one leaves the cards short.
         //
-        // Confirmed on Qwen3.6-35B-A3B's production cell: physical GPU model
-        // = 2 × 1431 = 2862 MiB ≈ all attention (1837) + the one retained
+        // Confirmed against a production cell: the physical GPU model buffer
+        // comes to all attention plus the one retained
         // block's experts (568) + output head (242) + nextn tensors (~215).
         //
         // ik_llama takes the other end and counts expert layers rather than
@@ -227,7 +227,7 @@ impl<'a> Packer<'a> {
         // The replicated tensors are already counted once inside the split pool,
         // so what each card still owes is the rest of a full copy. Spread evenly
         // across symmetric cards that is `replicated x (cards - 1) / cards` each,
-        // which totals the one extra copy a two-card split was measured holding.
+        // which totals the one extra copy a two-way split was measured holding.
         let replicated_extra = self
             .estimate
             .tensor_split_replicated_bytes

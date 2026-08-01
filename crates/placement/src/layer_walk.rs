@@ -125,7 +125,7 @@ impl<'a> Packer<'a> {
     /// on the CPU slot.
     ///
     /// The two are different quantities, and the CPU slot must not be charged
-    /// `compute_buffer_mb`: that is calibrated against `nvidia-smi` VRAM
+    /// `compute_buffer_mb`: that is calibrated against device VRAM
     /// readings and says nothing about a host backend. What the host holds is
     /// the pinned graph arena and the prompt cache, which scale differently and
     /// exist even when every layer is on a GPU — see
@@ -254,7 +254,7 @@ mod tests {
 
     /// llama.cpp names one device for the projector's CLIP graph buffer, so it
     /// is charged once and on the head GPU — not once per card the way the
-    /// compute buffer is. Charging it per card would over-reserve a two-card
+    /// compute buffer is. Charging it per card would over-reserve a two-way
     /// span by 248 MiB.
     #[test]
     fn the_mmproj_graph_buffer_rides_the_head_gpu_alone() {
@@ -432,7 +432,7 @@ mod tests {
             context: 262_144,
             architecture: Architecture::Gemma4,
         };
-        // 2×24 GB 3090s, fully free, empty pledge book.
+        // Two 24 GB cards, fully free, empty pledge book.
         let snap = snapshot(&[24, 24]);
         let alloc = AllocationTable::new();
         let packed = pack(&e, &svc(PlacementPolicy::GpuOnly, None), &snap, &alloc)

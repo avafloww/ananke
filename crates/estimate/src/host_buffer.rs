@@ -17,55 +17,22 @@
 //!   kept out of the rolling correction's base (see `Charge::Slop`).
 //!
 //! The `Cpu` slot must not be charged the GPU-calibrated `compute_buffer_mb`:
-//! that number is derived from `nvidia-smi` VRAM readings and says nothing
-//! about a host backend.
+//! that number describes a device, not a host backend.
 //!
-//! # Calibration
+//! The arena's shape is read from llama.cpp's graph construction; the baseline
+//! is fitted. Both are independent of how much of the model sits on the GPU —
+//! the host side grows through the CPU's share of the KV cache instead, which
+//! the packer charges separately.
 //!
-//! The arena's shape is read from llama.cpp's graph construction rather than
-//! fitted, then checked against hardware; the baseline is a fit. Measured on
-//! 2×RTX 3090 (CUDA) over Qwen3-4B (36 layers, n_embd 2560), Qwen3.6-27B (64,
-//! 5120), and Gemma-4-31B-QAT (60, 5376, SWA), sweeping context 8k–64k, ubatch
-//! 512–4096, `-np` 1–4, and flash attention on and off. The arena model
-//! reproduces all 15 sweep points to within 0.05 MiB.
+//! A service with **no GPU visible at all** is the exception: ggml never swaps
+//! the CPU backend's buffer type, so nothing is pinned, and the arena instead
+//! holds the op intermediates a GPU run offloads to the device. The two errors
+//! that introduces offset each other, and what remains is left to the rolling
+//! correction rather than threading placement into the estimator.
 //!
-//! A second axis matters as much as those: **how much of the model is on the
-//! GPU**. The arena turns out to be independent of it — 18.01 MiB at `-ngl 99`,
-//! at `-ngl 18`, and at `-ngl 0` alike — while the host side grows entirely
-//! through the CPU's share of the KV cache, which the packer charges
-//! separately. Whole-host predictions across that spread land within 1.2% (see
-//! `the_host_model_holds_across_the_offload_spread`).
-//!
-//! Both terms were measured on mainline llama.cpp. ik_llama differs — it does
-//! not map host-side weights even without `--no-mmap` — which the *observation*
-//! side handles by measuring rather than inferring; see
-//! `RollingBase::host_peak`.
-//!
-//! Validated at production scale on the shape issue #34 was about: a
-//! DeepSeek-V4-Flash hybrid (96 GiB, `--n-cpu-moe 40`, 2 GPUs) holds **90.7
-//! GiB of expert weights entirely in `RssFile`** and only 589 MiB of owned
-//! memory. That is the whole premise of pairing an owned-memory numerator with
-//! a weights-excluded denominator, measured rather than assumed.
-//!
-//! The exception is a service with **no GPU visible at all**, where ggml never
-//! swaps the CPU backend's buffer type: nothing is pinned, and the arena
-//! instead holds the CPU-executed op intermediates that a GPU run offloads to
-//! the device — measured 88 MiB against this model's 18, while the absent CUDA
-//! runtime makes the baseline ~130 MiB smaller. The two errors offset to a
-//! ~60 MiB over-prediction, which is left to the rolling correction rather
-//! than threading placement into the estimator for a term that size.
-//!
-//! Two known under-predictions, both small and both left to the correction:
-//! spanning a second GPU on the layer-split path adds ~18 MiB of baseline and
-//! ~24 MiB of arena (tensor-split adds neither), and the estimator runs before
-//! the packer has chosen a span, so it cannot see it.
-//!
-//! See CONTRIBUTING for the procedure.
-
-// Every tuning constant below comes from `tuning.json`, which
-// `ananke-calibrate`'s `emit` binary generates from the measurement dataset and
-// `build.rs` turns into compile-time constants. Each carries its evidence in
-// its own doc comment — how many models it rests on, and where it is weak.
+//! Every constant below comes from `tuning.json` and carries its evidence in
+//! its own doc comment. [`calibration/docs/memory-model.md`] is the model these
+//! functions implement, and `calibration/README.md` is how to re-derive it.
 
 use ananke_config::flags::cache_type;
 use ananke_gguf::{Architecture, GgufSummary, keys};
@@ -89,19 +56,14 @@ use crate::{
 pub fn host_overhead_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u64 {
     let arch = &summary.architecture;
     // Each visible CUDA device beyond the first costs host memory for its
-    // context. Measured with placement pinned to the CPU so only the context
-    // count varied: two models of very different size both moved by 20 MiB
-    // between one card and two.
+    // context, independently of the model's size.
     let device_bytes =
         PROCESS_BASE_BYTES_PER_DEVICE * u64::from(inputs.visible_devices.saturating_sub(1));
-    // The two MTP shapes cost materially different amounts of host memory,
-    // and `spec_type` alone does not distinguish them — a separate draft GGUF
-    // brings a whole second model, an embedded head brings only a context.
-    // Both shapes are flat in the slot count and linear in context at 2 MiB
-    // per 1024 — measured at 239, 243, and 240 MiB for Qwen3.6-27B at one,
-    // two, and four slots, and 240, 274, 341 across ctx 32768, 65536, and
-    // 131072. A flat constant is the wrong shape here, and wrong in opposite
-    // directions at the ends of that range.
+    // The two MTP shapes cost materially different amounts, and `spec_type`
+    // alone does not distinguish them — a separate draft GGUF brings a whole
+    // second model, an embedded head brings only a context. Both are flat in
+    // the slot count and linear in context, so a flat constant is the wrong
+    // shape and is wrong in opposite directions at the ends of the range.
     let mtp = if inputs.speculation.is_mtp() {
         let base = if inputs.speculation.draft_model().is_some() {
             MTP_HOST_BYTES_SEPARATE_DRAFT
@@ -115,10 +77,7 @@ pub fn host_overhead_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) 
     } else {
         0
     };
-    // A tensor split costs host baseline a layer split does not — between 96
-    // and 184 MiB, measured on every model that ran both at matching settings.
-    // The operator runs several services this way, so omitting it under-predicts
-    // each of them by that much.
+    // A tensor split costs host baseline that a layer split does not.
     let tensor_split = if inputs.visible_devices > 1
         && inputs.split_mode == ananke_config::placement::SplitMode::Tensor
     {
@@ -126,20 +85,14 @@ pub fn host_overhead_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) 
     } else {
         0
     };
-    // A concurrently active slot costs host memory — 163 MiB on qwen35, 89 on
-    // gemma3, 4 on llama — and that is measured and recorded in
-    // `tuning.json`, but deliberately *not* charged here.
-    //
-    // This function is what the rolling correction divides an observation by,
-    // so it has to model what a process actually holds rather than the worst
-    // case it might. Slots that stay idle cost nothing, and most services are
-    // idle in most slots: charging all four took the cells outside the
-    // correction's band from 2 to 44, with ratios down to 0.34, because every
-    // ordinary service then reads as a massive over-reservation and clamps
-    // unreachably. Two stress cells inside the band is the better trade.
-    //
-    // A worst-case allowance belongs in the packer's slop, alongside the
-    // prompt cache, which is reserved the same way and for the same reason.
+    // A concurrently active slot costs host memory, recorded in `tuning.json`
+    // but deliberately not charged here: this function is what the rolling
+    // correction divides an observation by, so it models what a process holds
+    // rather than the worst case it might. Idle slots cost nothing, and most
+    // services are idle in most slots, so charging them all makes every
+    // ordinary service read as a large over-reservation and clamp the
+    // correction unreachably. The worst-case allowance belongs in the packer's
+    // slop, alongside the prompt cache. See [`slot_host_bytes`].
     pinned_graph_bytes(summary, inputs)
         .saturating_add(PINNED_EXTRA_BYTES)
         .saturating_add(process_base_bytes(
@@ -173,31 +126,26 @@ fn process_base_bytes(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -
         .saturating_add_signed(baseline_offset(summary, ik_llama, flash_attn))
 }
 
-/// The measured correction the layer-count model above leaves behind.
+/// The correction the layer-count model above leaves behind.
 ///
-/// Signed: it corrects a baseline that over-covers as well as one that
-/// under-covers. An over-prediction is only safe while it stays inside the
-/// band the rolling correction can travel, and gemma3 sat at 0.78 against a
-/// floor of 0.8 — unreachable rather than safe.
+/// Signed, because it corrects a baseline that over-covers as well as one that
+/// under-covers. An over-prediction is only safe while it stays inside the band
+/// the rolling correction can travel; past that it is unreachable, not safe.
 ///
-/// Keyed on the architecture *and* the two variant distinctions that separate
-/// models sharing one architecture string: within `gemma4`, the mixture of
-/// experts is over-covered by 66 MiB, the dense model needs 17, and the
-/// E-variant 107. Both discriminators are ones the estimator already reads, so
-/// the key is one it can construct.
+/// Keyed on [`variant_key`], because models sharing an architecture string can
+/// differ here by more than that band.
 fn baseline_offset(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -> i64 {
     let mut key = variant_key(summary);
-    // The two binaries do not share a baseline: grouped per runtime, ik's
-    // resident cells are as consistent as mainline's and simply sit 24 to 192
-    // MiB higher. Only this table is keyed on it — the flash-attention rates
-    // must not be, since ik is excluded from that derivation and an
-    // ik-suffixed key would inherit the worst rate as its default.
+    // The two forks do not share a baseline; ik's is consistently the higher.
+    // Only this table is keyed on the fork — the flash-attention rates must not
+    // be, since ik is excluded from that derivation and an ik-suffixed key
+    // would inherit the worst rate as its default.
     if ik_llama {
         key.push_str("@ik");
     }
     // Flash attention shifts the baseline underneath the per-token arena term
-    // as well: +21 to +33 MiB on most architectures and +131 on lfm2, which is
-    // enough on a 190 MiB baseline to put that configuration outside the band.
+    // as well, by enough on some architectures to put the configuration outside
+    // the correction's band.
     if !flash_attn {
         key.push_str("@nofa");
     }
@@ -209,11 +157,9 @@ fn baseline_offset(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -> i
 
 /// Extra pinned bytes per batch token when flash attention is off.
 ///
-/// Flat in context and proportional to batch: gemma-3-27B is 64 MiB over the
-/// modelled arena at ctx 8192, 32768, and 131072 alike, and 256 MiB over at
-/// ubatch 2048 in every one of them. The rate differs fourfold between
-/// sliding-window architectures and the rest, which one representative value
-/// could not carry.
+/// Flat in context and proportional to batch. The rate differs several-fold
+/// between sliding-window architectures and the rest, which is why it is a
+/// table rather than a scalar.
 fn no_flash_attn_rate(summary: &GgufSummary) -> u64 {
     // Never reached on the ik path, which returns before this term.
     lookup(
@@ -225,10 +171,9 @@ fn no_flash_attn_rate(summary: &GgufSummary) -> u64 {
 
 /// The architecture, plus the distinctions that split one architecture string.
 ///
-/// `gemma4` covers three models whose host terms differ by more than the
-/// rolling correction can travel: a mixture of experts, a dense model, and an
-/// E-variant. Both discriminators are read from the GGUF, so the key costs
-/// nothing beyond what is already loaded.
+/// `gemma4` covers a mixture of experts, a dense model, and an E-variant, whose
+/// host terms differ by more than the rolling correction can travel. Both
+/// discriminators are read from the GGUF the estimator has already loaded.
 fn variant_key(summary: &GgufSummary) -> String {
     let arch = &summary.architecture;
     let mut key = arch.to_string();
@@ -256,17 +201,13 @@ fn has_experts(summary: &GgufSummary) -> bool {
 
 /// Host memory the slots beyond the first cost when they are all busy.
 ///
-/// Reserved, not predicted — the same treatment as the prompt cache and for
-/// the same reason. A concurrently active slot costs real host memory (163 MiB
-/// per slot on qwen35, 89 on gemma3, 4 on llama, measured across three
-/// architectures), but an idle one costs nothing, and most services are idle
-/// in most slots. Charging it in [`host_overhead_bytes`] would make every
-/// ordinary service read as a large over-reservation and clamp the rolling
-/// correction unreachably — measured at 44 of 259 cells outside the band
-/// against 4 when it is left out.
-///
-/// So the packer reserves it as slop, where it protects a service that does
-/// become busy, and the correction never divides by it.
+/// Reserved, not predicted — the same treatment as the prompt cache and for the
+/// same reason. A concurrently active slot costs real host memory, but an idle
+/// one costs nothing and most services are idle in most slots. Charging it in
+/// [`host_overhead_bytes`] would make every ordinary service read as a large
+/// over-reservation and clamp the rolling correction unreachably, so the packer
+/// reserves it as slop instead: it protects a service that does become busy,
+/// and the correction never divides by it.
 pub fn slot_host_bytes(arch: &Architecture, inputs: &EstimatorInputs<'_>) -> u64 {
     let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
     lookup(
@@ -279,17 +220,12 @@ pub fn slot_host_bytes(arch: &Architecture, inputs: &EstimatorInputs<'_>) -> u64
 /// Host memory a prompt long enough to be checkpointed adds, per slot.
 ///
 /// llama.cpp's server checkpoints a slot's state so a prompt can be rewound
-/// rather than reprocessed, spaced by `--checkpoint-min-step` (8192 tokens).
-/// A service serving real prompts holds more of them than a short probe does,
-/// and how many more depends on the attention: the flag's other name is
-/// `--swa-checkpoints`, and a sliding-window model needs them to rewind its
-/// window. gemma-4-31B-QAT measures 524 MiB at a four-token prompt and 2138
-/// at 16384; Qwen3.6-27B, without a sliding window, 778 and 928.
+/// rather than reprocessed. A service serving real prompts holds more of them
+/// than a short probe does, and how many more depends on the attention — the
+/// flag's other name is `--swa-checkpoints`, and a sliding-window model needs
+/// them to rewind its window.
 ///
-/// Reserved, not predicted — the same treatment as the prompt cache and the
-/// per-slot cost, and for the same reason. Charging it in
-/// [`host_overhead_bytes`] would make a service that never sees a long prompt
-/// read as a 1.6 GiB over-reservation and clamp the correction unreachably.
+/// Reserved, not predicted, for the reason [`slot_host_bytes`] gives.
 pub fn checkpoint_headroom_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u64 {
     let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
     lookup(
@@ -301,18 +237,17 @@ pub fn checkpoint_headroom_bytes(summary: &GgufSummary, inputs: &EstimatorInputs
 
 /// The prompt-cache cap in bytes. Zero when the operator disables it.
 ///
-/// Reserved but not predicted. The cache fills with use rather than at load —
-/// measured identical host memory at `-cram 0` and `-cram 4096` on a freshly
-/// started server — so counting the cap as a prediction would make every
-/// observation read as a large over-reservation and pin the host correction to
-/// its clamp floor. The packer charges it as slop for exactly that reason.
+/// Reserved but not predicted. The cache fills with use rather than at load, so
+/// counting the cap as a prediction would make every observation read as a large
+/// over-reservation and pin the host correction to its clamp floor. The packer
+/// charges it as slop for that reason.
 pub fn prompt_cache_bytes(inputs: &EstimatorInputs<'_>) -> u64 {
     inputs.cache_ram_mb.unwrap_or(DEFAULT_CACHE_RAM_MB) as u64 * 1024 * 1024
 }
 
 /// Bytes of pinned host memory the graph allocator reserves.
 ///
-/// Three measured components, each scaling with the batch:
+/// Three components, each scaling with the batch:
 ///
 /// - **The KQ mask**, `n_kv × n_tokens` elements — f16 under flash attention,
 ///   f32 otherwise. `n_kv` is one slot's share of the cache, since a
@@ -350,46 +285,34 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -
     let has_swa = sliding_window(summary).is_some();
 
     if inputs.fork.is_ik() {
-        // ik sizes every mask against the *whole* cache — it does not divide
-        // by the slot count, and an interleaved-SWA model's second mask gets
-        // the full context rather than the window — and pins one
-        // hidden-state buffer where mainline pins two.
-        // One ordinary mask, a second for an interleaved-SWA model — sized
-        // against the full cache, not the window — and two more when DSA is
-        // on, for the MLA and sparse-indexer masks. Measured: GLM-5.2 at
-        // ctx 131072 / ub 2048 came to exactly three 512 MiB masks.
+        // ik sizes every mask against the *whole* cache — it does not divide by
+        // the slot count, and an interleaved-SWA model's second mask gets the
+        // full context rather than the window — and pins one hidden-state
+        // buffer where mainline pins two. One ordinary mask, a second for an
+        // interleaved-SWA model, and two more under DSA for the MLA and
+        // sparse-indexer masks.
         let masks = 1 + u64::from(has_swa) + if inputs.fork.dsa() { 2 } else { 0 };
         let arena = masks * context * n_tokens * element_bytes + n_embd * n_tokens * 4;
         return arena + ik_moe_cpu_bytes(summary, n_tokens, inputs.visible_devices);
     }
 
     let n_kv = pad_to_kv_cache(context / streams);
-    // An MLA architecture compresses the KV cache into a single latent
-    // tensor, and its mask comes out at half the width the cache size
-    // suggests. Measured on DeepSeek-V4-Flash across context and batch: half
-    // width fits all three points to 0.3 MiB, full width over-predicts by 30%
-    // — far enough that the rolling correction could not pull it back.
+    // An MLA architecture compresses the KV cache into a single latent tensor,
+    // and its mask comes out at half the width the cache size suggests. Full
+    // width over-predicts by far more than the rolling correction can pull back.
     let base_mask = if is_mla(arch) {
         n_kv * n_tokens * element_bytes / 2
     } else {
         n_kv * n_tokens * element_bytes
     };
-    // A sparse-attention indexer builds its own mask alongside the ordinary
-    // one. The ik path models this from the `-dsa` flag; on mainline there is
-    // no flag, so it keys on the architecture. Measured on GLM-5.2: two masks
-    // plus hidden comes to 40.00 MiB against 40.07 observed, where one mask
-    // gives 32.00.
+    // A sparse-attention indexer builds its own mask alongside the ordinary one.
+    // The ik path models this from the `-dsa` flag; mainline has no flag, so it
+    // keys on the architecture.
     let indexer_masks = extra_full_masks(arch) * n_kv * n_tokens * element_bytes;
 
     let swa_mask = match sliding_window(summary) {
-        // Three window masks when several slots *share* one cache, otherwise
-        // one.
-        //
-        // Measured on gemma3 and on gemma4 alike: both imply three at four
-        // slots with `--kv-unified`, and one everywhere else. The condition is
-        // the shared cache and not the slot count: gemma-4-31B-QAT at four
-        // slots with a per-slot cache measures one, which rules the simpler
-        // rule out.
+        // The condition is the shared cache and not the slot count: four slots
+        // with a per-slot cache build one mask, which rules the simpler rule out.
         Some(window) => {
             let shared = inputs.parallel.unwrap_or(1) > 1 && inputs.kv_unified.unwrap_or(false);
             swa_mask_copies(window as u64, n_tokens, shared)
@@ -401,14 +324,10 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -
     };
 
     let hidden_inputs = 2 * n_embd * n_tokens * 4;
-    // Per token, per *device copy* — replicated under a layer split the same
-    // way the masks are, and independent of the slot count.
-    //
-    // It must not be divided by the stream count. Single-card points measure 8
-    // KiB per token against two-card cells at 32, which is the mask-copy factor
-    // of 4 rather than the slot count: gemma3 measures 128.1 KiB per token and
-    // qwen35 32.1 at both one slot and four, on two cards, identical to the
-    // decimal.
+    // Per token, per *device copy* — replicated under a layer split the same way
+    // the masks are, and independent of the slot count. It must not be divided
+    // by the stream count: the one-card to two-way ratio is the mask-copy
+    // factor, and the per-token figure is identical at one slot and at four.
     let no_fa_extra = if flash_attn {
         0
     } else {
@@ -418,21 +337,20 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -
     // in every one of 117 pairs differing in nothing else. The per-copy rate
     // varies by architecture — 160 bytes per batch token on a non-sliding-
     // window model, 6144 on deepseek4 — and is not predicted by head count,
-    // head width or layer count, so the worst is charged to all of them. That
-    // is 12 MiB at the largest batch measured, which is cheap against an
-    // under-prediction whose mechanism is not understood.
+    // head width or layer count, so the worst is charged to all of them. The
+    // overcharge is small, and cheap against an under-prediction whose
+    // mechanism is not understood.
     let quantised_cache = if quantised_kv(inputs) {
         quantised_cache_rate(arch) * n_tokens
     } else {
         0
     };
 
-    // mainline replicates every mask when layers are split across more than
-    // one device. Not under tensor split, where llama.cpp fuses the cards
-    // into a single device, and not on ik at any card count. Measured at
-    // 4.00-4.16 on six architectures, flat across context, batch, slot count
-    // and cache mode — so it multiplies a term that scales, rather than being
-    // a flat allowance (which at ctx 8192 comes to about +24 MiB).
+    // mainline replicates every mask when layers are split across more than one
+    // device. Not under tensor split, where llama.cpp fuses the cards into a
+    // single device, and not on ik at any card count. The factor is flat across
+    // context, batch, slot count, and cache mode, so it multiplies a term that
+    // scales rather than being a flat allowance.
     let masks = base_mask + indexer_masks + swa_mask + no_fa_extra;
     let masks = masks * mask_copies(inputs);
 
@@ -466,10 +384,9 @@ fn mainline_tensor_moe_bytes(
 /// How many times the graph's attention masks are replicated.
 ///
 /// Only when the whole model is split across devices. A hybrid — experts held
-/// on the CPU — does not replicate them, measured at 1.00 on all three
-/// (deepseek4, laguna, qwen35moe) against 4.00 on every fully-resident model
-/// including a mixture of experts, which is what rules out MoE-ness as the
-/// discriminator and leaves placement.
+/// on the CPU — does not replicate them, and a fully-resident mixture of experts
+/// does, which is what rules out MoE-ness as the discriminator and leaves
+/// placement.
 fn mask_copies(inputs: &EstimatorInputs<'_>) -> u64 {
     let split_across_devices = inputs.visible_devices > 1
         && matches!(
@@ -486,9 +403,8 @@ fn mask_copies(inputs: &EstimatorInputs<'_>) -> u64 {
 /// The Gemma 4 E-variant pins a per-layer embedding input alongside the
 /// ordinary hidden-state buffers.
 ///
-/// Measured flat at 1028 bytes per layer per batch token across three
-/// contexts, two batch sizes, and both card counts — with two same-architecture
-/// controls that are not E-variants showing none of it.
+/// Flat per layer per batch token, and absent from same-architecture models
+/// that are not E-variants.
 fn gemma_e_variant_bytes(summary: &GgufSummary, n_tokens: u64) -> u64 {
     let arch = &summary.architecture;
     if !crate::compute_buffer::is_gemma_e_variant(summary) {
@@ -525,20 +441,18 @@ fn ik_moe_cpu_bytes(summary: &GgufSummary, n_tokens: u64, devices: u32) -> u64 {
     if n_tokens * used >= IK_OP_OFFLOAD_MIN_BATCH * experts {
         return 0;
     }
-    // Proportional to hidden size, not flat: a flat 81 KiB/token, which is this
-    // term at qwen35moe's `n_embd` of 2048, under-reserves GLM-5.2 — three
-    // times that hidden size — threefold.
+    // Proportional to hidden size, not flat: a rate taken from a narrow model
+    // under-reserves a wide one in proportion to the width.
     ik_moe_rate(arch, devices) * embedding_length(summary) * n_tokens
 }
 
 /// The per-token, per-unit-of-hidden-size rate for this architecture and
 /// device count.
 ///
-/// Both axes are measured. The three ik mixtures differ by a third from each
-/// other — 41, 43 and 54 — and two of them differ again with the card count:
-/// glm-dsa is 28 on one card and 43 on two at identical placement, laguna 36
-/// and 54, while qwen35moe is 41 on both. A single constant would either
-/// under-reserve the worst or over-reserve a single-card glm by 45 MiB.
+/// Both axes matter. The measured mixtures differ from each other by a third,
+/// and some of them differ again with the card count at identical placement, so
+/// a single constant would either under-reserve the worst or badly over-reserve
+/// a single-card service.
 fn ik_moe_rate(arch: &Architecture, devices: u32) -> u64 {
     let table = crate::tuning::IK_MOE_RATES;
     let exact = format!("{arch}@{}", devices.max(1));
@@ -546,8 +460,8 @@ fn ik_moe_rate(arch: &Architecture, devices: u32) -> u64 {
         return *rate;
     }
     // No measurement at this device count. Take the worst seen for the
-    // architecture: the rate rises with cards on both models where it varies
-    // at all, and under-reserving is the direction that OOMs.
+    // architecture: the rate rises with cards wherever it varies at all, and
+    // under-reserving is the direction that OOMs.
     let prefix = format!("{arch}@");
     table
         .iter()
@@ -568,10 +482,9 @@ pub fn pad_to_kv_cache(cells: u64) -> u64 {
 /// How many window masks an interleaved-SWA model builds.
 ///
 /// One per batch the window spans, plus the batch's own, and one flat when the
-/// slots do not share a cache. A constant cannot express it: a 1024-token
-/// window spans two batches at ubatch 512 and one at 2048, and the two
-/// configurations measure exactly one mask apart. Capped at the measured range
-/// rather than extrapolated below ubatch 512.
+/// slots do not share a cache. A constant cannot express it: the same window
+/// spans two batches at one ubatch and one at the next, a difference of exactly
+/// one mask. Capped at the measured range rather than extrapolated downwards.
 ///
 /// Public for the same reason as [`pad_to_kv_cache`] — the deriver counts these
 /// masks too, and a disagreement surfaces only as a strange consensus multiple

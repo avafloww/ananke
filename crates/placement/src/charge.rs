@@ -343,7 +343,7 @@ mod tests {
         //
         // The compute buffer appears once *per card*, unlike the weights and
         // the KV: llama.cpp builds the same graph on every device under a
-        // tensor split rather than dividing one between them, so a two-card
+        // tensor split rather than dividing one between them, so a two-way
         // span pays it twice. That is the whole point of
         // [`ananke_estimate::compute_model`] being a
         // per-device figure.
