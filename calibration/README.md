@@ -9,22 +9,21 @@ This is where those constants come from: measurements of real `llama-server`
 processes, the tools that turn them into `crates/tuning/tuning.json`, and the
 record of what each one rests on.
 
-Two companions. [`docs/design.md`](docs/design.md) is why the calibration code
-is arranged the way it is, rather than how to run it, and
-[`../docs/memory-model.md`](../docs/memory-model.md) is the memory model the
-constants belong to.
-
 | | |
 |---|---|
 | `data/` | the dataset: one NDJSON row per measured cell, plus the compressed load logs |
 | `docs/findings.md` | what was measured and what it showed, written as results landed |
 | `docs/plan.md` | the campaign's original specification and what it deliberately does not establish |
+| `docs/design.md` | why the calibration code is arranged the way it is, rather than how to run it |
 | `models.toml` | which models the scoreboard checks, and their production settings |
-| `crates/measure` | the harness, and the `probe` diagnostic for what a single sample cannot separate |
+| `crates/dataset/` | the one declaration of the measurement record's format |
+| `crates/measure/` | the harness, and the `probe` diagnostic for what a single sample cannot separate |
+| `crates/calibrate/` | the campaign driver, the derivers, and the reports that say whether to ship |
 
 The tools are Rust crates, not scripts: `ananke-measure` runs a cell,
 `ananke-calibrate` plans the campaign and derives the constants. This page is
-the workflow; the crates' own docs describe their internals.
+the workflow. The memory model those constants belong to is
+[`../docs/memory-model.md`](../docs/memory-model.md).
 
 ## The whole loop
 
@@ -185,9 +184,9 @@ load log kept gzipped alongside in `data/logs/`. Records from earlier,
 narrower schemas are kept in `data/legacy/` rather than merged, since they
 lack fields the current ones carry.
 
-`crates/dataset` is the one place the format is declared. It derives both
+`crates/dataset/` is the one place the format is declared. It derives both
 halves of serde on every type with `deny_unknown_fields` throughout, and
-`crates/dataset/tests/roundtrip.rs` holds it against every committed row, so a
+its `tests/roundtrip.rs` holds it against every committed row, so a
 column the schema forgets is a test failure rather than a silently dropped
 field. The harness and the calibration tools both read and write these types;
 neither declares its own view of a row.

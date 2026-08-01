@@ -13,12 +13,12 @@ directories do not.
 | crate | path | holds | depends on |
 |---|---|---|---|
 | `ananke-fs` | `crates/fs` | the `Fs` trait with its local and in-memory implementations | `parking_lot` |
-| `ananke-gguf` | `crates/gguf` | the GGUF reader, including sharded models; `dump-gguf` | `ananke-fs` |
+| `ananke-gguf` | `crates/gguf` | the GGUF reader, including sharded models; the `Architecture` enum and every metadata key the workspace reads; `dump-gguf` | `ananke-fs` |
 | `ananke-tuning-schema` | `crates/tuning-schema` | the type of `tuning.json`, shared by everything that reads or writes it | `serde` |
 | `ananke-tuning` | `crates/tuning` | `tuning.json` and the build script that turns it into constants | `ananke-tuning-schema` (build) |
-| `ananke-config` | `crates/config` | config defaults, the descriptor table the docs are generated from, and the placement vocabulary (`SplitMode`, `DeviceSlot`), and the fork marker (`Runtime`) | — |
+| `ananke-config` | `crates/config` | config defaults, the descriptor table the docs are generated from, the placement vocabulary (`SplitMode`, `DeviceSlot`), the fork marker (`Runtime`), and the byte-unit conversions everything shares | — |
 | `ananke-estimate` | `crates/estimate` | the VRAM estimator and the design-column contract the fitter shares | the four above |
-| `ananke-placement` | `crates/placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate` |
+| `ananke-placement` | `crates/placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate`, `ananke-gguf` |
 | `ananke-api` | `crates/api` | the DTOs that cross the wire to the frontend | — |
 | `ananke` | `ananke` | the daemon: supervision, scheduling, HTTP surface, the NVML probe | all of the above |
 | `anankectl` | `anankectl` | the CLI | `ananke-api` |
@@ -30,7 +30,7 @@ see [`calibration/README.md`](calibration/README.md):
 |---|---|---|---|
 | `ananke-dataset` | `calibration/crates/dataset` | the one schema `calibration/data/measurements.ndjson` is written and read with, and the JSON writer that is part of that format | `serde`, `serde_json` |
 | `ananke-measure` | `calibration/crates/measure` | the measurement harness and its log parser | `ananke-dataset`, `regex`, `nix` |
-| `ananke-calibrate` | `calibration/crates/calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-dataset`, `ananke-measure`, `ananke-estimate`, `ananke-placement`, `ananke-tuning-schema` |
+| `ananke-calibrate` | `calibration/crates/calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-dataset`, `ananke-measure`, `ananke-estimate`, `ananke-placement`, `ananke-gguf`, `ananke-tuning-schema` |
 
 That boundary is the useful one to hold in mind: `crates/tuning/tuning.json` is the
 entire interface between the two halves. Delete `calibration/` and the daemon still
@@ -187,7 +187,7 @@ Today the shared DTOs live in the `ananke-api` crate (hand-written, consumed by 
 - Always use the Oxford comma.
 - Don't omit articles ("a", "an", "the"). Write "the file has a newer version" not "file has newer version".
 - Comments describe the present state. Reserve past-tense narration for the rare case where history explains a standing "why".
-- Keep the user-facing docs in sync with code changes. The source of truth for config defaults is the `DEFAULT_*` constants in `crates/config/src/docs.rs` and `crates/config/src/defaults.rs`; the source of truth for config struct fields is `ananke/src/config/parse.rs` and `ananke/src/config/validate.rs`. When you add, remove, rename, or change the default of a config field, update the descriptor table in `ananke_config::docs::all_sections()` and run `cargo xtask gen-config-docs` to regenerate `docs/configuration.md`. CI enforces this with `--check`. Likewise, changes to service states or the management/OpenAI API surface should be reflected in `docs/api.md` (run `cargo xtask gen-api-docs` to regenerate). Treat a code change that touches these areas as incomplete until the docs are updated.
+- Keep the user-facing docs in sync with code changes. The source of truth for config defaults is the `DEFAULT_*` constants in `crates/config/src/docs/` and `crates/config/src/defaults.rs`; the source of truth for config struct fields is `ananke/src/config/parse/` and `ananke/src/config/validate/`. When you add, remove, rename, or change the default of a config field, update the descriptor table in `ananke_config::docs::all_sections()` and run `cargo xtask gen-config-docs` to regenerate `docs/configuration.md`. CI enforces this with `--check`. Likewise, changes to service states or the management/OpenAI API surface should be reflected in `docs/api.md` (run `cargo xtask gen-api-docs` to regenerate). Treat a code change that touches these areas as incomplete until the docs are updated.
 
 ### Code organization
 
