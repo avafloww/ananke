@@ -9,6 +9,11 @@ This is where those constants come from: measurements of real `llama-server`
 processes, the tools that turn them into `crates/tuning/tuning.json`, and the
 record of what each one rests on.
 
+Two companions. [`docs/design.md`](docs/design.md) is why the calibration code
+is arranged the way it is, rather than how to run it, and
+[`../docs/memory-model.md`](../docs/memory-model.md) is the memory model the
+constants belong to.
+
 | | |
 |---|---|
 | `data/` | the dataset: one NDJSON row per measured cell, plus the compressed load logs |

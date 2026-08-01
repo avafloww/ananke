@@ -1,0 +1,80 @@
+# How the calibration code is arranged
+
+[`README.md`](README.md) is the workflow — how to add a model, run the campaign,
+refit, and decide whether to trust the result. This is the separate question of
+why the code is shaped the way it is.
+
+`ananke-calibrate`'s ten binaries split three ways. `plan` and `campaign` schedule
+and drive the measurement; `fit` and `emit` turn the dataset into constants;
+`coverage`, `validate`, `scoreboard`, `crossval`, and `estimates` say whether the
+result is worth shipping. Only the first four produce anything, and only
+`fit --check`, `emit --check`, and `coverage --check` gate the build.
+
+`ananke-measure` carries two: `measure` runs a cell, and `probe` answers what a
+harness sampling each process once cannot — whether a term is allocated once or
+accumulates with use.
+
+`fit` and `emit` are separate operations in a fixed order: `emit` first, then
+`fit`. `emit` derives `MAINLINE_LAYER_SPLIT_MASK_COPIES`, which `fit` reads to
+normalise its design rows; nothing `emit` derives reads the fitted model back. Both
+read `tuning.json` at runtime rather than the constants compiled from it, so the
+order is the only requirement — no rebuild in the middle, and no iteration. Two
+gates rather than one because they fail for different reasons, and which half moved
+is the first thing you want to know.
+
+`validate` and `scoreboard` are **in-sample**. Every `ok` row feeds the fit,
+including the `holdout` question's — deliberately, since three of the four `mmproj`
+cells are holdout cells and excluding them costs a real constant more than the
+honesty of the figure is worth. So the drift they report says the model describes
+the data, not that it predicts a model it has never seen.
+
+`crossval` is the figure that does. For each constant it refits from every model
+but one and compares against what that model's own cells say, which costs no extra
+measurement. What it finds: the structural constants generalise essentially
+perfectly — `MAINLINE_LAYER_SPLIT_MASK_COPIES` is 4 for every one of six models
+held out in turn, `SPEC_RECURRENT_ROLLBACK_DEPTH` likewise, `PROCESS_BASE_BYTES_PER_DEVICE`
+within 1.2% — while the terms resting on one or two models do not, `MMPROJ_GRAPH_BYTES`
+worst at 77%. Four constants cannot be cross-validated at all, because removing
+their single supporting model leaves nothing to fit; they are model-specific fits
+wearing an architecture constant's name, which `calibration/docs/plan.md` predicted
+and the tool now names.
+
+Read its percentages against the absolute column beside them. That 77% is 108 MiB
+on an estimate of ~44 GiB, and the constant is charged flat at the worst of its two
+vision configurations, so it over-reserves rather than OOMs. A constant's error is
+not its estimate's error. It is not a CI gate for that reason — `--check` exists,
+but a threshold that passes today would be measuring the campaign's model coverage
+rather than the estimator's quality.
+
+Each piece is pinned to what the campaign recorded rather than to its own output —
+31 derive tests against `tuning.json`, 604 archived logs against the parses taken
+from them at the time, a fitter fixture, and the plan schedule as a captured
+fixture. A change to any of them has to say what it changed and why, because the
+committed artefact disagrees first.
+
+The **harness** deliberately does not reuse the daemon's `system::ProcessSpawner`.
+That trait is async and coupled to the supervisor's `SpawnConfig` — built for
+long-lived supervised children with pdeathsig and log capture. The harness spawns
+one process, waits for it to load, samples, and kills it. Its own small synchronous
+traits with in-memory fakes fit that shape; borrowing the supervisor's would be
+over-fitting, and would drag tokio into a crate that has no other use for it. The
+filesystem is one of those seams — three primitives, read/write/append — because the
+measurement loop appends a row per cell and notifies its driver, and that ordering
+cannot be checked against a scratch directory without also being a test of the disk.
+
+Those seams are public, and `measure_cells_with` takes them. The campaign commits
+from inside the harness's per-cell notification, so what the two agree on is an
+ordering — a cell is reported once, after its row is on disk — and an ordering is
+only worth stating if something checks it. `campaign::run_with` runs the whole
+driver against the in-memory world for that reason. Splitting the driver across two
+processes would put that seam beyond the reach of any test, which is exactly where
+a mid-append commit comes from. Commits stay scoped to the data paths, so an
+overnight run cannot sweep up whatever else happens to be staged.
+
+One rule for anything added here. Where a derivation pairs two cells, or reads a
+config, the key must pin **every** factor that could differ, and the reader should
+be the strict form (`serde(deny_unknown_fields)`, named fields over a `Value` map).
+A field quietly missing from a mapping has produced four wrong constants in this
+campaign — `bool(n_cpu_moe)` instead of the count, a pairing key missing `ngl`, a
+`cram` omitted from a cell identity, and a `mtp` key that serde dropped in silence
+while the scoreboard read 16% low and still looked plausible.

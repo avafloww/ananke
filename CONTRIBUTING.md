@@ -75,85 +75,13 @@ dataset, not chosen. Every one carries its evidence in its own doc comment, and 
 regenerates the document and compares, so a value cannot drift from the data that
 justifies it without the drift showing up as a diff.
 
-**[`calibration/README.md`](calibration/README.md) is the workflow** — how to add a
-model, run the campaign, refit, and decide whether to trust the result. It is the
-single source of truth for the loop; what follows is why the code is arranged the
-way it is, which is a separate question from how to run it.
-
-`ananke-calibrate`'s ten binaries split three ways. `plan` and `campaign` schedule
-and drive the measurement; `fit` and `emit` turn the dataset into constants;
-`coverage`, `validate`, `scoreboard`, `crossval`, and `estimates` say whether the
-result is worth shipping. Only the first four produce anything, and only
-`fit --check`, `emit --check`, and `coverage --check` gate the build.
-
-`ananke-measure` carries two: `measure` runs a cell, and `probe` answers what a
-harness sampling each process once cannot — whether a term is allocated once or
-accumulates with use.
-
-`fit` and `emit` are separate operations in a fixed order: `emit` first, then
-`fit`. `emit` derives `MAINLINE_LAYER_SPLIT_MASK_COPIES`, which `fit` reads to
-normalise its design rows; nothing `emit` derives reads the fitted model back. Both
-read `tuning.json` at runtime rather than the constants compiled from it, so the
-order is the only requirement — no rebuild in the middle, and no iteration. Two
-gates rather than one because they fail for different reasons, and which half moved
-is the first thing you want to know.
-
-`validate` and `scoreboard` are **in-sample**. Every `ok` row feeds the fit,
-including the `holdout` question's — deliberately, since three of the four `mmproj`
-cells are holdout cells and excluding them costs a real constant more than the
-honesty of the figure is worth. So the drift they report says the model describes
-the data, not that it predicts a model it has never seen.
-
-`crossval` is the figure that does. For each constant it refits from every model
-but one and compares against what that model's own cells say, which costs no extra
-measurement. What it finds: the structural constants generalise essentially
-perfectly — `MAINLINE_LAYER_SPLIT_MASK_COPIES` is 4 for every one of six models
-held out in turn, `SPEC_RECURRENT_ROLLBACK_DEPTH` likewise, `PROCESS_BASE_BYTES_PER_DEVICE`
-within 1.2% — while the terms resting on one or two models do not, `MMPROJ_GRAPH_BYTES`
-worst at 77%. Four constants cannot be cross-validated at all, because removing
-their single supporting model leaves nothing to fit; they are model-specific fits
-wearing an architecture constant's name, which `calibration/docs/plan.md` predicted
-and the tool now names.
-
-Read its percentages against the absolute column beside them. That 77% is 108 MiB
-on an estimate of ~44 GiB, and the constant is charged flat at the worst of its two
-vision configurations, so it over-reserves rather than OOMs. A constant's error is
-not its estimate's error. It is not a CI gate for that reason — `--check` exists,
-but a threshold that passes today would be measuring the campaign's model coverage
-rather than the estimator's quality.
-
-Each piece is pinned to what the campaign recorded rather than to its own output —
-31 derive tests against `tuning.json`, 604 archived logs against the parses taken
-from them at the time, a fitter fixture, and the plan schedule as a captured
-fixture. A change to any of them has to say what it changed and why, because the
-committed artefact disagrees first.
-
-The **harness** deliberately does not reuse the daemon's `system::ProcessSpawner`.
-That trait is async and coupled to the supervisor's `SpawnConfig` — built for
-long-lived supervised children with pdeathsig and log capture. The harness spawns
-one process, waits for it to load, samples, and kills it. Its own small synchronous
-traits with in-memory fakes fit that shape; borrowing the supervisor's would be
-over-fitting, and would drag tokio into a crate that has no other use for it. The
-filesystem is one of those seams — three primitives, read/write/append — because the
-measurement loop appends a row per cell and notifies its driver, and that ordering
-cannot be checked against a scratch directory without also being a test of the disk.
-
-Those seams are public, and `measure_cells_with` takes them. The campaign commits
-from inside the harness's per-cell notification, so what the two agree on is an
-ordering — a cell is reported once, after its row is on disk — and an ordering is
-only worth stating if something checks it. `campaign::run_with` runs the whole
-driver against the in-memory world for that reason. Splitting the driver across two
-processes would put that seam beyond the reach of any test, which is exactly where
-a mid-append commit comes from. Commits stay scoped to the data paths, so an
-overnight run cannot sweep up whatever else happens to be staged.
-
-One rule for anything added here. Where a derivation pairs two cells, or reads a
-config, the key must pin **every** factor that could differ, and the reader should
-be the strict form (`serde(deny_unknown_fields)`, named fields over a `Value` map).
-A field quietly missing from a mapping has produced four wrong constants in this
-campaign — `bool(n_cpu_moe)` instead of the count, a pairing key missing `ngl`, a
-`cram` omitted from a cell identity, and a `mtp` key that serde dropped in silence
-while the scoreboard read 16% low and still looked plausible.
+Two documents, and neither is duplicated here.
+[`calibration/README.md`](calibration/README.md) is the workflow — how to add a
+model, run the campaign, refit, and decide whether to trust the result.
+[`calibration/docs/design.md`](calibration/docs/design.md) is why the calibration
+code is shaped the way it is: the binaries and what each is for, the fixed
+`emit`-then-`fit` order, what `validate` and `crossval` do and do not tell you,
+and the rule that a derivation's key must pin every factor that could differ.
 
 Getting the estimator and the packer out took a real decoupling rather than a file
 move. Both had taken a whole `ServiceConfig`; both now take a distilled input
@@ -161,7 +89,6 @@ struct — `EstimatorInputs` and `PlacementInputs` — built by free functions i
 `ananke::config::service_inputs`. Reading a service config is the daemon's
 business; estimating and packing are pure functions over the fields they actually
 need. Prefer that shape for anything else that wants to come out.
-
 ### Platform scope
 
 v1 targets Linux only — the daemon depends on NVML, `/proc`, and `prctl`, none of which have direct equivalents elsewhere. Linux-specific code is fine; don't invent cross-platform shims on speculation.
@@ -392,12 +319,12 @@ When a new model family ships with a `general.architecture` value that ananke do
 1. **Dump the GGUF metadata.** Run the `dump-gguf` example against the first shard:
 
    ```bash
-   cargo run --example dump-gguf -- /path/to/model-00001-of-NNNN.gguf
+   cargo run -p ananke-gguf --example dump-gguf -- /path/to/model-00001-of-NNNN.gguf
    ```
 
    The output shows the architecture name, block count, tensor categories, and every attention-related metadata key. This is the ground truth for what the estimator needs to read.
 
-2. **Choose the right family module.** The estimator dispatches on `general.architecture` through the family modules in `crates/estimate/src/`. Each module's `*_FAMILY` constant lists the architectures it covers, and the module docs and per-entry comments describe the tensor layouts and metadata quirks already handled. Read those alongside the dump from step 1, and pick the module whose expectations the new architecture's tensors and metadata actually match — the existing entries are worked examples of what "matching" looks like.
+2. **Choose the right family module.** The estimator dispatches on `Architecture` through the family modules in `crates/estimate/src/`. Each module's `*_FAMILY` constant lists the architectures it covers, and the module docs and per-entry comments describe the tensor layouts and metadata quirks already handled. Read those alongside the dump from step 1, and pick the module whose expectations the new architecture's tensors and metadata actually match — the existing entries are worked examples of what "matching" looks like.
 
 3. **Register and test.**
 
@@ -405,152 +332,15 @@ When a new model family ships with a `general.architecture` value that ananke do
 
    b. Add that variant to the chosen family's `*_FAMILY` constant, with a comment describing the quirks it brings.
 
-   c. If the architecture needs a custom compute-buffer tuning curve, add a match arm in `crates/estimate/src/compute_buffer.rs::tuning_for()`. The formula is `base + slope * (ctx / 1024)` MiB per device. Derive the curve like this:
-
-   - Sweep `llama-server -m <model> -c <ctx> -ngl 99` over a few context lengths, pinning one card with `CUDA_VISIBLE_DEVICES=0`. For an embedding model, add `--embeddings` (the modality implies the same flag in production); the calibration is otherwise identical.
-   - Read each run's process VRAM from `nvidia-smi --query-compute-apps=pid,used_memory`. Match the row to the server's actual pid and wait for each server to fully exit before the next run — a leftover server silently wins the port bind and you measure the same process at every "ctx".
-   - Compute the residual `compute_buffer = used - gpu_weights - kv_total`, where `gpu_weights` is the estimator's `weights_bytes` minus its `token_embd_bytes` (llama.cpp keeps token embeddings on CPU) and `kv_total = kv_per_token * ctx`. Both terms come straight from `cargo run --example estimate -- --model <model> --context <ctx>`.
-   - Fit `base + slope * (ctx / 1024)` to the residuals: pick a base that covers the worst case with a little headroom, and keep the slope as low as the data allows. A flat residual across the sweep also confirms `kv_per_token` is right — a wrong KV term makes the residual trend with context.
-   - One gotcha: the `estimate` example's printed `gpu_vram_mib` doubles the compute buffer (`active_devices.min(2)`) for a 2-GPU split, so pass `--active-devices 1` when comparing its total to a single-card `nvidia-smi` reading.
-   - Most architectures' compute buffers are effectively independent of `--ubatch-size`, so the curve is calibrated at llama.cpp's default (512) and `tuning_for` ignores ubatch. A minority scale with it — notably `deepseek4`, whose NSA "lightning indexer" scores every one of the `ubatch` query tokens against the whole context, so its residual is `≈ k * ubatch * ctx`. For such an arch, take the slope as a function of ubatch (`deepseek4_cb_slope` scales the calibrated 512-slope linearly) and thread the service's `ubatch` through `EstimatorInputs` → `compute_buffer::default_for`. Sweep a second ubatch (e.g. 1024) to confirm the scaling before trusting the extrapolation.
+   c. If the architecture needs a custom compute-buffer curve, derive one — [`docs/memory-model.md`](docs/memory-model.md) has the procedure — and add a match arm in `crates/estimate/src/compute_buffer.rs::tuning_for()`.
 
    d. Add a unit test in the family module that exercises the key behaviour (KV computation, layer collection, expert detection, etc.). Use `synth_gguf::Builder` from `ananke/tests/common/mod.rs` to construct a fake GGUF summary, or write one inline with the same pattern.
 
    e. Run the full test suite: `cargo test --workspace --all-features` and `cargo clippy --all-targets --all-features -- -D warnings`.
 
-**Reference implementation:** the `dump-gguf` example at `ananke/examples/dump-gguf.rs` is the canonical tool for gathering GGUF metadata. The llama.cpp source (ask the operator where it lives) is the ground truth for tensor naming, metadata keys, and architecture classification. When in doubt about how a tensor is routed at runtime, check `llama-arch.cpp` (`LLM_TENSOR_NAMES`, `LLM_ARCH_NAMES`, `llm_arch_is_hybrid`), `llama-model.cpp` (hparams loading), and `llama-memory*.cpp` (KV cache vs recurrent state).
+[`docs/memory-model.md`](docs/memory-model.md) is what those estimators are modelling — the VRAM and host-side terms, and where each one comes from.
 
-### Host-side memory
-
-The GPU compute-buffer curves above describe VRAM. The host side is modelled
-separately in `crates/estimate/src/host_buffer.rs`, and the two are not
-interchangeable — for a long time the `Cpu` slot was charged the GPU-calibrated
-`compute_buffer_mb`, a number derived entirely from `nvidia-smi` readings and
-never measured against a host backend.
-
-What llama-server actually holds in host RAM, beyond weights and the CPU's KV
-share:
-
-- **The pinned graph arena.** ggml pins every graph *input* tensor to the CPU
-  backend, and when a GPU is present that backend's buffer type is swapped for
-  the device's host buffer type — `cudaMallocHost`, page-locked and
-  unswappable. llama.cpp logs it as `CUDA_Host compute buffer size`, not `CPU`.
-  Three measured components, all scaling with the batch: the KQ mask at
-  `n_kv × min(context, ubatch) × (fa ? 2 : 4)`, a second window-sized mask on
-  an interleaved-SWA model (sized `n_swa + n_tokens`, not the window alone),
-  and two `n_embd × n_tokens` f32 hidden-state inputs. That last term is easy
-  to miss and *dominates at short contexts* — the token embeddings stay on the
-  CPU backend, so the embedding lookup and the split-boundary copy both land
-  here.
-- **The process baseline.** CUDA runtime host allocations, tokenizer, sampler
-  state, graph metadata. Measured at `112 MiB + 3.4 MiB × n_layer` against *serving*
-  processes (an idle one reads ~26 MiB lower) across three models; the layer count predicts it better than the hidden size does.
-- **The prompt cache.** `-cram`, default 8192 MiB of serialized evicted
-  prompts. ananke passes the flag explicitly so the reservation and the
-  runtime's cap are the same number.
-
-The two runtimes size the arena by **different rules**, so calibrate each:
-
-| | mainline | ik_llama |
-|---|---|---|
-| mask width | `ctx / parallel`, padded | `ctx` — `-np` does not divide it |
-| SWA second mask | window-sized (`n_swa + n_tokens`) | full context |
-| MLA | half-width mask (`deepseek4`; `deepseek2` unmeasured) | — |
-| sparse-attention indexer | one extra mask (`glm-dsa`) | two extra, keyed on `-dsa` |
-| hidden-state buffers | two `n_embd x n_tokens` f32 | one |
-| extra GPU, layer-split | +24 MiB | none |
-| CPU-resident MoE ops | — | 81-161 KiB/token, only below `n_tokens x n_used >= 32 x n_expert` |
-
-Same model and flags at ctx 32768 / ub 512: mainline 18 MiB, ik 37 MiB.
-
-Calibrate along **two** axes, not one. The obvious sweep is context × batch;
-the one that is easy to forget is **how much of the model is on the GPU**, and
-a `-ngl 99`-only sweep measures the regime where the host side matters least.
-The arena turns out to be offload-independent (18.01 MiB at `-ngl 99`, `-ngl
-18`, and `-ngl 0` alike) and the host side grows through the CPU's KV share
-instead — but that is a finding, not an assumption to start from. A service
-with no GPU visible at all is different again: nothing is pinned, and the CPU
-compute buffer swells to hold the op intermediates a GPU run offloads to the
-device (measured 88 MiB against 18).
-
-Sweep *real* hybrids, not a small model pushed to the CPU with `-ngl`. Expert
-offload (`--n-cpu-moe`) is a different mechanism, and a mixture of experts has
-a much larger process baseline than its layer count suggests — a 41-layer MoE
-was measured holding more than a 65-layer dense model, which is why the
-baseline carries a flat MoE allowance. Note that Laguna and other ik_llama-only
-architectures cannot be measured with a mainline build at all; keep the fork
-constant across a sweep or the fork's own differences will be read as model
-differences.
-
-**Measure both forks before trusting a host model.** Laguna-S-2.1 under
-`--n-cpu-moe 30` on two GPUs, same model and same flags:
-
-Qwen3.6-35B-A3B under `--n-cpu-moe 40`, one GPU, no `--no-mmap` on either:
-
-| runtime | load log | owned (anon+shmem) | mapped (`RssFile`) |
-|---|---|---|---|
-| mainline | `CPU_Mapped model buffer size = 24771` | 465 MiB | 24935 MiB |
-| ik_llama | `CPU buffer size` | 23759 MiB | 164 MiB |
-
-Nothing in the configuration distinguishes those runs, yet the same bytes land
-in different counters. The divergence is specific to the expert-offload path —
-at `-ngl 0` the same ik build maps normally, and honours `--no-mmap` when given
-it — so it cannot be predicted from flags at all. That is why
-`RollingBase::host_peak` decides from the measured `RssFile` rather than from
-`mmap`/`-rtr`: inferring from flags takes ik's 62.3 GiB owned against a 6.6 GiB
-base, a ratio of 9 clamped to 1.5, and over-reserves a host slot tens of GiB
-wide by half. Mainline's `RssFile` came to the host weight total plus
-~150-230 MiB of shared libraries in every configuration tried, which is what
-makes it a usable discriminator.
-
-**Aim for reachability, not closeness.** Where a term cannot be predicted well
-— the process baseline varies 400-546 MiB across three MoEs that all have 256
-experts, with layer count running the wrong way — pick the constant so that
-every known model lands inside the rolling correction's `[0.8, 1.5]` clamp of
-reality. That band is the whole distance the correction can travel, so a
-"closer" constant that pushes one model outside it is strictly worse: no amount
-of observation can bring that service back.
-
-The arena's *shape* is read from llama.cpp's graph construction; the baseline
-is a fit. Calibrate the baseline against a process that has **served a
-request** — measuring at idle understates it by ~26 MiB of first-use scratch.
-Recent builds also print a `memory breakdown` table splitting each device into
-model / context / compute, which is easier to read than the individual buffer
-lines. To re-check either:
-
-```bash
-# One run per (context, ubatch) point. Read the arena from the load log —
-# note -lv 5, without which recent builds omit the buffer lines entirely:
-llama-server -m <model> -c <ctx> -ub <ub> -ngl 99 -fa on -lv 5 2>&1 \
-  | grep "CUDA_Host compute buffer size"
-# and the host footprint from /proc once it is serving:
-grep -E "^(RssAnon|RssShmem|RssFile|VmRSS):" /proc/<pid>/status
-```
-
-**Read `RssAnon + RssShmem`, not `RssAnon`.** `cudaMallocHost` is accounted as
-*shmem*: growing the arena from 18 MiB to 72 MiB moves `RssShmem` by exactly
-that and leaves `RssAnon` flat. And **not `VmRSS`** — `RssFile` is the mapped
-GGUF, which llama.cpp maps with `MAP_POPULATE` and then unmaps only outside the
-host-resident tensor span, so a hybrid run leaves nearly the whole file
-resident as clean, reclaimable pages. That is what
-`ananke/src/supervise/rolling.rs` compares against a weights-excluded base.
-
-Two gotchas. `ik_llama`'s `-rtr` forces `--no-mmap`, so a repacked model's
-weights are anonymous and *do* appear in the owned figure. And the prompt cache
-allocates nothing at load — `-cram 0` and `-cram 4096` measure identically on a
-fresh server — so it is reserved but deliberately kept out of the rolling
-correction's base, or every observation would read as a large
-over-reservation.
-
-### Multi-token prediction (MTP / NextN) overhead
-
-When a service sets `spec_type = "draft-mtp"`, llama.cpp enables multi-token-prediction speculative decoding. For models that ship an embedded MTP head (`{arch}.nextn_predict_layers > 0` — e.g. Qwen 3.6's `qwen35` and `qwen35moe`), this needs *no separate draft model*: llama.cpp creates a second context against the same target model whose KV cache covers only the trailing `nextn_predict_layers` block(s) — the dense-attention MTP head — using the draft cache types (f16 by default, independent of `--cache-type-*`). No extra weights load, because the nextn-layer tensors are resident regardless.
-
-`crates/estimate/src/mtp.rs` models this as `nextn × head_count_kv × (key_length + value_length) × 2 (f16) × context` for the KV term, plus a roughly constant `MTP_COMPUTE_MIB` compute buffer. The estimator computes it once in `estimate_with_summary` (architecture-independent — it reads the metadata directly), stores it on `Estimate::mtp_bytes`, and the packer reserves it as a single lump on the primary GPU (`Packer::seed_mtp_overhead`). The compute constant is calibrated against llama.cpp's own `[spec] estimated memory usage of MTP context is N MiB` log line; re-derive it the same way (run `llama-server … --spec-type draft-mtp`, read the figure, subtract the modelled KV) if a new MTP arch lands with a materially different curve.
-
-Some families ship the MTP head as a **separate draft GGUF** instead of embedding it (e.g. Gemma 4's `gemma4-assistant`, a 4-block model loaded via `-md`). Set `draft_model = "…/mtp-head.gguf"` alongside `spec_type = "draft-mtp"`; the validator requires `spec_type` whenever `draft_model` is set, and the estimator reads the draft file in `estimate_with_summary` and passes its summary to `mtp_overhead_bytes`. The draft's attention layers *share the target model's KV cache* (the load log shows `llama_kv_cache: layer 3: sharing with layer 59`), so there is no context-scaling KV term — the overhead is just the draft's GPU-resident weights (everything but the CPU-side `token_embd.weight`) plus a small `DRAFT_MODEL_COMPUTE_MIB` buffer. That constant is calibrated against the production 2×3090 Gemma 4 run: the estimator landed within ~10 MiB of the measured 40858 MiB peak. Because the cache keys on the `model` and `mmproj` paths but not the draft path, `draft_model` is folded into `EstimatorInputs::config_fingerprint` so swapping the draft GGUF invalidates a stale estimate.
-
-MTP composes with `parallel > 1` and `mmproj` — both are supported by current llama.cpp, including image inference, so there is deliberately no validator rejection of those combinations. Note that `parallel > 1` with a non-unified KV splits the `-c` budget across slots, so each request's effective context is `context / parallel`; raise `context` if every slot needs the full window.
+**Reference implementation:** the `dump-gguf` example at `crates/gguf/examples/dump-gguf.rs` is the canonical tool for gathering GGUF metadata. The llama.cpp source (ask the operator where it lives) is the ground truth for tensor naming, metadata keys, and architecture classification. When in doubt about how a tensor is routed at runtime, check `llama-arch.cpp` (`LLM_TENSOR_NAMES`, `LLM_ARCH_NAMES`, `llm_arch_is_hybrid`), `llama-model.cpp` (hparams loading), and `llama-memory*.cpp` (KV cache vs recurrent state).
 
 ## TypeScript code style
 

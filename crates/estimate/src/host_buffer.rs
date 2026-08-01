@@ -31,8 +31,8 @@
 //! correction rather than threading placement into the estimator.
 //!
 //! Every constant below comes from `tuning.json` and carries its evidence in
-//! its own doc comment. [`calibration/docs/memory-model.md`] is the model these
-//! functions implement, and `calibration/README.md` is how to re-derive it.
+//! its own doc comment. `docs/memory-model.md` is the model these functions
+//! implement, and `calibration/README.md` is how to re-derive it.
 
 use ananke_config::flags::cache_type;
 use ananke_gguf::{Architecture, GgufSummary, keys};
