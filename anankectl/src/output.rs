@@ -9,6 +9,7 @@ use ananke_api::{
     devices::list::DeviceSummary,
     services::{detail::ServiceDetail, list::ServiceSummary},
 };
+use ananke_config::units::{GIB, MIB};
 use comfy_table::{Attribute, Cell, CellAlignment, Color, ContentArrangement, Table, presets};
 use serde::Serialize;
 
@@ -158,8 +159,6 @@ fn format_restart_time(at_ms: i64) -> String {
 /// Format `bytes` with an automatically-chosen unit (GiB / MiB / B).
 /// Used wherever VRAM totals or reservation amounts get printed.
 pub fn format_bytes(bytes: u64) -> String {
-    const GIB: u64 = 1024 * 1024 * 1024;
-    const MIB: u64 = 1024 * 1024;
     if bytes >= GIB {
         format!("{:.1} GiB", bytes as f64 / GIB as f64)
     } else if bytes >= MIB {

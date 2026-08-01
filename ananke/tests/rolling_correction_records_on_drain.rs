@@ -26,6 +26,7 @@ use ananke::{
     supervise::drain::DrainReason,
     system::Fs,
 };
+use ananke_config::units::GIB;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -33,8 +34,6 @@ use axum::{
 use common::{build_harness_with_snapshot, synth_gguf};
 use smol_str::SmolStr;
 use tower::util::ServiceExt;
-
-const GIB: u64 = 1024 * 1024 * 1024;
 
 fn service(model_path: PathBuf) -> ServiceConfig {
     let mut svc = common::minimal_llama_service("drainy", 0);

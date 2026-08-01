@@ -20,7 +20,7 @@
 use std::process::ExitCode;
 
 use ananke_calibrate::{
-    derive::units::{MIB, MIB_F64},
+    derive::units::MIB,
     models::{self, ModelConfig},
     validate::{NEUTRAL, snapshot_for},
 };
@@ -30,7 +30,7 @@ use ananke_placement::{Packed, devices::DeviceId, pack_demand};
 use serde::Serialize;
 
 const MODELS_TOML: &str = "calibration/models.toml";
-const GIB: f64 = MIB_F64 * 1024.0;
+const GIB_F64: f64 = ananke_config::units::GIB as f64;
 
 /// One model's estimate, or why it has none.
 ///
@@ -188,11 +188,11 @@ fn estimate_one(fs: &LocalFs, config: &ModelConfig) -> Row {
     Row::Estimated(Box::new(EstimatedRow {
         name: config.name.clone(),
         arch: estimate.architecture.to_string(),
-        weights_gib: estimate.weights_bytes as f64 / GIB,
+        weights_gib: estimate.weights_bytes as f64 / GIB_F64,
         compute_buffer_mb: estimate.compute_buffer_mb,
         kv_total_mib: kv_total_mib(&estimate, config),
         mtp_mib: estimate.mtp_bytes / MIB,
-        gpu_vram_gib: (gpu_vram_mib * MIB) as f64 / GIB,
+        gpu_vram_gib: (gpu_vram_mib * MIB) as f64 / GIB_F64,
         host_overhead_mib: estimate.host_overhead_bytes / MIB,
         expert_offload_mib: packed.as_ref().map(|p| p.expert_offload_bytes / MIB),
         expert_offload_layers: packed.as_ref().map(|p| p.expert_offload_layers),

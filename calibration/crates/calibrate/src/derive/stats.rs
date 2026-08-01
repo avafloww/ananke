@@ -183,9 +183,6 @@ mod tests {
     }
 
     #[test]
-    fn pad_rounds_up_to_the_cache_granularity() {}
-
-    #[test]
     fn consensus_accepts_a_tight_group_and_refuses_a_split_one() {
         assert_eq!(
             consensus_default(&[100.0, 101.0, 102.0], "tight").unwrap(),

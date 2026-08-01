@@ -252,13 +252,11 @@ impl RollingBase {
 }
 #[cfg(test)]
 mod tests {
-    use ananke_config::units::MIB;
+    use ananke_config::units::{GIB, MIB};
     use smol_str::SmolStr;
 
     use super::*;
     use crate::tracking::rolling::{MIN_TRUSTED_SAMPLES, MemoryClass, RollingTable};
-
-    const GIB: u64 = 1024 * 1024 * 1024;
 
     /// `host` is the whole `Cpu` slot; `cpu_weight` is the host-resident model
     /// weight within it, which leaves both sides of the host ratio.
