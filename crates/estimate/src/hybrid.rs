@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 use smol_str::SmolStr;
 
 use crate::{
@@ -56,28 +56,20 @@ pub fn kv_for_hybrid(
     let bytes_v = kv::kv_bytes_per_element(cache_v);
 
     let n_kv_heads = summary
-        .metadata
-        .get(&*format!("{arch}.attention.head_count_kv"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_head_count_kv(arch))
         .unwrap_or(0) as u64;
     let key_length = summary
-        .metadata
-        .get(&*format!("{arch}.attention.key_length"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_key_length(arch))
         .unwrap_or(128) as u64;
     let value_length = summary
-        .metadata
-        .get(&*format!("{arch}.attention.value_length"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_value_length(arch))
         .unwrap_or(128) as u64;
 
     // `full_attention_interval = N`: only every N-th layer runs full
     // attention; the rest are SSM with no KV cache. Absent / 1 = every
     // layer has KV (the jamba case).
     let full_attention_interval = summary
-        .metadata
-        .get(&*format!("{arch}.full_attention_interval"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::full_attention_interval(arch))
         .unwrap_or(1)
         .max(1);
     let span = recurrent::context_layer_span(summary, arch).min(n_layers);
@@ -146,7 +138,10 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
 mod tests {
     use std::path::Path;
 
-    use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
+    use ananke_gguf::{
+        keys::suffix,
+        types::{GgufSummary, GgufTensor, GgufType, GgufValue},
+    };
 
     use super::*;
 
@@ -191,39 +186,27 @@ mod tests {
 
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String(arch.into()),
         );
-        metadata.insert(
-            SmolStr::new(format!("{arch}.block_count")),
-            GgufValue::U32(n_layers),
-        );
-        metadata.insert(
-            SmolStr::new(format!("{arch}.attention.head_count_kv")),
-            GgufValue::U32(4),
-        );
-        metadata.insert(
-            SmolStr::new(format!("{arch}.attention.key_length")),
-            GgufValue::U32(128),
-        );
-        metadata.insert(
-            SmolStr::new(format!("{arch}.attention.value_length")),
-            GgufValue::U32(128),
-        );
+        metadata.insert(keys::block_count(arch), GgufValue::U32(n_layers));
+        metadata.insert(keys::attention_head_count_kv(arch), GgufValue::U32(4));
+        metadata.insert(keys::attention_key_length(arch), GgufValue::U32(128));
+        metadata.insert(keys::attention_value_length(arch), GgufValue::U32(128));
         if let Some(interval) = interval {
             metadata.insert(
-                SmolStr::new(format!("{arch}.full_attention_interval")),
+                keys::full_attention_interval(arch),
                 GgufValue::U32(interval),
             );
         }
         // Qwen3.6-27B's recurrent block, as its GGUF declares it.
         for (key, value) in [
-            ("ssm.conv_kernel", 4u32),
-            ("ssm.inner_size", 6144),
-            ("ssm.state_size", 128),
-            ("ssm.group_count", 16),
+            (suffix::SSM_CONV_KERNEL, 4u32),
+            (suffix::SSM_INNER_SIZE, 6144),
+            (suffix::SSM_STATE_SIZE, 128),
+            (suffix::SSM_GROUP_COUNT, 16),
         ] {
-            metadata.insert(SmolStr::new(format!("{arch}.{key}")), GgufValue::U32(value));
+            metadata.insert(keys::scoped(arch, key), GgufValue::U32(value));
         }
 
         GgufSummary {

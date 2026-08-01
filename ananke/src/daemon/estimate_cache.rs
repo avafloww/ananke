@@ -20,6 +20,7 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use ananke_api::services::detail::{EstimateSummary, ModelInfo};
+use ananke_gguf::keys;
 use parking_lot::RwLock;
 use smol_str::SmolStr;
 
@@ -82,19 +83,19 @@ impl CacheEntry {
             .and_then(|v| v.as_u32());
         let model_name = summary
             .metadata
-            .get("general.name")
+            .get(keys::NAME)
             .and_then(GgufValue::as_str)
             .map(str::to_string)
             .filter(|s| !s.is_empty());
         let license = summary
             .metadata
-            .get("general.license")
+            .get(keys::LICENSE)
             .and_then(GgufValue::as_str)
             .map(str::to_string)
             .filter(|s| !s.is_empty());
         let parameter_count = summary
             .metadata
-            .get("general.parameter_count")
+            .get(keys::PARAMETER_COUNT)
             .and_then(GgufValue::as_u64);
 
         let has_mmproj = mmproj_path.is_some();

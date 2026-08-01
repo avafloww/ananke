@@ -38,6 +38,7 @@ use ananke::{
     gguf::{GgufSummary, GgufTensor, GgufType, GgufValue},
 };
 use ananke_dataset::{KvType, Record, Status, read_ndjson};
+use ananke_gguf::{keys, keys::suffix};
 
 /// Architectures whose arena the campaign confirmed to within 0.1 MiB.
 ///
@@ -301,21 +302,18 @@ impl Case {
         let mut metadata = BTreeMap::new();
         let mut put = |key: &str, value: u64| {
             if value > 0 {
-                metadata.insert(
-                    smol_str::SmolStr::new(format!("{arch}.{key}")),
-                    GgufValue::U32(value as u32),
-                );
+                metadata.insert(keys::scoped(&arch, key), GgufValue::U32(value as u32));
             }
         };
-        put("block_count", parsed.n_layer);
-        put("embedding_length", parsed.n_embd);
-        put("expert_count", parsed.n_expert);
-        put("expert_used_count", parsed.n_expert_used);
-        put("attention.sliding_window", parsed.n_swa);
-        put("attention.head_count", parsed.n_head);
-        put("attention.head_count_kv", parsed.n_head_kv);
-        put("attention.key_length", parsed.n_embd_head_k);
-        put("attention.value_length", parsed.n_embd_head_v);
+        put(suffix::BLOCK_COUNT, parsed.n_layer);
+        put(suffix::EMBEDDING_LENGTH, parsed.n_embd);
+        put(suffix::EXPERT_COUNT, parsed.n_expert);
+        put(suffix::EXPERT_USED_COUNT, parsed.n_expert_used);
+        put(suffix::ATTENTION_SLIDING_WINDOW, parsed.n_swa);
+        put(suffix::ATTENTION_HEAD_COUNT, parsed.n_head);
+        put(suffix::ATTENTION_HEAD_COUNT_KV, parsed.n_head_kv);
+        put(suffix::ATTENTION_KEY_LENGTH, parsed.n_embd_head_k);
+        put(suffix::ATTENTION_VALUE_LENGTH, parsed.n_embd_head_v);
 
         let model_key = &record.provenance.model_key;
 

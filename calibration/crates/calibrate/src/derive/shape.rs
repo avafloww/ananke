@@ -2,6 +2,7 @@
 //! reported holding where. How a record is *keyed* lives in [`crate::derive::keys`].
 
 use ananke_dataset::BufferRole;
+use ananke_gguf::keys::suffix;
 
 use crate::record::{Parsed, Record};
 
@@ -22,11 +23,11 @@ pub fn query_head_count(parsed: &Parsed) -> u64 {
     if parsed.n_head != 0 {
         return parsed.n_head;
     }
-    let n_embd = match parsed.gguf("embedding_length").unwrap_or(0) {
+    let n_embd = match parsed.gguf(suffix::EMBEDDING_LENGTH).unwrap_or(0) {
         0 => parsed.n_embd as i64,
         value => value,
     };
-    let head_dim = match parsed.gguf("attention.key_length").unwrap_or(0) {
+    let head_dim = match parsed.gguf(suffix::ATTENTION_KEY_LENGTH).unwrap_or(0) {
         0 => parsed.n_embd_head_k as i64,
         value => value,
     };

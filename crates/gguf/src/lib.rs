@@ -4,6 +4,7 @@
 //! so tests can substitute [`ananke_fs::InMemoryFs`] preloaded with
 //! synthetic bytes. Production calls pass [`ananke_fs::LocalFs`].
 
+pub mod keys;
 pub mod reader;
 pub mod shards;
 pub mod types;

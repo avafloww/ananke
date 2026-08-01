@@ -21,7 +21,7 @@
 //! Operators can override the whole term per service via
 //! `estimation.compute_buffer_mb`.
 
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 
 use crate::{
     compute_model,
@@ -96,17 +96,16 @@ pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u3
 /// product, so the fallback costs accuracy in the attribution rather than in the
 /// reservation.
 fn query_head_count(summary: &GgufSummary, arch: &str) -> u64 {
-    let meta = |key: &str| {
-        summary
-            .metadata
-            .get(&smol_str::SmolStr::new(format!("{arch}.{key}")))
-            .and_then(|v| v.as_u32())
-            .map(u64::from)
-    };
-    if let Some(heads) = meta("attention.head_count").filter(|h| *h > 0) {
+    if let Some(heads) = summary
+        .meta_u64(&keys::attention_head_count(arch))
+        .filter(|h| *h > 0)
+    {
         return heads;
     }
-    match (meta("embedding_length"), meta("attention.key_length")) {
+    match (
+        summary.meta_u64(&keys::embedding_length(arch)),
+        summary.meta_u64(&keys::attention_key_length(arch)),
+    ) {
         (Some(n_embd), Some(head_dim)) if head_dim > 0 => n_embd / head_dim,
         _ => 0,
     }
@@ -183,14 +182,8 @@ mod tests {
     /// in `tuning.json`.
     fn sized_summary(arch: &str, n_embd: u32) -> GgufSummary {
         let mut metadata = BTreeMap::new();
-        metadata.insert(
-            SmolStr::new(format!("{arch}.embedding_length")),
-            GgufValue::U32(n_embd),
-        );
-        metadata.insert(
-            SmolStr::new(format!("{arch}.attention.head_count")),
-            GgufValue::U32(32),
-        );
+        metadata.insert(keys::embedding_length(arch), GgufValue::U32(n_embd));
+        metadata.insert(keys::attention_head_count(arch), GgufValue::U32(32));
         GgufSummary {
             path: Path::new("/model.gguf").to_path_buf(),
             total_tensor_bytes: 0,

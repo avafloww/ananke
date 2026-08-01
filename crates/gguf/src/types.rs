@@ -24,6 +24,26 @@ pub struct GgufSummary {
     pub shards: Vec<PathBuf>,
 }
 
+impl GgufSummary {
+    /// A metadata value, by a key from [`crate::keys`].
+    pub fn meta(&self, key: &SmolStr) -> Option<&GgufValue> {
+        self.metadata.get(key)
+    }
+
+    /// A metadata value read as a u32, absent where the key is missing or
+    /// holds something that does not fit one.
+    pub fn meta_u32(&self, key: &SmolStr) -> Option<u32> {
+        self.meta(key).and_then(GgufValue::as_u32)
+    }
+
+    /// A metadata value read as a u64, absent where the key is missing or
+    /// holds something that does not fit one. Callers doing byte arithmetic
+    /// want this rather than a `u32` they immediately cast.
+    pub fn meta_u64(&self, key: &SmolStr) -> Option<u64> {
+        self.meta_u32(key).map(u64::from)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GgufTensor {
     pub name: SmolStr,

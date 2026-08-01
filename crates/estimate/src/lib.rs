@@ -292,7 +292,10 @@ pub fn dispatch(
 mod tests {
     use std::path::Path;
 
-    use ananke_gguf::types::{GgufSummary, GgufValue};
+    use ananke_gguf::{
+        keys,
+        types::{GgufSummary, GgufValue},
+    };
     use smol_str::SmolStr;
 
     use super::*;
@@ -327,7 +330,7 @@ mod tests {
     fn dispatch_recognises_known_families() {
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("qwen3".into()),
         );
         metadata.insert(SmolStr::new("qwen3.block_count"), GgufValue::U32(1));
@@ -349,7 +352,7 @@ mod tests {
     fn dispatch_unknown_goes_to_fallback_when_opted_in() {
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("novel-arch".into()),
         );
         let summary = GgufSummary {
@@ -379,7 +382,7 @@ mod tests {
     fn unknown_architecture_rejects_without_opt_in() {
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("novel-arch".into()),
         );
         let summary = GgufSummary {

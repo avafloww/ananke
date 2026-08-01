@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use ananke_fs::Fs;
 
 use crate::{
+    keys,
     reader::{ReadError, read_single},
     types::GgufSummary,
 };
@@ -16,7 +17,7 @@ pub fn read(fs: &dyn Fs, path: &Path) -> Result<GgufSummary, ReadError> {
     let first = read_single(fs, path)?;
     let split_count = first
         .metadata
-        .get("split.count")
+        .get(keys::SPLIT_COUNT)
         .and_then(|v| v.as_u32())
         .unwrap_or(1);
     if split_count <= 1 {
@@ -26,7 +27,7 @@ pub fn read(fs: &dyn Fs, path: &Path) -> Result<GgufSummary, ReadError> {
     // If the user pointed at a non-zero shard, normalise to shard 0 first.
     let split_no = first
         .metadata
-        .get("split.no")
+        .get(keys::SPLIT_NO)
         .and_then(|v| v.as_u32())
         .unwrap_or(0);
     let base_path = if split_no != 0 {
@@ -61,7 +62,7 @@ pub fn read(fs: &dyn Fs, path: &Path) -> Result<GgufSummary, ReadError> {
             .map_err(|e| ReadError(format!("shard {idx}/{split_count}: {}", e.0)))?;
         let part_count = part
             .metadata
-            .get("split.count")
+            .get(keys::SPLIT_COUNT)
             .and_then(|v| v.as_u32())
             .unwrap_or(1);
         if part_count != split_count {

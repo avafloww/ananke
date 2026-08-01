@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 use smol_str::SmolStr;
 
 use crate::{
@@ -67,7 +67,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     // and shared-KV layers.
     let has_full_attention_interval = summary
         .metadata
-        .contains_key(&*format!("{arch}.full_attention_interval"));
+        .contains_key(&keys::full_attention_interval(arch));
     let kv_per_token = if arch == "deepseek4" {
         deepseek4_kv_per_token(summary, arch, n_layers, inputs)
     } else if arch == "glm-dsa" {
@@ -135,6 +135,8 @@ pub(crate) fn expert_kind(name: &str) -> Option<ExpertKind> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_gguf::keys::suffix;
+
     use super::*;
 
     #[test]
@@ -162,7 +164,7 @@ mod tests {
         }
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("qwen35moe".into()),
         );
         metadata.insert(SmolStr::new("qwen35moe.block_count"), GgufValue::U32(8));
@@ -186,10 +188,10 @@ mod tests {
         );
         // Qwen3.6-35B-A3B's recurrent block, as its GGUF declares it.
         for (key, value) in [
-            ("ssm.conv_kernel", 4u32),
-            ("ssm.inner_size", 4096),
-            ("ssm.state_size", 128),
-            ("ssm.group_count", 16),
+            (suffix::SSM_CONV_KERNEL, 4u32),
+            (suffix::SSM_INNER_SIZE, 4096),
+            (suffix::SSM_STATE_SIZE, 128),
+            (suffix::SSM_GROUP_COUNT, 16),
         ] {
             metadata.insert(
                 SmolStr::new(format!("qwen35moe.{key}")),
@@ -309,7 +311,7 @@ mod tests {
         }
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("qwen3moe".into()),
         );
         metadata.insert(SmolStr::new("qwen3moe.block_count"), GgufValue::U32(3));
@@ -428,7 +430,7 @@ mod tests {
 
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("laguna".into()),
         );
         metadata.insert(SmolStr::new("laguna.block_count"), GgufValue::U32(n_layers));

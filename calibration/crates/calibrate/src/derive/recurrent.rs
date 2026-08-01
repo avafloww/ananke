@@ -2,6 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ananke_gguf::keys::suffix;
+
 use crate::{
     derive::{
         Scalar,
@@ -39,24 +41,24 @@ pub fn recurrent_pools(rows: &[Record]) -> Vec<(&RsPool, &Parsed)> {
 pub fn modelled_recurrent_mib(pool: &RsPool, parsed: &Parsed) -> Option<(f64, f64)> {
     // A convolution kernel is how an SSM block announces itself; without one the
     // model is the shortconv shape instead. Absent and zero pick the same branch.
-    let (n_embd_r, n_embd_s) = match parsed.gguf("ssm.conv_kernel").unwrap_or(0) {
+    let (n_embd_r, n_embd_s) = match parsed.gguf(suffix::SSM_CONV_KERNEL).unwrap_or(0) {
         d_conv if d_conv != 0 => {
             // Every other SSM dimension must be there if the kernel is. A missing
             // one must not read as zero: that shrinks the modelled state silently.
-            let d_inner = parsed.gguf("ssm.inner_size")?;
-            let d_state = parsed.gguf("ssm.state_size")?;
-            let n_group = parsed.gguf("ssm.group_count")?;
+            let d_inner = parsed.gguf(suffix::SSM_INNER_SIZE)?;
+            let d_state = parsed.gguf(suffix::SSM_STATE_SIZE)?;
+            let n_group = parsed.gguf(suffix::SSM_GROUP_COUNT)?;
             (
                 (d_conv - 1) * (d_inner + 2 * n_group * d_state),
                 d_state * d_inner,
             )
         }
         _ => {
-            let l_cache = parsed.gguf("shortconv.l_cache").unwrap_or(0);
+            let l_cache = parsed.gguf(suffix::SHORTCONV_L_CACHE).unwrap_or(0);
             if l_cache <= 1 {
                 return None;
             }
-            (parsed.gguf("embedding_length")? * (l_cache - 1), 0)
+            (parsed.gguf(suffix::EMBEDDING_LENGTH)? * (l_cache - 1), 0)
         }
     };
 
@@ -64,7 +66,7 @@ pub fn modelled_recurrent_mib(pool: &RsPool, parsed: &Parsed) -> Option<(f64, f6
     // allocating layers; the attention layers within it are subtracted the way the
     // estimator does.
     let span = pool.layers as i64;
-    let interval = parsed.gguf("full_attention_interval").unwrap_or(0);
+    let interval = parsed.gguf(suffix::FULL_ATTENTION_INTERVAL).unwrap_or(0);
     if interval == 0 {
         // Without an interval the pattern is a per-layer property the log does not
         // carry (LFM2's is a fixed list inside llama.cpp), so the layer count cannot

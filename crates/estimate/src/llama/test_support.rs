@@ -5,7 +5,10 @@
 
 use std::path::Path;
 
-use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
+use ananke_gguf::{
+    keys,
+    types::{GgufSummary, GgufTensor, GgufType, GgufValue},
+};
 use smol_str::SmolStr;
 
 use crate::types::EstimatorInputs;
@@ -41,7 +44,7 @@ pub fn fake_summary() -> GgufSummary {
 
     let mut metadata = std::collections::BTreeMap::new();
     metadata.insert(
-        SmolStr::new("general.architecture"),
+        SmolStr::new(keys::ARCHITECTURE),
         GgufValue::String("qwen3".into()),
     );
     metadata.insert(SmolStr::new("qwen3.block_count"), GgufValue::U32(2));

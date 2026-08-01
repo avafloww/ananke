@@ -27,7 +27,7 @@
 //! 2×3090 run (peak 40858 MiB total) minus the target+mmproj estimate: the
 //! draft contributes ~400 MiB, of which ~108 MiB is weights.
 
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 
 use crate::{
     tuning::{
@@ -113,7 +113,9 @@ pub fn mtp_overhead_bytes(
         return separate_draft_overhead_bytes(draft, inputs.context);
     }
     let arch = summary.architecture.as_str();
-    let nextn = meta_u32(summary, arch, "nextn_predict_layers").unwrap_or(0) as u64;
+    let nextn = summary
+        .meta_u32(&keys::nextn_predict_layers(arch))
+        .unwrap_or(0) as u64;
     if nextn == 0 {
         // `--spec-type draft-mtp` was requested but this model has no MTP
         // head; llama.cpp would refuse to draft, so there is no extra cost.
@@ -121,7 +123,9 @@ pub fn mtp_overhead_bytes(
     }
     // The MTP head is a full-attention layer; `head_count_kv` is a scalar on
     // the qwen35 / qwen35moe families that ship MTP heads today.
-    let n_kv_heads = meta_attn_u32(summary, arch, "head_count_kv").unwrap_or(0) as u64;
+    let n_kv_heads = summary
+        .meta_u32(&keys::attention_head_count_kv(arch))
+        .unwrap_or(0) as u64;
     if n_kv_heads == 0 {
         return 0;
     }
@@ -141,8 +145,12 @@ pub fn mtp_overhead_bytes(
     // Neither term scales with the slot count. There is one MTP context, not
     // one per slot, and its cache covers the whole context budget however that
     // budget is divided: `mtpslot-*-mtp-np{1,2,4}` all report the same figure.
-    let key_length = meta_attn_u32(summary, arch, "key_length").unwrap_or(0) as u64;
-    let value_length = meta_attn_u32(summary, arch, "value_length").unwrap_or(0) as u64;
+    let key_length = summary
+        .meta_u32(&keys::attention_key_length(arch))
+        .unwrap_or(0) as u64;
+    let value_length = summary
+        .meta_u32(&keys::attention_value_length(arch))
+        .unwrap_or(0) as u64;
     // The MTP draft context always uses f16 for its KV cache, independent of
     // the main cache type.
     let bytes_per_element = crate::kv::kv_bytes_per_element("f16");
@@ -207,20 +215,6 @@ fn rate(table: &[(&str, u64)], arch: &str, fallback: u64) -> u64 {
         .unwrap_or(fallback)
 }
 
-fn meta_u32(summary: &GgufSummary, arch: &str, key: &str) -> Option<u32> {
-    summary
-        .metadata
-        .get(&*format!("{arch}.{key}"))
-        .and_then(|v| v.as_u32())
-}
-
-fn meta_attn_u32(summary: &GgufSummary, arch: &str, key: &str) -> Option<u32> {
-    summary
-        .metadata
-        .get(&*format!("{arch}.attention.{key}"))
-        .and_then(|v| v.as_u32())
-}
-
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, path::Path};
@@ -233,25 +227,16 @@ mod tests {
     fn qwen35_summary(arch: &str, nextn: u32, kv_heads: u32) -> GgufSummary {
         let mut metadata = BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String(arch.into()),
         );
+        metadata.insert(keys::nextn_predict_layers(arch), GgufValue::U32(nextn));
         metadata.insert(
-            SmolStr::new(format!("{arch}.nextn_predict_layers")),
-            GgufValue::U32(nextn),
-        );
-        metadata.insert(
-            SmolStr::new(format!("{arch}.attention.head_count_kv")),
+            keys::attention_head_count_kv(arch),
             GgufValue::U32(kv_heads),
         );
-        metadata.insert(
-            SmolStr::new(format!("{arch}.attention.key_length")),
-            GgufValue::U32(256),
-        );
-        metadata.insert(
-            SmolStr::new(format!("{arch}.attention.value_length")),
-            GgufValue::U32(256),
-        );
+        metadata.insert(keys::attention_key_length(arch), GgufValue::U32(256));
+        metadata.insert(keys::attention_value_length(arch), GgufValue::U32(256));
         GgufSummary {
             path: "/fake".into(),
             total_tensor_bytes: 0,
@@ -330,10 +315,8 @@ mod tests {
         let empty: Vec<String> = Vec::new();
         for (arch, kv_heads, n_embd, context, slots, reported, cache) in cells {
             let mut s = qwen35_summary(arch, 1, kv_heads);
-            s.metadata.insert(
-                SmolStr::new(format!("{arch}.embedding_length")),
-                GgufValue::U32(n_embd),
-            );
+            s.metadata
+                .insert(keys::embedding_length(arch), GgufValue::U32(n_embd));
             let mut i = inputs(context, true, &empty);
             i.parallel = Some(slots);
             i.visible_devices = 2;

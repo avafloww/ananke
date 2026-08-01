@@ -5,6 +5,7 @@
 use std::{collections::BTreeMap, env};
 
 use ananke_fs::LocalFs;
+use ananke_gguf::keys::suffix;
 
 fn main() {
     let path = env::args()
@@ -31,20 +32,20 @@ fn main() {
     println!();
     println!("attention + context metadata (both scalar and array shapes):");
     let prefixes_of_interest = [
-        "attention.head_count_kv",
-        "attention.head_count",
-        "attention.key_length",
-        "attention.value_length",
-        "attention.key_length_swa",
-        "attention.value_length_swa",
-        "attention.sliding_window",
-        "attention.sliding_window_pattern",
-        "attention.shared_kv_layers",
-        "attention.layer_types",
-        "full_attention_interval",
+        suffix::ATTENTION_HEAD_COUNT_KV,
+        suffix::ATTENTION_HEAD_COUNT,
+        suffix::ATTENTION_KEY_LENGTH,
+        suffix::ATTENTION_VALUE_LENGTH,
+        suffix::ATTENTION_KEY_LENGTH_SWA,
+        suffix::ATTENTION_VALUE_LENGTH_SWA,
+        suffix::ATTENTION_SLIDING_WINDOW,
+        suffix::ATTENTION_SLIDING_WINDOW_PATTERN,
+        suffix::ATTENTION_SHARED_KV_LAYERS,
+        suffix::ATTENTION_LAYER_TYPES,
+        suffix::FULL_ATTENTION_INTERVAL,
         "context_length",
-        "embedding_length",
-        "block_count",
+        suffix::EMBEDDING_LENGTH,
+        suffix::BLOCK_COUNT,
     ];
     let keys: Vec<_> = summary.metadata.keys().cloned().collect();
     for suffix in prefixes_of_interest {

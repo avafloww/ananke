@@ -373,6 +373,7 @@ pub mod synth_gguf {
     use std::path::Path;
 
     use ananke::system::InMemoryFs;
+    use ananke_gguf::keys;
 
     pub struct Builder {
         /// Accumulated KV + tensor-info bytes (written after the fixed header).
@@ -392,7 +393,7 @@ pub mod synth_gguf {
 
         /// Append `general.architecture = name` as a string KV entry.
         pub fn arch(self, name: &str) -> Self {
-            self.kv_string("general.architecture", name)
+            self.kv_string(keys::ARCHITECTURE, name)
         }
 
         /// Append a u32 KV entry (type tag 4 in GGUF).

@@ -2,7 +2,7 @@
 //! sparse attention (CSA) layers are the only ones with a context-scaling
 //! cache.
 
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 
 use crate::{kv, tuning::DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16, types::EstimatorInputs};
 
@@ -38,7 +38,7 @@ pub(crate) fn deepseek4_kv_per_token(
     // a quant that drops the array still gets a sane, non-zero estimate.
     let csa_layers = summary
         .metadata
-        .get(&*format!("{arch}.attention.compress_ratios"))
+        .get(&keys::attention_compress_ratios(arch))
         .and_then(|v| v.as_u32_array())
         .map(|ratios| ratios.iter().filter(|&&r| r == DEEPSEEK4_CSA_RATIO).count() as u64)
         .filter(|&n| n > 0)
@@ -51,7 +51,10 @@ pub(crate) fn deepseek4_kv_per_token(
 
 #[cfg(test)]
 mod tests {
-    use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
+    use ananke_gguf::{
+        keys,
+        types::{GgufSummary, GgufTensor, GgufType, GgufValue},
+    };
     use smol_str::SmolStr;
 
     use crate::{moe::estimate::estimate, types::EstimatorInputs};
@@ -97,7 +100,7 @@ mod tests {
         }
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("deepseek4".into()),
         );
         metadata.insert(
@@ -178,7 +181,7 @@ mod tests {
 
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("deepseek4".into()),
         );
         metadata.insert(SmolStr::new("deepseek4.block_count"), GgufValue::U32(43));

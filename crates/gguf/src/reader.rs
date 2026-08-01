@@ -14,7 +14,10 @@ use std::{
 use ananke_fs::Fs;
 use smol_str::SmolStr;
 
-use crate::types::{GgufSummary, GgufTensor, GgufType, GgufValue};
+use crate::{
+    keys,
+    types::{GgufSummary, GgufTensor, GgufType, GgufValue},
+};
 
 const MAGIC: &[u8; 4] = b"GGUF";
 
@@ -59,7 +62,7 @@ pub fn read_single(fs: &dyn Fs, path: &Path) -> Result<GgufSummary, ReadError> {
     }
 
     let architecture = metadata
-        .get("general.architecture")
+        .get(keys::ARCHITECTURE)
         .and_then(|v| v.as_str())
         .map(SmolStr::new)
         .unwrap_or_else(|| SmolStr::new("unknown"));
@@ -285,7 +288,7 @@ mod tests {
         v.extend_from_slice(&1u64.to_le_bytes());
         v.extend_from_slice(&2u64.to_le_bytes());
         // kv #1: general.architecture = "qwen3" (string, type=8)
-        write_string(&mut v, "general.architecture");
+        write_string(&mut v, keys::ARCHITECTURE);
         v.extend_from_slice(&8u32.to_le_bytes());
         write_string(&mut v, "qwen3");
         // kv #2: qwen3.block_count = 36 (u32, type=4)

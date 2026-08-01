@@ -1,7 +1,7 @@
 //! KV cache sizing for MLA (multi-head latent attention) architectures
 //! (glm-dsa), which carry no V cache at all.
 
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 
 use crate::{kv, types::EstimatorInputs};
 
@@ -31,15 +31,11 @@ pub(crate) fn mla_kv_per_token(
     let bytes_k = kv::kv_bytes_per_element(inputs.cache_type_k.unwrap_or("f16"));
 
     let key_length = summary
-        .metadata
-        .get(&*format!("{arch}.attention.key_length"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_key_length(arch))
         .map(u64::from)
         .unwrap_or(MLA_DEFAULT_KEY_LENGTH);
     let nextn_layers = summary
-        .metadata
-        .get(&*format!("{arch}.nextn_predict_layers"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::nextn_predict_layers(arch))
         .unwrap_or(0);
     let kv_layers = n_layers.saturating_sub(nextn_layers) as u64;
 
@@ -67,9 +63,7 @@ pub(crate) fn mla_kv_per_token(
 /// 32768, 65536, and 131072.
 fn indexer_cache_bytes_per_token(summary: &GgufSummary, arch: &str, span: u32) -> u64 {
     let Some(key_length) = summary
-        .metadata
-        .get(&*format!("{arch}.attention.indexer.key_length"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_indexer_key_length(arch))
         .map(u64::from)
     else {
         return 0;
@@ -96,7 +90,10 @@ const INDEXER_CACHE_BYTES_PER_ELEMENT: u64 = 2;
 
 #[cfg(test)]
 mod tests {
-    use ananke_gguf::types::{GgufSummary, GgufValue};
+    use ananke_gguf::{
+        keys,
+        types::{GgufSummary, GgufValue},
+    };
     use smol_str::SmolStr;
 
     use crate::{moe::estimate::estimate, types::EstimatorInputs};
@@ -110,7 +107,7 @@ mod tests {
         // that must NOT be priced.
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("glm-dsa".into()),
         );
         metadata.insert(SmolStr::new("glm-dsa.block_count"), GgufValue::U32(79));
@@ -193,7 +190,7 @@ mod tests {
             metadata.insert(SmolStr::new(key), GgufValue::U32(value));
         }
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("glm-dsa".into()),
         );
         // Indexer weights on layers 0, 1, 2 and every fourth from 6 to 78 —

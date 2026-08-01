@@ -25,7 +25,7 @@
 //! average: the average times the card count is the same total either way.
 
 use ananke_config::placement::SplitMode;
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 
 use crate::{
     tuning::{
@@ -102,13 +102,7 @@ impl Columns {
     ) -> Self {
         let arch = summary.architecture.as_str();
         let ubatch = f64::from(inputs.ubatch.unwrap_or(DEFAULT_UBATCH).max(1));
-        let n_embd = f64::from(
-            summary
-                .metadata
-                .get(&smol_str::SmolStr::new(format!("{arch}.embedding_length")))
-                .and_then(|v| v.as_u32())
-                .unwrap_or(0),
-        );
+        let n_embd = f64::from(summary.meta_u32(&keys::embedding_length(arch)).unwrap_or(0));
         let n_vocab = summary
             .tensors
             .get("output.weight")

@@ -1,7 +1,7 @@
 //! KV cache sizing for llama-family models, including the SWA and shared-KV
 //! variants (Gemma 2/3/4, LFM2).
 
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 
 use crate::{kv, recurrent, types::EstimatorInputs};
 
@@ -62,12 +62,8 @@ pub(crate) fn compute_kv_per_token(
     // which omits the KV key entirely).
     let kv_heads_raw: Vec<u32> = summary
         .metadata
-        .get(&*format!("{arch}.attention.head_count_kv"))
-        .or_else(|| {
-            summary
-                .metadata
-                .get(&*format!("{arch}.attention.head_count"))
-        })
+        .get(&keys::attention_head_count_kv(arch))
+        .or_else(|| summary.metadata.get(&keys::attention_head_count(arch)))
         .and_then(|v| v.as_u32_array())
         .unwrap_or_default();
     let kv_heads_per_layer: Vec<u32> = if kv_heads_raw.len() == 1 {
@@ -86,40 +82,28 @@ pub(crate) fn compute_kv_per_token(
     // falling back to the classic 128 (which is only correct for models
     // whose ratio happens to be 128 — e.g. lfm2's is 64).
     let derived_head_dim = summary
-        .metadata
-        .get(&*format!("{arch}.embedding_length"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::embedding_length(arch))
         .zip(
             summary
-                .metadata
-                .get(&*format!("{arch}.attention.head_count"))
-                .and_then(|v| v.as_u32())
+                .meta_u32(&keys::attention_head_count(arch))
                 .filter(|&h| h > 0),
         )
         .map(|(embd, heads)| (embd / heads) as u64)
         .unwrap_or(128);
     let key_length = summary
-        .metadata
-        .get(&*format!("{arch}.attention.key_length"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_key_length(arch))
         .map(|v| v as u64)
         .unwrap_or(derived_head_dim);
     let value_length = summary
-        .metadata
-        .get(&*format!("{arch}.attention.value_length"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_value_length(arch))
         .map(|v| v as u64)
         .unwrap_or(derived_head_dim);
     let key_length_swa = summary
-        .metadata
-        .get(&*format!("{arch}.attention.key_length_swa"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_key_length_swa(arch))
         .map(|v| v as u64)
         .unwrap_or(key_length);
     let value_length_swa = summary
-        .metadata
-        .get(&*format!("{arch}.attention.value_length_swa"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_value_length_swa(arch))
         .map(|v| v as u64)
         .unwrap_or(value_length);
     let per_head_full = ((key_length as f64 * bytes_k) + (value_length as f64 * bytes_v)) as u64;
@@ -132,13 +116,11 @@ pub(crate) fn compute_kv_per_token(
     //      bakes the pattern in (gemma2 / gemma3).
     //   3. No SWA — every layer is full attention.
     let sliding_window = summary
-        .metadata
-        .get(&*format!("{arch}.attention.sliding_window"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_sliding_window(arch))
         .map(|v| v as u64);
     let pattern_mask: Option<Vec<bool>> = summary
         .metadata
-        .get(&*format!("{arch}.attention.sliding_window_pattern"))
+        .get(&keys::attention_sliding_window_pattern(arch))
         .and_then(|v| v.as_bool_array())
         .filter(|m| m.len() == n_layers as usize);
     let is_swa_layer: Vec<bool> = match (&pattern_mask, hardcoded_swa_group_size(arch)) {
@@ -156,9 +138,7 @@ pub(crate) fn compute_kv_per_token(
     // layers' KV and contribute no additional cache bytes. Absent key =
     // 0 shared = every layer unique.
     let shared_kv_layers = summary
-        .metadata
-        .get(&*format!("{arch}.attention.shared_kv_layers"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::attention_shared_kv_layers(arch))
         .unwrap_or(0);
     let unique_kv_count = (n_layers as u64).saturating_sub(shared_kv_layers as u64);
 
@@ -221,7 +201,10 @@ pub(crate) fn compute_kv_per_token(
 
 #[cfg(test)]
 mod tests {
-    use ananke_gguf::types::{GgufSummary, GgufValue};
+    use ananke_gguf::{
+        keys,
+        types::{GgufSummary, GgufValue},
+    };
     use smol_str::SmolStr;
 
     use crate::{
@@ -260,7 +243,7 @@ mod tests {
         }
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("lfm2".into()),
         );
         metadata.insert(SmolStr::new("lfm2.block_count"), GgufValue::U32(16));
@@ -320,7 +303,7 @@ mod tests {
         }
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("talkie".into()),
         );
         metadata.insert(SmolStr::new("talkie.block_count"), GgufValue::U32(2));
@@ -360,7 +343,7 @@ mod tests {
         let n_layers = is_swa.len() as u32;
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String("gemma4".into()),
         );
         metadata.insert(SmolStr::new("gemma4.block_count"), GgufValue::U32(n_layers));

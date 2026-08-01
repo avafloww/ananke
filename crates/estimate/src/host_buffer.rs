@@ -68,7 +68,7 @@
 // its own doc comment — how many models it rests on, and where it is weak.
 
 use ananke_config::flags::cache_type;
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 
 pub use crate::tuning::DEFAULT_CACHE_RAM_MB;
 use crate::{
@@ -501,7 +501,7 @@ fn gemma_e_variant_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64) -> u6
     if !crate::compute_buffer::is_gemma_e_variant(summary) {
         return 0;
     }
-    let layers = meta_u32(summary, arch, "block_count").unwrap_or(0) as u64;
+    let layers = summary.meta_u32(&keys::block_count(arch)).unwrap_or(0) as u64;
     GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN * layers * n_tokens
 }
 
@@ -521,8 +521,10 @@ fn extra_full_masks(arch: &str) -> u64 {
 /// service that lowers `ubatch_size` crosses back over it and the term
 /// reappears, so it cannot simply be ignored.
 fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64, devices: u32) -> u64 {
-    let experts = meta_u32(summary, arch, "expert_count").unwrap_or(0) as u64;
-    let used = meta_u32(summary, arch, "expert_used_count").unwrap_or(0) as u64;
+    let experts = summary.meta_u32(&keys::expert_count(arch)).unwrap_or(0) as u64;
+    let used = summary
+        .meta_u32(&keys::expert_used_count(arch))
+        .unwrap_or(0) as u64;
     if experts == 0 || used == 0 {
         return 0;
     }
@@ -561,14 +563,6 @@ fn ik_moe_rate(arch: &str, devices: u32) -> u64 {
         .unwrap_or(crate::tuning::IK_MOE_RATE_DEFAULT)
 }
 
-/// Read a `{arch}.{key}` u32 from the GGUF metadata.
-fn meta_u32(summary: &GgufSummary, arch: &str, key: &str) -> Option<u32> {
-    summary
-        .metadata
-        .get(&smol_str::SmolStr::new(format!("{arch}.{key}")))
-        .and_then(|v| v.as_u32())
-}
-
 /// Round a cell count up to the KV cache's padding granularity.
 fn pad_to_kv_cache(cells: u64) -> u64 {
     cells.div_ceil(KV_CACHE_PAD).max(1) * KV_CACHE_PAD
@@ -577,7 +571,7 @@ fn pad_to_kv_cache(cells: u64) -> u64 {
 /// The model's hidden size. Zero when absent, which drops the hidden-input
 /// term rather than guessing a width.
 fn embedding_length(summary: &GgufSummary, arch: &str) -> u64 {
-    meta_u32(summary, arch, "embedding_length").unwrap_or(0) as u64
+    summary.meta_u32(&keys::embedding_length(arch)).unwrap_or(0) as u64
 }
 
 /// Architectures whose attention compresses the KV cache into a latent
@@ -597,7 +591,9 @@ pub(crate) fn is_mla(arch: &str) -> bool {
 
 /// The model's sliding-window size, when it advertises one.
 fn sliding_window(summary: &GgufSummary, arch: &str) -> Option<u32> {
-    meta_u32(summary, arch, "attention.sliding_window").filter(|w| *w > 0)
+    summary
+        .meta_u32(&keys::attention_sliding_window(arch))
+        .filter(|w| *w > 0)
 }
 
 #[cfg(test)]
@@ -642,15 +638,9 @@ mod tests {
 
     fn summary(arch: &str, n_embd: u32, layers: u32, swa: Option<u32>) -> GgufSummary {
         let mut metadata = std::collections::BTreeMap::new();
-        metadata.insert(
-            SmolStr::new(format!("{arch}.embedding_length")),
-            GgufValue::U32(n_embd),
-        );
+        metadata.insert(keys::embedding_length(arch), GgufValue::U32(n_embd));
         if let Some(w) = swa {
-            metadata.insert(
-                SmolStr::new(format!("{arch}.attention.sliding_window")),
-                GgufValue::U32(w),
-            );
+            metadata.insert(keys::attention_sliding_window(arch), GgufValue::U32(w));
         }
         GgufSummary {
             path: std::path::PathBuf::from("/m.gguf"),

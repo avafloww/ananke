@@ -27,7 +27,7 @@
 //! (architecture, slots, rollback) combinations in the measurement set and
 //! fails `emit` if any of them moves.
 
-use ananke_gguf::GgufSummary;
+use ananke_gguf::{GgufSummary, keys};
 
 use crate::{tuning::SPEC_RECURRENT_ROLLBACK_DEPTH, types::EstimatorInputs};
 
@@ -66,37 +66,28 @@ pub(crate) fn state_bytes(
 pub(crate) fn context_layer_span(summary: &GgufSummary, arch: &str) -> u32 {
     let blocks = summary.block_count.unwrap_or(0);
     let nextn = summary
-        .metadata
-        .get(&*format!("{arch}.nextn_predict_layers"))
-        .and_then(|v| v.as_u32())
+        .meta_u32(&keys::nextn_predict_layers(arch))
         .unwrap_or(0);
     blocks.saturating_sub(nextn)
 }
 
 /// `n_embd_r + n_embd_s`: the elements one recurrent layer holds per copy.
 fn per_layer_elements(summary: &GgufSummary, arch: &str) -> u64 {
-    let meta = |key: &str| {
-        summary
-            .metadata
-            .get(&*format!("{arch}.{key}"))
-            .and_then(|v| v.as_u32())
-            .map(u64::from)
-            .unwrap_or(0)
-    };
-    let d_conv = meta("ssm.conv_kernel");
+    let meta = |key| summary.meta_u64(&key).unwrap_or(0);
+    let d_conv = meta(keys::ssm_conv_kernel(arch));
     if d_conv > 0 {
-        let d_inner = meta("ssm.inner_size");
-        let d_state = meta("ssm.state_size");
-        let n_group = meta("ssm.group_count");
+        let d_inner = meta(keys::ssm_inner_size(arch));
+        let d_state = meta(keys::ssm_state_size(arch));
+        let n_group = meta(keys::ssm_group_count(arch));
         let n_embd_r = (d_conv - 1) * (d_inner + 2 * n_group * d_state);
         let n_embd_s = d_state * d_inner;
         return n_embd_r + n_embd_s;
     }
     // A short-convolution block keeps `l_cache - 1` past activations of the
     // full hidden width and no SSM state at all.
-    let l_cache = meta("shortconv.l_cache");
+    let l_cache = meta(keys::shortconv_l_cache(arch));
     if l_cache > 1 {
-        return meta("embedding_length") * (l_cache - 1);
+        return meta(keys::embedding_length(arch)) * (l_cache - 1);
     }
     0
 }
@@ -110,7 +101,10 @@ const F32_BYTES: u64 = 4;
 mod tests {
     use std::{collections::BTreeMap, path::Path};
 
-    use ananke_gguf::types::{GgufSummary, GgufValue};
+    use ananke_gguf::{
+        keys::suffix,
+        types::{GgufSummary, GgufValue},
+    };
     use smol_str::SmolStr;
 
     use super::*;
@@ -122,29 +116,23 @@ mod tests {
             41,
             1,
             &[
-                ("ssm.conv_kernel", 4),
-                ("ssm.inner_size", 4096),
-                ("ssm.state_size", 128),
-                ("ssm.group_count", 16),
+                (suffix::SSM_CONV_KERNEL, 4),
+                (suffix::SSM_INNER_SIZE, 4096),
+                (suffix::SSM_STATE_SIZE, 128),
+                (suffix::SSM_GROUP_COUNT, 16),
             ],
         )
     }
 
-    fn summary_with(arch: &str, blocks: u32, nextn: u32, keys: &[(&str, u32)]) -> GgufSummary {
+    fn summary_with(arch: &str, blocks: u32, nextn: u32, entries: &[(&str, u32)]) -> GgufSummary {
         let mut metadata = BTreeMap::new();
         metadata.insert(
-            SmolStr::new("general.architecture"),
+            SmolStr::new(keys::ARCHITECTURE),
             GgufValue::String(arch.into()),
         );
-        metadata.insert(
-            SmolStr::new(format!("{arch}.nextn_predict_layers")),
-            GgufValue::U32(nextn),
-        );
-        for (key, value) in keys {
-            metadata.insert(
-                SmolStr::new(format!("{arch}.{key}")),
-                GgufValue::U32(*value),
-            );
+        metadata.insert(keys::nextn_predict_layers(arch), GgufValue::U32(nextn));
+        for (key, value) in entries {
+            metadata.insert(keys::scoped(arch, key), GgufValue::U32(*value));
         }
         GgufSummary {
             path: "/fake".into(),
@@ -236,7 +224,10 @@ mod tests {
             "lfm2",
             16,
             0,
-            &[("shortconv.l_cache", 3), ("embedding_length", 1024)],
+            &[
+                (suffix::SHORTCONV_L_CACHE, 3),
+                (suffix::EMBEDDING_LENGTH, 1024),
+            ],
         );
         let empty: Vec<String> = Vec::new();
         let bytes = state_bytes(&s, "lfm2", 10, &inputs(Some(1), false, &empty));
@@ -245,7 +236,7 @@ mod tests {
 
     #[test]
     fn a_pure_attention_model_has_no_recurrent_state() {
-        let s = summary_with("llama", 32, 0, &[("embedding_length", 4096)]);
+        let s = summary_with("llama", 32, 0, &[(suffix::EMBEDDING_LENGTH, 4096)]);
         let empty: Vec<String> = Vec::new();
         assert_eq!(
             state_bytes(&s, "llama", 0, &inputs(Some(1), false, &empty)),
