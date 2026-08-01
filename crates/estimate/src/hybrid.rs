@@ -220,28 +220,13 @@ mod tests {
         }
     }
 
-    fn inputs<'a>(context: u32, empty: &'a [String]) -> EstimatorInputs<'a> {
+    fn inputs<'a>(context: u32) -> EstimatorInputs<'a> {
         EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
-            name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context,
-            ubatch: None,
+            name: "demo",
             cache_type_k: Some("f16"),
             cache_type_v: Some("f16"),
-            override_tensor: empty,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         }
     }
 
@@ -258,8 +243,7 @@ mod tests {
         //   Folded into per-token at ctx 4096: 156_893_184 / 4096 = 38304.
         // kv_per_token = 32768 + 38304 = 71072.
         let s = fake_hybrid_summary(&Architecture::Qwen35, 64, Some(4));
-        let empty: Vec<String> = Vec::new();
-        let e = estimate(&s, &inputs(4096, &empty));
+        let e = estimate(&s, &inputs(4096));
         assert_eq!(e.kv_per_token, 71072);
     }
 
@@ -267,8 +251,7 @@ mod tests {
     fn jamba_kv_no_interval_scales_all_layers() {
         // No full_attention_interval key → defaults to 1 (all layers).
         let s = fake_hybrid_summary(&Architecture::Jamba, 80, None);
-        let empty: Vec<String> = Vec::new();
-        let e = estimate(&s, &inputs(4096, &empty));
+        let e = estimate(&s, &inputs(4096));
         // 80 layers × 2048 bytes = 163840.
         assert_eq!(e.kv_per_token, 163840);
     }

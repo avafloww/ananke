@@ -6,6 +6,7 @@
 //! a property of the configuration, not of the estimate.
 
 use ananke_config::placement::PlacementInputs;
+use ananke_estimate::{Fork, Speculation};
 
 use crate::{config::ServiceConfig, estimator::EstimatorInputs};
 
@@ -44,10 +45,18 @@ pub fn estimator_inputs(svc: &ServiceConfig) -> Option<EstimatorInputs<'_>> {
         cache_type_v: lc.cache_type_v.as_deref(),
         override_tensor: &lc.override_tensor,
         compute_buffer_mb: lc.estimation.compute_buffer_mb,
-        mtp: lc.spec_type.as_deref() == Some("draft-mtp"),
-        draft_model: lc.draft_model.as_deref(),
-        ik_llama: lc.runtime.ik().is_some(),
-        ik_dsa: lc.runtime.ik().is_some_and(|ik| ik.dsa),
+        speculation: match (
+            lc.spec_type.as_deref() == Some("draft-mtp"),
+            lc.draft_model.as_deref(),
+        ) {
+            (true, Some(draft)) => Speculation::DraftMtp(draft),
+            (true, None) => Speculation::EmbeddedMtp,
+            (false, _) => Speculation::None,
+        },
+        fork: match lc.runtime.ik() {
+            Some(ik) => Fork::Ik { dsa: ik.dsa },
+            None => Fork::Mainline,
+        },
         parallel: extra_arg_value(&svc.extra_args, &["-np", "--parallel"])
             .and_then(|v| v.parse().ok())
             .or(lc.parallel),

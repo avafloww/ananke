@@ -12,7 +12,7 @@
 //! difference between +1.1% and −0.1%.
 
 use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode};
-use ananke_estimate::EstimatorInputs;
+use ananke_estimate::{EstimatorInputs, Fork, Speculation};
 use ananke_measure::record::Status;
 use ananke_placement::{
     Corrections,
@@ -84,12 +84,20 @@ pub fn estimator_inputs<'a>(record: &'a Record, model: &'a std::path::Path) -> E
         cache_type_v: Some(f.kv_type.name()),
         override_tensor: &[],
         compute_buffer_mb: None,
-        mtp: f.spec_type.is_some(),
-        draft_model: f.draft.as_deref().map(std::path::Path::new),
-        ik_llama: f.runtime_is_ik(),
-        // The fork's sparse-attention path is a separate flag, and the campaign
-        // runs it only for the architecture that has one.
-        ik_dsa: f.runtime_is_ik() && record.parsed.arch == "glm-dsa",
+        speculation: match (f.spec_type.is_some(), f.draft.as_deref()) {
+            (true, Some(draft)) => Speculation::DraftMtp(std::path::Path::new(draft)),
+            (true, None) => Speculation::EmbeddedMtp,
+            (false, _) => Speculation::None,
+        },
+        fork: if f.runtime_is_ik() {
+            // The fork's sparse-attention path is a separate flag, and the
+            // campaign runs it only for the architecture that has one.
+            Fork::Ik {
+                dsa: record.parsed.arch == "glm-dsa",
+            }
+        } else {
+            Fork::Mainline
+        },
         parallel: Some(f.parallel),
         flash_attn: Some(f.flash_attn_on()),
         kv_unified: Some(f.kv_unified),

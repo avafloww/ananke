@@ -219,7 +219,7 @@ fn coefficients_for(
         SplitMode::Tensor | SplitMode::Row => "tensor",
         SplitMode::Layer => "layer",
     };
-    let runtime = inputs.ik_llama.then_some("ik");
+    let runtime = inputs.fork.is_ik().then_some("ik");
     let matches = |entry: &&'static crate::tuning::ComputeEntry| {
         entry.archs.contains(&arch.as_str()) && entry.variant == variant && entry.split == split
     };

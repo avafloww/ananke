@@ -97,7 +97,10 @@ mod tests {
     };
     use smol_str::SmolStr;
 
-    use crate::{moe::estimate::estimate, types::EstimatorInputs};
+    use crate::{
+        moe::estimate::estimate,
+        types::{EstimatorInputs, Fork},
+    };
 
     #[test]
     fn glm_dsa_kv_is_key_only_and_excludes_nextn_layers() {
@@ -137,28 +140,11 @@ mod tests {
             architecture: Architecture::GlmDsa,
             shards: vec!["/fake".into()],
         };
-        let empty: Vec<String> = Vec::new();
         let mk = |ctk: Option<&'static str>| EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context: 32768,
-            ubatch: None,
             cache_type_k: ctk,
-            cache_type_v: None,
-            override_tensor: &empty,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         };
         // 78 KV layers × 576 elems × 2 bytes (f16) = 89856 bytes/token.
         // The naive K+V formula would give 79 × (576 + 512) × 2 = 171904.
@@ -219,28 +205,12 @@ mod tests {
             architecture: Architecture::GlmDsa,
             shards: vec!["/fake".into()],
         };
-        let empty: Vec<String> = Vec::new();
         let at = |context: u32| EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
-            name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context,
-            ubatch: None,
+            name: "demo",
             cache_type_k: Some("f16"),
-            cache_type_v: None,
-            override_tensor: &empty,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: true,
-            ik_dsa: true,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            fork: Fork::Ik { dsa: true },
+            ..EstimatorInputs::empty(Path::new("/fake"))
         };
         // 21 indexing layers × 128 × 2 bytes = 5376 bytes/token on top of the
         // 89856 the main cache costs.

@@ -82,7 +82,7 @@ fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32) -> u64 {
 /// allocation — the distinction the `Charge` split exists to make. Left as runtime, the draft's weights
 /// would inflate every host sample of an MTP service.
 pub fn mtp_weight_bytes(draft: Option<&GgufSummary>, inputs: &EstimatorInputs<'_>) -> u64 {
-    if !inputs.mtp {
+    if !inputs.speculation.is_mtp() {
         return 0;
     }
     draft.map(draft_model_gpu_weight_bytes).unwrap_or(0)
@@ -106,7 +106,7 @@ pub fn mtp_overhead_bytes(
     draft: Option<&GgufSummary>,
     inputs: &EstimatorInputs<'_>,
 ) -> u64 {
-    if !inputs.mtp {
+    if !inputs.speculation.is_mtp() {
         return 0;
     }
     if let Some(draft) = draft {
@@ -220,6 +220,7 @@ mod tests {
     use smol_str::SmolStr;
 
     use super::*;
+    use crate::types::Speculation;
 
     fn qwen35_summary(arch: &Architecture, nextn: u32, kv_heads: u32) -> GgufSummary {
         let mut metadata = BTreeMap::new();
@@ -245,37 +246,21 @@ mod tests {
         }
     }
 
-    fn inputs(context: u32, mtp: bool, empty: &[String]) -> EstimatorInputs<'_> {
+    fn inputs<'a>(context: u32, speculation: Speculation<'a>) -> EstimatorInputs<'a> {
         EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
-            name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context,
-            ubatch: None,
             cache_type_k: Some("q8_0"),
             cache_type_v: Some("q8_0"),
-            override_tensor: empty,
-            compute_buffer_mb: None,
-            mtp,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            speculation,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         }
     }
 
     #[test]
     fn zero_when_mtp_disabled() {
         let s = qwen35_summary(&Architecture::Qwen35, 1, 4);
-        let empty: Vec<String> = Vec::new();
         assert_eq!(
-            mtp_overhead_bytes(&s, None, &inputs(262144, false, &empty)),
+            mtp_overhead_bytes(&s, None, &inputs(262144, Speculation::None)),
             0
         );
     }
@@ -284,9 +269,8 @@ mod tests {
     fn zero_when_no_mtp_head() {
         // MTP requested but the model has nextn_predict_layers = 0.
         let s = qwen35_summary(&Architecture::Qwen35, 0, 4);
-        let empty: Vec<String> = Vec::new();
         assert_eq!(
-            mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty)),
+            mtp_overhead_bytes(&s, None, &inputs(262144, Speculation::EmbeddedMtp)),
             0
         );
     }
@@ -308,14 +292,13 @@ mod tests {
             // prod-qwen36-35b-a3b: `is 1320.02 MiB`, of which 1024 is cache.
             ("qwen35moe", 2, 2048, 524288, 2, 1320, 1024),
         ];
-        let empty: Vec<String> = Vec::new();
         for (arch, kv_heads, n_embd, context, slots, reported, cache) in cells {
             let mut s = qwen35_summary(&Architecture::from(arch), 1, kv_heads);
             s.metadata.insert(
                 keys::embedding_length(&Architecture::from(arch)),
                 GgufValue::U32(n_embd),
             );
-            let mut i = inputs(context, true, &empty);
+            let mut i = inputs(context, Speculation::EmbeddedMtp);
             i.parallel = Some(slots);
             i.visible_devices = 2;
             let mib = mtp_overhead_bytes(&s, None, &i) / (1024 * 1024);
@@ -351,8 +334,8 @@ mod tests {
         // The draft context always caches in f16. A q8_0 *main* cache — which
         // `inputs` sets — must not shrink this term.
         let s = qwen35_summary(&Architecture::Qwen35, 1, 4);
-        let empty: Vec<String> = Vec::new();
-        let mib = mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty)) / (1024 * 1024);
+        let mib =
+            mtp_overhead_bytes(&s, None, &inputs(262144, Speculation::EmbeddedMtp)) / (1024 * 1024);
         // nextn 1 x 4 heads x (256 + 256) x 2 bytes x 262144 = 1024 MiB of
         // cache alone, which a q8_0 rate would have cut to 544.
         assert!(mib >= 1024, "the draft cache must be priced at f16: {mib}");
@@ -365,9 +348,8 @@ mod tests {
     #[test]
     fn overhead_does_not_scale_with_slots() {
         let s = qwen35_summary(&Architecture::Qwen35, 1, 4);
-        let empty: Vec<String> = Vec::new();
         let at = |slots: u32| {
-            let mut i = inputs(262144, true, &empty);
+            let mut i = inputs(262144, Speculation::EmbeddedMtp);
             i.parallel = Some(slots);
             i.kv_unified = Some(true);
             mtp_overhead_bytes(&s, None, &i)
@@ -416,10 +398,12 @@ mod tests {
         // draft it is the draft's GPU-resident weights plus a compute term.
         let target = qwen35_summary(&Architecture::Gemma4, 0, 4);
         let draft = draft_summary(144, 108);
-        let empty: Vec<String> = Vec::new();
         let at = |context: u32| {
-            mtp_overhead_bytes(&target, Some(&draft), &inputs(context, true, &empty))
-                / (1024 * 1024)
+            mtp_overhead_bytes(
+                &target,
+                Some(&draft),
+                &inputs(context, Speculation::EmbeddedMtp),
+            ) / (1024 * 1024)
         };
         let expected = |context: u64| {
             108 + DRAFT_MODEL_COMPUTE_MIB + DRAFT_MODEL_COMPUTE_MIB_PER_1K * context / 1024
@@ -445,9 +429,8 @@ mod tests {
         // target's cache and so has none of its own to replicate per slot.
         let target = qwen35_summary(&Architecture::Gemma4, 0, 4);
         let draft = draft_summary(144, 108);
-        let empty: Vec<String> = Vec::new();
         let at = |slots: u32| {
-            let mut i = inputs(32768, true, &empty);
+            let mut i = inputs(32768, Speculation::EmbeddedMtp);
             i.parallel = Some(slots);
             mtp_overhead_bytes(&target, Some(&draft), &i)
         };
@@ -458,9 +441,8 @@ mod tests {
     fn separate_draft_ignored_when_mtp_disabled() {
         let target = qwen35_summary(&Architecture::Gemma4, 0, 4);
         let draft = draft_summary(144, 108);
-        let empty: Vec<String> = Vec::new();
         assert_eq!(
-            mtp_overhead_bytes(&target, Some(&draft), &inputs(204800, false, &empty)),
+            mtp_overhead_bytes(&target, Some(&draft), &inputs(204800, Speculation::None)),
             0
         );
     }

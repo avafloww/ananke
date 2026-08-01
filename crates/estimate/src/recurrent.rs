@@ -46,7 +46,7 @@ pub(crate) fn state_bytes(
         return 0;
     }
     // A rollback depth is only allocated when something can roll back.
-    let rollback = if inputs.mtp {
+    let rollback = if inputs.speculation.is_mtp() {
         SPEC_RECURRENT_ROLLBACK_DEPTH
     } else {
         0
@@ -110,6 +110,7 @@ mod tests {
     use smol_str::SmolStr;
 
     use super::*;
+    use crate::types::Speculation;
 
     /// Qwen3.6-35B-A3B's recurrent shape, as its GGUF declares it.
     fn qwen35moe() -> GgufSummary {
@@ -152,28 +153,18 @@ mod tests {
         }
     }
 
-    fn inputs<'a>(parallel: Option<u32>, mtp: bool, empty: &'a [String]) -> EstimatorInputs<'a> {
+    fn inputs(parallel: Option<u32>, mtp: bool) -> EstimatorInputs<'static> {
         EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
-            name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context: 32768,
-            ubatch: None,
             cache_type_k: Some("q8_0"),
             cache_type_v: Some("q8_0"),
-            override_tensor: empty,
-            compute_buffer_mb: None,
-            mtp,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
+            speculation: if mtp {
+                Speculation::EmbeddedMtp
+            } else {
+                Speculation::None
+            },
             parallel,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         }
     }
 
@@ -184,8 +175,7 @@ mod tests {
         // — 30 recurrent layers of the 40 the context spans.
         let s = qwen35moe();
         assert_eq!(context_layer_span(&s), 40);
-        let empty: Vec<String> = Vec::new();
-        let bytes = state_bytes(&s, 30, &inputs(Some(1), false, &empty));
+        let bytes = state_bytes(&s, 30, &inputs(Some(1), false));
         // R: (4-1) × (4096 + 2×16×128) = 24576 elements → 2.8125 MiB over 30.
         // S: 128 × 4096 = 524288 elements → 60 MiB over 30.
         assert_eq!(
@@ -200,9 +190,8 @@ mod tests {
         // recurrent module growing with the slot count: 62.81, 125.62, 251.25
         // MiB at np 1, 2, 4. A stream count would have collapsed all three.
         let s = qwen35moe();
-        let empty: Vec<String> = Vec::new();
         let at = |np: u32| {
-            let mut i = inputs(Some(np), false, &empty);
+            let mut i = inputs(Some(np), false);
             i.kv_unified = Some(true);
             state_bytes(&s, 30, &i)
         };
@@ -216,9 +205,8 @@ mod tests {
         // measures 502.50 MiB against 62.81 at one slot without it, exactly
         // `2 × (3 + 1)`.
         let s = qwen35moe();
-        let empty: Vec<String> = Vec::new();
-        let plain = state_bytes(&s, 30, &inputs(Some(1), false, &empty));
-        let spec = state_bytes(&s, 30, &inputs(Some(2), true, &empty));
+        let plain = state_bytes(&s, 30, &inputs(Some(1), false));
+        let spec = state_bytes(&s, 30, &inputs(Some(2), true));
         assert_eq!(spec, plain * 2 * (SPEC_RECURRENT_ROLLBACK_DEPTH + 1));
     }
 
@@ -235,8 +223,7 @@ mod tests {
                 (suffix::EMBEDDING_LENGTH, 1024),
             ],
         );
-        let empty: Vec<String> = Vec::new();
-        let bytes = state_bytes(&s, 10, &inputs(Some(1), false, &empty));
+        let bytes = state_bytes(&s, 10, &inputs(Some(1), false));
         assert_eq!(bytes, 10 * 1024 * 2 * 4);
     }
 
@@ -248,10 +235,9 @@ mod tests {
             0,
             &[(suffix::EMBEDDING_LENGTH, 4096)],
         );
-        let empty: Vec<String> = Vec::new();
-        assert_eq!(state_bytes(&s, 0, &inputs(Some(1), false, &empty)), 0);
+        assert_eq!(state_bytes(&s, 0, &inputs(Some(1), false)), 0);
         // Even if a caller miscounted the layers, an architecture with neither
         // an `ssm.*` block nor a short convolution allocates nothing.
-        assert_eq!(state_bytes(&s, 32, &inputs(Some(1), false, &empty)), 0);
+        assert_eq!(state_bytes(&s, 32, &inputs(Some(1), false)), 0);
     }
 }

@@ -18,7 +18,7 @@ pub mod types;
 use ananke_fs::Fs;
 use ananke_gguf::{self, Architecture, GgufSummary};
 use tracing::{info, warn};
-pub use types::{Estimate, EstimatorInputs, ExpertKind, ExpertTensor, NonLayer};
+pub use types::{Estimate, EstimatorInputs, ExpertKind, ExpertTensor, Fork, NonLayer, Speculation};
 
 /// One per-architecture family, paired with the `general.architecture`
 /// values it accepts and the function that produces an `Estimate` for
@@ -150,8 +150,8 @@ pub fn estimate_with_summary(
     // draft GGUF is configured via `-md` — that file's resident weights. It
     // applies uniformly to whichever family dispatched above rather than
     // living in each one.
-    let draft_summary = match inputs.draft_model {
-        Some(path) if inputs.mtp => match ananke_gguf::read(fs, path) {
+    let draft_summary = match inputs.speculation.draft_model() {
+        Some(path) if inputs.speculation.is_mtp() => match ananke_gguf::read(fs, path) {
             Ok(s) => Some(s),
             Err(e) => {
                 warn!(
@@ -194,7 +194,7 @@ pub fn estimate_with_summary(
         "post-dispatch estimate",
     );
 
-    if inputs.ik_llama {
+    if inputs.fork.is_ik() {
         drop_mtp_head_blocks(&mut est, &summary);
     }
 
@@ -294,28 +294,13 @@ mod tests {
 
     use super::*;
 
-    fn inputs_for<'a>(empty_override: &'a [String]) -> EstimatorInputs<'a> {
+    fn inputs_for() -> EstimatorInputs<'static> {
         EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context: 4096,
-            ubatch: None,
             cache_type_k: Some("f16"),
             cache_type_v: Some("f16"),
-            override_tensor: empty_override,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         }
     }
 
@@ -336,8 +321,7 @@ mod tests {
             architecture: Architecture::Qwen3,
             shards: vec!["/fake".into()],
         };
-        let empty: Vec<String> = Vec::new();
-        let e = dispatch(&summary, &inputs_for(&empty)).unwrap();
+        let e = dispatch(&summary, &inputs_for()).unwrap();
         assert_eq!(e.architecture, Architecture::Qwen3);
     }
 
@@ -361,8 +345,7 @@ mod tests {
             architecture: Architecture::from("novel-arch"),
             shards: vec!["/fake".into()],
         };
-        let empty: Vec<String> = Vec::new();
-        match dispatch(&summary, &inputs_for(&empty)) {
+        match dispatch(&summary, &inputs_for()) {
             Err(EstimatorError::UnknownArchitecture { architecture }) => {
                 assert_eq!(architecture, Architecture::from("novel-arch"));
             }

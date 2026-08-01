@@ -155,7 +155,7 @@ pub(crate) fn compute_kv_per_token(
     if context == 0 {
         return 0;
     }
-    let swa_capped = !inputs.ik_llama;
+    let swa_capped = !inputs.fork.is_ik();
     // With `kv_unified=true`, the non-SWA (full-attention) layers share a
     // unified cache of `context` cells across all slots. However, the SWA
     // layers are NOT unified — each slot gets its own window-sized cache, so
@@ -218,8 +218,7 @@ mod tests {
     #[test]
     fn kv_uses_arch_metadata() {
         let s = fake_summary();
-        let empty: Vec<String> = Vec::new();
-        let e = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        let e = estimate(&s, &inputs("f16", "f16", 4096));
         // n_layers=2, n_kv=4, k=v=128, 2 bytes/element (f16).
         // per_layer_kv = 4 × (128*2 + 128*2) = 4 × 512 = 2048 bytes.
         // kv_per_token = 2 × 2048 = 4096 bytes.
@@ -270,8 +269,7 @@ mod tests {
         };
 
         assert!(crate::llama::is_llama_family(&Architecture::Lfm2));
-        let empty: Vec<String> = Vec::new();
-        let e = estimate(&s, &inputs("f16", "f16", 16384, &empty));
+        let e = estimate(&s, &inputs("f16", "f16", 16384));
         // 5 attention layers (indices 2,5,8,11,14) × 8 kv-heads ×
         // (64 + 64) head dims × 2 bytes (f16) = 5 × 2048 = 10240 B/token.
         // Shortconv layers contribute exactly zero.
@@ -283,9 +281,8 @@ mod tests {
     #[test]
     fn kv_quantised_shrinks() {
         let s = fake_summary();
-        let empty: Vec<String> = Vec::new();
-        let e_q8 = estimate(&s, &inputs("q8_0", "q8_0", 4096, &empty));
-        let e_f16 = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        let e_q8 = estimate(&s, &inputs("q8_0", "q8_0", 4096));
+        let e_f16 = estimate(&s, &inputs("f16", "f16", 4096));
         assert!(e_q8.kv_per_token < e_f16.kv_per_token);
     }
 
@@ -328,8 +325,7 @@ mod tests {
             architecture: Architecture::Talkie,
             shards: vec!["/fake".into()],
         };
-        let empty: Vec<String> = Vec::new();
-        let e = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        let e = estimate(&s, &inputs("f16", "f16", 4096));
         // n_layers=2, n_kv=head_count=8, k=v=128, 2 bytes/element (f16).
         // per_layer_kv = 8 × (128*2 + 128*2) = 8 × 512 = 4096 bytes.
         // kv_per_token = 2 × 4096 = 8192 bytes.
@@ -394,8 +390,7 @@ mod tests {
         let mask = [true, true, false, true];
         let heads = [8u32, 8, 8, 8];
         let s = gemma4_summary(&mask, &heads, 1024);
-        let empty: Vec<String> = Vec::new();
-        let e = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        let e = estimate(&s, &inputs("f16", "f16", 4096));
 
         // Per-head bytes: f16 (2 b) × (512+512) = 2048 for full, × (256+256) = 1024 for SWA.
         // Layer cost (K+V bytes per layer at this context):
@@ -418,8 +413,7 @@ mod tests {
             SmolStr::new("gemma4.attention.shared_kv_layers"),
             GgufValue::U32(1),
         );
-        let empty: Vec<String> = Vec::new();
-        let e = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        let e = estimate(&s, &inputs("f16", "f16", 4096));
         // Total must drop by one SWA layer's worth (8_388_608 bytes).
         let total_kv = e.kv_per_token * e.context as u64;
         assert_eq!(total_kv, 92_274_688 - 8_388_608);
@@ -450,9 +444,8 @@ mod tests {
         let mask = [true, true, false, true];
         let heads = [8u32, 8, 8, 8];
         let s = gemma4_summary(&mask, &heads, 1024);
-        let empty: Vec<String> = Vec::new();
 
-        let no_kvu = inputs("f16", "f16", 65536, &empty);
+        let no_kvu = inputs("f16", "f16", 65536);
         let e_no_kvu = estimate(&s, &no_kvu);
         assert_eq!(
             e_no_kvu.kv_per_token * 65536,
@@ -463,7 +456,7 @@ mod tests {
         let with_kvu = EstimatorInputs {
             parallel: Some(4),
             kv_unified: Some(true),
-            ..inputs("f16", "f16", 65536, &empty)
+            ..inputs("f16", "f16", 65536)
         };
         let e_with_kvu = estimate(&s, &with_kvu);
         assert_eq!(

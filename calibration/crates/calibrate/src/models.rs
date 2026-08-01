@@ -11,7 +11,7 @@ use ananke_config::{
     flags::expert_offload::AUTO,
     placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode},
 };
-use ananke_estimate::EstimatorInputs;
+use ananke_estimate::{EstimatorInputs, Fork, Speculation};
 use serde::Deserialize;
 
 use crate::plan::library::Library;
@@ -129,6 +129,15 @@ impl ModelConfig {
         }
     }
 
+    /// Which llama.cpp this cell was measured against.
+    pub fn fork(&self) -> Fork {
+        if self.ik_llama {
+            Fork::Ik { dsa: self.ik_dsa }
+        } else {
+            Fork::Mainline
+        }
+    }
+
     /// The estimator inputs for this model.
     ///
     /// `model`, `mmproj`, and `draft` are passed in because `EstimatorInputs`
@@ -152,10 +161,12 @@ impl ModelConfig {
             cache_type_v: self.cache_type_v.as_deref(),
             override_tensor: &[],
             compute_buffer_mb: None,
-            mtp: self.mtp,
-            draft_model: draft,
-            ik_llama: self.ik_llama,
-            ik_dsa: self.ik_dsa,
+            speculation: match (self.mtp, draft) {
+                (true, Some(path)) => Speculation::DraftMtp(path),
+                (true, None) => Speculation::EmbeddedMtp,
+                (false, _) => Speculation::None,
+            },
+            fork: self.fork(),
             parallel: self.parallel,
             flash_attn: self.flash_attn,
             kv_unified: self.kv_unified,

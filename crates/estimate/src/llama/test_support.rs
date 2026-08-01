@@ -72,32 +72,12 @@ pub fn fake_summary() -> GgufSummary {
     }
 }
 
-pub fn inputs<'a>(
-    cache_k: &'a str,
-    cache_v: &'a str,
-    context: u32,
-    empty: &'a [String],
-) -> EstimatorInputs<'a> {
+pub fn inputs<'a>(cache_k: &'a str, cache_v: &'a str, context: u32) -> EstimatorInputs<'a> {
     EstimatorInputs {
-        host_resident_experts: false,
-        visible_devices: 1,
-        split_mode: ananke_config::placement::SplitMode::Layer,
-        name: "demo",
-        model: Path::new("/fake"),
-        mmproj: None,
         context,
-        ubatch: None,
+        name: "demo",
         cache_type_k: Some(cache_k),
         cache_type_v: Some(cache_v),
-        override_tensor: empty,
-        compute_buffer_mb: None,
-        mtp: false,
-        draft_model: None,
-        ik_llama: false,
-        ik_dsa: false,
-        parallel: None,
-        flash_attn: None,
-        kv_unified: None,
-        cache_ram_mb: None,
+        ..EstimatorInputs::empty(Path::new("/fake"))
     }
 }

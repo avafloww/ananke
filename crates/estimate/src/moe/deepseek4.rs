@@ -134,29 +134,12 @@ mod tests {
             architecture: Architecture::DeepSeek4,
             shards: vec!["/fake".into()],
         };
-
-        let empty: Vec<String> = Vec::new();
         let inputs = EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context: 131072,
-            ubatch: None,
             cache_type_k: Some("f16"),
             cache_type_v: Some("f16"),
-            override_tensor: &empty,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         };
 
         let e = estimate(&summary, &inputs);
@@ -194,28 +177,12 @@ mod tests {
             architecture: Architecture::DeepSeek4,
             shards: vec!["/fake".into()],
         };
-        let empty: Vec<String> = Vec::new();
         let mk = |ctk: &'static str| EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context: 131072,
-            ubatch: None,
             cache_type_k: Some(ctk),
             cache_type_v: Some(ctk),
-            override_tensor: &empty,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         };
         // Fallback layer count (21) at f16 reproduces the 6657 figure.
         assert_eq!(estimate(&summary, &mk("f16")).kv_per_token, 6657);

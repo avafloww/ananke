@@ -39,7 +39,7 @@
 use std::{path::PathBuf, process};
 
 use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode};
-use ananke_estimate::{self as estimator, EstimatorInputs};
+use ananke_estimate::{self as estimator, EstimatorInputs, Fork, Speculation};
 use ananke_fs::LocalFs;
 use ananke_placement::{
     Corrections,
@@ -261,10 +261,16 @@ fn main() {
         cache_type_v: args.cache_type_v.as_deref(),
         override_tensor: &args.override_tensor,
         compute_buffer_mb: args.compute_buffer_mb,
-        mtp: args.mtp,
-        draft_model: args.draft_model.as_deref(),
-        ik_llama: args.ik_llama,
-        ik_dsa: args.ik_dsa,
+        speculation: match (args.mtp, args.draft_model.as_deref()) {
+            (true, Some(draft)) => Speculation::DraftMtp(draft),
+            (true, None) => Speculation::EmbeddedMtp,
+            (false, _) => Speculation::None,
+        },
+        fork: if args.ik_llama {
+            Fork::Ik { dsa: args.ik_dsa }
+        } else {
+            Fork::Mainline
+        },
         parallel: args.parallel,
         flash_attn: args.flash_attn,
         kv_unified: args.kv_unified,

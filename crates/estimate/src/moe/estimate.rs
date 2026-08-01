@@ -208,29 +208,10 @@ mod tests {
             architecture: Architecture::Qwen35Moe,
             shards: vec!["/fake".into()],
         };
-
-        let empty: Vec<String> = Vec::new();
         let inputs = EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context: 4096,
-            ubatch: None,
-            cache_type_k: None,
-            cache_type_v: None,
-            override_tensor: &empty,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         };
 
         let e = estimate(&summary, &inputs);
@@ -324,29 +305,10 @@ mod tests {
             architecture: Architecture::Qwen3Moe,
             shards: vec!["/fake".into()],
         };
-
-        let empty_override: Vec<String> = Vec::new();
         let inputs = EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context: 4096,
-            ubatch: None,
-            cache_type_k: None,
-            cache_type_v: None,
-            override_tensor: &empty_override,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         };
 
         let e = estimate(&summary, &inputs);
@@ -467,29 +429,12 @@ mod tests {
             architecture: Architecture::Laguna,
             shards: vec!["/fake".into()],
         };
-
-        let empty: Vec<String> = Vec::new();
         let inputs = EstimatorInputs {
-            host_resident_experts: false,
-            visible_devices: 1,
-            split_mode: ananke_config::placement::SplitMode::Layer,
             name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context: 32768,
-            ubatch: None,
             cache_type_k: Some("f16"),
             cache_type_v: Some("f16"),
-            override_tensor: &empty,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         };
 
         let e = estimate(&summary, &inputs);

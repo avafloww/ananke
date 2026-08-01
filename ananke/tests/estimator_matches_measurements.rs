@@ -38,6 +38,7 @@ use ananke::{
     gguf::{GgufSummary, GgufTensor, GgufType, GgufValue},
 };
 use ananke_dataset::{KvType, Record, Status, read_ndjson};
+use ananke_estimate::{Fork, Speculation};
 use ananke_gguf::{Architecture, keys, keys::suffix};
 
 /// Architectures whose arena the campaign confirmed to within 0.1 MiB.
@@ -416,10 +417,12 @@ impl Case {
             cache_type_v: Some(self.kv_type.name()),
             override_tensor: &[],
             compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: self.ik_llama,
-            ik_dsa: self.ik_dsa,
+            speculation: Speculation::None,
+            fork: if self.ik_llama {
+                Fork::Ik { dsa: self.ik_dsa }
+            } else {
+                Fork::Mainline
+            },
             parallel: Some(self.parallel),
             flash_attn: Some(self.flash_attn),
             kv_unified: Some(self.kv_unified),

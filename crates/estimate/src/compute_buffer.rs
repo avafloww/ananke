@@ -174,6 +174,7 @@ mod tests {
     use smol_str::SmolStr;
 
     use super::*;
+    use crate::types::Fork;
 
     /// The measured-coverage burden sits with
     /// `tests/estimator_matches_measurements.rs`, which walks every cell in the
@@ -197,28 +198,12 @@ mod tests {
     }
 
     fn inputs(context: u32, split: SplitMode, devices: u32) -> EstimatorInputs<'static> {
-        const EMPTY: &[String] = &[];
         EstimatorInputs {
-            name: "demo",
-            model: Path::new("/fake"),
-            mmproj: None,
             context,
-            ubatch: None,
+            name: "demo",
             visible_devices: devices,
-            host_resident_experts: false,
             split_mode: split,
-            cache_type_k: None,
-            cache_type_v: None,
-            override_tensor: EMPTY,
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake"))
         }
     }
 
@@ -297,7 +282,7 @@ mod tests {
         // ik-fitted entry must take precedence where one exists.
         let s = sized_summary(&Architecture::Qwen35Moe, 2048);
         let mut ik = inputs(32768, SplitMode::Layer, 2);
-        ik.ik_llama = true;
+        ik.fork = Fork::Ik { dsa: false };
         let mainline = per_device_for(&s, &inputs(32768, SplitMode::Layer, 2));
         assert_ne!(per_device_for(&s, &ik), mainline);
     }

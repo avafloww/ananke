@@ -62,16 +62,8 @@ pub struct EstimatorInputs<'a> {
     /// Override for the compute-buffer reservation (MB per active device).
     /// Absent means the estimator's 400 MB default.
     pub compute_buffer_mb: Option<u32>,
-    /// Whether the service runs with `--spec-type draft-mtp`. When set and
-    /// the model carries an MTP head (`nextn_predict_layers > 0`), the
-    /// estimator adds the MTP draft context's KV + compute overhead. See
-    /// [`crate::mtp`].
-    pub mtp: bool,
-    /// Optional separate draft-model GGUF (`-md`). When `mtp` is set and
-    /// this is present, the estimator reads this file's resident weights
-    /// plus a draft compute buffer rather than the target model's embedded
-    /// MTP head. See [`crate::mtp`].
-    pub draft_model: Option<&'a Path>,
+    /// Speculative decoding, and where the draft head comes from.
+    pub speculation: Speculation<'a>,
     /// Number of parallel slots (`-np`). Absent means llama.cpp's default
     /// of 1. With a non-unified cache this divides the KV budget per
     /// stream, which is what the host graph mask is sized against — see
@@ -85,13 +77,8 @@ pub struct EstimatorInputs<'a> {
     /// llama.cpp's default. Decides whether the mask is sized against the
     /// whole context or one slot's share.
     pub kv_unified: Option<bool>,
-    /// Whether the child is served by ik_llama.cpp rather than mainline.
-    /// The two forks size the pinned graph arena by measurably different
-    /// rules — see [`crate::host_buffer`].
-    pub ik_llama: bool,
-    /// Whether the child runs ik_llama's DSA sparse attention (`-dsa`), which
-    /// builds two additional full-cache masks on top of the ordinary one.
-    pub ik_dsa: bool,
+    /// Which llama.cpp serves the child, and the knobs only that fork has.
+    pub fork: Fork,
     /// Host RAM cap for the server's prompt cache (`-cram`, MiB). Absent
     /// means llama.cpp's 8192 MiB default — which is charged either way,
     /// since the runtime will fill up to whatever the cap is.
@@ -99,6 +86,38 @@ pub struct EstimatorInputs<'a> {
 }
 
 impl<'a> EstimatorInputs<'a> {
+    /// The inputs for `model` with every optional knob at llama.cpp's default.
+    ///
+    /// `Default` cannot express this — `model` has no meaningful default and
+    /// the whole struct borrows — so this is the spreadable base a caller
+    /// overrides the two or three fields it cares about on:
+    ///
+    /// ```ignore
+    /// EstimatorInputs { context: 32768, ..EstimatorInputs::empty(path) }
+    /// ```
+    pub fn empty(model: &'a Path) -> Self {
+        Self {
+            name: "",
+            model,
+            mmproj: None,
+            context: 0,
+            ubatch: None,
+            visible_devices: 1,
+            host_resident_experts: false,
+            split_mode: ananke_config::placement::SplitMode::Layer,
+            cache_type_k: None,
+            cache_type_v: None,
+            override_tensor: &[],
+            compute_buffer_mb: None,
+            speculation: Speculation::None,
+            parallel: None,
+            flash_attn: None,
+            kv_unified: None,
+            fork: Fork::Mainline,
+            cache_ram_mb: None,
+        }
+    }
+
     /// How many separate KV caches the service runs.
     ///
     /// One per slot, unless the slots share a unified cache. Several terms are
@@ -112,20 +131,6 @@ impl<'a> EstimatorInputs<'a> {
         }
     }
 
-    /// Stable hash of every field that would change the estimate's
-    /// numbers. Cache layers (currently the daemon-side
-    /// `EstimateCache`) compare this against the value stored
-    /// alongside a cached entry to detect "the operator edited
-    /// `context` / `override_tensor` / `cache_type_*` / … without
-    /// changing the GGUF path" — the model on disk is the same but
-    /// the estimate isn't.
-    ///
-    /// `model` and `mmproj` paths are deliberately excluded because
-    /// the cache keys on them separately (any path change is a
-    /// different model, not a different config of the same model).
-    /// `draft_model` *is* hashed here because the cache does not key on
-    /// it separately, yet swapping the draft GGUF changes the estimate.
-    /// `name` is excluded because it's a log-context-only field.
     /// Tell the estimate how many devices the child will see.
     ///
     /// Callers that hold a device snapshot should use this; `from_service`
@@ -136,6 +141,16 @@ impl<'a> EstimatorInputs<'a> {
         self
     }
 
+    /// Stable hash of every field that would change the estimate's numbers.
+    /// The daemon's `EstimateCache` compares this against the value stored
+    /// with a cached entry to catch "the operator edited `context` /
+    /// `override_tensor` / `cache_type_*` without changing the GGUF path".
+    ///
+    /// `model` and `mmproj` are excluded because the cache keys on them
+    /// separately: a path change is a different model, not a different config
+    /// of the same one. The draft GGUF is hashed here, because the cache does
+    /// not key on it and swapping it does change the estimate. `name` is
+    /// excluded because it only reaches the logs.
     pub fn config_fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -145,10 +160,8 @@ impl<'a> EstimatorInputs<'a> {
         self.cache_type_v.hash(&mut hasher);
         self.override_tensor.hash(&mut hasher);
         self.compute_buffer_mb.hash(&mut hasher);
-        self.mtp.hash(&mut hasher);
-        self.draft_model.hash(&mut hasher);
-        self.ik_llama.hash(&mut hasher);
-        self.ik_dsa.hash(&mut hasher);
+        self.speculation.hash(&mut hasher);
+        self.fork.hash(&mut hasher);
         self.parallel.hash(&mut hasher);
         self.flash_attn.hash(&mut hasher);
         self.kv_unified.hash(&mut hasher);
@@ -157,6 +170,62 @@ impl<'a> EstimatorInputs<'a> {
         self.host_resident_experts.hash(&mut hasher);
         self.split_mode.hash(&mut hasher);
         hasher.finish()
+    }
+}
+
+/// Which llama.cpp serves a child.
+///
+/// The two forks size the pinned graph arena by measurably different rules, so
+/// this is not cosmetic — see [`crate::host_buffer`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Fork {
+    #[default]
+    Mainline,
+    /// ik_llama.cpp. `dsa` is its sparse attention (`-dsa`), which builds two
+    /// additional full-cache masks and which mainline has no equivalent of —
+    /// hence a field on the variant rather than a flag beside it.
+    Ik { dsa: bool },
+}
+
+impl Fork {
+    pub fn is_ik(self) -> bool {
+        matches!(self, Self::Ik { .. })
+    }
+
+    /// Whether ik's sparse attention is on. False for mainline, which cannot
+    /// run it.
+    pub fn dsa(self) -> bool {
+        matches!(self, Self::Ik { dsa: true })
+    }
+}
+
+/// Where a service's speculative-decoding draft head comes from.
+///
+/// A draft GGUF without `--spec-type draft-mtp` is meaningless, so the two are
+/// one value rather than a flag and an `Option` that can disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Speculation<'a> {
+    #[default]
+    None,
+    /// `--spec-type draft-mtp` against the target model's own head, present
+    /// when it declares `nextn_predict_layers > 0`.
+    EmbeddedMtp,
+    /// The same, with the head shipped as a separate GGUF passed as `-md`.
+    DraftMtp(&'a Path),
+}
+
+impl<'a> Speculation<'a> {
+    /// Whether the child runs `--spec-type draft-mtp` at all.
+    pub fn is_mtp(self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// The separate draft GGUF, if the head is not the target model's own.
+    pub fn draft_model(self) -> Option<&'a Path> {
+        match self {
+            Self::DraftMtp(path) => Some(path),
+            _ => None,
+        }
     }
 }
 
@@ -333,25 +402,10 @@ mod tests {
     fn baseline<'a>() -> EstimatorInputs<'a> {
         EstimatorInputs {
             name: "test",
-            model: Path::new("/fake/model.gguf"),
-            mmproj: None,
             context: 4096,
             ubatch: Some(512),
-            visible_devices: 1,
-            host_resident_experts: false,
             split_mode: SplitMode::Layer,
-            cache_type_k: None,
-            cache_type_v: None,
-            override_tensor: &[],
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            parallel: None,
-            flash_attn: None,
-            kv_unified: None,
-            ik_llama: false,
-            ik_dsa: false,
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(Path::new("/fake/model.gguf"))
         }
     }
 

@@ -102,8 +102,8 @@ pub fn host_overhead_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) 
     // two, and four slots, and 240, 274, 341 across ctx 32768, 65536, and
     // 131072. A flat constant is the wrong shape here, and wrong in opposite
     // directions at the ends of that range.
-    let mtp = if inputs.mtp {
-        let base = if inputs.draft_model.is_some() {
+    let mtp = if inputs.speculation.is_mtp() {
+        let base = if inputs.speculation.draft_model().is_some() {
             MTP_HOST_BYTES_SEPARATE_DRAFT
         } else {
             MTP_HOST_BYTES_EMBEDDED
@@ -144,7 +144,7 @@ pub fn host_overhead_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) 
         .saturating_add(PINNED_EXTRA_BYTES)
         .saturating_add(process_base_bytes(
             summary,
-            inputs.ik_llama,
+            inputs.fork.is_ik(),
             inputs.flash_attn.unwrap_or(false),
         ))
         .saturating_add(device_bytes)
@@ -349,7 +349,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -
     let n_embd = embedding_length(summary);
     let has_swa = sliding_window(summary).is_some();
 
-    if inputs.ik_llama {
+    if inputs.fork.is_ik() {
         // ik sizes every mask against the *whole* cache — it does not divide
         // by the slot count, and an interleaved-SWA model's second mask gets
         // the full context rather than the window — and pins one
@@ -358,7 +358,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -
         // against the full cache, not the window — and two more when DSA is
         // on, for the MLA and sparse-indexer masks. Measured: GLM-5.2 at
         // ctx 131072 / ub 2048 came to exactly three 512 MiB masks.
-        let masks = 1 + u64::from(has_swa) + if inputs.ik_dsa { 2 } else { 0 };
+        let masks = 1 + u64::from(has_swa) + if inputs.fork.dsa() { 2 } else { 0 };
         let arena = masks * context * n_tokens * element_bytes + n_embd * n_tokens * 4;
         return arena + ik_moe_cpu_bytes(summary, n_tokens, inputs.visible_devices);
     }
@@ -464,7 +464,7 @@ fn mainline_tensor_moe_bytes(
     inputs: &EstimatorInputs<'_>,
     n_tokens: u64,
 ) -> u64 {
-    if inputs.ik_llama
+    if inputs.fork.is_ik()
         || !inputs.host_resident_experts
         || inputs.split_mode != ananke_config::placement::SplitMode::Tensor
     {
@@ -608,6 +608,7 @@ mod tests {
     use smol_str::SmolStr;
 
     use super::*;
+    use crate::types::{Fork, Speculation};
 
     const MIB: f64 = (1024 * 1024) as f64;
 
@@ -618,26 +619,13 @@ mod tests {
         parallel: u32,
     ) -> EstimatorInputs<'a> {
         EstimatorInputs {
-            visible_devices: 1,
-            host_resident_experts: false,
-            split_mode: ananke_config::placement::SplitMode::Layer,
-            name: "t",
-            model: std::path::Path::new("/m.gguf"),
-            mmproj: None,
             context,
+            name: "t",
             ubatch: Some(ubatch),
-            cache_type_k: None,
-            cache_type_v: None,
-            override_tensor: &[],
-            compute_buffer_mb: None,
-            mtp: false,
-            draft_model: None,
-            ik_llama: false,
-            ik_dsa: false,
             parallel: Some(parallel),
             flash_attn: Some(flash_attn),
             kv_unified: Some(false),
-            cache_ram_mb: None,
+            ..EstimatorInputs::empty(std::path::Path::new("/m.gguf"))
         }
     }
 
@@ -826,8 +814,7 @@ mod tests {
                     .insert(SmolStr::new("t.expert_used_count"), GgufValue::U32(used));
             }
             let mut i = inputs(p.context, p.ubatch, true, p.parallel);
-            i.ik_llama = true;
-            i.ik_dsa = p.dsa;
+            i.fork = Fork::Ik { dsa: p.dsa };
             let got = pinned_graph_bytes(&sum, &i) as f64 / MIB;
             // The mask and hidden-buffer terms are exact. The host MoE term is
             // calibrated on one model, so where it applies the guarantee is
@@ -871,7 +858,7 @@ mod tests {
         let s = summary(&Architecture::Unknown("t".into()), 2560, 36, None);
         let mainline = pinned_graph_bytes(&s, &inputs(32768, 512, true, 4));
         let mut ik = inputs(32768, 512, true, 4);
-        ik.ik_llama = true;
+        ik.fork = Fork::Ik { dsa: false };
         let ik_bytes = pinned_graph_bytes(&s, &ik);
         assert_eq!(mainline as f64 / MIB, 18.0);
         assert_eq!(ik_bytes as f64 / MIB, 37.0);
@@ -1031,10 +1018,10 @@ mod tests {
         i.kv_unified = Some(true);
         let plain = host_overhead_bytes(&s, &i);
 
-        i.mtp = true;
+        i.speculation = Speculation::EmbeddedMtp;
         let embedded = host_overhead_bytes(&s, &i);
         let draft_path = std::path::PathBuf::from("/d.gguf");
-        i.draft_model = Some(&draft_path);
+        i.speculation = Speculation::DraftMtp(&draft_path);
         let separate = host_overhead_bytes(&s, &i);
 
         // Both shapes cost more than none, and they cost *different* amounts —
@@ -1093,15 +1080,14 @@ mod measured_tests {
     #[test]
     fn layer_split_replicates_masks_but_tensor_split_does_not() {
         let summary = fake_summary();
-        let empty: [String; 0] = [];
-        let one = pinned_graph_bytes(&summary, &inputs("f16", "f16", 32768, &empty));
+        let one = pinned_graph_bytes(&summary, &inputs("f16", "f16", 32768));
 
-        let mut two = inputs("f16", "f16", 32768, &empty);
+        let mut two = inputs("f16", "f16", 32768);
         two.visible_devices = 2;
         two.split_mode = SplitMode::Layer;
         let layered = pinned_graph_bytes(&summary, &two);
 
-        let mut fused = inputs("f16", "f16", 32768, &empty);
+        let mut fused = inputs("f16", "f16", 32768);
         fused.visible_devices = 2;
         fused.split_mode = SplitMode::Tensor;
         let tensored = pinned_graph_bytes(&summary, &fused);
@@ -1133,14 +1119,13 @@ mod measured_tests {
         // the per-device context cost alone. Other terms leaking into that
         // delta is exactly what this test guards against; two already have.
         let summary = fake_summary();
-        let empty: [String; 0] = [];
         // Two devices against four, not one against four: the tensor-split
         // baseline is charged whenever more than one device is visible, so
         // starting from one would fold that term into the delta as well.
-        let mut two = inputs("f16", "f16", 32768, &empty);
+        let mut two = inputs("f16", "f16", 32768);
         two.visible_devices = 2;
         two.split_mode = SplitMode::Tensor;
-        let mut four = inputs("f16", "f16", 32768, &empty);
+        let mut four = inputs("f16", "f16", 32768);
         four.visible_devices = 4;
         four.split_mode = SplitMode::Tensor;
 

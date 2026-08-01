@@ -110,8 +110,7 @@ mod tests {
     #[test]
     fn sums_per_layer_and_non_layer() {
         let s = fake_summary();
-        let empty: Vec<String> = Vec::new();
-        let e = estimate(&s, &inputs("f16", "f16", 4096, &empty));
+        let e = estimate(&s, &inputs("f16", "f16", 4096));
         // per-layer: 2 layers × 3 tensors × 1 MiB = 6 MiB weights from layers.
         // non-layer: 2 MiB output + 4 MiB token_embd = 6 MiB.
         assert_eq!(e.weights_bytes, 12 * 1024 * 1024);
