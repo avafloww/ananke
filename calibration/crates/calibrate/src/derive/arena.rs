@@ -9,20 +9,17 @@
 use std::collections::BTreeMap;
 
 use ananke_config::placement::SplitMode;
+use ananke_estimate::host_buffer::{pad_to_kv_cache, swa_mask_copies};
 
 use crate::{
     derive::{
         error::{DeriveError, Result},
         keys::{ArchKey, VariantKey},
-        stats::pad,
         tuning::Tuning,
         units::MIB_F64,
     },
     record::Record,
 };
-
-/// llama.cpp pads the KV cache length to a multiple of this.
-pub const KV_CACHE_PAD: u64 = 256;
 
 /// Below this many activated experts per expert — `tokens * n_expert_used /
 /// n_expert` — the MoE op intermediates stay on the host. [`crate::derive::graph::offload_min_batch`]
@@ -83,7 +80,7 @@ pub fn arena_terms(record: &Record, charge_moe: MoeCharge, tuning: &Tuning) -> A
     } else {
         ctx / slots
     };
-    let n_kv = pad(n_kv, KV_CACHE_PAD);
+    let n_kv = pad_to_kv_cache(n_kv);
     let tokens = factors.tokens();
     let width = factors.flash_attn.mask_element_bytes();
 
@@ -106,21 +103,9 @@ pub fn arena_terms(record: &Record, charge_moe: MoeCharge, tuning: &Tuning) -> A
     let swa_rows = if ik {
         n_kv
     } else {
-        pad(swa + tokens, KV_CACHE_PAD)
+        pad_to_kv_cache(swa + tokens)
     };
-    // Several slots sharing one cache means more than one window mask, and the
-    // count has to match `host_buffer::pinned_graph_bytes`. Drift between the two
-    // does not fail here: it surfaces as `consensus` reading a 5.27 multiple among
-    // cells that are otherwise 4.00.
-    //
-    // One mask per batch the window spans, plus the batch's own. A flat constant
-    // cannot express that — a 1024-token window spans two batches at ubatch 512
-    // and one at 2048, and the two configurations differ by exactly one mask.
-    let swa_copies = if slots > 1 && unified && !ik {
-        1 + swa.div_ceil(tokens).min(2)
-    } else {
-        1
-    };
+    let swa_copies = swa_mask_copies(swa, tokens, slots > 1 && unified && !ik);
     let swa_mask = if swa != 0 {
         swa_copies * swa_rows * tokens * width
     } else {

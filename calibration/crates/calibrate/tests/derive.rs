@@ -14,10 +14,11 @@ use std::{
 use ananke_calibrate::{
     derive::{
         Table, arena, baseline, dataset, emit, graph, keys::VariantKey, mtp, pinned, recurrent,
-        shape::query_head_count, stats::pad, tuning::Tuning, units::MIB_F64, vram,
+        shape::query_head_count, tuning::Tuning, units::MIB_F64, vram,
     },
     record::Record,
 };
+use ananke_estimate::host_buffer::pad_to_kv_cache;
 use ananke_tuning_schema::{Document, RateTable, RateTableName};
 
 /// The dataset, de-duplicated the way `emit` does before anything reads it.
@@ -335,7 +336,7 @@ fn the_arena_terms_are_whole_masks() {
         .expect("the dataset has a dense single-slot cell");
     let terms = arena::arena_terms(record, arena::MoeCharge::On, tuning());
     let tokens = record.factors.tokens();
-    let n_kv = pad(u64::from(record.factors.ctx), arena::KV_CACHE_PAD);
+    let n_kv = pad_to_kv_cache(u64::from(record.factors.ctx));
     assert_eq!(terms.mask, (n_kv * tokens * 2) as f64 / MIB_F64);
     assert_eq!(terms.swa_mask, 0.0);
     let n_embd = record.parsed.n_embd;

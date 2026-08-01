@@ -24,7 +24,7 @@
 //! that way also reproduces a tensor split, whose fused row reports a per-card
 //! average: the average times the card count is the same total either way.
 
-use ananke_config::placement::SplitMode;
+use ananke_config::{placement::SplitMode, units::MIB_F64};
 use ananke_gguf::{GgufSummary, keys};
 
 use crate::{
@@ -73,8 +73,6 @@ pub struct Columns {
     /// asymmetric.
     offload_head: f64,
 }
-
-const BYTES_PER_MIB: f64 = (1024 * 1024) as f64;
 
 /// What the columns are computed from, once the GGUF and the placement have been
 /// read. Every field is a quantity the fitter has too, which is why it is public:
@@ -138,15 +136,15 @@ impl Columns {
         Self {
             flat: 1.0,
             head_flat: s.head_share,
-            hidden: s.n_embd * s.ubatch / BYTES_PER_MIB,
+            hidden: s.n_embd * s.ubatch / MIB_F64,
             doubling: (s.ubatch.max(chunk) / chunk).log2(),
-            mask: s.mask_copies * s.ubatch * s.n_kv / BYTES_PER_MIB,
+            mask: s.mask_copies * s.ubatch * s.n_kv / MIB_F64,
             quant: if s.quantised {
-                s.ubatch * s.ctx / BYTES_PER_MIB
+                s.ubatch * s.ctx / MIB_F64
             } else {
                 0.0
             },
-            logits: s.head_share * s.n_vocab * s.ubatch / BYTES_PER_MIB,
+            logits: s.head_share * s.n_vocab * s.ubatch / MIB_F64,
             offload_head: if s.offloading { s.head_share } else { 0.0 },
         }
     }

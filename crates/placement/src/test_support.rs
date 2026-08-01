@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 
 use ananke_config::placement::{DeviceSlot, OffloadMode, PlacementInputs, PlacementPolicy};
+pub(crate) use ananke_config::units::{GIB, MIB};
 use ananke_estimate::{Estimate, ExpertKind, ExpertTensor, NonLayer};
 use ananke_gguf::Architecture;
 
@@ -11,9 +12,6 @@ use crate::{
     Packed,
     devices::{CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot},
 };
-
-pub(crate) const MIB: u64 = 1024 * 1024;
-pub(crate) const GIB: u64 = 1024 * 1024 * 1024;
 
 /// A placement with a pinned override, built through the same distiller the
 /// daemon uses so the tests exercise that conversion rather than bypassing it.

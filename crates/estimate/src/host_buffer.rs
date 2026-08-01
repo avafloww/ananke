@@ -392,20 +392,10 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -
         // rule out.
         Some(window) => {
             let shared = inputs.parallel.unwrap_or(1) > 1 && inputs.kv_unified.unwrap_or(false);
-            // How many batches the window spans, plus the batch's own mask.
-            //
-            // The count depends on the batch: at ubatch 512 a 1024-token
-            // window spans two batches and the count is 3, while at 2048 the
-            // same configuration measures 2 — a difference of exactly one mask
-            // — 692.3 MiB against 740.0 modelled on gemma-3-27B at four
-            // shared slots, where two masks give 692.0. Capped at the measured
-            // range rather than extrapolated below ubatch 512.
-            let masks = if shared {
-                1 + (window as u64).div_ceil(n_tokens).min(2)
-            } else {
-                1
-            };
-            masks * pad_to_kv_cache(window as u64 + n_tokens) * n_tokens * element_bytes
+            swa_mask_copies(window as u64, n_tokens, shared)
+                * pad_to_kv_cache(window as u64 + n_tokens)
+                * n_tokens
+                * element_bytes
         }
         None => 0,
     };
@@ -568,8 +558,30 @@ fn ik_moe_rate(arch: &Architecture, devices: u32) -> u64 {
 }
 
 /// Round a cell count up to the KV cache's padding granularity.
-fn pad_to_kv_cache(cells: u64) -> u64 {
+///
+/// Public because `ananke-calibrate`'s arena deriver models the same masks
+/// against the same padded figure; two implementations of it drifted once.
+pub fn pad_to_kv_cache(cells: u64) -> u64 {
     cells.div_ceil(KV_CACHE_PAD).max(1) * KV_CACHE_PAD
+}
+
+/// How many window masks an interleaved-SWA model builds.
+///
+/// One per batch the window spans, plus the batch's own, and one flat when the
+/// slots do not share a cache. A constant cannot express it: a 1024-token
+/// window spans two batches at ubatch 512 and one at 2048, and the two
+/// configurations measure exactly one mask apart. Capped at the measured range
+/// rather than extrapolated below ubatch 512.
+///
+/// Public for the same reason as [`pad_to_kv_cache`] — the deriver counts these
+/// masks too, and a disagreement surfaces only as a strange consensus multiple
+/// rather than as a failure.
+pub fn swa_mask_copies(window: u64, tokens: u64, shared_cache: bool) -> u64 {
+    if shared_cache {
+        1 + window.div_ceil(tokens).min(2)
+    } else {
+        1
+    }
 }
 
 /// The model's hidden size. Zero when absent, which drops the hidden-input
@@ -604,13 +616,12 @@ fn sliding_window(summary: &GgufSummary) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
+    use ananke_config::units::MIB_F64;
     use ananke_gguf::{GgufSummary, GgufValue};
     use smol_str::SmolStr;
 
     use super::*;
     use crate::types::{Fork, Speculation};
-
-    const MIB: f64 = (1024 * 1024) as f64;
 
     fn inputs<'a>(
         context: u32,
@@ -700,7 +711,7 @@ mod tests {
                 &summary(&Architecture::from(p.arch), p.n_embd, p.layers, p.swa),
                 &inputs(p.context, p.ubatch, p.flash_attn, p.parallel),
             ) as f64
-                / MIB;
+                / MIB_F64;
             assert!(
                 (got - p.measured_mib).abs() < 0.1,
                 "n_embd={} ctx={} ub={} fa={} np={}: modelled {got:.2} MiB \
@@ -744,7 +755,7 @@ mod tests {
                 &summary(&Architecture::from(arch), n_embd, 48, swa),
                 &inputs(ctx, ub, true, par),
             ) as f64
-                / MIB;
+                / MIB_F64;
             let ratio = measured / got;
             assert!(
                 (0.8..=1.5).contains(&ratio),
@@ -815,7 +826,7 @@ mod tests {
             }
             let mut i = inputs(p.context, p.ubatch, true, p.parallel);
             i.fork = Fork::Ik { dsa: p.dsa };
-            let got = pinned_graph_bytes(&sum, &i) as f64 / MIB;
+            let got = pinned_graph_bytes(&sum, &i) as f64 / MIB_F64;
             // The mask and hidden-buffer terms are exact. The host MoE term is
             // calibrated on one model, so where it applies the guarantee is
             // only that the estimate stays inside the band the rolling
@@ -860,8 +871,8 @@ mod tests {
         let mut ik = inputs(32768, 512, true, 4);
         ik.fork = Fork::Ik { dsa: false };
         let ik_bytes = pinned_graph_bytes(&s, &ik);
-        assert_eq!(mainline as f64 / MIB, 18.0);
-        assert_eq!(ik_bytes as f64 / MIB, 37.0);
+        assert_eq!(mainline as f64 / MIB_F64, 18.0);
+        assert_eq!(ik_bytes as f64 / MIB_F64, 37.0);
     }
 
     /// The hidden-state inputs dominate at short contexts, which is why a
@@ -913,7 +924,7 @@ mod tests {
                 layers,
                 None,
             ));
-            let predicted = process_base_bytes(&s, false, true) as f64 / MIB;
+            let predicted = process_base_bytes(&s, false, true) as f64 / MIB_F64;
             let ratio = measured / predicted;
             assert!(
                 (0.8..=1.5).contains(&ratio),
@@ -951,7 +962,7 @@ mod tests {
             false,
             true,
         ) as f64
-            / MIB;
+            / MIB_F64;
         assert!(
             (small - 233.0).abs() < 8.0,
             "36-layer baseline modelled at {small:.0} MiB against 233 MiB measured"
@@ -961,7 +972,7 @@ mod tests {
             false,
             true,
         ) as f64
-            / MIB;
+            / MIB_F64;
         assert!(large > small, "more layers means more graph metadata");
     }
 
@@ -983,7 +994,7 @@ mod tests {
             ("-ngl 0,   0/37 on GPU", 4608.0, 4819.0),
         ];
         let s = summary(&Architecture::Unknown("t".into()), 2560, 36, None);
-        let overhead = host_overhead_bytes(&s, &inputs(32768, 512, true, 4)) as f64 / MIB;
+        let overhead = host_overhead_bytes(&s, &inputs(32768, 512, true, 4)) as f64 / MIB_F64;
         for (label, cpu_kv, measured) in regimes {
             let predicted = overhead + cpu_kv;
             let ratio = measured / predicted;
@@ -1037,8 +1048,10 @@ mod tests {
             MTP_HOST_BYTES_EMBEDDED.abs_diff(MTP_HOST_BYTES_SEPARATE_DRAFT)
         );
         // The measured gemma-4 pair, which is the separate-draft shape.
-        for (predicted, measured) in [(plain as f64 / MIB, 770.0), (separate as f64 / MIB, 1274.0)]
-        {
+        for (predicted, measured) in [
+            (plain as f64 / MIB_F64, 770.0),
+            (separate as f64 / MIB_F64, 1274.0),
+        ] {
             let ratio = measured / predicted;
             assert!(
                 (0.8..=1.5).contains(&ratio),

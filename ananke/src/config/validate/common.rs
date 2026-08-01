@@ -4,15 +4,10 @@
 
 use std::path::PathBuf;
 
-use crate::errors::ExpectedError;
-
-/// Convert GiB (as declared by users in config) to MiB. The cast truncates;
-/// centralised so the oneshot API path and the TOML path agree on rounding.
-pub fn gib_to_mib(gib: f32) -> u64 {
-    (gib * 1024.0) as u64
-}
-
 pub(crate) use ananke_config::placement::{flag_variant, variant_flag};
+pub use ananke_config::units::gib_to_mib;
+
+use crate::errors::ExpectedError;
 
 pub(crate) fn fail(msg: String) -> ExpectedError {
     ExpectedError::config_unparseable(PathBuf::from("<config>"), msg)

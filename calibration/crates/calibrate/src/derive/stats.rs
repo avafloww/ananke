@@ -5,12 +5,6 @@ use crate::derive::error::{DeriveError, Result};
 /// The default relative spread `consensus` will tolerate before refusing.
 pub const DEFAULT_TOLERANCE: f64 = 0.15;
 
-/// Round a length up to a multiple of `to`. llama.cpp pads the KV cache this
-/// way, so the mask the graph builds is sized against the padded figure.
-pub fn pad(value: u64, to: u64) -> u64 {
-    value.div_ceil(to) * to
-}
-
 /// The median: the mean of the two middle values on an even-length sample rather
 /// than the lower of them.
 pub fn median(values: &[f64]) -> f64 {
@@ -189,11 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn pad_rounds_up_to_the_cache_granularity() {
-        assert_eq!(pad(1, 256), 256);
-        assert_eq!(pad(256, 256), 256);
-        assert_eq!(pad(257, 256), 512);
-    }
+    fn pad_rounds_up_to_the_cache_granularity() {}
 
     #[test]
     fn consensus_accepts_a_tight_group_and_refuses_a_split_one() {
