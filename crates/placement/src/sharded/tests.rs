@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use ananke_config::placement::{PlacementPolicy, SplitMode};
 use ananke_estimate::{Estimate, NonLayer};
-use smol_str::SmolStr;
+use ananke_gguf::Architecture;
 
 use super::*;
 use crate::{
@@ -97,7 +97,7 @@ fn tensor_split_shards_output_head_and_mtp_across_gpus() {
         expert_layers: Vec::new(),
         expert_tensors: None,
         context: 4096,
-        architecture: SmolStr::new("qwen35"),
+        architecture: Architecture::Qwen35,
     };
     let snap = snapshot(&[24, 24]);
     let alloc = AllocationTable::new();
@@ -182,7 +182,7 @@ fn a_tied_head_is_copied_onto_the_cards_only_when_sharded() {
         expert_layers: Vec::new(),
         expert_tensors: None,
         context: 4096,
-        architecture: SmolStr::new("gemma4"),
+        architecture: Architecture::Gemma4,
     };
     let gpu_total = |cards: &[u64], estimate: &Estimate| -> u64 {
         let mut s = svc(PlacementPolicy::GpuOnly, None);
@@ -417,7 +417,7 @@ fn a_sharded_separate_draft_models_weights_are_tallied_as_weights() {
         expert_layers: Vec::new(),
         expert_tensors: None,
         context: 4096,
-        architecture: SmolStr::new("gemma4"),
+        architecture: Architecture::Gemma4,
     };
     let mut svc = svc(PlacementPolicy::GpuOnly, Some(vec![0, 1]));
     svc.placement_override = BTreeMap::new();

@@ -387,7 +387,7 @@ The Rust stack is chosen; don't silently introduce alternatives when one of thes
 
 ### Adding a new model architecture
 
-When a new model family ships with a `general.architecture` value that ananke does not yet recognise, the daemon rejects it with `UnknownArchitecture` and the service stays disabled until the operator sets `estimation.allow_fallback = true` (which skips KV modelling and estimates weights-only). Adding proper support takes three steps:
+When a new model family ships with a `general.architecture` value that ananke does not yet recognise, the estimator refuses it with `UnknownArchitecture`. The operator's only recourse is to declare the reservation explicitly — `mode` plus `reserve_gb`, the same way a `command` service does — which skips the estimator and the packer entirely. Adding proper support takes three steps:
 
 1. **Dump the GGUF metadata.** Run the `dump-gguf` example against the first shard:
 
@@ -401,9 +401,11 @@ When a new model family ships with a `general.architecture` value that ananke do
 
 3. **Register and test.**
 
-   a. Add the architecture name to the chosen family's `*_FAMILY` constant, with a comment describing the quirks it brings.
+   a. Add a variant to `Architecture` in `crates/gguf/src/architecture.rs`, and its `general.architecture` spelling to `as_str` and `known()`. The tests there hold every variant to a round-trip and to distinct names, so a half-registered one fails immediately.
 
-   b. If the architecture needs a custom compute-buffer tuning curve, add a match arm in `crates/estimate/src/compute_buffer.rs::tuning_for()`. The formula is `base + slope * (ctx / 1024)` MiB per device. Derive the curve like this:
+   b. Add that variant to the chosen family's `*_FAMILY` constant, with a comment describing the quirks it brings.
+
+   c. If the architecture needs a custom compute-buffer tuning curve, add a match arm in `crates/estimate/src/compute_buffer.rs::tuning_for()`. The formula is `base + slope * (ctx / 1024)` MiB per device. Derive the curve like this:
 
    - Sweep `llama-server -m <model> -c <ctx> -ngl 99` over a few context lengths, pinning one card with `CUDA_VISIBLE_DEVICES=0`. For an embedding model, add `--embeddings` (the modality implies the same flag in production); the calibration is otherwise identical.
    - Read each run's process VRAM from `nvidia-smi --query-compute-apps=pid,used_memory`. Match the row to the server's actual pid and wait for each server to fully exit before the next run — a leftover server silently wins the port bind and you measure the same process at every "ctx".
@@ -412,9 +414,9 @@ When a new model family ships with a `general.architecture` value that ananke do
    - One gotcha: the `estimate` example's printed `gpu_vram_mib` doubles the compute buffer (`active_devices.min(2)`) for a 2-GPU split, so pass `--active-devices 1` when comparing its total to a single-card `nvidia-smi` reading.
    - Most architectures' compute buffers are effectively independent of `--ubatch-size`, so the curve is calibrated at llama.cpp's default (512) and `tuning_for` ignores ubatch. A minority scale with it — notably `deepseek4`, whose NSA "lightning indexer" scores every one of the `ubatch` query tokens against the whole context, so its residual is `≈ k * ubatch * ctx`. For such an arch, take the slope as a function of ubatch (`deepseek4_cb_slope` scales the calibrated 512-slope linearly) and thread the service's `ubatch` through `EstimatorInputs` → `compute_buffer::default_for`. Sweep a second ubatch (e.g. 1024) to confirm the scaling before trusting the extrapolation.
 
-   c. Add a unit test in the family module that exercises the key behaviour (KV computation, layer collection, expert detection, etc.). Use `synth_gguf::Builder` from `ananke/tests/common/mod.rs` to construct a fake GGUF summary, or write one inline with the same pattern.
+   d. Add a unit test in the family module that exercises the key behaviour (KV computation, layer collection, expert detection, etc.). Use `synth_gguf::Builder` from `ananke/tests/common/mod.rs` to construct a fake GGUF summary, or write one inline with the same pattern.
 
-   d. Run the full test suite: `cargo test --workspace --all-features` and `cargo clippy --all-targets --all-features -- -D warnings`.
+   e. Run the full test suite: `cargo test --workspace --all-features` and `cargo clippy --all-targets --all-features -- -D warnings`.
 
 **Reference implementation:** the `dump-gguf` example at `ananke/examples/dump-gguf.rs` is the canonical tool for gathering GGUF metadata. The llama.cpp source (ask the operator where it lives) is the ground truth for tensor naming, metadata keys, and architecture classification. When in doubt about how a tensor is routed at runtime, check `llama-arch.cpp` (`LLM_TENSOR_NAMES`, `LLM_ARCH_NAMES`, `llm_arch_is_hybrid`), `llama-model.cpp` (hparams loading), and `llama-memory*.cpp` (KV cache vs recurrent state).
 

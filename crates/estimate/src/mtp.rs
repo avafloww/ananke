@@ -27,7 +27,7 @@
 //! 2×3090 run (peak 40858 MiB total) minus the target+mmproj estimate: the
 //! draft contributes ~400 MiB, of which ~108 MiB is weights.
 
-use ananke_gguf::{GgufSummary, keys};
+use ananke_gguf::{Architecture, GgufSummary, keys};
 
 use crate::{
     tuning::{
@@ -112,7 +112,7 @@ pub fn mtp_overhead_bytes(
     if let Some(draft) = draft {
         return separate_draft_overhead_bytes(draft, inputs.context);
     }
-    let arch = summary.architecture.as_str();
+    let arch = &summary.architecture;
     let nextn = summary
         .meta_u32(&keys::nextn_predict_layers(arch))
         .unwrap_or(0) as u64;
@@ -161,7 +161,7 @@ pub fn mtp_overhead_bytes(
     let devices = u64::from(inputs.visible_devices.max(1));
     kv_bytes
         + devices
-            * (draft_compute_share_bytes(summary, arch, inputs)
+            * (draft_compute_share_bytes(summary, inputs)
                 + MTP_UNACCOUNTED_MIB_PER_DEVICE * 1024 * 1024)
 }
 
@@ -187,11 +187,8 @@ pub fn mtp_overhead_bytes(
 /// at 65536 and 524288. Both sit ~30 and ~4 MiB higher at ctx 32768, so the
 /// per-architecture count is taken from the worst cell and over-reserves the
 /// long contexts by that much.
-fn draft_compute_share_bytes(
-    _summary: &GgufSummary,
-    arch: &str,
-    inputs: &EstimatorInputs<'_>,
-) -> u64 {
+fn draft_compute_share_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u64 {
+    let arch = &summary.architecture;
     let base = rate(
         MTP_DRAFT_COMPUTE_BASE_MIB,
         arch,
@@ -207,10 +204,10 @@ fn draft_compute_share_bytes(
 }
 
 /// A per-architecture rate, or the table's default.
-fn rate(table: &[(&str, u64)], arch: &str, fallback: u64) -> u64 {
+fn rate(table: &[(&str, u64)], arch: &Architecture, fallback: u64) -> u64 {
     table
         .iter()
-        .find(|(a, _)| *a == arch)
+        .find(|(a, _)| *a == arch.as_str())
         .map(|(_, v)| *v)
         .unwrap_or(fallback)
 }
@@ -224,11 +221,11 @@ mod tests {
 
     use super::*;
 
-    fn qwen35_summary(arch: &str, nextn: u32, kv_heads: u32) -> GgufSummary {
+    fn qwen35_summary(arch: &Architecture, nextn: u32, kv_heads: u32) -> GgufSummary {
         let mut metadata = BTreeMap::new();
         metadata.insert(
             SmolStr::new(keys::ARCHITECTURE),
-            GgufValue::String(arch.into()),
+            GgufValue::String(arch.as_str().into()),
         );
         metadata.insert(keys::nextn_predict_layers(arch), GgufValue::U32(nextn));
         metadata.insert(
@@ -243,7 +240,7 @@ mod tests {
             tensors: BTreeMap::new(),
             metadata,
             block_count: Some(65),
-            architecture: SmolStr::new(arch),
+            architecture: arch.clone(),
             shards: vec!["/fake".into()],
         }
     }
@@ -262,7 +259,6 @@ mod tests {
             cache_type_v: Some("q8_0"),
             override_tensor: empty,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp,
             draft_model: None,
             ik_llama: false,
@@ -276,7 +272,7 @@ mod tests {
 
     #[test]
     fn zero_when_mtp_disabled() {
-        let s = qwen35_summary("qwen35", 1, 4);
+        let s = qwen35_summary(&Architecture::Qwen35, 1, 4);
         let empty: Vec<String> = Vec::new();
         assert_eq!(
             mtp_overhead_bytes(&s, None, &inputs(262144, false, &empty)),
@@ -287,7 +283,7 @@ mod tests {
     #[test]
     fn zero_when_no_mtp_head() {
         // MTP requested but the model has nextn_predict_layers = 0.
-        let s = qwen35_summary("qwen35", 0, 4);
+        let s = qwen35_summary(&Architecture::Qwen35, 0, 4);
         let empty: Vec<String> = Vec::new();
         assert_eq!(
             mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty)),
@@ -314,9 +310,11 @@ mod tests {
         ];
         let empty: Vec<String> = Vec::new();
         for (arch, kv_heads, n_embd, context, slots, reported, cache) in cells {
-            let mut s = qwen35_summary(arch, 1, kv_heads);
-            s.metadata
-                .insert(keys::embedding_length(arch), GgufValue::U32(n_embd));
+            let mut s = qwen35_summary(&Architecture::from(arch), 1, kv_heads);
+            s.metadata.insert(
+                keys::embedding_length(&Architecture::from(arch)),
+                GgufValue::U32(n_embd),
+            );
             let mut i = inputs(context, true, &empty);
             i.parallel = Some(slots);
             i.visible_devices = 2;
@@ -352,7 +350,7 @@ mod tests {
     fn uses_f16_draft_cache_not_main_cache_type() {
         // The draft context always caches in f16. A q8_0 *main* cache — which
         // `inputs` sets — must not shrink this term.
-        let s = qwen35_summary("qwen35", 1, 4);
+        let s = qwen35_summary(&Architecture::Qwen35, 1, 4);
         let empty: Vec<String> = Vec::new();
         let mib = mtp_overhead_bytes(&s, None, &inputs(262144, true, &empty)) / (1024 * 1024);
         // nextn 1 x 4 heads x (256 + 256) x 2 bytes x 262144 = 1024 MiB of
@@ -366,7 +364,7 @@ mod tests {
     /// all read 258.02 MiB for the 27B.
     #[test]
     fn overhead_does_not_scale_with_slots() {
-        let s = qwen35_summary("qwen35", 1, 4);
+        let s = qwen35_summary(&Architecture::Qwen35, 1, 4);
         let empty: Vec<String> = Vec::new();
         let at = |slots: u32| {
             let mut i = inputs(262144, true, &empty);
@@ -406,7 +404,7 @@ mod tests {
             tensors,
             metadata: BTreeMap::new(),
             block_count: Some(4),
-            architecture: SmolStr::new("gemma4-assistant"),
+            architecture: Architecture::from("gemma4-assistant"),
             shards: vec!["/fake-draft".into()],
         }
     }
@@ -416,7 +414,7 @@ mod tests {
         // The target carries no embedded MTP head (gemma4, nextn = 0), so
         // without a draft model the overhead would be zero. With a separate
         // draft it is the draft's GPU-resident weights plus a compute term.
-        let target = qwen35_summary("gemma4", 0, 4);
+        let target = qwen35_summary(&Architecture::Gemma4, 0, 4);
         let draft = draft_summary(144, 108);
         let empty: Vec<String> = Vec::new();
         let at = |context: u32| {
@@ -445,7 +443,7 @@ mod tests {
         // Measured flat at 724, 724, and 728 MiB across one, two, and four
         // slots, against an embedded head that doubles: the draft shares the
         // target's cache and so has none of its own to replicate per slot.
-        let target = qwen35_summary("gemma4", 0, 4);
+        let target = qwen35_summary(&Architecture::Gemma4, 0, 4);
         let draft = draft_summary(144, 108);
         let empty: Vec<String> = Vec::new();
         let at = |slots: u32| {
@@ -458,7 +456,7 @@ mod tests {
 
     #[test]
     fn separate_draft_ignored_when_mtp_disabled() {
-        let target = qwen35_summary("gemma4", 0, 4);
+        let target = qwen35_summary(&Architecture::Gemma4, 0, 4);
         let draft = draft_summary(144, 108);
         let empty: Vec<String> = Vec::new();
         assert_eq!(

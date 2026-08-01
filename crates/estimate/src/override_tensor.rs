@@ -168,7 +168,10 @@ pub fn parse_and_apply(estimate: &mut Estimate, summary: &GgufSummary, rules: &[
 
 #[cfg(test)]
 mod tests {
-    use ananke_gguf::types::{GgufSummary, GgufTensor, GgufType};
+    use ananke_gguf::{
+        Architecture,
+        types::{GgufSummary, GgufTensor, GgufType},
+    };
     use smol_str::SmolStr;
 
     use super::*;
@@ -208,7 +211,7 @@ mod tests {
             expert_layers: Vec::new(),
             expert_tensors: None,
             context: 4096,
-            architecture: SmolStr::new("qwen3moe"),
+            architecture: Architecture::Qwen3Moe,
         }
     }
 
@@ -225,7 +228,7 @@ mod tests {
             tensors: map,
             metadata: Default::default(),
             block_count: Some(2),
-            architecture: SmolStr::new("qwen3moe"),
+            architecture: Architecture::Qwen3Moe,
             shards: vec!["/fake".into()],
         }
     }
@@ -325,7 +328,7 @@ mod tests {
             expert_layers: Vec::new(),
             expert_tensors: None,
             context: 4096,
-            architecture: SmolStr::new("glm4moe"),
+            architecture: Architecture::Glm4Moe,
         };
 
         let rules = parse_rules(&[".ffn_(up|down)_exps.=CPU".into()]).unwrap();

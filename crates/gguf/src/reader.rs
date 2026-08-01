@@ -15,7 +15,7 @@ use ananke_fs::Fs;
 use smol_str::SmolStr;
 
 use crate::{
-    keys,
+    Architecture, keys,
     types::{GgufSummary, GgufTensor, GgufType, GgufValue},
 };
 
@@ -61,15 +61,17 @@ pub fn read_single(fs: &dyn Fs, path: &Path) -> Result<GgufSummary, ReadError> {
         metadata.insert(SmolStr::new(&key), value);
     }
 
-    let architecture = metadata
-        .get(keys::ARCHITECTURE)
-        .and_then(|v| v.as_str())
-        .map(SmolStr::new)
-        .unwrap_or_else(|| SmolStr::new("unknown"));
+    // A file with no architecture at all is `Unknown("")`, which refuses the
+    // same way a name we do not recognise does.
+    let architecture = Architecture::from(
+        metadata
+            .get(keys::ARCHITECTURE)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default(),
+    );
 
-    let block_count_key = format!("{architecture}.block_count");
     let block_count = metadata
-        .get(block_count_key.as_str())
+        .get(&keys::block_count(&architecture))
         .and_then(|v| v.as_u32());
 
     let mut tensors = BTreeMap::new();
@@ -314,7 +316,7 @@ mod tests {
     fn parses_synthetic_header() {
         let fs = ananke_fs::InMemoryFs::new().with("/fake.gguf", synth_gguf());
         let summary = read_single(&fs, Path::new("/fake.gguf")).unwrap();
-        assert_eq!(summary.architecture, "qwen3");
+        assert_eq!(summary.architecture, Architecture::Qwen3);
         assert_eq!(summary.block_count, Some(36));
         assert_eq!(summary.tensors.len(), 1);
         let t = summary.tensors.values().next().unwrap();

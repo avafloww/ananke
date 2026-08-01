@@ -6,8 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use ananke_gguf::GgufSummary;
-use smol_str::SmolStr;
+use ananke_gguf::{Architecture, GgufSummary};
 
 use crate::{
     compute_buffer,
@@ -30,14 +29,14 @@ const STATE_ELEMENT_BYTES: u64 = std::mem::size_of::<f32>() as u64;
 /// llama.cpp's default.
 const DEFAULT_CONTEXT: u32 = 4096;
 
-pub const MAMBA_FAMILY: &[&str] = &["mamba"];
+pub const MAMBA_FAMILY: &[Architecture] = &[Architecture::Mamba];
 
-pub fn is_mamba(arch: &str) -> bool {
-    MAMBA_FAMILY.contains(&arch)
+pub fn is_mamba(arch: &Architecture) -> bool {
+    MAMBA_FAMILY.contains(arch)
 }
 
 pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
-    let arch = summary.architecture.as_str();
+    let arch = &summary.architecture;
     let context = if inputs.context == 0 {
         DEFAULT_CONTEXT
     } else {
@@ -94,7 +93,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         expert_layers: Vec::new(),
         expert_tensors: None,
         context,
-        architecture: SmolStr::new(arch),
+        architecture: arch.clone(),
     }
 }
 

@@ -229,6 +229,7 @@ mod tests {
 
     use ananke_config::placement::PlacementPolicy;
     use ananke_estimate::{Estimate, NonLayer};
+    use ananke_gguf::Architecture;
     use smol_str::SmolStr;
 
     use super::*;
@@ -429,7 +430,7 @@ mod tests {
             expert_layers: Vec::new(),
             expert_tensors: None,
             context: 262_144,
-            architecture: SmolStr::new("gemma4"),
+            architecture: Architecture::Gemma4,
         };
         // 2×24 GB 3090s, fully free, empty pledge book.
         let snap = snapshot(&[24, 24]);
@@ -479,7 +480,7 @@ mod tests {
             expert_layers: Vec::new(),
             expert_tensors: None,
             context: 131_072,
-            architecture: SmolStr::new("qwen3"),
+            architecture: Architecture::Qwen3,
         };
         // Single 24 GB GPU, no spill allowed.
         let snap = snapshot(&[24]);

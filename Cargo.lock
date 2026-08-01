@@ -183,6 +183,7 @@ dependencies = [
  "ananke-config",
  "ananke-estimate",
  "ananke-fs",
+ "ananke-gguf",
  "serde_json",
  "smol_str",
  "tracing",

@@ -84,7 +84,6 @@ pub fn estimator_inputs<'a>(record: &'a Record, model: &'a std::path::Path) -> E
         cache_type_v: Some(f.kv_type.name()),
         override_tensor: &[],
         compute_buffer_mb: None,
-        allow_fallback: false,
         mtp: f.spec_type.is_some(),
         draft_model: f.draft.as_deref().map(std::path::Path::new),
         ik_llama: f.runtime_is_ik(),

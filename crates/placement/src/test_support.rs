@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use ananke_config::placement::{DeviceSlot, OffloadMode, PlacementInputs, PlacementPolicy};
 use ananke_estimate::{Estimate, ExpertKind, ExpertTensor, NonLayer};
-use smol_str::SmolStr;
+use ananke_gguf::Architecture;
 
 use crate::{
     Packed,
@@ -71,7 +71,7 @@ pub(crate) fn trivial_estimate(n_layers: u32, per_layer_mb: u64) -> Estimate {
         expert_layers: Vec::new(),
         expert_tensors: None,
         context: 4096,
-        architecture: SmolStr::new("qwen3"),
+        architecture: Architecture::Qwen3,
     }
 }
 
@@ -125,7 +125,7 @@ pub(crate) fn moe_estimate(n_layers: u32, nonexp_mb: u64, exp_mb: u64) -> Estima
         expert_layers: (0..n_layers).collect(),
         expert_tensors: Some(experts),
         context: 4096,
-        architecture: SmolStr::new("qwen3moe"),
+        architecture: Architecture::Qwen3Moe,
     }
 }
 

@@ -68,7 +68,7 @@
 // its own doc comment — how many models it rests on, and where it is weak.
 
 use ananke_config::flags::cache_type;
-use ananke_gguf::{GgufSummary, keys};
+use ananke_gguf::{Architecture, GgufSummary, keys};
 
 pub use crate::tuning::DEFAULT_CACHE_RAM_MB;
 use crate::{
@@ -86,7 +86,8 @@ use crate::{
 ///
 /// This is the figure the rolling correction divides an observation by, so it
 /// deliberately excludes the prompt-cache cap — see [`prompt_cache_bytes`].
-pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorInputs<'_>) -> u64 {
+pub fn host_overhead_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u64 {
+    let arch = &summary.architecture;
     // Each visible CUDA device beyond the first costs host memory for its
     // context. Measured with placement pinned to the CPU so only the context
     // count varied: two models of very different size both moved by 20 MiB
@@ -139,7 +140,7 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
     //
     // A worst-case allowance belongs in the packer's slop, alongside the
     // prompt cache, which is reserved the same way and for the same reason.
-    pinned_graph_bytes(summary, arch, inputs)
+    pinned_graph_bytes(summary, inputs)
         .saturating_add(PINNED_EXTRA_BYTES)
         .saturating_add(process_base_bytes(
             summary,
@@ -152,10 +153,10 @@ pub fn host_overhead_bytes(summary: &GgufSummary, arch: &str, inputs: &Estimator
 }
 
 /// What a tensor split adds to the host baseline, for this architecture.
-fn tensor_split_baseline(arch: &str) -> u64 {
+fn tensor_split_baseline(arch: &Architecture) -> u64 {
     lookup(
         crate::tuning::TENSOR_SPLIT_BASELINE,
-        arch,
+        arch.as_str(),
         crate::tuning::TENSOR_SPLIT_BASELINE_DEFAULT,
     )
 }
@@ -185,7 +186,7 @@ fn process_base_bytes(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -
 /// E-variant 107. Both discriminators are ones the estimator already reads, so
 /// the key is one it can construct.
 fn baseline_offset(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -> i64 {
-    let mut key = variant_key(summary, &summary.architecture);
+    let mut key = variant_key(summary);
     // The two binaries do not share a baseline: grouped per runtime, ik's
     // resident cells are as consistent as mainline's and simply sit 24 to 192
     // MiB higher. Only this table is keyed on it — the flash-attention rates
@@ -213,11 +214,11 @@ fn baseline_offset(summary: &GgufSummary, ik_llama: bool, flash_attn: bool) -> i
 /// ubatch 2048 in every one of them. The rate differs fourfold between
 /// sliding-window architectures and the rest, which one representative value
 /// could not carry.
-fn no_flash_attn_rate(summary: &GgufSummary, arch: &str) -> u64 {
+fn no_flash_attn_rate(summary: &GgufSummary) -> u64 {
     // Never reached on the ik path, which returns before this term.
     lookup(
         crate::tuning::NO_FLASH_ATTN_RATES,
-        &variant_key(summary, arch),
+        &variant_key(summary),
         crate::tuning::NO_FLASH_ATTN_RATE_DEFAULT,
     )
 }
@@ -228,7 +229,8 @@ fn no_flash_attn_rate(summary: &GgufSummary, arch: &str) -> u64 {
 /// rolling correction can travel: a mixture of experts, a dense model, and an
 /// E-variant. Both discriminators are read from the GGUF, so the key costs
 /// nothing beyond what is already loaded.
-fn variant_key(summary: &GgufSummary, arch: &str) -> String {
+fn variant_key(summary: &GgufSummary) -> String {
+    let arch = &summary.architecture;
     let mut key = arch.to_string();
     if has_experts(summary) {
         key.push_str("+moe");
@@ -265,11 +267,11 @@ fn has_experts(summary: &GgufSummary) -> bool {
 ///
 /// So the packer reserves it as slop, where it protects a service that does
 /// become busy, and the correction never divides by it.
-pub fn slot_host_bytes(arch: &str, inputs: &EstimatorInputs<'_>) -> u64 {
+pub fn slot_host_bytes(arch: &Architecture, inputs: &EstimatorInputs<'_>) -> u64 {
     let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
     lookup(
         crate::tuning::PER_SLOT_HOST_BYTES,
-        arch,
+        arch.as_str(),
         crate::tuning::PER_SLOT_HOST_BYTES_DEFAULT,
     ) * slots.saturating_sub(1)
 }
@@ -292,7 +294,7 @@ pub fn checkpoint_headroom_bytes(summary: &GgufSummary, inputs: &EstimatorInputs
     let slots = u64::from(inputs.parallel.unwrap_or(1).max(1));
     lookup(
         crate::tuning::CHECKPOINT_HEADROOM_BYTES,
-        &variant_key(summary, &summary.architecture),
+        &variant_key(summary),
         crate::tuning::CHECKPOINT_HEADROOM_DEFAULT,
     ) * slots
 }
@@ -327,7 +329,8 @@ pub fn prompt_cache_bytes(inputs: &EstimatorInputs<'_>) -> u64 {
 ///
 /// An interleaved-SWA model builds a second mask against its sliding-window
 /// cache, sized `n_swa + n_tokens` rather than the window alone.
-pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorInputs<'_>) -> u64 {
+pub fn pinned_graph_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u64 {
+    let arch = &summary.architecture;
     let context = inputs.context.max(1) as u64;
     let ubatch = inputs.ubatch.unwrap_or(DEFAULT_UBATCH).max(1) as u64;
     let n_tokens = context.min(ubatch);
@@ -343,8 +346,8 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     } else {
         inputs.parallel.unwrap_or(1).max(1) as u64
     };
-    let n_embd = embedding_length(summary, arch);
-    let has_swa = sliding_window(summary, arch).is_some();
+    let n_embd = embedding_length(summary);
+    let has_swa = sliding_window(summary).is_some();
 
     if inputs.ik_llama {
         // ik sizes every mask against the *whole* cache — it does not divide
@@ -357,7 +360,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
         // ctx 131072 / ub 2048 came to exactly three 512 MiB masks.
         let masks = 1 + u64::from(has_swa) + if inputs.ik_dsa { 2 } else { 0 };
         let arena = masks * context * n_tokens * element_bytes + n_embd * n_tokens * 4;
-        return arena + ik_moe_cpu_bytes(summary, arch, n_tokens, inputs.visible_devices);
+        return arena + ik_moe_cpu_bytes(summary, n_tokens, inputs.visible_devices);
     }
 
     let n_kv = pad_to_kv_cache(context / streams);
@@ -378,7 +381,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     // gives 32.00.
     let indexer_masks = extra_full_masks(arch) * n_kv * n_tokens * element_bytes;
 
-    let swa_mask = match sliding_window(summary, arch) {
+    let swa_mask = match sliding_window(summary) {
         // Three window masks when several slots *share* one cache, otherwise
         // one.
         //
@@ -419,7 +422,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     let no_fa_extra = if flash_attn {
         0
     } else {
-        no_flash_attn_rate(summary, arch) * n_tokens
+        no_flash_attn_rate(summary) * n_tokens
     };
     // A quantised KV cache costs more pinned memory than an f16 one, measured
     // in every one of 117 pairs differing in nothing else. The per-copy rate
@@ -446,8 +449,8 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
     masks
         + hidden_inputs
         + quantised_cache
-        + gemma_e_variant_bytes(summary, arch, n_tokens)
-        + mainline_tensor_moe_bytes(summary, arch, inputs, n_tokens)
+        + gemma_e_variant_bytes(summary, n_tokens)
+        + mainline_tensor_moe_bytes(summary, inputs, n_tokens)
 }
 
 /// mainline's host-resident MoE intermediates under tensor split.
@@ -458,7 +461,6 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, arch: &str, inputs: &EstimatorI
 /// mode and not on the placement alone.
 fn mainline_tensor_moe_bytes(
     summary: &GgufSummary,
-    arch: &str,
     inputs: &EstimatorInputs<'_>,
     n_tokens: u64,
 ) -> u64 {
@@ -468,7 +470,7 @@ fn mainline_tensor_moe_bytes(
     {
         return 0;
     }
-    MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD * embedding_length(summary, arch) * n_tokens
+    MAINLINE_TENSOR_MOE_BYTES_PER_NEMBD * embedding_length(summary) * n_tokens
 }
 
 /// How many times the graph's attention masks are replicated.
@@ -497,7 +499,8 @@ fn mask_copies(inputs: &EstimatorInputs<'_>) -> u64 {
 /// Measured flat at 1028 bytes per layer per batch token across three
 /// contexts, two batch sizes, and both card counts — with two same-architecture
 /// controls that are not E-variants showing none of it.
-fn gemma_e_variant_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64) -> u64 {
+fn gemma_e_variant_bytes(summary: &GgufSummary, n_tokens: u64) -> u64 {
+    let arch = &summary.architecture;
     if !crate::compute_buffer::is_gemma_e_variant(summary) {
         return 0;
     }
@@ -507,9 +510,9 @@ fn gemma_e_variant_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64) -> u6
 
 /// Additional full-width masks an architecture's sparse-attention indexer
 /// builds, beyond the ordinary one.
-fn extra_full_masks(arch: &str) -> u64 {
+fn extra_full_masks(arch: &Architecture) -> u64 {
     match arch {
-        "glm-dsa" => 1,
+        Architecture::GlmDsa => 1,
         _ => 0,
     }
 }
@@ -520,7 +523,8 @@ fn extra_full_masks(arch: &str) -> u64 {
 /// Zero above the threshold, which is where production batches sit — but a
 /// service that lowers `ubatch_size` crosses back over it and the term
 /// reappears, so it cannot simply be ignored.
-fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64, devices: u32) -> u64 {
+fn ik_moe_cpu_bytes(summary: &GgufSummary, n_tokens: u64, devices: u32) -> u64 {
+    let arch = &summary.architecture;
     let experts = summary.meta_u32(&keys::expert_count(arch)).unwrap_or(0) as u64;
     let used = summary
         .meta_u32(&keys::expert_used_count(arch))
@@ -534,7 +538,7 @@ fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64, devices: u
     // Proportional to hidden size, not flat: a flat 81 KiB/token, which is this
     // term at qwen35moe's `n_embd` of 2048, under-reserves GLM-5.2 — three
     // times that hidden size — threefold.
-    ik_moe_rate(arch, devices) * embedding_length(summary, arch) * n_tokens
+    ik_moe_rate(arch, devices) * embedding_length(summary) * n_tokens
 }
 
 /// The per-token, per-unit-of-hidden-size rate for this architecture and
@@ -545,7 +549,7 @@ fn ik_moe_cpu_bytes(summary: &GgufSummary, arch: &str, n_tokens: u64, devices: u
 /// glm-dsa is 28 on one card and 43 on two at identical placement, laguna 36
 /// and 54, while qwen35moe is 41 on both. A single constant would either
 /// under-reserve the worst or over-reserve a single-card glm by 45 MiB.
-fn ik_moe_rate(arch: &str, devices: u32) -> u64 {
+fn ik_moe_rate(arch: &Architecture, devices: u32) -> u64 {
     let table = crate::tuning::IK_MOE_RATES;
     let exact = format!("{arch}@{}", devices.max(1));
     if let Some((_, rate)) = table.iter().find(|(name, _)| *name == exact) {
@@ -570,7 +574,8 @@ fn pad_to_kv_cache(cells: u64) -> u64 {
 
 /// The model's hidden size. Zero when absent, which drops the hidden-input
 /// term rather than guessing a width.
-fn embedding_length(summary: &GgufSummary, arch: &str) -> u64 {
+fn embedding_length(summary: &GgufSummary) -> u64 {
+    let arch = &summary.architecture;
     summary.meta_u32(&keys::embedding_length(arch)).unwrap_or(0) as u64
 }
 
@@ -580,17 +585,18 @@ fn embedding_length(summary: &GgufSummary, arch: &str) -> u64 {
 /// `glm-dsa` is *not* in this list despite also being MLA: it was measured
 /// needing *more* than the plain law, not less. It gets an extra mask instead,
 /// via [`extra_full_masks`].
-pub(crate) fn is_mla(arch: &str) -> bool {
+pub(crate) fn is_mla(arch: &Architecture) -> bool {
     // `deepseek4` only. The DeepSeek-V2/V3/R1 family (`deepseek2`) is also
     // MLA, but it has *no measurement here* and a materially different graph —
     // no NSA indexer, no sliding window. Halving its mask on the strength of a
     // different architecture's numbers is the mistake this module keeps
     // making; add it when someone measures it.
-    arch == "deepseek4"
+    *arch == Architecture::DeepSeek4
 }
 
 /// The model's sliding-window size, when it advertises one.
-fn sliding_window(summary: &GgufSummary, arch: &str) -> Option<u32> {
+fn sliding_window(summary: &GgufSummary) -> Option<u32> {
+    let arch = &summary.architecture;
     summary
         .meta_u32(&keys::attention_sliding_window(arch))
         .filter(|w| *w > 0)
@@ -624,7 +630,6 @@ mod tests {
             cache_type_v: None,
             override_tensor: &[],
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: false,
@@ -636,7 +641,7 @@ mod tests {
         }
     }
 
-    fn summary(arch: &str, n_embd: u32, layers: u32, swa: Option<u32>) -> GgufSummary {
+    fn summary(arch: &Architecture, n_embd: u32, layers: u32, swa: Option<u32>) -> GgufSummary {
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(keys::embedding_length(arch), GgufValue::U32(n_embd));
         if let Some(w) = swa {
@@ -648,7 +653,7 @@ mod tests {
             tensors: Default::default(),
             metadata,
             block_count: Some(layers),
-            architecture: SmolStr::new(arch),
+            architecture: arch.clone(),
             shards: Vec::new(),
         }
     }
@@ -704,8 +709,7 @@ mod tests {
         ];
         for p in points {
             let got = pinned_graph_bytes(
-                &summary(p.arch, p.n_embd, p.layers, p.swa),
-                p.arch,
+                &summary(&Architecture::from(p.arch), p.n_embd, p.layers, p.swa),
                 &inputs(p.context, p.ubatch, p.flash_attn, p.parallel),
             ) as f64
                 / MIB;
@@ -749,8 +753,7 @@ mod tests {
         ];
         for (arch, n_embd, swa, ctx, ub, par, measured) in points {
             let got = pinned_graph_bytes(
-                &summary(arch, n_embd, 48, swa),
-                arch,
+                &summary(&Architecture::from(arch), n_embd, 48, swa),
                 &inputs(ctx, ub, true, par),
             ) as f64
                 / MIB;
@@ -815,7 +818,7 @@ mod tests {
             IkPoint { n_embd: 6144, swa: None, experts: Some((256, 8)), dsa: true, context: 131072, ubatch: 2048, parallel: 1, measured_mib: 1584.02 },
         ];
         for p in points {
-            let mut sum = summary("t", p.n_embd, 36, p.swa);
+            let mut sum = summary(&Architecture::Unknown("t".into()), p.n_embd, 36, p.swa);
             if let Some((count, used)) = p.experts {
                 sum.metadata
                     .insert(SmolStr::new("t.expert_count"), GgufValue::U32(count));
@@ -825,7 +828,7 @@ mod tests {
             let mut i = inputs(p.context, p.ubatch, true, p.parallel);
             i.ik_llama = true;
             i.ik_dsa = p.dsa;
-            let got = pinned_graph_bytes(&sum, "t", &i) as f64 / MIB;
+            let got = pinned_graph_bytes(&sum, &i) as f64 / MIB;
             // The mask and hidden-buffer terms are exact. The host MoE term is
             // calibrated on one model, so where it applies the guarantee is
             // only that the estimate stays inside the band the rolling
@@ -865,11 +868,11 @@ mod tests {
     /// part of the estimate rather than a detail of how it is served.
     #[test]
     fn the_forks_disagree_on_the_same_inputs() {
-        let s = summary("t", 2560, 36, None);
-        let mainline = pinned_graph_bytes(&s, "t", &inputs(32768, 512, true, 4));
+        let s = summary(&Architecture::Unknown("t".into()), 2560, 36, None);
+        let mainline = pinned_graph_bytes(&s, &inputs(32768, 512, true, 4));
         let mut ik = inputs(32768, 512, true, 4);
         ik.ik_llama = true;
-        let ik_bytes = pinned_graph_bytes(&s, "t", &ik);
+        let ik_bytes = pinned_graph_bytes(&s, &ik);
         assert_eq!(mainline as f64 / MIB, 18.0);
         assert_eq!(ik_bytes as f64 / MIB, 37.0);
     }
@@ -878,8 +881,8 @@ mod tests {
     /// mask-only model (or a per-device GPU curve) cannot stand in for this.
     #[test]
     fn the_hidden_state_inputs_dominate_a_short_context() {
-        let s = summary("t", 5120, 64, None);
-        let total = pinned_graph_bytes(&s, "t", &inputs(8192, 512, true, 4));
+        let s = summary(&Architecture::Unknown("t".into()), 5120, 64, None);
+        let total = pinned_graph_bytes(&s, &inputs(8192, 512, true, 4));
         let mask = 2048 * 512 * 2;
         assert!(
             total - mask > 9 * mask,
@@ -917,7 +920,12 @@ mod tests {
     #[test]
     fn a_mixture_of_experts_gets_its_own_allowance() {
         for (layers, measured) in [(41u32, 503.0), (43, 546.0), (48, 400.0)] {
-            let s = with_experts(summary("t", 2048, layers, None));
+            let s = with_experts(summary(
+                &Architecture::Unknown("t".into()),
+                2048,
+                layers,
+                None,
+            ));
             let predicted = process_base_bytes(&s, false, true) as f64 / MIB;
             let ratio = measured / predicted;
             assert!(
@@ -928,8 +936,16 @@ mod tests {
             );
         }
         // A dense model of the same size gets no allowance.
-        let dense = process_base_bytes(&summary("t", 2048, 41, None), false, true);
-        let moe = process_base_bytes(&with_experts(summary("t", 2048, 41, None)), false, true);
+        let dense = process_base_bytes(
+            &summary(&Architecture::Unknown("t".into()), 2048, 41, None),
+            false,
+            true,
+        );
+        let moe = process_base_bytes(
+            &with_experts(summary(&Architecture::Unknown("t".into()), 2048, 41, None)),
+            false,
+            true,
+        );
         assert!(moe > dense);
     }
 
@@ -943,12 +959,22 @@ mod tests {
     /// service that has never served is not the state worth predicting.
     #[test]
     fn the_process_baseline_matches_a_serving_process() {
-        let small = process_base_bytes(&summary("t", 2560, 36, None), false, true) as f64 / MIB;
+        let small = process_base_bytes(
+            &summary(&Architecture::Unknown("t".into()), 2560, 36, None),
+            false,
+            true,
+        ) as f64
+            / MIB;
         assert!(
             (small - 233.0).abs() < 8.0,
             "36-layer baseline modelled at {small:.0} MiB against 233 MiB measured"
         );
-        let large = process_base_bytes(&summary("t", 5120, 64, None), false, true) as f64 / MIB;
+        let large = process_base_bytes(
+            &summary(&Architecture::Unknown("t".into()), 5120, 64, None),
+            false,
+            true,
+        ) as f64
+            / MIB;
         assert!(large > small, "more layers means more graph metadata");
     }
 
@@ -969,8 +995,8 @@ mod tests {
             ("-ngl 6,   6/37 on GPU", 3968.0, 4223.0),
             ("-ngl 0,   0/37 on GPU", 4608.0, 4819.0),
         ];
-        let s = summary("t", 2560, 36, None);
-        let overhead = host_overhead_bytes(&s, "t", &inputs(32768, 512, true, 4)) as f64 / MIB;
+        let s = summary(&Architecture::Unknown("t".into()), 2560, 36, None);
+        let overhead = host_overhead_bytes(&s, &inputs(32768, 512, true, 4)) as f64 / MIB;
         for (label, cpu_kv, measured) in regimes {
             let predicted = overhead + cpu_kv;
             let ratio = measured / predicted;
@@ -1000,16 +1026,16 @@ mod tests {
     /// for an embedded head over-predicts by ~300 MiB.
     #[test]
     fn the_two_mtp_shapes_are_charged_differently() {
-        let s = summary("gemma4", 5376, 60, Some(1024));
+        let s = summary(&Architecture::Gemma4, 5376, 60, Some(1024));
         let mut i = inputs(240000, 512, true, 4);
         i.kv_unified = Some(true);
-        let plain = host_overhead_bytes(&s, "gemma4", &i);
+        let plain = host_overhead_bytes(&s, &i);
 
         i.mtp = true;
-        let embedded = host_overhead_bytes(&s, "gemma4", &i);
+        let embedded = host_overhead_bytes(&s, &i);
         let draft_path = std::path::PathBuf::from("/d.gguf");
         i.draft_model = Some(&draft_path);
-        let separate = host_overhead_bytes(&s, "gemma4", &i);
+        let separate = host_overhead_bytes(&s, &i);
 
         // Both shapes cost more than none, and they cost *different* amounts —
         // which is the point of the assertion. Which of the two is larger is
@@ -1068,17 +1094,17 @@ mod measured_tests {
     fn layer_split_replicates_masks_but_tensor_split_does_not() {
         let summary = fake_summary();
         let empty: [String; 0] = [];
-        let one = pinned_graph_bytes(&summary, "llama", &inputs("f16", "f16", 32768, &empty));
+        let one = pinned_graph_bytes(&summary, &inputs("f16", "f16", 32768, &empty));
 
         let mut two = inputs("f16", "f16", 32768, &empty);
         two.visible_devices = 2;
         two.split_mode = SplitMode::Layer;
-        let layered = pinned_graph_bytes(&summary, "llama", &two);
+        let layered = pinned_graph_bytes(&summary, &two);
 
         let mut fused = inputs("f16", "f16", 32768, &empty);
         fused.visible_devices = 2;
         fused.split_mode = SplitMode::Tensor;
-        let tensored = pinned_graph_bytes(&summary, "llama", &fused);
+        let tensored = pinned_graph_bytes(&summary, &fused);
 
         assert!(
             layered > one,
@@ -1118,8 +1144,7 @@ mod measured_tests {
         four.visible_devices = 4;
         four.split_mode = SplitMode::Tensor;
 
-        let delta = host_overhead_bytes(&summary, "llama", &four)
-            - host_overhead_bytes(&summary, "llama", &two);
+        let delta = host_overhead_bytes(&summary, &four) - host_overhead_bytes(&summary, &two);
         assert_eq!(delta, 2 * PROCESS_BASE_BYTES_PER_DEVICE);
     }
 
@@ -1135,10 +1160,10 @@ mod measured_tests {
         // qwen35moe measures the same rate on one card and two, which is what
         // makes it the right model to assert the hidden-size scaling against —
         // glm-dsa and laguna vary with the device count as well.
-        let rate = ik_moe_rate("qwen35moe", 2);
+        let rate = ik_moe_rate(&Architecture::Qwen35Moe, 2);
         assert_eq!(
             rate,
-            ik_moe_rate("qwen35moe", 1),
+            ik_moe_rate(&Architecture::Qwen35Moe, 1),
             "qwen35moe is measured card-independent"
         );
         let narrow = rate * 2048;
@@ -1166,10 +1191,10 @@ mod measured_tests {
 /// They span a factor of forty — 61 bytes per batch token on lfm2 against
 /// 6144 on deepseek4 — so one value would either under-reserve the worst or
 /// over-reserve everything else by about 3 MiB.
-fn quantised_cache_rate(arch: &str) -> u64 {
+fn quantised_cache_rate(arch: &Architecture) -> u64 {
     lookup(
         crate::tuning::QUANTISED_CACHE_RATES,
-        arch,
+        arch.as_str(),
         crate::tuning::QUANTISED_CACHE_RATE_DEFAULT,
     )
 }

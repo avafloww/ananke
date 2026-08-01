@@ -189,6 +189,8 @@ impl EstimateCache {
 
 #[cfg(test)]
 mod tests {
+    use ananke_gguf::Architecture;
+
     use super::*;
 
     const FP: u64 = 0xC0FFEE;
@@ -238,7 +240,7 @@ mod tests {
                 expert_layers: Vec::new(),
                 expert_tensors: None,
                 context: 4096,
-                architecture: SmolStr::new("llama"),
+                architecture: Architecture::Llama,
             },
         }
     }

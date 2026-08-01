@@ -199,12 +199,6 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "none",
                     "Multiplier applied to the estimated VRAM footprint.",
                 ),
-                field(
-                    "allow_fallback",
-                    "bool",
-                    "`false`",
-                    "Accept the coarse fallback estimate when the GGUF's architecture isn't recognised by any per-family estimator. Unknown architectures hard-reject at config load by default so the operator either adds the arch to the right family list or explicitly opts in here.",
-                ),
             ],
         },
         SectionDoc {

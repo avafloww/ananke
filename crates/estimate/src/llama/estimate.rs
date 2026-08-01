@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 
 use ananke_gguf::GgufSummary;
-use smol_str::SmolStr;
 
 use crate::{
     llama::kv_per_token::compute_kv_per_token,
@@ -12,7 +11,7 @@ use crate::{
 };
 
 pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
-    let arch = summary.architecture.as_str();
+    let arch = &summary.architecture;
     let n_layers = summary.block_count.unwrap_or(0);
 
     let per_layer_bytes = collect_per_layer(summary, n_layers);
@@ -23,7 +22,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         + non_layer.token_embd_bytes
         + non_layer.other_bytes;
 
-    let kv_per_token = compute_kv_per_token(summary, arch, n_layers, inputs);
+    let kv_per_token = compute_kv_per_token(summary, n_layers, inputs);
 
     Estimate {
         weights_bytes,
@@ -46,7 +45,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         expert_layers: Vec::new(),
         expert_tensors: None,
         context: inputs.context,
-        architecture: SmolStr::new(arch),
+        architecture: arch.clone(),
     }
 }
 
@@ -102,7 +101,7 @@ pub(crate) fn layer_index(name: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use ananke_gguf::types::GgufSummary;
+    use ananke_gguf::{Architecture, types::GgufSummary};
     use smol_str::SmolStr;
 
     use super::*;
@@ -161,7 +160,7 @@ mod tests {
             tensors,
             metadata: std::collections::BTreeMap::new(),
             block_count: Some(0),
-            architecture: SmolStr::new("gemma3n"),
+            architecture: Architecture::Gemma3n,
             shards: vec!["/fake".into()],
         };
         let nl = collect_non_layer(&summary);
@@ -199,7 +198,7 @@ mod tests {
             tensors,
             metadata: std::collections::BTreeMap::new(),
             block_count: Some(0),
-            architecture: SmolStr::new("gemma4"),
+            architecture: Architecture::Gemma4,
             shards: vec!["/fake".into()],
         };
         let nl = collect_non_layer(&summary);

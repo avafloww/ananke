@@ -31,6 +31,7 @@ use ananke::{
     devices::{Allocation, CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot, cuda_env},
     estimator::{Estimate, NonLayer},
 };
+use ananke_gguf::Architecture;
 use smol_str::SmolStr;
 
 /// Build a `DeviceSnapshot` from a list of `(gpu_id, total_gb, free_gb)`
@@ -82,7 +83,7 @@ fn flat_estimate(n_layers: usize, per_layer_mib: u64) -> Estimate {
         expert_layers: Vec::new(),
         expert_tensors: None,
         context: 4096,
-        architecture: SmolStr::new("qwen3"),
+        architecture: Architecture::Qwen3,
     }
 }
 

@@ -58,7 +58,6 @@ struct Args {
     override_tensor: Vec<String>,
     compute_buffer_mb: Option<u32>,
     active_devices: Option<u64>,
-    allow_fallback: bool,
     mtp: bool,
     draft_model: Option<PathBuf>,
     parallel: Option<u32>,
@@ -86,7 +85,6 @@ fn parse_args() -> Args {
     let mut override_tensor: Vec<String> = Vec::new();
     let mut compute_buffer_mb: Option<u32> = None;
     let mut active_devices: Option<u64> = None;
-    let mut allow_fallback = false;
     let mut mtp = false;
     let mut draft_model: Option<PathBuf> = None;
     let mut parallel: Option<u32> = None;
@@ -119,7 +117,6 @@ fn parse_args() -> Args {
             }
             "--compute-buffer-mb" => compute_buffer_mb = it.next().and_then(|s| s.parse().ok()),
             "--active-devices" => active_devices = it.next().and_then(|s| s.parse().ok()),
-            "--allow-fallback" => allow_fallback = true,
             "--mtp" => mtp = true,
             "--draft-model" => draft_model = it.next().map(PathBuf::from),
             "--parallel" => parallel = it.next().and_then(|s| s.parse().ok()),
@@ -191,7 +188,6 @@ fn parse_args() -> Args {
         override_tensor,
         compute_buffer_mb,
         active_devices,
-        allow_fallback,
         mtp: mtp || draft_model.is_some(),
         draft_model,
         parallel,
@@ -265,7 +261,6 @@ fn main() {
         cache_type_v: args.cache_type_v.as_deref(),
         override_tensor: &args.override_tensor,
         compute_buffer_mb: args.compute_buffer_mb,
-        allow_fallback: args.allow_fallback,
         mtp: args.mtp,
         draft_model: args.draft_model.as_deref(),
         ik_llama: args.ik_llama,

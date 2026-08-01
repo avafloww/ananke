@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use ananke_estimate::{Estimate, ExpertKind, ExpertTensor, NonLayer};
-use smol_str::SmolStr;
+use ananke_gguf::Architecture;
 
 use super::*;
 use crate::{
@@ -379,7 +379,7 @@ fn deepseek4_like_auto_fits_two_24gib_cards() {
         expert_layers: (0..n_layers).collect(),
         expert_tensors: Some(experts),
         context: 131072,
-        architecture: SmolStr::new("deepseek4"),
+        architecture: Architecture::DeepSeek4,
     };
     // The real box has 125 GiB RAM for the ~60 GiB of CPU-side experts;
     // widen the default snapshot's host budget to match.

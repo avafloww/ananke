@@ -21,7 +21,7 @@
 //! Operators can override the whole term per service via
 //! `estimation.compute_buffer_mb`.
 
-use ananke_gguf::{GgufSummary, keys};
+use ananke_gguf::{Architecture, GgufSummary, keys};
 
 use crate::{
     compute_model,
@@ -95,7 +95,8 @@ pub fn per_device_for(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> u3
 /// absorbed by the per-architecture rate, the two only ever appearing as a
 /// product, so the fallback costs accuracy in the attribution rather than in the
 /// reservation.
-fn query_head_count(summary: &GgufSummary, arch: &str) -> u64 {
+fn query_head_count(summary: &GgufSummary) -> u64 {
+    let arch = &summary.architecture;
     if let Some(heads) = summary
         .meta_u64(&keys::attention_head_count(arch))
         .filter(|h| *h > 0)
@@ -112,10 +113,10 @@ fn query_head_count(summary: &GgufSummary, arch: &str) -> u64 {
 }
 
 /// A per-architecture rate, or the table's default.
-fn rate(table: &[(&str, u64)], arch: &str, fallback: u64) -> u64 {
+fn rate(table: &[(&str, u64)], arch: &Architecture, fallback: u64) -> u64 {
     table
         .iter()
-        .find(|(a, _)| *a == arch)
+        .find(|(a, _)| *a == arch.as_str())
         .map(|(_, v)| *v)
         .unwrap_or(fallback)
 }
@@ -140,8 +141,8 @@ fn no_flash_attn_mib(summary: &GgufSummary, context: u32, ubatch: u32, flash_att
     if flash_attn {
         return 0;
     }
-    let arch = summary.architecture.as_str();
-    let heads = query_head_count(summary, arch);
+    let arch = &summary.architecture;
+    let heads = query_head_count(summary);
     if heads == 0 {
         return 0;
     }
@@ -180,7 +181,7 @@ mod tests {
     /// structure — which entry a model resolves to, and how the head card differs from
     /// the others — because those are decisions in this file rather than numbers
     /// in `tuning.json`.
-    fn sized_summary(arch: &str, n_embd: u32) -> GgufSummary {
+    fn sized_summary(arch: &Architecture, n_embd: u32) -> GgufSummary {
         let mut metadata = BTreeMap::new();
         metadata.insert(keys::embedding_length(arch), GgufValue::U32(n_embd));
         metadata.insert(keys::attention_head_count(arch), GgufValue::U32(32));
@@ -190,7 +191,7 @@ mod tests {
             tensors: BTreeMap::new(),
             metadata,
             block_count: Some(32),
-            architecture: SmolStr::new(arch),
+            architecture: arch.clone(),
             shards: Vec::new(),
         }
     }
@@ -210,7 +211,6 @@ mod tests {
             cache_type_v: None,
             override_tensor: EMPTY,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: false,
@@ -235,7 +235,7 @@ mod tests {
             "gemma4",
             "talkie",
         ] {
-            let s = sized_summary(arch, 4096);
+            let s = sized_summary(&Architecture::from(arch), 4096);
             let got = per_device_for(&s, &inputs(32768, SplitMode::Layer, 2));
             assert!(got > 0, "{arch} produced no reservation");
         }
@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn an_unmeasured_architecture_falls_back_rather_than_failing() {
-        let s = sized_summary("no-such-arch", 4096);
+        let s = sized_summary(&Architecture::Unknown("no-such-arch".into()), 4096);
         assert!(per_device_for(&s, &inputs(32768, SplitMode::Layer, 1)) > 0);
     }
 
@@ -252,7 +252,7 @@ mod tests {
         // `per_device_for` returns the head card's total and the packer trims
         // `output_buffer_bytes` back off every other card, so the head extra must
         // be a positive share of it.
-        let s = sized_summary("qwen35moe", 2048);
+        let s = sized_summary(&Architecture::Qwen35Moe, 2048);
         let i = inputs(32768, SplitMode::Layer, 2);
         let head = per_device_for(&s, &i);
         let extra = compute_model::head_extra_mib(&s, &i);
@@ -271,7 +271,7 @@ mod tests {
         // Measured: at ctx 32768 gemma4 needs 212 MiB per device sharded against
         // 337 layer-split, and laguna 166 against 558. A single number for both
         // would have to be wrong for one of them.
-        let s = sized_summary("gemma4", 4096);
+        let s = sized_summary(&Architecture::Gemma4, 4096);
         let layer = per_device_for(&s, &inputs(32768, SplitMode::Layer, 2));
         let tensor = per_device_for(&s, &inputs(32768, SplitMode::Tensor, 2));
         assert_ne!(layer, tensor);
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn a_longer_context_never_reserves_less() {
-        let s = sized_summary("qwen3", 4096);
+        let s = sized_summary(&Architecture::Qwen3, 4096);
         let mut previous = 0;
         for context in [0, 8192, 32768, 131072, 524288] {
             let got = per_device_for(&s, &inputs(context, SplitMode::Layer, 2));
@@ -295,7 +295,7 @@ mod tests {
     fn a_runtime_specific_entry_wins_over_a_general_one() {
         // The two forks build different graphs for the same architecture, so an
         // ik-fitted entry must take precedence where one exists.
-        let s = sized_summary("qwen35moe", 2048);
+        let s = sized_summary(&Architecture::Qwen35Moe, 2048);
         let mut ik = inputs(32768, SplitMode::Layer, 2);
         ik.ik_llama = true;
         let mainline = per_device_for(&s, &inputs(32768, SplitMode::Layer, 2));
@@ -306,8 +306,8 @@ mod tests {
     fn the_gemma_e_variant_has_its_own_entry() {
         // One architecture string, two graphs: the E-variants keep their
         // per-layer embeddings on the host.
-        let plain = sized_summary("gemma4", 4096);
-        let mut e = sized_summary("gemma4", 4096);
+        let plain = sized_summary(&Architecture::Gemma4, 4096);
+        let mut e = sized_summary(&Architecture::Gemma4, 4096);
         e.tensors.insert(
             SmolStr::new("per_layer_token_embd.weight"),
             ananke_gguf::types::GgufTensor {
@@ -327,7 +327,7 @@ mod tests {
 
     #[test]
     fn an_operator_override_wins_outright() {
-        let s = sized_summary("qwen3", 4096);
+        let s = sized_summary(&Architecture::Qwen3, 4096);
         let mut i = inputs(32768, SplitMode::Layer, 2);
         i.compute_buffer_mb = Some(1234);
         assert_eq!(per_device_for(&s, &i), 1234);

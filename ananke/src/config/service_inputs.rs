@@ -44,7 +44,6 @@ pub fn estimator_inputs(svc: &ServiceConfig) -> Option<EstimatorInputs<'_>> {
         cache_type_v: lc.cache_type_v.as_deref(),
         override_tensor: &lc.override_tensor,
         compute_buffer_mb: lc.estimation.compute_buffer_mb,
-        allow_fallback: lc.estimation.allow_fallback.unwrap_or(false),
         mtp: lc.spec_type.as_deref() == Some("draft-mtp"),
         draft_model: lc.draft_model.as_deref(),
         ik_llama: lc.runtime.ik().is_some(),

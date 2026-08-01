@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, path::Path};
 
 use ananke_config::placement::DeviceSlot;
-use smol_str::SmolStr;
+use ananke_gguf::Architecture;
 
 /// Pure inputs the estimator reads. The daemon builds one of these from a
 /// `ServiceConfig` on each spawn; standalone callers (calibration tools,
@@ -62,11 +62,6 @@ pub struct EstimatorInputs<'a> {
     /// Override for the compute-buffer reservation (MB per active device).
     /// Absent means the estimator's 400 MB default.
     pub compute_buffer_mb: Option<u32>,
-    /// Whether the operator has opted into the coarse fallback when the
-    /// GGUF's architecture isn't recognised by any per-family estimator.
-    /// `false` by default — unknown architectures return an error instead
-    /// of silently producing a guess that may be badly wrong.
-    pub allow_fallback: bool,
     /// Whether the service runs with `--spec-type draft-mtp`. When set and
     /// the model carries an MTP head (`nextn_predict_layers > 0`), the
     /// estimator adds the MTP draft context's KV + compute overhead. See
@@ -150,7 +145,6 @@ impl<'a> EstimatorInputs<'a> {
         self.cache_type_v.hash(&mut hasher);
         self.override_tensor.hash(&mut hasher);
         self.compute_buffer_mb.hash(&mut hasher);
-        self.allow_fallback.hash(&mut hasher);
         self.mtp.hash(&mut hasher);
         self.draft_model.hash(&mut hasher);
         self.ik_llama.hash(&mut hasher);
@@ -262,8 +256,9 @@ pub struct Estimate {
     pub expert_tensors: Option<Vec<ExpertTensor>>,
     /// `context` that was used to compute `kv_per_token × context`.
     pub context: u32,
-    /// Architecture string for diagnostics.
-    pub architecture: SmolStr,
+    /// The model's graph, carried through for diagnostics and for the
+    /// packer's architecture-specific decisions.
+    pub architecture: Architecture,
 }
 
 /// One offloadable fused expert tensor on a MoE layer. llama.cpp stacks every
@@ -349,7 +344,6 @@ mod tests {
             cache_type_v: None,
             override_tensor: &[],
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             parallel: None,

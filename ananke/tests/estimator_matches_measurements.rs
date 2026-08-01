@@ -38,7 +38,7 @@ use ananke::{
     gguf::{GgufSummary, GgufTensor, GgufType, GgufValue},
 };
 use ananke_dataset::{KvType, Record, Status, read_ndjson};
-use ananke_gguf::{keys, keys::suffix};
+use ananke_gguf::{Architecture, keys, keys::suffix};
 
 /// Architectures whose arena the campaign confirmed to within 0.1 MiB.
 ///
@@ -110,7 +110,7 @@ fn arena_reproduces_the_measured_pinned_buffer() {
             continue;
         }
 
-        let predicted = pinned_graph_bytes(&case.summary, &case.arch, &case.inputs()) as f64;
+        let predicted = pinned_graph_bytes(&case.summary, &case.inputs()) as f64;
         let measured = case.arena_mib * 1024.0 * 1024.0;
         let delta = (predicted - measured).abs() / 1024.0 / 1024.0;
         checked += 1;
@@ -195,7 +195,7 @@ fn every_model_lands_inside_the_correction_band() {
         if !case.served {
             continue;
         }
-        let predicted = host_overhead_bytes(&case.summary, &case.arch, &case.inputs()) as f64;
+        let predicted = host_overhead_bytes(&case.summary, &case.inputs()) as f64;
         if predicted <= 0.0 {
             continue;
         }
@@ -281,6 +281,7 @@ impl Case {
         let factors = &record.factors;
         let parsed = &record.parsed;
         let arch = parsed.architecture()?.to_owned();
+        let architecture = Architecture::from(arch.as_str());
         // `?` is the parser's own marker for a log that named no architecture.
         if arch == "?" {
             return None;
@@ -302,7 +303,10 @@ impl Case {
         let mut metadata = BTreeMap::new();
         let mut put = |key: &str, value: u64| {
             if value > 0 {
-                metadata.insert(keys::scoped(&arch, key), GgufValue::U32(value as u32));
+                metadata.insert(
+                    keys::scoped(&architecture, key),
+                    GgufValue::U32(value as u32),
+                );
             }
         };
         put(suffix::BLOCK_COUNT, parsed.n_layer);
@@ -359,7 +363,7 @@ impl Case {
                 },
                 metadata,
                 block_count: Some(n_layer),
-                architecture: smol_str::SmolStr::new(&arch),
+                architecture: architecture.clone(),
                 shards: Vec::new(),
             },
             arch,
@@ -412,7 +416,6 @@ impl Case {
             cache_type_v: Some(self.kv_type.name()),
             override_tensor: &[],
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: self.ik_llama,

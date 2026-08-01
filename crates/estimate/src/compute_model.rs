@@ -100,7 +100,7 @@ impl Columns {
         inputs: &EstimatorInputs<'_>,
         head_share: f64,
     ) -> Self {
-        let arch = summary.architecture.as_str();
+        let arch = &summary.architecture;
         let ubatch = f64::from(inputs.ubatch.unwrap_or(DEFAULT_UBATCH).max(1));
         let n_embd = f64::from(summary.meta_u32(&keys::embedding_length(arch)).unwrap_or(0));
         let n_vocab = summary
@@ -213,7 +213,7 @@ fn coefficients_for(
     summary: &GgufSummary,
     inputs: &EstimatorInputs<'_>,
 ) -> &'static ComputeCoefficients {
-    let arch = summary.architecture.as_str();
+    let arch = &summary.architecture;
     let variant = variant_of(summary);
     let split = match inputs.split_mode {
         SplitMode::Tensor | SplitMode::Row => "tensor",
@@ -221,7 +221,7 @@ fn coefficients_for(
     };
     let runtime = inputs.ik_llama.then_some("ik");
     let matches = |entry: &&'static crate::tuning::ComputeEntry| {
-        entry.archs.contains(&arch) && entry.variant == variant && entry.split == split
+        entry.archs.contains(&arch.as_str()) && entry.variant == variant && entry.split == split
     };
     COMPUTE_MODEL
         .iter()

@@ -1,7 +1,7 @@
 //! KV cache sizing for llama-family models, including the SWA and shared-KV
 //! variants (Gemma 2/3/4, LFM2).
 
-use ananke_gguf::{GgufSummary, keys};
+use ananke_gguf::{Architecture, GgufSummary, keys};
 
 use crate::{kv, recurrent, types::EstimatorInputs};
 
@@ -14,14 +14,14 @@ use crate::{kv, recurrent, types::EstimatorInputs};
 /// Architectures that ship the pattern as a per-layer bool mask (e.g.
 /// `gemma4.attention.sliding_window_pattern`) do *not* go through this
 /// function — they use the mask directly.
-pub fn hardcoded_swa_group_size(arch: &str) -> Option<u32> {
+pub fn hardcoded_swa_group_size(arch: &Architecture) -> Option<u32> {
     match arch {
-        "gemma2" | "gemma3" => Some(6),
+        Architecture::Gemma2 | Architecture::Gemma3 => Some(6),
         // Laguna-S: 1:3 global:SWA pattern across all layers (every 4th is
         // global), confirmed by measured KV at ctx 32768: 12 full-attention
         // layers + 36 SWA layers (window 512) reproduces the 1680 MiB
         // reading within 4%.
-        "laguna" => Some(4),
+        Architecture::Laguna => Some(4),
         _ => None,
     }
 }
@@ -45,10 +45,10 @@ pub fn hardcoded_swa_group_size(arch: &str) -> Option<u32> {
 /// bytes` so the packer's downstream math stays identical.
 pub(crate) fn compute_kv_per_token(
     summary: &GgufSummary,
-    arch: &str,
     n_layers: u32,
     inputs: &EstimatorInputs<'_>,
 ) -> u64 {
+    let arch = &summary.architecture;
     let cache_k = inputs.cache_type_k.unwrap_or("f16");
     let cache_v = inputs.cache_type_v.unwrap_or("f16");
     let bytes_k = kv::kv_bytes_per_element(cache_k);
@@ -194,7 +194,7 @@ pub(crate) fn compute_kv_per_token(
         .take(unique_kv_count as usize)
         .filter(|&&heads| heads == 0)
         .count() as u64;
-    let state = recurrent::state_bytes(summary, arch, recurrent_layers, inputs);
+    let state = recurrent::state_bytes(summary, recurrent_layers, inputs);
 
     (total_kv_bytes + state) / context
 }
@@ -202,7 +202,7 @@ pub(crate) fn compute_kv_per_token(
 #[cfg(test)]
 mod tests {
     use ananke_gguf::{
-        keys,
+        Architecture, keys,
         types::{GgufSummary, GgufValue},
     };
     use smol_str::SmolStr;
@@ -265,11 +265,11 @@ mod tests {
             tensors,
             metadata,
             block_count: Some(16),
-            architecture: SmolStr::new("lfm2"),
+            architecture: Architecture::Lfm2,
             shards: vec!["/fake".into()],
         };
 
-        assert!(crate::llama::is_llama_family("lfm2"));
+        assert!(crate::llama::is_llama_family(&Architecture::Lfm2));
         let empty: Vec<String> = Vec::new();
         let e = estimate(&s, &inputs("f16", "f16", 16384, &empty));
         // 5 attention layers (indices 2,5,8,11,14) × 8 kv-heads ×
@@ -325,7 +325,7 @@ mod tests {
             tensors,
             metadata,
             block_count: Some(2),
-            architecture: SmolStr::new("talkie"),
+            architecture: Architecture::Talkie,
             shards: vec!["/fake".into()],
         };
         let empty: Vec<String> = Vec::new();
@@ -381,7 +381,7 @@ mod tests {
             tensors: std::collections::BTreeMap::new(),
             metadata,
             block_count: Some(n_layers),
-            architecture: SmolStr::new("gemma4"),
+            architecture: Architecture::Gemma4,
             shards: vec!["/fake".into()],
         }
     }

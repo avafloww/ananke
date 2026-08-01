@@ -202,7 +202,7 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "mode",
                     "string",
                     "*required* (command only)",
-                    "`\"static\"` or `\"dynamic\"`. Rejected for llama-cpp services. Applies to `command` services only.",
+                    "`\"static\"` or `\"dynamic\"`. Required on every `command` service. Optional on a `llama-cpp` one, where it replaces the estimator entirely — the only way to place a model whose architecture ananke does not recognise.",
                 ),
                 field(
                     "reserve_gb",

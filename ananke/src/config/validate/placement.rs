@@ -50,19 +50,15 @@ impl AllocationMode {
         max_reserve_gb: Option<f32>,
         min_borrower_runtime_ms: u64,
     ) -> Result<AllocationMode, String> {
-        match (template, mode) {
-            (Template::LlamaCpp, Some(m)) => Err(format!(
-                "allocation.mode `{m}` invalid for llama-cpp (use placement_override or estimator)"
-            )),
-            (Template::LlamaCpp, None) => Ok(AllocationMode::None),
-            (Template::Command, Some("static")) => {
+        match mode {
+            Some("static") => {
                 let gb = reserve_gb
                     .ok_or_else(|| "allocation.mode=static requires reserve_gb".to_string())?;
                 Ok(AllocationMode::Static {
                     reserve_mb: gib_to_mib(gb),
                 })
             }
-            (Template::Command, Some("dynamic")) => {
+            Some("dynamic") => {
                 let min = min_reserve_gb
                     .ok_or_else(|| "allocation.mode=dynamic requires min_reserve_gb".to_string())?;
                 let max = max_reserve_gb
@@ -76,10 +72,16 @@ impl AllocationMode {
                     min_borrower_runtime_ms,
                 })
             }
-            (Template::Command, Some(other)) => Err(format!("unknown allocation.mode `{other}`")),
-            (Template::Command, None) => {
-                Err("command template requires allocation.mode (static|dynamic)".to_string())
-            }
+            Some(other) => Err(format!("unknown allocation.mode `{other}`")),
+            // A llama-cpp service without one is estimated and packed, which
+            // is the normal path. A command service cannot be: ananke does not
+            // build its argv and so cannot know what it will allocate.
+            None => match template {
+                Template::LlamaCpp => Ok(AllocationMode::None),
+                Template::Command => {
+                    Err("command template requires allocation.mode (static|dynamic)".to_string())
+                }
+            },
         }
     }
 }

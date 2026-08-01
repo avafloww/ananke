@@ -12,8 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use ananke_gguf::{GgufSummary, keys};
-use smol_str::SmolStr;
+use ananke_gguf::{Architecture, GgufSummary, keys};
 
 use crate::{
     compute_buffer, kv,
@@ -23,10 +22,10 @@ use crate::{
 };
 
 /// Architectures that mix attention with recurrent SSM layers (no MoE).
-pub const HYBRID_FAMILY: &[&str] = &["jamba", "qwen35"];
+pub const HYBRID_FAMILY: &[Architecture] = &[Architecture::Jamba, Architecture::Qwen35];
 
-pub fn is_hybrid(arch: &str) -> bool {
-    HYBRID_FAMILY.contains(&arch)
+pub fn is_hybrid(arch: &Architecture) -> bool {
+    HYBRID_FAMILY.contains(arch)
 }
 
 /// Compute the KV cost per token for a hybrid model, scaling by
@@ -44,12 +43,8 @@ pub fn is_hybrid(arch: &str) -> bool {
 /// `n_layers` is the model's full block count; the layer counting below uses
 /// [`recurrent::context_layer_span`] to drop an MTP head's trailing block,
 /// which belongs to the separate draft context rather than to this one.
-pub fn kv_for_hybrid(
-    summary: &GgufSummary,
-    arch: &str,
-    n_layers: u32,
-    inputs: &EstimatorInputs<'_>,
-) -> u64 {
+pub fn kv_for_hybrid(summary: &GgufSummary, n_layers: u32, inputs: &EstimatorInputs<'_>) -> u64 {
+    let arch = &summary.architecture;
     let cache_k = inputs.cache_type_k.unwrap_or("f16");
     let cache_v = inputs.cache_type_v.unwrap_or("f16");
     let bytes_k = kv::kv_bytes_per_element(cache_k);
@@ -72,7 +67,7 @@ pub fn kv_for_hybrid(
         .meta_u32(&keys::full_attention_interval(arch))
         .unwrap_or(1)
         .max(1);
-    let span = recurrent::context_layer_span(summary, arch).min(n_layers);
+    let span = recurrent::context_layer_span(summary).min(n_layers);
     let kv_layer_count = (span / full_attention_interval) as u64;
 
     let attention_kv = if kv_layer_count > 0 && n_kv_heads > 0 {
@@ -88,7 +83,7 @@ pub fn kv_for_hybrid(
     // size follows from the model's `ssm.*` metadata — see
     // [`crate::recurrent`].
     let recurrent_layers = span as u64 - kv_layer_count;
-    let state = recurrent::state_bytes(summary, arch, recurrent_layers, inputs);
+    let state = recurrent::state_bytes(summary, recurrent_layers, inputs);
 
     // Fold the state into the per-token figure so `kv_per_token × context`
     // recovers `attention_kv + state`.
@@ -97,7 +92,7 @@ pub fn kv_for_hybrid(
 }
 
 pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
-    let arch = summary.architecture.as_str();
+    let arch = &summary.architecture;
     let n_layers = summary.block_count.unwrap_or(0);
 
     let per_layer = collect_per_layer(summary, n_layers);
@@ -107,7 +102,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         + non_layer.token_embd_bytes
         + non_layer.other_bytes;
 
-    let kv_per_token = kv_for_hybrid(summary, arch, n_layers, inputs);
+    let kv_per_token = kv_for_hybrid(summary, n_layers, inputs);
 
     Estimate {
         weights_bytes,
@@ -130,7 +125,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         expert_layers: Vec::new(),
         expert_tensors: None,
         context: inputs.context,
-        architecture: SmolStr::new(arch),
+        architecture: arch.clone(),
     }
 }
 
@@ -142,10 +137,15 @@ mod tests {
         keys::suffix,
         types::{GgufSummary, GgufTensor, GgufType, GgufValue},
     };
+    use smol_str::SmolStr;
 
     use super::*;
 
-    fn fake_hybrid_summary(arch: &str, n_layers: u32, interval: Option<u32>) -> GgufSummary {
+    fn fake_hybrid_summary(
+        arch: &Architecture,
+        n_layers: u32,
+        interval: Option<u32>,
+    ) -> GgufSummary {
         let mut tensors = std::collections::BTreeMap::new();
         for layer in 0..n_layers {
             let name = format!("blk.{layer}.attn_q.weight");
@@ -187,7 +187,7 @@ mod tests {
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
             SmolStr::new(keys::ARCHITECTURE),
-            GgufValue::String(arch.into()),
+            GgufValue::String(arch.as_str().into()),
         );
         metadata.insert(keys::block_count(arch), GgufValue::U32(n_layers));
         metadata.insert(keys::attention_head_count_kv(arch), GgufValue::U32(4));
@@ -215,7 +215,7 @@ mod tests {
             tensors,
             metadata,
             block_count: Some(n_layers),
-            architecture: SmolStr::new(arch),
+            architecture: arch.clone(),
             shards: vec!["/fake".into()],
         }
     }
@@ -234,7 +234,6 @@ mod tests {
             cache_type_v: Some("f16"),
             override_tensor: empty,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: false,
@@ -258,7 +257,7 @@ mod tests {
         //   5.62 + 144.00 MiB llama.cpp reports for this model.
         //   Folded into per-token at ctx 4096: 156_893_184 / 4096 = 38304.
         // kv_per_token = 32768 + 38304 = 71072.
-        let s = fake_hybrid_summary("qwen35", 64, Some(4));
+        let s = fake_hybrid_summary(&Architecture::Qwen35, 64, Some(4));
         let empty: Vec<String> = Vec::new();
         let e = estimate(&s, &inputs(4096, &empty));
         assert_eq!(e.kv_per_token, 71072);
@@ -267,7 +266,7 @@ mod tests {
     #[test]
     fn jamba_kv_no_interval_scales_all_layers() {
         // No full_attention_interval key → defaults to 1 (all layers).
-        let s = fake_hybrid_summary("jamba", 80, None);
+        let s = fake_hybrid_summary(&Architecture::Jamba, 80, None);
         let empty: Vec<String> = Vec::new();
         let e = estimate(&s, &inputs(4096, &empty));
         // 80 layers × 2048 bytes = 163840.
@@ -276,7 +275,7 @@ mod tests {
 
     #[test]
     fn hybrid_is_recognised() {
-        assert!(is_hybrid("jamba"));
-        assert!(is_hybrid("qwen35"));
+        assert!(is_hybrid(&Architecture::Jamba));
+        assert!(is_hybrid(&Architecture::Qwen35));
     }
 }

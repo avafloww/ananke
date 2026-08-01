@@ -9,6 +9,8 @@
 //! full `per_layer_bytes` total; the packer decides which experts to offload
 //! (from live VRAM) and synthesises the matching `-ot` rules.
 
+use ananke_gguf::Architecture;
+
 mod deepseek4;
 mod estimate;
 mod mla;
@@ -16,13 +18,13 @@ mod mla;
 pub use estimate::estimate;
 pub(crate) use estimate::expert_kind;
 
-pub const MOE_FAMILY: &[&str] = &[
-    "llama4",
-    "qwen3moe",
-    "qwen3vlmoe",
-    "deepseek2",
-    "mixtral",
-    "gpt-oss",
+pub const MOE_FAMILY: &[Architecture] = &[
+    Architecture::Llama4,
+    Architecture::Qwen3Moe,
+    Architecture::Qwen3VlMoe,
+    Architecture::DeepSeek2,
+    Architecture::Mixtral,
+    Architecture::GptOss,
     // GLM-4.5 series (including glm-4-5-air) uses the standard MoE tensor
     // layout: `blk.N.ffn_{gate,up,down}_exps.weight` + shared expert tensors
     // (`_shexp`). Without this entry the dispatcher falls through to the
@@ -30,7 +32,7 @@ pub const MOE_FAMILY: &[&str] = &[
     // operator's CPU-offload `override_tensor` regex then zeroes the
     // weight estimate entirely, leading to 400 MiB predicted vs 27 GiB
     // observed (a 67× under-reservation).
-    "glm4moe",
+    Architecture::Glm4Moe,
     // Qwen 3.5+ MoE is a hybrid: every `full_attention_interval`-th layer
     // runs full attention (with KV cache); the others run a linear-
     // attention / gated-delta-net SSM that carries constant per-layer
@@ -41,7 +43,7 @@ pub const MOE_FAMILY: &[&str] = &[
     // total across all recurrent layers for typical sizes) and are
     // absorbed by the compute-buffer headroom rather than modelled
     // explicitly.
-    "qwen35moe",
+    Architecture::Qwen35Moe,
     // DeepSeek-V4-Flash (deepseek4) uses the standard fused-expert tensor
     // layout — `blk.N.ffn_{gate,up,down}_exps.weight` plus a `_shexp`
     // shared expert — so the weight accounting and expert itemisation
@@ -54,7 +56,7 @@ pub const MOE_FAMILY: &[&str] = &[
     // KiB/token (11.5 GiB at 128k) versus the measured ~6.65 KiB/token
     // (0.84 GiB at 128k), a 13× over-reservation, so deepseek4 routes to
     // `deepseek4_kv_per_token` below instead.
-    "deepseek4",
+    Architecture::DeepSeek4,
     // GLM-5 (glm-dsa) pairs the standard fused-expert layout —
     // `blk.N.ffn_{gate,up,down}_exps.weight` plus a `_shexp` shared
     // expert — with DeepSeek-style MLA attention, so the weight
@@ -66,20 +68,20 @@ pub const MOE_FAMILY: &[&str] = &[
     // `nextn_predict_layers` MTP block carries no main-context KV. The
     // generic `kv_for_hybrid` would add a phantom `value_length` V term
     // (a ~1.9× over-reservation), so glm-dsa routes to
-    // `mla_kv_per_token` below. Despite the "dsa" in the name, the
+    // `mla_kv_per_token` below. Despite the Architecture::Dsa in the name, the
     // pinned llama.cpp runs this arch as dense MLA (the deepseek2
     // graph, plain KV cache); the sparse-attention indexer tensors are
     // loaded but only the deepseek32 arch gets the DSA indexer cache.
-    "glm-dsa",
+    Architecture::GlmDsa,
     // Laguna MoE: fused-expert layout (`ffn_{gate,up,down}_exps` + `_shexp`
     // shared experts), plain GQA KV (scalar `head_count_kv`, constant
     // `key_length`/`value_length`). The per-layer `attention.head_count`
     // array only sizes Q projections and is irrelevant to KV, so the generic
     // `kv_for_hybrid` path is correct. Advertises `sliding_window` but
     // `kv_for_hybrid` doesn't model SWA eviction — safe over-estimation.
-    "laguna",
+    Architecture::Laguna,
 ];
 
-pub fn is_moe(arch: &str) -> bool {
-    MOE_FAMILY.contains(&arch)
+pub fn is_moe(arch: &Architecture) -> bool {
+    MOE_FAMILY.contains(arch)
 }

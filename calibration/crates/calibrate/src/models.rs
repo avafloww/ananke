@@ -81,10 +81,6 @@ pub struct ModelConfig {
     /// Whether the service runs `--spec-type draft-mtp`.
     #[serde(default)]
     pub mtp: bool,
-    /// Whether the operator has opted into the coarse fallback for an
-    /// architecture no family estimator recognises.
-    #[serde(default)]
-    pub allow_fallback: bool,
     #[serde(default)]
     pub gpus: Option<Vec<u32>>,
 }
@@ -156,7 +152,6 @@ impl ModelConfig {
             cache_type_v: self.cache_type_v.as_deref(),
             override_tensor: &[],
             compute_buffer_mb: None,
-            allow_fallback: self.allow_fallback,
             mtp: self.mtp,
             draft_model: draft,
             ik_llama: self.ik_llama,

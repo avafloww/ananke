@@ -244,7 +244,7 @@ min_borrower_runtime = "60s" # dynamic: balloon resolver grace period
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `mode` | string | *required* (command only) | `"static"` or `"dynamic"`. Rejected for llama-cpp services. Applies to `command` services only. |
+| `mode` | string | *required* (command only) | `"static"` or `"dynamic"`. Required on every `command` service. Optional on a `llama-cpp` one, where it replaces the estimator entirely — the only way to place a model whose architecture ananke does not recognise. |
 | `reserve_gb` | f32 | none | `static` only. Memory to reserve, in GiB — host RAM for a cpu-only service, VRAM otherwise. Required for `static`. Accepted as `vram_gb` for pre-rename configs. |
 | `min_reserve_gb` | f32 | none | `dynamic` only. Minimum reservation in GiB. Required for `dynamic`. Accepted as `min_vram_gb` for pre-rename configs. |
 | `max_reserve_gb` | f32 | none | `dynamic` only. Maximum reservation in GiB. Required for `dynamic`; must be > `min_reserve_gb`. Accepted as `max_vram_gb` for pre-rename configs. |
@@ -520,14 +520,12 @@ Override the internal GGUF-aware VRAM estimator's parameters:
 [service.estimation]
 compute_buffer_mb = 512
 safety_factor = 1.1
-allow_fallback = false
 ```
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `compute_buffer_mb` | u32 | none | Override the estimated compute buffer size (MiB). |
 | `safety_factor` | f32 | none | Multiplier applied to the estimated VRAM footprint. |
-| `allow_fallback` | bool | `false` | Accept the coarse fallback estimate when the GGUF's architecture isn't recognised by any per-family estimator. Unknown architectures hard-reject at config load by default so the operator either adds the arch to the right family list or explicitly opts in here. |
 
 #### Sampling
 Sampling parameters mapped to `llama-server` CLI flags:

@@ -4,6 +4,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use smol_str::SmolStr;
 
+use crate::Architecture;
+
 /// Summary of a GGUF file (or aggregated shard set).
 #[derive(Debug, Clone)]
 pub struct GgufSummary {
@@ -18,8 +20,8 @@ pub struct GgufSummary {
     /// Number of layers (`<arch>.block_count` typical). `None` if the
     /// architecture doesn't expose this.
     pub block_count: Option<u32>,
-    /// Architecture string (`general.architecture` metadata).
-    pub architecture: SmolStr,
+    /// The model's graph, parsed from `general.architecture`.
+    pub architecture: Architecture,
     /// For sharded files: the discovered shard list. Single-file → len 1.
     pub shards: Vec<PathBuf>,
 }

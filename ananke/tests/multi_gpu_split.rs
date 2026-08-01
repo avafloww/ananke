@@ -16,7 +16,7 @@ use ananke::{
     devices::{DeviceId, DeviceSnapshot, GpuSnapshot},
     estimator::{Estimate, NonLayer},
 };
-use smol_str::SmolStr;
+use ananke_gguf::Architecture;
 
 fn two_gpu_svc() -> ServiceConfig {
     // No placement_override — the test drives pack() directly.
@@ -75,7 +75,7 @@ fn large_estimate() -> Estimate {
         expert_layers: Vec::new(),
         expert_tensors: None,
         context: 4096,
-        architecture: SmolStr::new("qwen3"),
+        architecture: Architecture::Qwen3,
     }
 }
 

@@ -43,7 +43,7 @@ mod tests {
 
     use ananke_config::placement::PlacementPolicy;
     use ananke_estimate::{Estimate, NonLayer};
-    use smol_str::SmolStr;
+    use ananke_gguf::Architecture;
 
     use crate::{
         AllocationTable,
@@ -86,7 +86,7 @@ mod tests {
             expert_layers: Vec::new(),
             expert_tensors: None,
             context: 4096,
-            architecture: SmolStr::new("qwen35"),
+            architecture: Architecture::Qwen35,
         };
         let snap = snapshot(&[24, 24]);
         let alloc = AllocationTable::new();
@@ -146,7 +146,7 @@ mod tests {
             expert_layers: Vec::new(),
             expert_tensors: None,
             context: 4096,
-            architecture: SmolStr::new("gemma4"),
+            architecture: Architecture::Gemma4,
         };
         let packed = pack(
             &e,

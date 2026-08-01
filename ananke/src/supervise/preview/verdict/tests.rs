@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use ananke_gguf::Architecture;
 use smol_str::SmolStr;
 
 use super::*;
@@ -79,7 +80,7 @@ fn estimate_gib(n_layers: u32, per_gib: u64) -> Estimate {
         expert_layers: Vec::new(),
         expert_tensors: None,
         context: 4096,
-        architecture: SmolStr::new("qwen3"),
+        architecture: Architecture::Qwen3,
     }
 }
 

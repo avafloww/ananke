@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use ananke_gguf::{
-    keys,
+    Architecture, keys,
     types::{GgufSummary, GgufTensor, GgufType, GgufValue},
 };
 use smol_str::SmolStr;
@@ -67,7 +67,7 @@ pub fn fake_summary() -> GgufSummary {
         tensors,
         metadata,
         block_count: Some(2),
-        architecture: SmolStr::new("qwen3"),
+        architecture: Architecture::Qwen3,
         shards: vec!["/fake".into()],
     }
 }
@@ -91,7 +91,6 @@ pub fn inputs<'a>(
         cache_type_v: Some(cache_v),
         override_tensor: empty,
         compute_buffer_mb: None,
-        allow_fallback: false,
         mtp: false,
         draft_model: None,
         ik_llama: false,

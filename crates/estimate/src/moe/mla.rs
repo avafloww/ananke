@@ -21,10 +21,10 @@ const MLA_DEFAULT_KEY_LENGTH: u64 = 576;
 /// `hparams.n_layer()` (which sizes the main-context cache) subtracts it.
 pub(crate) fn mla_kv_per_token(
     summary: &GgufSummary,
-    arch: &str,
     n_layers: u32,
     inputs: &EstimatorInputs<'_>,
 ) -> u64 {
+    let arch = &summary.architecture;
     if inputs.context == 0 || n_layers == 0 {
         return 0;
     }
@@ -40,7 +40,7 @@ pub(crate) fn mla_kv_per_token(
     let kv_layers = n_layers.saturating_sub(nextn_layers) as u64;
 
     (kv_layers as f64 * key_length as f64 * bytes_k) as u64
-        + indexer_cache_bytes_per_token(summary, arch, n_layers.saturating_sub(nextn_layers))
+        + indexer_cache_bytes_per_token(summary, n_layers.saturating_sub(nextn_layers))
 }
 
 /// Bytes per context token of the sparse-attention indexer's own cache.
@@ -61,7 +61,8 @@ pub(crate) fn mla_kv_per_token(
 /// 21 layers x 128 elements x 2 bytes is 5376 bytes per token, which reproduces
 /// every measured figure exactly: 42, 168, 336, and 672 MiB at contexts 8192,
 /// 32768, 65536, and 131072.
-fn indexer_cache_bytes_per_token(summary: &GgufSummary, arch: &str, span: u32) -> u64 {
+fn indexer_cache_bytes_per_token(summary: &GgufSummary, span: u32) -> u64 {
+    let arch = &summary.architecture;
     let Some(key_length) = summary
         .meta_u32(&keys::attention_indexer_key_length(arch))
         .map(u64::from)
@@ -91,7 +92,7 @@ const INDEXER_CACHE_BYTES_PER_ELEMENT: u64 = 2;
 #[cfg(test)]
 mod tests {
     use ananke_gguf::{
-        keys,
+        Architecture, keys,
         types::{GgufSummary, GgufValue},
     };
     use smol_str::SmolStr;
@@ -133,7 +134,7 @@ mod tests {
             tensors: std::collections::BTreeMap::new(),
             metadata,
             block_count: Some(79),
-            architecture: SmolStr::new("glm-dsa"),
+            architecture: Architecture::GlmDsa,
             shards: vec!["/fake".into()],
         };
         let empty: Vec<String> = Vec::new();
@@ -150,7 +151,6 @@ mod tests {
             cache_type_v: None,
             override_tensor: &empty,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: false,
@@ -216,7 +216,7 @@ mod tests {
             tensors,
             metadata,
             block_count: Some(79),
-            architecture: SmolStr::new("glm-dsa"),
+            architecture: Architecture::GlmDsa,
             shards: vec!["/fake".into()],
         };
         let empty: Vec<String> = Vec::new();
@@ -233,7 +233,6 @@ mod tests {
             cache_type_v: None,
             override_tensor: &empty,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: true,

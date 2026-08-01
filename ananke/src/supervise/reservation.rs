@@ -47,7 +47,13 @@ impl RunLoop {
     {
         let current = self.current_svc();
         let svc = &current;
-        if matches!(svc.template(), crate::config::Template::Command) {
+        // An explicit allocation mode replaces the estimator outright: the
+        // operator states the reservation and the service is placed from that
+        // figure alone. Every command service is here, because ananke does not
+        // build its argv; a llama-cpp service is only here when its
+        // architecture is one the estimator refuses, which leaves the operator
+        // nothing else to place it with.
+        if !matches!(svc.allocation_mode, crate::config::AllocationMode::None) {
             return self.compute_command_reservation(svc, snap, table, optimistic);
         }
         if !svc.placement_override.is_empty() {

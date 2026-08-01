@@ -2,7 +2,6 @@
 
 pub mod compute_buffer;
 pub mod compute_model;
-pub mod fallback;
 pub mod host_buffer;
 pub mod hybrid;
 pub mod kv;
@@ -17,8 +16,7 @@ pub mod tuning;
 pub mod types;
 
 use ananke_fs::Fs;
-use ananke_gguf::{self, GgufSummary};
-use smol_str::SmolStr;
+use ananke_gguf::{self, Architecture, GgufSummary};
 use tracing::{info, warn};
 pub use types::{Estimate, EstimatorInputs, ExpertKind, ExpertTensor, NonLayer};
 
@@ -29,7 +27,7 @@ pub use types::{Estimate, EstimatorInputs, ExpertKind, ExpertTensor, NonLayer};
 /// dispatched".
 struct Family {
     name: &'static str,
-    arches: &'static [&'static str],
+    arches: &'static [Architecture],
     estimate: fn(&GgufSummary, &EstimatorInputs<'_>) -> Estimate,
 }
 
@@ -65,10 +63,11 @@ pub enum EstimatorError {
         path: std::path::PathBuf,
         cause: String,
     },
-    /// The GGUF parsed cleanly but its `general.architecture` is not in
-    /// any per-family estimator's allowlist and the service config
-    /// hasn't opted into the coarse fallback.
-    UnknownArchitecture { architecture: SmolStr },
+    /// The GGUF parsed cleanly but no per-family estimator covers its
+    /// `general.architecture`. Nothing here can price the model's KV cache or
+    /// graph, so the estimator refuses rather than returning a number it has
+    /// no basis for; the operator declares the reservation instead.
+    UnknownArchitecture { architecture: Architecture },
 }
 
 impl std::fmt::Display for EstimatorError {
@@ -80,10 +79,10 @@ impl std::fmt::Display for EstimatorError {
             Self::UnknownArchitecture { architecture } => {
                 write!(
                     f,
-                    "architecture {architecture:?} is not recognised. Set \
-                     `estimation.allow_fallback = true` on the service to \
-                     accept the coarse fallback (no KV modelling, weights-only). \
-                     Recognised families:"
+                    "architecture {architecture} is not recognised, so its memory \
+                     cannot be estimated. Give the service an explicit reservation \
+                     (`mode` plus `reserve_gb`, or `min_reserve_gb`/`max_reserve_gb`) \
+                     and it is placed from that instead. Recognised families:"
                 )?;
                 for fam in FAMILIES {
                     write!(f, " {}=[", fam.name)?;
@@ -91,7 +90,7 @@ impl std::fmt::Display for EstimatorError {
                         if i > 0 {
                             f.write_str(",")?;
                         }
-                        f.write_str(arch)?;
+                        f.write_str(arch.as_str())?;
                     }
                     f.write_str("]")?;
                 }
@@ -181,10 +180,9 @@ pub fn estimate_with_summary(
     // cache. Architecture-independent apart from the sliding-window lookup,
     // and charged to the `Cpu` slot regardless of where the layers land, so
     // it is computed here rather than in each family estimate.
-    est.host_overhead_bytes =
-        host_buffer::host_overhead_bytes(&summary, summary.architecture.as_str(), inputs);
+    est.host_overhead_bytes = host_buffer::host_overhead_bytes(&summary, inputs);
     est.host_cache_bytes = host_buffer::prompt_cache_bytes(inputs);
-    est.host_slot_bytes = host_buffer::slot_host_bytes(summary.architecture.as_str(), inputs);
+    est.host_slot_bytes = host_buffer::slot_host_bytes(&summary.architecture, inputs);
     est.host_checkpoint_bytes = host_buffer::checkpoint_headroom_bytes(&summary, inputs);
 
     info!(
@@ -248,7 +246,7 @@ pub fn estimate_with_summary(
 /// leaving them in `expert_tensors` would have it offload experts belonging to a
 /// block whose per-layer cost is zero.
 fn drop_mtp_head_blocks(est: &mut Estimate, summary: &GgufSummary) {
-    let span = recurrent::context_layer_span(summary, summary.architecture.as_str());
+    let span = recurrent::context_layer_span(summary);
     let Some(per_layer) = est.per_layer_bytes.as_mut() else {
         return;
     };
@@ -274,14 +272,10 @@ pub fn dispatch(
     summary: &GgufSummary,
     inputs: &EstimatorInputs<'_>,
 ) -> Result<Estimate, EstimatorError> {
-    let arch = summary.architecture.as_str();
     for fam in FAMILIES {
-        if fam.arches.contains(&arch) {
+        if fam.arches.contains(&summary.architecture) {
             return Ok((fam.estimate)(summary, inputs));
         }
-    }
-    if inputs.allow_fallback {
-        return Ok(fallback::estimate_fallback(summary, inputs));
     }
     Err(EstimatorError::UnknownArchitecture {
         architecture: summary.architecture.clone(),
@@ -293,7 +287,7 @@ mod tests {
     use std::path::Path;
 
     use ananke_gguf::{
-        keys,
+        Architecture, keys,
         types::{GgufSummary, GgufValue},
     };
     use smol_str::SmolStr;
@@ -314,7 +308,6 @@ mod tests {
             cache_type_v: Some("f16"),
             override_tensor: empty_override,
             compute_buffer_mb: None,
-            allow_fallback: true,
             mtp: false,
             draft_model: None,
             ik_llama: false,
@@ -340,16 +333,20 @@ mod tests {
             tensors: Default::default(),
             metadata,
             block_count: Some(1),
-            architecture: SmolStr::new("qwen3"),
+            architecture: Architecture::Qwen3,
             shards: vec!["/fake".into()],
         };
         let empty: Vec<String> = Vec::new();
         let e = dispatch(&summary, &inputs_for(&empty)).unwrap();
-        assert_eq!(e.architecture, "qwen3");
+        assert_eq!(e.architecture, Architecture::Qwen3);
     }
 
+    /// An architecture no family covers is refused, never estimated. A guess
+    /// here reserved 400 MiB against glm4moe's real 27 GiB before the
+    /// architecture was recognised; the operator gives these services an
+    /// explicit reservation instead.
     #[test]
-    fn dispatch_unknown_goes_to_fallback_when_opted_in() {
+    fn an_unrecognised_architecture_is_refused() {
         let mut metadata = std::collections::BTreeMap::new();
         metadata.insert(
             SmolStr::new(keys::ARCHITECTURE),
@@ -361,47 +358,34 @@ mod tests {
             tensors: Default::default(),
             metadata,
             block_count: None,
-            architecture: SmolStr::new("novel-arch"),
+            architecture: Architecture::from("novel-arch"),
             shards: vec!["/fake".into()],
         };
         let empty: Vec<String> = Vec::new();
-        let mut inputs = inputs_for(&empty);
-        inputs.allow_fallback = true;
-        let e = dispatch(&summary, &inputs).unwrap();
-        // Fallback returns a non-zero weights estimate (the exact formula
-        // lives in `fallback::estimate_fallback`; asserting shape here
-        // keeps this test decoupled from the specific coefficients).
-        assert!(e.weights_bytes > 0);
-    }
-
-    /// Regression: an unknown architecture with `allow_fallback = false`
-    /// must return `UnknownArchitecture` rather than silently producing
-    /// the coarse fallback guess. Guards against a glm4moe-style silent
-    /// 67× under-reservation.
-    #[test]
-    fn unknown_architecture_rejects_without_opt_in() {
-        let mut metadata = std::collections::BTreeMap::new();
-        metadata.insert(
-            SmolStr::new(keys::ARCHITECTURE),
-            GgufValue::String("novel-arch".into()),
-        );
-        let summary = GgufSummary {
-            path: "/fake".into(),
-            total_tensor_bytes: 1_000_000,
-            tensors: Default::default(),
-            metadata,
-            block_count: None,
-            architecture: SmolStr::new("novel-arch"),
-            shards: vec!["/fake".into()],
-        };
-        let empty: Vec<String> = Vec::new();
-        let mut inputs = inputs_for(&empty);
-        inputs.allow_fallback = false;
-        match dispatch(&summary, &inputs) {
+        match dispatch(&summary, &inputs_for(&empty)) {
             Err(EstimatorError::UnknownArchitecture { architecture }) => {
-                assert_eq!(architecture.as_str(), "novel-arch");
+                assert_eq!(architecture, Architecture::from("novel-arch"));
             }
             other => panic!("expected UnknownArchitecture; got {other:?}"),
+        }
+    }
+
+    /// The diagnostic has to name the architectures that would have worked —
+    /// it is the operator's only list of what ananke can estimate.
+    #[test]
+    fn the_refusal_names_every_recognised_architecture() {
+        let message = EstimatorError::UnknownArchitecture {
+            architecture: Architecture::from("novel-arch"),
+        }
+        .to_string();
+        for fam in FAMILIES {
+            for arch in fam.arches {
+                assert!(
+                    message.contains(arch.as_str()),
+                    "{} missing from the refusal message",
+                    arch.as_str()
+                );
+            }
         }
     }
 }

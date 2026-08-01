@@ -24,10 +24,10 @@ const DEEPSEEK4_CSA_RATIO: u32 = 4;
 /// context exactly as it does for every other family.
 pub(crate) fn deepseek4_kv_per_token(
     summary: &GgufSummary,
-    arch: &str,
     n_layers: u32,
     inputs: &EstimatorInputs<'_>,
 ) -> u64 {
+    let arch = &summary.architecture;
     if inputs.context == 0 || n_layers == 0 {
         return 0;
     }
@@ -52,7 +52,7 @@ pub(crate) fn deepseek4_kv_per_token(
 #[cfg(test)]
 mod tests {
     use ananke_gguf::{
-        keys,
+        Architecture, keys,
         types::{GgufSummary, GgufTensor, GgufType, GgufValue},
     };
     use smol_str::SmolStr;
@@ -131,7 +131,7 @@ mod tests {
             tensors,
             metadata,
             block_count: Some(n_layers),
-            architecture: SmolStr::new("deepseek4"),
+            architecture: Architecture::DeepSeek4,
             shards: vec!["/fake".into()],
         };
 
@@ -149,7 +149,6 @@ mod tests {
             cache_type_v: Some("f16"),
             override_tensor: &empty,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: false,
@@ -192,7 +191,7 @@ mod tests {
             tensors: std::collections::BTreeMap::new(),
             metadata,
             block_count: Some(43),
-            architecture: SmolStr::new("deepseek4"),
+            architecture: Architecture::DeepSeek4,
             shards: vec!["/fake".into()],
         };
         let empty: Vec<String> = Vec::new();
@@ -209,7 +208,6 @@ mod tests {
             cache_type_v: Some(ctk),
             override_tensor: &empty,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: false,

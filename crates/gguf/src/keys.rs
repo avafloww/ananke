@@ -11,6 +11,8 @@
 
 use smol_str::SmolStr;
 
+use crate::Architecture;
+
 /// `general.architecture` — the value every [`scoped`] key is prefixed with.
 pub const ARCHITECTURE: &str = "general.architecture";
 pub const NAME: &str = "general.name";
@@ -74,21 +76,21 @@ pub mod suffix {
 ///
 /// Prefer a named accessor below. This is for the caller whose suffix is
 /// chosen at runtime.
-pub fn scoped(arch: &str, suffix: &str) -> SmolStr {
-    SmolStr::new(format!("{arch}.{suffix}"))
+pub fn scoped(arch: &Architecture, suffix: &str) -> SmolStr {
+    SmolStr::new(format!("{}.{suffix}", arch.as_str()))
 }
 
 macro_rules! scoped_keys {
     ($($name:ident => $suffix:ident),* $(,)?) => {
         $(
             #[doc = concat!("[`suffix::", stringify!($suffix), "`], prefixed by `arch`.")]
-            pub fn $name(arch: &str) -> SmolStr {
+            pub fn $name(arch: &Architecture) -> SmolStr {
                 scoped(arch, suffix::$suffix)
             }
         )*
 
         #[cfg(test)]
-        const ALL_SCOPED: &[(fn(&str) -> SmolStr, &str)] =
+        const ALL_SCOPED: &[(fn(&Architecture) -> SmolStr, &str)] =
             &[$(($name, suffix::$suffix)),*];
     };
 }
@@ -148,7 +150,7 @@ mod tests {
     #[test]
     fn every_accessor_is_its_suffix_prefixed_by_the_architecture() {
         for (build, suffix) in ALL_SCOPED {
-            assert_eq!(build("qwen3"), format!("qwen3.{suffix}"));
+            assert_eq!(build(&Architecture::Qwen3), format!("qwen3.{suffix}"));
         }
     }
 }

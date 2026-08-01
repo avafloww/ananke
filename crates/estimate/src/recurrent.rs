@@ -35,14 +35,13 @@ use crate::{tuning::SPEC_RECURRENT_ROLLBACK_DEPTH, types::EstimatorInputs};
 /// of this model under `inputs`, or 0 when the architecture carries none.
 pub(crate) fn state_bytes(
     summary: &GgufSummary,
-    arch: &str,
     recurrent_layers: u64,
     inputs: &EstimatorInputs<'_>,
 ) -> u64 {
     if recurrent_layers == 0 {
         return 0;
     }
-    let per_layer = per_layer_elements(summary, arch);
+    let per_layer = per_layer_elements(summary);
     if per_layer == 0 {
         return 0;
     }
@@ -63,7 +62,8 @@ pub(crate) fn state_bytes(
 /// only the former — the head's own attention layer belongs to the separate
 /// draft context. Without this the recurrent layer count runs one high on
 /// every Qwen 3.6 model.
-pub(crate) fn context_layer_span(summary: &GgufSummary, arch: &str) -> u32 {
+pub(crate) fn context_layer_span(summary: &GgufSummary) -> u32 {
+    let arch = &summary.architecture;
     let blocks = summary.block_count.unwrap_or(0);
     let nextn = summary
         .meta_u32(&keys::nextn_predict_layers(arch))
@@ -72,7 +72,8 @@ pub(crate) fn context_layer_span(summary: &GgufSummary, arch: &str) -> u32 {
 }
 
 /// `n_embd_r + n_embd_s`: the elements one recurrent layer holds per copy.
-fn per_layer_elements(summary: &GgufSummary, arch: &str) -> u64 {
+fn per_layer_elements(summary: &GgufSummary) -> u64 {
+    let arch = &summary.architecture;
     let meta = |key| summary.meta_u64(&key).unwrap_or(0);
     let d_conv = meta(keys::ssm_conv_kernel(arch));
     if d_conv > 0 {
@@ -102,6 +103,7 @@ mod tests {
     use std::{collections::BTreeMap, path::Path};
 
     use ananke_gguf::{
+        Architecture,
         keys::suffix,
         types::{GgufSummary, GgufValue},
     };
@@ -112,7 +114,7 @@ mod tests {
     /// Qwen3.6-35B-A3B's recurrent shape, as its GGUF declares it.
     fn qwen35moe() -> GgufSummary {
         summary_with(
-            "qwen35moe",
+            &Architecture::Qwen35Moe,
             41,
             1,
             &[
@@ -124,11 +126,16 @@ mod tests {
         )
     }
 
-    fn summary_with(arch: &str, blocks: u32, nextn: u32, entries: &[(&str, u32)]) -> GgufSummary {
+    fn summary_with(
+        arch: &Architecture,
+        blocks: u32,
+        nextn: u32,
+        entries: &[(&str, u32)],
+    ) -> GgufSummary {
         let mut metadata = BTreeMap::new();
         metadata.insert(
             SmolStr::new(keys::ARCHITECTURE),
-            GgufValue::String(arch.into()),
+            GgufValue::String(arch.as_str().into()),
         );
         metadata.insert(keys::nextn_predict_layers(arch), GgufValue::U32(nextn));
         for (key, value) in entries {
@@ -140,7 +147,7 @@ mod tests {
             tensors: BTreeMap::new(),
             metadata,
             block_count: Some(blocks),
-            architecture: SmolStr::new(arch),
+            architecture: arch.clone(),
             shards: vec!["/fake".into()],
         }
     }
@@ -159,7 +166,6 @@ mod tests {
             cache_type_v: Some("q8_0"),
             override_tensor: empty,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp,
             draft_model: None,
             ik_llama: false,
@@ -177,9 +183,9 @@ mod tests {
         // 1 seqs 0 rs_seq), R (f32): 2.81 MiB, S (f32): 60.00 MiB`
         // — 30 recurrent layers of the 40 the context spans.
         let s = qwen35moe();
-        assert_eq!(context_layer_span(&s, "qwen35moe"), 40);
+        assert_eq!(context_layer_span(&s), 40);
         let empty: Vec<String> = Vec::new();
-        let bytes = state_bytes(&s, "qwen35moe", 30, &inputs(Some(1), false, &empty));
+        let bytes = state_bytes(&s, 30, &inputs(Some(1), false, &empty));
         // R: (4-1) × (4096 + 2×16×128) = 24576 elements → 2.8125 MiB over 30.
         // S: 128 × 4096 = 524288 elements → 60 MiB over 30.
         assert_eq!(
@@ -198,7 +204,7 @@ mod tests {
         let at = |np: u32| {
             let mut i = inputs(Some(np), false, &empty);
             i.kv_unified = Some(true);
-            state_bytes(&s, "qwen35moe", 30, &i)
+            state_bytes(&s, 30, &i)
         };
         assert_eq!(at(2), at(1) * 2);
         assert_eq!(at(4), at(1) * 4);
@@ -211,8 +217,8 @@ mod tests {
         // `2 × (3 + 1)`.
         let s = qwen35moe();
         let empty: Vec<String> = Vec::new();
-        let plain = state_bytes(&s, "qwen35moe", 30, &inputs(Some(1), false, &empty));
-        let spec = state_bytes(&s, "qwen35moe", 30, &inputs(Some(2), true, &empty));
+        let plain = state_bytes(&s, 30, &inputs(Some(1), false, &empty));
+        let spec = state_bytes(&s, 30, &inputs(Some(2), true, &empty));
         assert_eq!(spec, plain * 2 * (SPEC_RECURRENT_ROLLBACK_DEPTH + 1));
     }
 
@@ -221,7 +227,7 @@ mod tests {
         // LFM2.5-Embedding-350M: `l_cache = 3`, `n_embd = 1024`, 10 of its 16
         // layers recurrent. Measured `R (f32): 0.08 MiB, S (f32): 0.00 MiB`.
         let s = summary_with(
-            "lfm2",
+            &Architecture::Lfm2,
             16,
             0,
             &[
@@ -230,23 +236,22 @@ mod tests {
             ],
         );
         let empty: Vec<String> = Vec::new();
-        let bytes = state_bytes(&s, "lfm2", 10, &inputs(Some(1), false, &empty));
+        let bytes = state_bytes(&s, 10, &inputs(Some(1), false, &empty));
         assert_eq!(bytes, 10 * 1024 * 2 * 4);
     }
 
     #[test]
     fn a_pure_attention_model_has_no_recurrent_state() {
-        let s = summary_with("llama", 32, 0, &[(suffix::EMBEDDING_LENGTH, 4096)]);
-        let empty: Vec<String> = Vec::new();
-        assert_eq!(
-            state_bytes(&s, "llama", 0, &inputs(Some(1), false, &empty)),
-            0
+        let s = summary_with(
+            &Architecture::Llama,
+            32,
+            0,
+            &[(suffix::EMBEDDING_LENGTH, 4096)],
         );
+        let empty: Vec<String> = Vec::new();
+        assert_eq!(state_bytes(&s, 0, &inputs(Some(1), false, &empty)), 0);
         // Even if a caller miscounted the layers, an architecture with neither
         // an `ssm.*` block nor a short convolution allocates nothing.
-        assert_eq!(
-            state_bytes(&s, "llama", 32, &inputs(Some(1), false, &empty)),
-            0
-        );
+        assert_eq!(state_bytes(&s, 32, &inputs(Some(1), false, &empty)), 0);
     }
 }

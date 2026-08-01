@@ -4,8 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use ananke_gguf::{GgufSummary, keys};
-use smol_str::SmolStr;
+use ananke_gguf::{Architecture, GgufSummary, keys};
 
 use crate::{
     llama::{collect_non_layer, layer_index},
@@ -14,7 +13,7 @@ use crate::{
 };
 
 pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
-    let arch = summary.architecture.as_str();
+    let arch = &summary.architecture;
     let n_layers = summary.block_count.unwrap_or(0);
 
     // Per-layer split into {non-expert, expert} bytes, and itemise every
@@ -68,14 +67,14 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     let has_full_attention_interval = summary
         .metadata
         .contains_key(&keys::full_attention_interval(arch));
-    let kv_per_token = if arch == "deepseek4" {
-        deepseek4_kv_per_token(summary, arch, n_layers, inputs)
-    } else if arch == "glm-dsa" {
-        mla_kv_per_token(summary, arch, n_layers, inputs)
+    let kv_per_token = if *arch == Architecture::DeepSeek4 {
+        deepseek4_kv_per_token(summary, n_layers, inputs)
+    } else if *arch == Architecture::GlmDsa {
+        mla_kv_per_token(summary, n_layers, inputs)
     } else if has_full_attention_interval {
-        crate::hybrid::kv_for_hybrid(summary, arch, n_layers, inputs)
+        crate::hybrid::kv_for_hybrid(summary, n_layers, inputs)
     } else {
-        crate::llama::compute_kv_per_token(summary, arch, n_layers, inputs)
+        crate::llama::compute_kv_per_token(summary, n_layers, inputs)
     };
 
     let expert_layers: Vec<u32> = per_layer_exp
@@ -109,7 +108,7 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
         expert_layers,
         expert_tensors: Some(expert_tensors),
         context: inputs.context,
-        architecture: SmolStr::new(arch),
+        architecture: arch.clone(),
     }
 }
 
@@ -136,6 +135,7 @@ pub(crate) fn expert_kind(name: &str) -> Option<ExpertKind> {
 #[cfg(test)]
 mod tests {
     use ananke_gguf::keys::suffix;
+    use smol_str::SmolStr;
 
     use super::*;
 
@@ -205,7 +205,7 @@ mod tests {
             tensors,
             metadata,
             block_count: Some(8),
-            architecture: SmolStr::new("qwen35moe"),
+            architecture: Architecture::Qwen35Moe,
             shards: vec!["/fake".into()],
         };
 
@@ -223,7 +223,6 @@ mod tests {
             cache_type_v: None,
             override_tensor: &empty,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: false,
@@ -322,7 +321,7 @@ mod tests {
             tensors,
             metadata,
             block_count: Some(3),
-            architecture: SmolStr::new("qwen3moe"),
+            architecture: Architecture::Qwen3Moe,
             shards: vec!["/fake".into()],
         };
 
@@ -340,7 +339,6 @@ mod tests {
             cache_type_v: None,
             override_tensor: &empty_override,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: false,
@@ -466,7 +464,7 @@ mod tests {
             tensors,
             metadata,
             block_count: Some(n_layers),
-            architecture: SmolStr::new("laguna"),
+            architecture: Architecture::Laguna,
             shards: vec!["/fake".into()],
         };
 
@@ -484,7 +482,6 @@ mod tests {
             cache_type_v: Some("f16"),
             override_tensor: &empty,
             compute_buffer_mb: None,
-            allow_fallback: false,
             mtp: false,
             draft_model: None,
             ik_llama: false,
