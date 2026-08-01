@@ -486,3 +486,44 @@ fn an_operator_supplied_cache_ram_is_not_duplicated() {
         "the estimator must read the operator's value"
     );
 }
+
+/// A llama-cpp service whose architecture the estimator refuses is placed from
+/// the operator's own `mode` + `reserve_gb`, which goes down the command path.
+/// That path produces a `Packed` for the device allocation alone, with no
+/// offload layout in it — and the operator's `-ngl` and `-ot` are then the only
+/// ones there are, so the renderer must not read those empty fields as
+/// decisions the packer made.
+#[test]
+fn an_empty_placement_layout_leaves_the_services_own_offload_alone() {
+    let mut svc = base_service();
+    {
+        let lc = expect_llama_cpp(&mut svc);
+        lc.n_gpu_layers = Some(41);
+        lc.override_tensor = vec!["blk\\.[0-9]+\\.ffn_.*_exps\\.=CPU".to_string()];
+    }
+    let alloc = Allocation::from_override(&svc.placement_override);
+
+    let with_layout = render_argv(&svc, &alloc, None).unwrap();
+    let without = render_argv(&svc, &alloc, Some(&CommandArgs::default())).unwrap();
+    assert_eq!(
+        with_layout.args, without.args,
+        "an empty CommandArgs must render the same argv as no CommandArgs"
+    );
+
+    let ngl = without.args.iter().position(|a| a == "-ngl").unwrap();
+    assert_eq!(without.args[ngl + 1], "41");
+    let ot = without.args.iter().position(|a| a == "-ot").unwrap();
+    assert_eq!(without.args[ot + 1], "blk\\.[0-9]+\\.ffn_.*_exps\\.=CPU");
+}
+
+/// The same service under `placement = "cpu-only"` still has to be told to
+/// keep every layer off the GPU.
+#[test]
+fn an_empty_placement_layout_still_renders_cpu_only() {
+    let mut svc = base_service();
+    svc.placement_policy = PlacementPolicy::CpuOnly;
+    let alloc = Allocation::from_override(&svc.placement_override);
+    let cmd = render_argv(&svc, &alloc, Some(&CommandArgs::default())).unwrap();
+    let ngl = cmd.args.iter().position(|a| a == "-ngl").unwrap();
+    assert_eq!(cmd.args[ngl + 1], "0");
+}

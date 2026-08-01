@@ -40,6 +40,19 @@ pub struct CommandArgs {
     pub n_cpu_moe: Option<u32>,
 }
 
+impl CommandArgs {
+    /// Whether the packer actually chose an offload layout for this service.
+    ///
+    /// A service placed from an operator-declared reservation never runs the
+    /// packer: the command path produces a `Packed` for the device allocation
+    /// alone and leaves every offload field unset. The argv renderer has to
+    /// tell that apart from a real layout, or it reads the empty fields as
+    /// decisions and drops the service's own `-ngl` and `-ot`.
+    pub fn describes_offload(&self) -> bool {
+        self.ngl.is_some()
+    }
+}
+
 /// One device's contribution to a placement failure: how much the packer
 /// needed there set against how much the device could actually offer.
 ///

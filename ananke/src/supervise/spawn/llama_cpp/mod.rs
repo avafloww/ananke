@@ -101,6 +101,9 @@ fn render_llama_server_flags(
     lc: &LlamaCppConfig,
     cmd_args: Option<&CommandArgs>,
 ) -> Vec<String> {
+    // Only a real packer layout overrides the service's own offload settings.
+    // See [`CommandArgs::describes_offload`].
+    let cmd_args = cmd_args.filter(|ca| ca.describes_offload());
     let mut args: Vec<String> = Vec::new();
 
     if let Some(ik) = lc.runtime.ik() {
