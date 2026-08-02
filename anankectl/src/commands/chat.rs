@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use ananke_api::services::list::ServicesResponse;
+use ananke_api::{openai::response::ChatCompletionChunk, services::list::ServicesResponse};
 use futures::StreamExt;
 use reqwest::Url;
 use serde::Serialize;
@@ -215,17 +215,14 @@ async fn run_non_streaming(
         });
     }
 
-    let json_val: serde_json::Value = resp
+    let body: ChatCompletionChunk = resp
         .json()
         .await
         .map_err(|e| ApiClientError::Parse(format!("parse response: {e}")))?;
 
-    let content = json_val
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|v| v.as_str())
+    let content = body
+        .message()
+        .and_then(|m| m.content.as_deref())
         .unwrap_or("");
 
     println!("{}", serde_json::to_string(content).unwrap_or_default());
@@ -234,11 +231,6 @@ async fn run_non_streaming(
 
 /// Extract `delta.content` from a parsed SSE JSON payload.
 pub fn extract_content(data: &str) -> Option<String> {
-    let val: serde_json::Value = serde_json::from_str(data).ok()?;
-    val.get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("delta"))
-        .and_then(|d| d.get("content"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    let chunk: ChatCompletionChunk = serde_json::from_str(data).ok()?;
+    chunk.delta()?.content.clone()
 }
