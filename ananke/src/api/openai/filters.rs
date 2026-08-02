@@ -1,4 +1,9 @@
 //! Apply `strip_params` and `set_params` to a JSON body.
+//!
+//! Both sides here are untyped by nature: the body is the client's
+//! (see `crate::api::openai::handlers`) and the values are whatever the
+//! operator wrote in `[service.filters]`, so neither shape is ananke's
+//! to know.
 
 use serde_json::Value;
 

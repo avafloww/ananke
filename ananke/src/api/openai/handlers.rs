@@ -199,6 +199,10 @@ async fn forward_json_post(
     body_bytes: Bytes,
 ) -> Response {
     let request_start = Instant::now();
+    // Untyped on purpose: the body belongs to the client and is forwarded
+    // verbatim. The daemon reads `model` and `stream` and writes back at
+    // most `model` and `timings_per_token`; every other key has to survive
+    // the round trip unexamined, which a struct would not let it do.
     let mut parsed: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
