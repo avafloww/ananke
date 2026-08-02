@@ -1,7 +1,7 @@
 //! KV cache sizing for MLA (multi-head latent attention) architectures
 //! (glm-dsa), which carry no V cache at all.
 
-use ananke_gguf::{GgufSummary, keys};
+use ananke_gguf::{GgufSummary, GgufType, keys};
 
 use crate::{kv, types::EstimatorInputs};
 
@@ -28,7 +28,7 @@ pub(crate) fn mla_kv_per_token(
     if inputs.context == 0 || n_layers == 0 {
         return 0;
     }
-    let bytes_k = kv::kv_bytes_per_element(inputs.cache_type_k.unwrap_or("f16"));
+    let bytes_k = kv::kv_bytes_per_element(inputs.cache_type_k.unwrap_or(GgufType::F16));
 
     let key_length = summary
         .meta_u32(&keys::attention_key_length(arch))
@@ -92,8 +92,8 @@ const INDEXER_CACHE_BYTES_PER_ELEMENT: u64 = 2;
 #[cfg(test)]
 mod tests {
     use ananke_gguf::{
-        Architecture, keys,
-        types::{GgufSummary, GgufValue},
+        Architecture, GgufType, keys,
+        types::{GgufSummary, GgufTensor, GgufValue},
     };
     use smol_str::SmolStr;
 
@@ -140,7 +140,7 @@ mod tests {
             architecture: Architecture::GlmDsa,
             shards: vec!["/fake".into()],
         };
-        let mk = |ctk: Option<&'static str>| EstimatorInputs {
+        let mk = |ctk: Option<GgufType>| EstimatorInputs {
             name: "demo",
             context: 32768,
             cache_type_k: ctk,
@@ -153,7 +153,7 @@ mod tests {
         // q8_0 K-cache shrinks it by the element-width ratio; the V type
         // is irrelevant because no V cache exists.
         assert_eq!(
-            estimate(&summary, &mk(Some("q8_0"))).kv_per_token,
+            estimate(&summary, &mk(Some(GgufType::Q8_0))).kv_per_token,
             (78.0f64 * 576.0 * 1.0625) as u64
         );
     }
@@ -162,8 +162,6 @@ mod tests {
     #[test]
     fn glm_dsa_prices_the_sparse_attention_indexer_cache() {
         use std::path::Path;
-
-        use ananke_gguf::types::{GgufTensor, GgufType};
 
         let mut metadata = std::collections::BTreeMap::new();
         for (key, value) in [
@@ -208,7 +206,7 @@ mod tests {
         let at = |context: u32| EstimatorInputs {
             context,
             name: "demo",
-            cache_type_k: Some("f16"),
+            cache_type_k: Some(GgufType::F16),
             fork: Fork::Ik { dsa: true },
             ..EstimatorInputs::empty(Path::new("/fake"))
         };

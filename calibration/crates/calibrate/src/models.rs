@@ -12,6 +12,7 @@ use ananke_config::{
     placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode},
 };
 use ananke_estimate::{EstimatorInputs, Fork, Speculation};
+use ananke_gguf::GgufType;
 use serde::Deserialize;
 
 use crate::plan::library::Library;
@@ -157,8 +158,8 @@ impl ModelConfig {
             visible_devices: self.cards(),
             host_resident_experts: self.offload().is_enabled(),
             split_mode: self.split(),
-            cache_type_k: self.cache_type_k.as_deref(),
-            cache_type_v: self.cache_type_v.as_deref(),
+            cache_type_k: self.cache_type_k.as_deref().and_then(GgufType::from_name),
+            cache_type_v: self.cache_type_v.as_deref().and_then(GgufType::from_name),
             override_tensor: &[],
             compute_buffer_mb: None,
             speculation: match (self.mtp, draft) {

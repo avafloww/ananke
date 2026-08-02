@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, path::Path};
 
 use ananke_config::placement::DeviceSlot;
-use ananke_gguf::Architecture;
+use ananke_gguf::{Architecture, GgufType};
 
 /// Pure inputs the estimator reads. The daemon builds one of these from a
 /// `ServiceConfig` on each spawn; standalone callers (calibration tools,
@@ -54,9 +54,9 @@ pub struct EstimatorInputs<'a> {
     /// more than a gigabyte at production contexts.
     pub split_mode: ananke_config::placement::SplitMode,
     /// K-cache quantisation (f16, q8_0, etc.). Absent means f16.
-    pub cache_type_k: Option<&'a str>,
+    pub cache_type_k: Option<GgufType>,
     /// V-cache quantisation. Absent means f16.
-    pub cache_type_v: Option<&'a str>,
+    pub cache_type_v: Option<GgufType>,
     /// `override_tensor` regex rules to pin specific tensors to CPU / a GPU.
     pub override_tensor: &'a [String],
     /// Override for the compute-buffer reservation (MB per active device).

@@ -103,7 +103,7 @@ mod tests {
     use std::{collections::BTreeMap, path::Path};
 
     use ananke_gguf::{
-        Architecture,
+        Architecture, GgufType,
         keys::suffix,
         types::{GgufSummary, GgufValue},
     };
@@ -156,8 +156,8 @@ mod tests {
     fn inputs(parallel: Option<u32>, mtp: bool) -> EstimatorInputs<'static> {
         EstimatorInputs {
             context: 32768,
-            cache_type_k: Some("q8_0"),
-            cache_type_v: Some("q8_0"),
+            cache_type_k: Some(GgufType::Q8_0),
+            cache_type_v: Some(GgufType::Q8_0),
             speculation: if mtp {
                 Speculation::EmbeddedMtp
             } else {

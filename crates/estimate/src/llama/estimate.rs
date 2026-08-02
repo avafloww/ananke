@@ -101,7 +101,7 @@ pub(crate) fn layer_index(name: &str) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use ananke_gguf::{Architecture, types::GgufSummary};
+    use ananke_gguf::{Architecture, GgufType, types::GgufSummary};
     use smol_str::SmolStr;
 
     use super::*;
@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn sums_per_layer_and_non_layer() {
         let s = fake_summary();
-        let e = estimate(&s, &inputs("f16", "f16", 4096));
+        let e = estimate(&s, &inputs(GgufType::F16, GgufType::F16, 4096));
         // per-layer: 2 layers × 3 tensors × 1 MiB = 6 MiB weights from layers.
         // non-layer: 2 MiB output + 4 MiB token_embd = 6 MiB.
         assert_eq!(e.weights_bytes, 12 * 1024 * 1024);

@@ -7,6 +7,8 @@
 
 use ananke_config::placement::PlacementInputs;
 use ananke_estimate::{Fork, Speculation};
+use ananke_gguf::GgufType;
+use tracing::warn;
 
 use crate::{config::ServiceConfig, estimator::EstimatorInputs};
 
@@ -41,8 +43,8 @@ pub fn estimator_inputs(svc: &ServiceConfig) -> Option<EstimatorInputs<'_>> {
             crate::config::validate::OffloadMode::Off
         ),
         split_mode: svc.split_mode,
-        cache_type_k: lc.cache_type_k.as_deref(),
-        cache_type_v: lc.cache_type_v.as_deref(),
+        cache_type_k: cache_type(&svc.name, "cache_type_k", lc.cache_type_k.as_deref()),
+        cache_type_v: cache_type(&svc.name, "cache_type_v", lc.cache_type_v.as_deref()),
         override_tensor: &lc.override_tensor,
         compute_buffer_mb: lc.estimation.compute_buffer_mb,
         // Mainline's spelling only. ik's `mtp:n_max=…` reads as no speculation,
@@ -83,6 +85,26 @@ pub fn estimator_inputs(svc: &ServiceConfig) -> Option<EstimatorInputs<'_>> {
             .cache_ram_mb
             .or_else(|| cache_ram_from_extra_args(&svc.extra_args)),
     })
+}
+
+/// A configured `cache_type_*` as the ggml type it names.
+///
+/// The config key is free-form: it is passed to llama.cpp verbatim, and the two
+/// forks accept different sets, so an unrecognised name is not a config error
+/// here. The child will refuse it at startup. Until then the estimate warns and
+/// falls back to f16.
+fn cache_type(service: &str, key: &str, configured: Option<&str>) -> Option<GgufType> {
+    let configured = configured?;
+    let ty = GgufType::from_name(configured);
+    if ty.is_none() {
+        warn!(
+            service,
+            key,
+            value = configured,
+            "unknown KV cache type; estimating as f16"
+        );
+    }
+    ty
 }
 
 /// Names llama.cpp accepts for the prompt-cache cap. `--` arguments have

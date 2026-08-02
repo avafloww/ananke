@@ -1,7 +1,7 @@
 //! KV cache sizing for llama-family models, including the SWA and shared-KV
 //! variants (Gemma 2/3/4, LFM2).
 
-use ananke_gguf::{Architecture, GgufSummary, keys};
+use ananke_gguf::{Architecture, GgufSummary, GgufType, keys};
 
 use crate::{kv, recurrent, types::EstimatorInputs};
 
@@ -49,8 +49,8 @@ pub(crate) fn compute_kv_per_token(
     inputs: &EstimatorInputs<'_>,
 ) -> u64 {
     let arch = &summary.architecture;
-    let cache_k = inputs.cache_type_k.unwrap_or("f16");
-    let cache_v = inputs.cache_type_v.unwrap_or("f16");
+    let cache_k = inputs.cache_type_k.unwrap_or(GgufType::F16);
+    let cache_v = inputs.cache_type_v.unwrap_or(GgufType::F16);
     let bytes_k = kv::kv_bytes_per_element(cache_k);
     let bytes_v = kv::kv_bytes_per_element(cache_v);
 
@@ -202,7 +202,7 @@ pub(crate) fn compute_kv_per_token(
 #[cfg(test)]
 mod tests {
     use ananke_gguf::{
-        Architecture, keys,
+        Architecture, GgufType, keys,
         types::{GgufSummary, GgufValue},
     };
     use smol_str::SmolStr;
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn kv_uses_arch_metadata() {
         let s = fake_summary();
-        let e = estimate(&s, &inputs("f16", "f16", 4096));
+        let e = estimate(&s, &inputs(GgufType::F16, GgufType::F16, 4096));
         // n_layers=2, n_kv=4, k=v=128, 2 bytes/element (f16).
         // per_layer_kv = 4 × (128*2 + 128*2) = 4 × 512 = 2048 bytes.
         // kv_per_token = 2 × 2048 = 4096 bytes.
@@ -269,7 +269,7 @@ mod tests {
         };
 
         assert!(crate::llama::is_llama_family(&Architecture::Lfm2));
-        let e = estimate(&s, &inputs("f16", "f16", 16384));
+        let e = estimate(&s, &inputs(GgufType::F16, GgufType::F16, 16384));
         // 5 attention layers (indices 2,5,8,11,14) × 8 kv-heads ×
         // (64 + 64) head dims × 2 bytes (f16) = 5 × 2048 = 10240 B/token.
         // Shortconv layers contribute exactly zero.
@@ -281,8 +281,8 @@ mod tests {
     #[test]
     fn kv_quantised_shrinks() {
         let s = fake_summary();
-        let e_q8 = estimate(&s, &inputs("q8_0", "q8_0", 4096));
-        let e_f16 = estimate(&s, &inputs("f16", "f16", 4096));
+        let e_q8 = estimate(&s, &inputs(GgufType::Q8_0, GgufType::Q8_0, 4096));
+        let e_f16 = estimate(&s, &inputs(GgufType::F16, GgufType::F16, 4096));
         assert!(e_q8.kv_per_token < e_f16.kv_per_token);
     }
 
@@ -325,7 +325,7 @@ mod tests {
             architecture: Architecture::Talkie,
             shards: vec!["/fake".into()],
         };
-        let e = estimate(&s, &inputs("f16", "f16", 4096));
+        let e = estimate(&s, &inputs(GgufType::F16, GgufType::F16, 4096));
         // n_layers=2, n_kv=head_count=8, k=v=128, 2 bytes/element (f16).
         // per_layer_kv = 8 × (128*2 + 128*2) = 8 × 512 = 4096 bytes.
         // kv_per_token = 2 × 4096 = 8192 bytes.
@@ -390,7 +390,7 @@ mod tests {
         let mask = [true, true, false, true];
         let heads = [8u32, 8, 8, 8];
         let s = gemma4_summary(&mask, &heads, 1024);
-        let e = estimate(&s, &inputs("f16", "f16", 4096));
+        let e = estimate(&s, &inputs(GgufType::F16, GgufType::F16, 4096));
 
         // Per-head bytes: f16 (2 b) × (512+512) = 2048 for full, × (256+256) = 1024 for SWA.
         // Layer cost (K+V bytes per layer at this context):
@@ -413,7 +413,7 @@ mod tests {
             SmolStr::new("gemma4.attention.shared_kv_layers"),
             GgufValue::U32(1),
         );
-        let e = estimate(&s, &inputs("f16", "f16", 4096));
+        let e = estimate(&s, &inputs(GgufType::F16, GgufType::F16, 4096));
         // Total must drop by one SWA layer's worth (8_388_608 bytes).
         let total_kv = e.kv_per_token * e.context as u64;
         assert_eq!(total_kv, 92_274_688 - 8_388_608);
@@ -445,7 +445,7 @@ mod tests {
         let heads = [8u32, 8, 8, 8];
         let s = gemma4_summary(&mask, &heads, 1024);
 
-        let no_kvu = inputs("f16", "f16", 65536);
+        let no_kvu = inputs(GgufType::F16, GgufType::F16, 65536);
         let e_no_kvu = estimate(&s, &no_kvu);
         assert_eq!(
             e_no_kvu.kv_per_token * 65536,
@@ -456,7 +456,7 @@ mod tests {
         let with_kvu = EstimatorInputs {
             parallel: Some(4),
             kv_unified: Some(true),
-            ..inputs("f16", "f16", 65536)
+            ..inputs(GgufType::F16, GgufType::F16, 65536)
         };
         let e_with_kvu = estimate(&s, &with_kvu);
         assert_eq!(

@@ -2,7 +2,7 @@
 //! sparse attention (CSA) layers are the only ones with a context-scaling
 //! cache.
 
-use ananke_gguf::{GgufSummary, keys};
+use ananke_gguf::{GgufSummary, GgufType, keys};
 
 use crate::{kv, tuning::DEEPSEEK4_CSA_KV_BYTES_PER_TOKEN_LAYER_F16, types::EstimatorInputs};
 
@@ -31,7 +31,7 @@ pub(crate) fn deepseek4_kv_per_token(
     if inputs.context == 0 || n_layers == 0 {
         return 0;
     }
-    let bytes_k = kv::kv_bytes_per_element(inputs.cache_type_k.unwrap_or("f16"));
+    let bytes_k = kv::kv_bytes_per_element(inputs.cache_type_k.unwrap_or(GgufType::F16));
 
     // Count the CSA layers from `attention.compress_ratios` when present;
     // fall back to the observed "roughly half the layers are CSA" ratio so
@@ -137,8 +137,8 @@ mod tests {
         let inputs = EstimatorInputs {
             name: "demo",
             context: 131072,
-            cache_type_k: Some("f16"),
-            cache_type_v: Some("f16"),
+            cache_type_k: Some(GgufType::F16),
+            cache_type_v: Some(GgufType::F16),
             ..EstimatorInputs::empty(Path::new("/fake"))
         };
 
@@ -177,7 +177,7 @@ mod tests {
             architecture: Architecture::DeepSeek4,
             shards: vec!["/fake".into()],
         };
-        let mk = |ctk: &'static str| EstimatorInputs {
+        let mk = |ctk: GgufType| EstimatorInputs {
             name: "demo",
             context: 131072,
             cache_type_k: Some(ctk),
@@ -185,8 +185,8 @@ mod tests {
             ..EstimatorInputs::empty(Path::new("/fake"))
         };
         // Fallback layer count (21) at f16 reproduces the 6657 figure.
-        assert_eq!(estimate(&summary, &mk("f16")).kv_per_token, 6657);
+        assert_eq!(estimate(&summary, &mk(GgufType::F16)).kv_per_token, 6657);
         // q8_0 K-cache (1.0625 B/elem vs 2.0) shrinks the per-token cost.
-        assert!(estimate(&summary, &mk("q8_0")).kv_per_token < 6657);
+        assert!(estimate(&summary, &mk(GgufType::Q8_0)).kv_per_token < 6657);
     }
 }

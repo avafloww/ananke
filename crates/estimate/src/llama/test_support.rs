@@ -72,7 +72,7 @@ pub fn fake_summary() -> GgufSummary {
     }
 }
 
-pub fn inputs<'a>(cache_k: &'a str, cache_v: &'a str, context: u32) -> EstimatorInputs<'a> {
+pub fn inputs<'a>(cache_k: GgufType, cache_v: GgufType, context: u32) -> EstimatorInputs<'a> {
     EstimatorInputs {
         context,
         name: "demo",

@@ -16,6 +16,7 @@ use ananke_config::{
     units::MIB,
 };
 use ananke_estimate::{EstimatorInputs, Fork, Speculation};
+use ananke_gguf::GgufType;
 use ananke_measure::record::Status;
 use ananke_placement::{
     Corrections,
@@ -80,8 +81,11 @@ pub fn estimator_inputs<'a>(record: &'a Record, model: &'a std::path::Path) -> E
         visible_devices: cards,
         host_resident_experts: f.n_cpu_moe.is_some(),
         split_mode: f.split_or_layer(),
-        cache_type_k: Some(f.kv_type.name()),
-        cache_type_v: Some(f.kv_type.name()),
+        // Every `KvType` names a type `GgufType` knows — `ananke_estimate`'s
+        // `the_two_quantised_partitions_agree` holds the two vocabularies
+        // together — so this never silently degrades to the f16 default.
+        cache_type_k: GgufType::from_name(f.kv_type.name()),
+        cache_type_v: GgufType::from_name(f.kv_type.name()),
         override_tensor: &[],
         compute_buffer_mb: None,
         speculation: match (f.spec_type.is_some(), f.draft.as_deref()) {

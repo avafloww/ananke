@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use ananke_gguf::{Architecture, GgufSummary, keys};
+use ananke_gguf::{Architecture, GgufSummary, GgufType, keys};
 
 use crate::{
     compute_buffer, kv,
@@ -45,8 +45,8 @@ pub fn is_hybrid(arch: &Architecture) -> bool {
 /// which belongs to the separate draft context rather than to this one.
 pub fn kv_for_hybrid(summary: &GgufSummary, n_layers: u32, inputs: &EstimatorInputs<'_>) -> u64 {
     let arch = &summary.architecture;
-    let cache_k = inputs.cache_type_k.unwrap_or("f16");
-    let cache_v = inputs.cache_type_v.unwrap_or("f16");
+    let cache_k = inputs.cache_type_k.unwrap_or(GgufType::F16);
+    let cache_v = inputs.cache_type_v.unwrap_or(GgufType::F16);
     let bytes_k = kv::kv_bytes_per_element(cache_k);
     let bytes_v = kv::kv_bytes_per_element(cache_v);
 
@@ -224,8 +224,8 @@ mod tests {
         EstimatorInputs {
             context,
             name: "demo",
-            cache_type_k: Some("f16"),
-            cache_type_v: Some("f16"),
+            cache_type_k: Some(GgufType::F16),
+            cache_type_v: Some(GgufType::F16),
             ..EstimatorInputs::empty(Path::new("/fake"))
         }
     }

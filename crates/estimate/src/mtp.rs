@@ -26,7 +26,7 @@
 //!
 //! [`Speculation`]: crate::Speculation
 
-use ananke_gguf::{Architecture, GgufSummary, keys};
+use ananke_gguf::{Architecture, GgufSummary, GgufType, keys};
 
 use crate::{
     tuning::{
@@ -148,7 +148,7 @@ pub fn mtp_overhead_bytes(
         .unwrap_or(0) as u64;
     // The MTP draft context always uses f16 for its KV cache, independent of
     // the main cache type.
-    let bytes_per_element = crate::kv::kv_bytes_per_element("f16");
+    let bytes_per_element = crate::kv::kv_bytes_per_element(GgufType::F16);
     let kv_bytes = nextn
         * n_kv_heads
         * (((key_length + value_length) as f64) * bytes_per_element) as u64
@@ -243,8 +243,8 @@ mod tests {
     fn inputs<'a>(context: u32, speculation: Speculation<'a>) -> EstimatorInputs<'a> {
         EstimatorInputs {
             context,
-            cache_type_k: Some("q8_0"),
-            cache_type_v: Some("q8_0"),
+            cache_type_k: Some(GgufType::Q8_0),
+            cache_type_v: Some(GgufType::Q8_0),
             speculation,
             ..EstimatorInputs::empty(Path::new("/fake"))
         }

@@ -287,7 +287,7 @@ mod tests {
     use std::path::Path;
 
     use ananke_gguf::{
-        Architecture, keys,
+        Architecture, GgufType, keys,
         types::{GgufSummary, GgufValue},
     };
     use smol_str::SmolStr;
@@ -298,8 +298,8 @@ mod tests {
         EstimatorInputs {
             name: "demo",
             context: 4096,
-            cache_type_k: Some("f16"),
-            cache_type_v: Some("f16"),
+            cache_type_k: Some(GgufType::F16),
+            cache_type_v: Some(GgufType::F16),
             ..EstimatorInputs::empty(Path::new("/fake"))
         }
     }

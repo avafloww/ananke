@@ -432,8 +432,8 @@ mod tests {
         let inputs = EstimatorInputs {
             name: "demo",
             context: 32768,
-            cache_type_k: Some("f16"),
-            cache_type_v: Some("f16"),
+            cache_type_k: Some(GgufType::F16),
+            cache_type_v: Some(GgufType::F16),
             ..EstimatorInputs::empty(Path::new("/fake"))
         };
 
@@ -462,8 +462,8 @@ mod tests {
             host_resident_experts: false,
             visible_devices: 1,
             split_mode: ananke_config::placement::SplitMode::Layer,
-            cache_type_k: Some("q8_0"),
-            cache_type_v: Some("q8_0"),
+            cache_type_k: Some(GgufType::Q8_0),
+            cache_type_v: Some(GgufType::Q8_0),
             ..inputs
         };
         let e_q8 = estimate(&summary, &inputs_q8);

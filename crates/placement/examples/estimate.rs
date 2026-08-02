@@ -40,6 +40,7 @@ use std::{path::PathBuf, process};
 use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode};
 use ananke_estimate::{self as estimator, EstimatorInputs, Fork, Speculation};
 use ananke_fs::LocalFs;
+use ananke_gguf::GgufType;
 use ananke_placement::{
     Corrections,
     devices::{CpuSnapshot, DeviceSnapshot, GpuSnapshot},
@@ -256,8 +257,8 @@ fn main() {
         mmproj: args.mmproj.as_deref(),
         context: args.context,
         ubatch: args.ubatch,
-        cache_type_k: args.cache_type_k.as_deref(),
-        cache_type_v: args.cache_type_v.as_deref(),
+        cache_type_k: args.cache_type_k.as_deref().and_then(GgufType::from_name),
+        cache_type_v: args.cache_type_v.as_deref().and_then(GgufType::from_name),
         override_tensor: &args.override_tensor,
         compute_buffer_mb: args.compute_buffer_mb,
         speculation: match (args.mtp, args.draft_model.as_deref()) {

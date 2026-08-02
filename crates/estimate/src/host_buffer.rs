@@ -34,7 +34,6 @@
 //! its own doc comment. `docs/memory-model.md` is the model these functions
 //! implement, and `calibration/README.md` is how to re-derive it.
 
-use ananke_config::flags::cache_type;
 use ananke_gguf::{Architecture, GgufSummary, keys};
 
 pub use crate::tuning::DEFAULT_CACHE_RAM_MB;
@@ -993,6 +992,7 @@ mod tests {
 #[cfg(test)]
 mod measured_tests {
     use ananke_config::placement::SplitMode;
+    use ananke_gguf::GgufType;
 
     use super::*;
     use crate::llama::test_support::{fake_summary, inputs};
@@ -1006,14 +1006,14 @@ mod measured_tests {
     #[test]
     fn layer_split_replicates_masks_but_tensor_split_does_not() {
         let summary = fake_summary();
-        let one = pinned_graph_bytes(&summary, &inputs("f16", "f16", 32768));
+        let one = pinned_graph_bytes(&summary, &inputs(GgufType::F16, GgufType::F16, 32768));
 
-        let mut two = inputs("f16", "f16", 32768);
+        let mut two = inputs(GgufType::F16, GgufType::F16, 32768);
         two.visible_devices = 2;
         two.split_mode = SplitMode::Layer;
         let layered = pinned_graph_bytes(&summary, &two);
 
-        let mut fused = inputs("f16", "f16", 32768);
+        let mut fused = inputs(GgufType::F16, GgufType::F16, 32768);
         fused.visible_devices = 2;
         fused.split_mode = SplitMode::Tensor;
         let tensored = pinned_graph_bytes(&summary, &fused);
@@ -1048,10 +1048,10 @@ mod measured_tests {
         // Two devices against four, not one against four: the tensor-split
         // baseline is charged whenever more than one device is visible, so
         // starting from one would fold that term into the delta as well.
-        let mut two = inputs("f16", "f16", 32768);
+        let mut two = inputs(GgufType::F16, GgufType::F16, 32768);
         two.visible_devices = 2;
         two.split_mode = SplitMode::Tensor;
-        let mut four = inputs("f16", "f16", 32768);
+        let mut four = inputs(GgufType::F16, GgufType::F16, 32768);
         four.visible_devices = 4;
         four.split_mode = SplitMode::Tensor;
 
@@ -1118,7 +1118,7 @@ fn quantised_cache_rate(arch: &Architecture) -> u64 {
 /// fit and the estimate cannot classify a row differently.
 pub(crate) fn quantised_kv(inputs: &EstimatorInputs<'_>) -> bool {
     [inputs.cache_type_k, inputs.cache_type_v]
-        .iter()
+        .into_iter()
         .flatten()
-        .any(|t| cache_type::is_quantised(t))
+        .any(crate::kv::is_quantised)
 }
