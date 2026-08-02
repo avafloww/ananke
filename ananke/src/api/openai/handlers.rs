@@ -116,22 +116,16 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
         }
         match handle.peek_state() {
             ServiceState::Idle | ServiceState::Starting | ServiceState::Running => {
-                data.push(ModelListing {
-                    id: name.to_string(),
-                    object: "model",
-                    created: 0,
-                    owned_by: "ananke",
-                    modality: svc.modality,
-                    ananke_metadata: svc.metadata.clone(),
-                });
+                data.push(ModelListing::new(
+                    name.to_string(),
+                    svc.modality,
+                    svc.metadata.clone(),
+                ));
             }
             _ => {}
         }
     }
-    let body = ModelsResponse {
-        object: "list",
-        data,
-    };
+    let body = ModelsResponse::new(data);
     (StatusCode::OK, Json(body)).into_response()
 }
 

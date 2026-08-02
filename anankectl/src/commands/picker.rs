@@ -3,7 +3,10 @@
 
 use std::{collections::HashSet, io};
 
-use ananke_api::services::list::{ServiceSummary, ServicesResponse};
+use ananke_api::{
+    openai::ModelsResponse,
+    services::list::{ServiceSummary, ServicesResponse},
+};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
@@ -92,20 +95,11 @@ async fn fetch_openai_models(base: &reqwest::Url) -> Result<HashSet<String>, Api
         let body = resp.text().await.unwrap_or_default();
         return Err(ApiClientError::Http { status, body });
     }
-    let payload: serde_json::Value = resp
+    let payload: ModelsResponse = resp
         .json()
         .await
         .map_err(|e| ApiClientError::Parse(format!("parse /v1/models: {e}")))?;
-    let names = payload
-        .get("data")
-        .and_then(|d| d.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(str::to_string))
-                .collect::<HashSet<_>>()
-        })
-        .unwrap_or_default();
-    Ok(names)
+    Ok(payload.data.into_iter().map(|m| m.id).collect())
 }
 
 fn run_picker(services: Vec<ServiceSummary>) -> Result<Option<String>, ApiClientError> {
