@@ -58,7 +58,7 @@ pub struct GgufTensor {
     pub offset: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[allow(non_camel_case_types)]
 pub enum GgufType {
     F32,
@@ -179,7 +179,82 @@ impl GgufType {
             other => Self::Unknown(other),
         }
     }
+
+    /// The ggml type name, lowercased — how llama.cpp spells the type in
+    /// `--cache-type-k` / `-ctk` and in its own load log. `None` for a type id
+    /// the reader did not recognise, which has no name to give.
+    pub fn as_str(self) -> Option<&'static str> {
+        NAMES
+            .iter()
+            .find(|(ty, _)| *ty == self)
+            .map(|(_, name)| *name)
+    }
+
+    /// The inverse of [`Self::as_str`], case-insensitive so llama.cpp's own
+    /// mixed-case K-quant spellings (`q4_K`) parse alongside the lowercase ones
+    /// an operator is more likely to write.
+    pub fn from_name(name: &str) -> Option<Self> {
+        NAMES
+            .iter()
+            .find(|(_, candidate)| candidate.eq_ignore_ascii_case(name))
+            .map(|(ty, _)| *ty)
+    }
 }
+
+/// Every named ggml type, paired with its name exactly once so the two
+/// directions cannot disagree. [`GgufType::Unknown`] is deliberately absent: it
+/// stands for an id no name is known for.
+const NAMES: &[(GgufType, &str)] = &[
+    (GgufType::F32, "f32"),
+    (GgufType::F16, "f16"),
+    (GgufType::BF16, "bf16"),
+    (GgufType::F64, "f64"),
+    (GgufType::I8, "i8"),
+    (GgufType::I16, "i16"),
+    (GgufType::I32, "i32"),
+    (GgufType::I64, "i64"),
+    (GgufType::Q4_0, "q4_0"),
+    (GgufType::Q4_1, "q4_1"),
+    (GgufType::Q5_0, "q5_0"),
+    (GgufType::Q5_1, "q5_1"),
+    (GgufType::Q8_0, "q8_0"),
+    (GgufType::Q8_1, "q8_1"),
+    (GgufType::Q2K, "q2_k"),
+    (GgufType::Q3K, "q3_k"),
+    (GgufType::Q4K, "q4_k"),
+    (GgufType::Q5K, "q5_k"),
+    (GgufType::Q6K, "q6_k"),
+    (GgufType::Q8K, "q8_k"),
+    (GgufType::IQ1_S, "iq1_s"),
+    (GgufType::IQ1_M, "iq1_m"),
+    (GgufType::IQ2_XXS, "iq2_xxs"),
+    (GgufType::IQ2_XS, "iq2_xs"),
+    (GgufType::IQ2_S, "iq2_s"),
+    (GgufType::IQ3_XXS, "iq3_xxs"),
+    (GgufType::IQ3_S, "iq3_s"),
+    (GgufType::IQ4_NL, "iq4_nl"),
+    (GgufType::IQ4_XS, "iq4_xs"),
+    (GgufType::TQ1_0, "tq1_0"),
+    (GgufType::TQ2_0, "tq2_0"),
+    (GgufType::MXFP4, "mxfp4"),
+    (GgufType::Q6_0, "q6_0"),
+    (GgufType::Q8_KV, "q8_kv"),
+    (GgufType::IQ2_K, "iq2_k"),
+    (GgufType::IQ3_K, "iq3_k"),
+    (GgufType::IQ4_K, "iq4_k"),
+    (GgufType::IQ5_K, "iq5_k"),
+    (GgufType::IQ6_K, "iq6_k"),
+    (GgufType::IQ2_KS, "iq2_ks"),
+    (GgufType::IQ3_KS, "iq3_ks"),
+    (GgufType::IQ4_KS, "iq4_ks"),
+    (GgufType::IQ5_KS, "iq5_ks"),
+    (GgufType::IQ4_KSS, "iq4_kss"),
+    (GgufType::IQ1_KT, "iq1_kt"),
+    (GgufType::IQ2_KT, "iq2_kt"),
+    (GgufType::IQ3_KT, "iq3_kt"),
+    (GgufType::IQ4_KT, "iq4_kt"),
+    (GgufType::IQ2_KL, "iq2_kl"),
+];
 
 #[derive(Debug, Clone)]
 pub enum GgufValue {
@@ -262,5 +337,40 @@ impl GgufValue {
             GgufValue::Bool(b) => Some(vec![*b]),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    /// Every type the reader can name from an id must also be nameable as a
+    /// string and parse back — a variant added to `from_u32` but forgotten in
+    /// `NAMES` would otherwise be silently unspellable in a config.
+    #[test]
+    fn every_known_type_round_trips_through_its_name() {
+        for id in 0..256 {
+            let ty = GgufType::from_u32(id);
+            if matches!(ty, GgufType::Unknown(_)) {
+                continue;
+            }
+            let name = ty.as_str().unwrap_or_else(|| panic!("{ty:?} has no name"));
+            assert_eq!(GgufType::from_name(name), Some(ty));
+        }
+    }
+
+    #[test]
+    fn names_are_distinct() {
+        let names: HashSet<&str> = NAMES.iter().map(|(_, name)| *name).collect();
+        assert_eq!(names.len(), NAMES.len(), "two types share a name");
+    }
+
+    #[test]
+    fn a_name_parses_regardless_of_case() {
+        assert_eq!(GgufType::from_name("Q4_K"), Some(GgufType::Q4K));
+        assert_eq!(GgufType::from_name("q4_k"), Some(GgufType::Q4K));
+        assert_eq!(GgufType::from_name("not-a-type"), None);
     }
 }
