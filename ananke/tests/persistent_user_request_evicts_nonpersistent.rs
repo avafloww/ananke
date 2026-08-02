@@ -1,11 +1,10 @@
 //! Integration test: a user-driven request for a persistent service evicts a
 //! running on-demand peer rather than yielding to it.
 //!
-//! Regression: when switching back to a persistent service after using a
-//! non-persistent one (e.g. qwen3.6 → gemma → qwen3.6 again), the supervisor's
-//! "persistent yields to active non-persistent" guard fired even on user-driven
-//! requests, returning 503 instead of evicting and starting the persistent
-//! service. The yield rule exists for background-watcher re-ensures only; a
+//! The supervisor's "persistent yields to active non-persistent" guard
+//! applies to background-watcher re-ensures only. Applying it to user-driven
+//! requests returns 503 when switching back to a persistent service after
+//! using a non-persistent one (e.g. qwen3.6 → gemma → qwen3.6 again); a
 //! user-driven ensure must be allowed to evict idle on-demand peers.
 #![cfg(feature = "test-fakes")]
 

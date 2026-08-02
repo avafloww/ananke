@@ -14,9 +14,9 @@ use ananke::{
     allocator::{AllocationTable, placement},
     config::{PlacementPolicy, ServiceConfig},
     devices::{DeviceId, DeviceSnapshot, GpuSnapshot},
-    estimator::{Estimate, NonLayer},
+    estimator::{Estimate, Layout},
 };
-use smol_str::SmolStr;
+use ananke_gguf::Architecture;
 
 fn two_gpu_svc() -> ServiceConfig {
     // No placement_override — the test drives pack() directly.
@@ -57,17 +57,11 @@ fn large_estimate() -> Estimate {
     Estimate {
         weights_bytes: per_layer_bytes * n_layers as u64,
         kv_per_token: 0,
-        compute_buffer_mb: 0, // suppress compute buffer overhead for clarity
-        output_buffer_bytes: 0,
-        mtp_bytes: 0,
-        per_layer_bytes: Some(vec![per_layer_bytes; n_layers]),
-        attention_layers: None,
-        non_layer: NonLayer::default(),
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: 4096,
-        architecture: SmolStr::new("qwen3"),
+        layout: Layout {
+            per_layer_bytes: Some(vec![per_layer_bytes; n_layers]),
+            ..Layout::default()
+        },
+        ..Estimate::empty(Architecture::Qwen3, 4096)
     }
 }
 
@@ -78,8 +72,13 @@ fn multi_gpu_split_produces_tensor_split_and_both_gpus_allocated() {
     let reserved = AllocationTable::new();
     let est = large_estimate();
 
-    let packed = placement::pack(&est, &svc, &snap, &reserved)
-        .expect("placement must succeed across two GPUs");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &reserved,
+    )
+    .expect("placement must succeed across two GPUs");
 
     // Both GPUs should carry some allocation.
     assert!(

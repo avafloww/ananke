@@ -46,7 +46,7 @@ fn override_tensor_rules_propagate_to_command_args() {
         .into_in_memory_fs(path);
 
     let svc = moe_svc_with_override_tensor(path.to_path_buf());
-    let inputs = estimator::EstimatorInputs::from_service(&svc).unwrap();
+    let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
     let est =
         estimator::estimate_from_path(&fs, &inputs).expect("estimate must succeed on MoE GGUF");
 
@@ -63,8 +63,13 @@ fn override_tensor_rules_propagate_to_command_args() {
     };
 
     let reserved = AllocationTable::new();
-    let packed = placement::pack(&est, &svc, &snap, &reserved)
-        .expect("placement must succeed on single GPU");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &reserved,
+    )
+    .expect("placement must succeed on single GPU");
 
     // The override_tensor rules declared in the service must be forwarded
     // verbatim to CommandArgs so the spawn renderer can emit -ot flags.
@@ -113,7 +118,7 @@ fn auto_expert_offload_emits_n_cpu_moe_under_hybrid() {
     lc.model = path.to_path_buf();
     lc.expert_offload = OffloadMode::Auto;
 
-    let inputs = estimator::EstimatorInputs::from_service(&svc).unwrap();
+    let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
     let est = estimator::estimate_from_path(&fs, &inputs).expect("estimate must succeed");
 
     // 1 GiB card, generous host RAM.
@@ -131,8 +136,13 @@ fn auto_expert_offload_emits_n_cpu_moe_under_hybrid() {
         taken_at_ms: 0,
     };
 
-    let packed = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect("hybrid auto-offload must pack on a 1 GiB card");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect("hybrid auto-offload must pack on a 1 GiB card");
 
     // -ngl 999: all layers to GPU, then --n-cpu-moe pulls the trailing
     // experts back to CPU (the runtime owns the cross-GPU split).

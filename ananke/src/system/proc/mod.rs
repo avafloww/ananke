@@ -1,9 +1,9 @@
 //! Linux-only: `/proc` abstraction.
 //!
 //! `/proc` isn't really a filesystem — every read is a synthesised view
-//! of kernel state — so routing it through `Fs` made every test stage
-//! synthetic text, only to have the consumer parse it back into a
-//! semantic value. This module models the daemon's actual reads as
+//! of kernel state — so it does not go through `Fs`, which would make
+//! every test stage synthetic text only for the consumer to parse it back
+//! into a semantic value. This module models the daemon's actual reads as
 //! typed trait methods. The production impl reads `/proc` directly; the
 //! test impl takes pre-parsed values keyed by pid.
 //!
@@ -29,6 +29,23 @@ use std::io;
 pub use fake::InMemoryProcFs;
 pub use local::LocalProcFs;
 
+/// A process's resident memory, split by what each part can be compared
+/// against. Read in one pass so the three figures describe the same instant.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Rss {
+    /// `VmRSS` — everything resident.
+    pub total: u64,
+    /// `RssAnon + RssShmem`: memory the process allocated. Both halves are
+    /// needed — the heap and the KV cache are anonymous, but `cudaMallocHost`,
+    /// where llama.cpp's pinned graph arena lives, is accounted as shmem.
+    pub owned: u64,
+    /// `RssFile`: pages backed by a mapping. For a llama.cpp child this is the
+    /// model's host-resident weights — measured at the host weight total plus
+    /// ~150-230 MiB of shared libraries, across every configuration tried,
+    /// including hybrids where most of the file lives on a GPU.
+    pub file: u64,
+}
+
 /// Parsed `/proc/meminfo` values the scheduler cares about.
 #[derive(Debug, Clone, Copy)]
 pub struct Meminfo {
@@ -50,9 +67,9 @@ pub trait ProcFs: Send + Sync {
     /// doesn't bias the scheduler.
     fn meminfo(&self) -> io::Result<Meminfo>;
 
-    /// `VmRSS` from `/proc/<pid>/status` in bytes. `None` when the pid
-    /// has exited or the status entry isn't fully populated yet.
-    fn vm_rss(&self, pid: u32) -> Option<u64>;
+    /// The `/proc/<pid>/status` resident-memory breakdown. `None` when the
+    /// pid has exited or the entry isn't fully populated yet.
+    fn rss(&self, pid: u32) -> Option<Rss>;
 
     /// `/proc/<pid>/comm` as the raw command name (trimmed). `None` when
     /// the pid has exited.

@@ -9,6 +9,7 @@ use ananke_api::{
     devices::list::DeviceSummary,
     services::{detail::ServiceDetail, list::ServiceSummary},
 };
+use ananke_config::units::{GIB, MIB};
 use comfy_table::{Attribute, Cell, CellAlignment, Color, ContentArrangement, Table, presets};
 use serde::Serialize;
 
@@ -158,8 +159,6 @@ fn format_restart_time(at_ms: i64) -> String {
 /// Format `bytes` with an automatically-chosen unit (GiB / MiB / B).
 /// Used wherever VRAM totals or reservation amounts get printed.
 pub fn format_bytes(bytes: u64) -> String {
-    const GIB: u64 = 1024 * 1024 * 1024;
-    const MIB: u64 = 1024 * 1024;
     if bytes >= GIB {
         format!("{:.1} GiB", bytes as f64 / GIB as f64)
     } else if bytes >= MIB {
@@ -191,9 +190,9 @@ fn state_rank(state: &str) -> u8 {
     }
 }
 
-/// Build a borderless, dynamically-arranged table. We avoid borders so
-/// the output keeps the same visual density as the legacy plain-text
-/// tables; comfy-table still gives us auto-sizing and per-cell styling.
+/// Build a borderless, dynamically-arranged table. Borders are avoided so the
+/// output keeps the visual density of plain-text tables; comfy-table still
+/// gives us auto-sizing and per-cell styling.
 fn base_table() -> Table {
     let mut table = Table::new();
     table.load_preset(presets::NOTHING);

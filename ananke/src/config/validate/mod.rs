@@ -23,8 +23,8 @@ pub mod test_fixtures;
 
 // Config-default constants live in the `ananke-config` leaf crate so the
 // xtask and CLI can reference them without pulling in the daemon's heavy
-// deps. Re-exported here so existing `use crate::config::validate::DEFAULT_*`
-// paths keep working.
+// deps. Re-exported here so they are reachable as
+// `crate::config::validate::DEFAULT_*`.
 pub use ananke_config::docs::{
     DEFAULT_AUTO_RESTART_FLAP_WINDOW_MS, DEFAULT_AUTO_RESTART_GENERATION_STALL_MS,
     DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS, DEFAULT_AUTO_RESTART_MAX_ERROR_RATE,
@@ -59,7 +59,7 @@ pub(crate) use port_pool::{PrivatePortAllocator, PrivatePortRange};
 pub(crate) use restart_triggers::{
     validate_error_rate, validate_generation_stall, validate_spec_collapse, validate_ttft_stall,
 };
-pub use runtime::{IkSettings, NumaStrategy, OffloadMode, Runtime};
+pub use runtime::{IkSettings, NumaStrategy, OffloadMode, Runtime, RuntimeConfig};
 pub(crate) use service_validation::validate_service;
 pub use split_mode::SplitMode;
 pub use tracking::TrackingSettings;

@@ -85,9 +85,9 @@ pub(super) fn render_llama_cpp_argv(
 /// rather than one `-ot` per rule. Current llama.cpp deprecated repeated
 /// `-ot` flags and now honours **only the last one** ("argument '-ot'
 /// specified multiple times … only last value will be used"), so a
-/// per-rule emission silently dropped every rule but the last — which for
-/// the packer's synthesised MoE offload meant almost no experts actually
-/// moved off the GPU, OOMing at load. Rules never contain a comma, so the
+/// per-rule emission silently drops every rule but the last — which for
+/// the packer's synthesised MoE offload leaves almost no experts moved off
+/// the GPU, OOMing at load. Rules never contain a comma, so the
 /// join is lossless and llama.cpp parses the combined value itself.
 fn push_override_tensor(args: &mut Vec<String>, rules: &[String]) {
     if !rules.is_empty() {
@@ -101,6 +101,9 @@ fn render_llama_server_flags(
     lc: &LlamaCppConfig,
     cmd_args: Option<&CommandArgs>,
 ) -> Vec<String> {
+    // Only a real packer layout overrides the service's own offload settings.
+    // See [`CommandArgs::describes_offload`].
+    let cmd_args = cmd_args.filter(|ca| ca.describes_offload());
     let mut args: Vec<String> = Vec::new();
 
     if let Some(ik) = lc.runtime.ik() {
@@ -208,6 +211,20 @@ fn render_llama_server_flags(
     }
     if lc.cache_idle_slots == Some(false) {
         args.push("--no-cache-idle-slots".into());
+    }
+    // Emitted even when it matches llama.cpp's own default: the prompt cache
+    // is host RAM the packer reserves, and the reservation is only honest if
+    // the runtime is capped at the number that was reserved. Skipped when the
+    // operator already passes the flag through `extra_args` — duplicating it
+    // would leave two conflicting values on the command line, and the
+    // estimator reads theirs for the reservation.
+    if crate::config::service_inputs::cache_ram_from_extra_args(&svc.extra_args).is_none() {
+        args.push("-cram".into());
+        args.push(
+            lc.cache_ram_mb
+                .unwrap_or(crate::estimator::host_buffer::DEFAULT_CACHE_RAM_MB)
+                .to_string(),
+        );
     }
     // An embedding service needs llama-server's embeddings endpoint enabled;
     // the pooling strategy comes from the GGUF's `{arch}.pooling_type`, so

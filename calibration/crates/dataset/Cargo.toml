@@ -1,0 +1,14 @@
+[package]
+name = "ananke-dataset"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+# For `SplitMode` and the cache-type vocabulary: the campaign's `split` and
+# `kv_type` columns are llama.cpp flag values, and the daemon already names them.
+ananke-config.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

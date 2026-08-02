@@ -118,10 +118,10 @@ pub fn resolve(key: &str, ctx: &PlaceholderContext<'_>) -> Result<String, Substi
             ids.sort_unstable();
             Ok(ids.iter().map(u32::to_string).collect::<Vec<_>>().join(","))
         }
-        // `vram_mb` is the pre-rename spelling. It is still accepted so
-        // existing command templates keep launching; `reserve_mb` is the name
-        // to write, since the reservation lands on the CPU device just as
-        // readily as on a GPU.
+        // `vram_mb` is a device-specific alias, accepted so command templates
+        // in the wild keep launching. `reserve_mb` is the name to write, since
+        // the reservation lands on the CPU device just as readily as on a
+        // GPU.
         "reserve_mb" | "vram_mb" => ctx
             .static_reserve_mb
             .map(|mb| mb.to_string())
@@ -214,9 +214,9 @@ mod tests {
         );
     }
 
-    /// `{vram_mb}` was the name before the reservation was recognised as
-    /// device-neutral. Command templates in the wild still use it, so it has
-    /// to keep resolving identically to `{reserve_mb}`.
+    /// `{vram_mb}` is the device-specific alias for the device-neutral
+    /// `{reserve_mb}`. Command templates in the wild use it, so it has to
+    /// keep resolving identically.
     #[test]
     fn legacy_vram_mb_placeholder_still_resolves() {
         let alloc = alloc_gpu0_only();

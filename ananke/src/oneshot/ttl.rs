@@ -60,8 +60,8 @@ pub fn spawn_watcher(cfg: WatcherConfig) -> tokio::task::JoinHandle<()> {
         let _ = db.mark_oneshot_ended(&id, now_ms).await;
         // Leave the record in place with `ended_at_ms` set so callers can
         // still observe the terminal state via `GET /api/oneshot/:id`.
-        // Removing it here caused polling clients (stress scenario 05) to
-        // see 404s immediately after TTL expiry.
+        // Removing it here gives polling clients a 404 the instant the TTL
+        // expires.
         oneshots.mark_ended(&id, now_ms as u64, None);
         port_pool.lock().release(port);
     })

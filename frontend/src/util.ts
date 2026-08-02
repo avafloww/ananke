@@ -100,10 +100,10 @@ export function zeroFillGaps(
 
   // Derive the gap threshold from the data's own cadence unless overridden:
   // a "gap" is more than 1.5x the median spacing between points. This keeps a
-  // run of evenly-spaced buckets connected at any resolution — the fixed
-  // 15-min default used to treat every point in the 24h view (1h buckets, now
-  // 30m) as a gap and drop to zero between them, rendering continuous traffic
-  // as a series of spikes.
+  // run of evenly-spaced buckets connected at any resolution. A fixed
+  // threshold cannot: a 15-minute one treats every point in the 24h view
+  // (30m buckets) as a gap and drops to zero between them, rendering
+  // continuous traffic as a series of spikes.
   const threshold = gapSec ?? medianGapThreshold(ts);
 
   // No timestamps — flat 0 line across the full range.

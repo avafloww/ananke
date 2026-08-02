@@ -19,14 +19,13 @@
 
 use std::sync::Arc;
 
-pub mod fs;
 pub mod proc;
 pub mod process;
 
-pub use fs::{Fs, InMemoryFs, LocalFs, SeekRead};
+pub use ananke_fs::{Fs, InMemoryFs, LocalFs, SeekRead};
 #[cfg(any(test, feature = "test-fakes"))]
 pub use proc::InMemoryProcFs;
-pub use proc::{LocalProcFs, Meminfo, ProcFs};
+pub use proc::{LocalProcFs, Meminfo, ProcFs, Rss};
 pub use process::{DynAsyncRead, LocalSpawner, ManagedChild, ProcessSpawner};
 #[cfg(any(test, feature = "test-fakes"))]
 pub use process::{FakeChildSnapshot, FakeProcessState, FakeSpawner};

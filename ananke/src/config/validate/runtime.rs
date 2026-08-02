@@ -46,22 +46,37 @@ impl NumaStrategy {
 }
 
 /// Serving runtime for a llama-cpp-template service, mirroring
-/// [`crate::config::parse::RawRuntime`]. `IkLlama` carries the fork's
-/// validated knobs and switches spawn/estimation to the fork's flag and
-/// memory conventions.
+/// [`crate::config::parse::RawRuntime`]: which fork serves, plus the fork's
+/// validated knobs where it has any.
+///
+/// Guardrail: the knobs hang off the variant rather than off a
+/// `{ fork, ik: Option<_> }` pair, so "mainline carrying ik settings" is
+/// unrepresentable instead of merely unexpected. [`Self::fork`] projects out
+/// the bare [`Runtime`] marker that the calibration dataset also records.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum Runtime {
+pub enum RuntimeConfig {
+    /// Upstream llama.cpp, which has no runtime table of its own.
     #[default]
-    LlamaCpp,
-    IkLlama(IkSettings),
+    Mainline,
+    /// ikawrakow's fork, whose knobs switch spawn and estimation to its flag
+    /// and memory conventions.
+    Ik(IkSettings),
 }
 
-impl Runtime {
+impl RuntimeConfig {
+    /// Which fork this is, without its settings.
+    pub fn fork(&self) -> Runtime {
+        match self {
+            RuntimeConfig::Mainline => Runtime::Mainline,
+            RuntimeConfig::Ik(_) => Runtime::Ik,
+        }
+    }
+
     /// The fork settings, when this is the fork runtime.
     pub fn ik(&self) -> Option<&IkSettings> {
         match self {
-            Runtime::LlamaCpp => None,
-            Runtime::IkLlama(ik) => Some(ik),
+            RuntimeConfig::Mainline => None,
+            RuntimeConfig::Ik(ik) => Some(ik),
         }
     }
 }
@@ -80,30 +95,7 @@ pub struct IkSettings {
     pub runtime_repack: bool,
 }
 
-/// MoE expert-offload policy for a llama-cpp service. Resolved from the
-/// `expert_offload` config value. The packer reads this to decide whether and
-/// how much expert weight to move off the GPU when the model doesn't fit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OffloadMode {
-    /// No expert offload. The model packs whole layers, spilling entire layers
-    /// to CPU only under a CPU-allowing placement.
-    #[default]
-    Off,
-    /// The packer keeps each expert on its layer's home GPU while that GPU has
-    /// room, then greedily spills the experts that don't fit — to the most-free
-    /// other GPU first, then to CPU — so only the surplus over live VRAM moves.
-    Auto,
-    /// The packer offloads the experts of exactly the `N` tail-most
-    /// expert-bearing layers, regardless of fit.
-    Layers(u32),
-}
-
-impl OffloadMode {
-    /// Whether any expert offload is requested (i.e. not [`OffloadMode::Off`]).
-    pub fn is_enabled(self) -> bool {
-        !matches!(self, OffloadMode::Off)
-    }
-}
+pub use ananke_config::{placement::OffloadMode, runtime::Runtime};
 
 #[cfg(test)]
 mod tests {
@@ -193,6 +185,7 @@ lifecycle = "persistent"
         let e = validate(&cfg).unwrap();
         let svc = &e.services[0];
         let lc = svc.llama_cpp().unwrap();
+        assert_eq!(lc.runtime.fork(), Runtime::Ik);
         let ik = lc.runtime.ik().expect("ik runtime");
         assert_eq!(ik.mla, Some(1));
         assert!(ik.dsa);

@@ -8,7 +8,7 @@ use tracing::warn;
 use crate::{
     config::ServiceConfig,
     daemon::{app_state::AppState, estimate_cache::CacheEntry},
-    estimator::{EstimatorInputs, estimate_with_summary},
+    estimator::estimate_with_summary,
 };
 
 /// Look up the cached `(ModelInfo, EstimateSummary)` for a service,
@@ -24,7 +24,8 @@ pub(crate) fn model_estimate_entry(
     // Build the inputs once so the fingerprint we compare against is
     // identical to the one `compute_estimate_entry` would write into
     // the cache on miss.
-    let inputs = EstimatorInputs::from_service(svc_cfg)?;
+    let inputs = crate::config::service_inputs::estimator_inputs(svc_cfg)
+        .map(|i| i.with_visible_devices(state.snapshot.read().gpus.len() as u32))?;
     let fingerprint = inputs.config_fingerprint();
     let lc = svc_cfg.llama_cpp()?;
     let svc_name = svc_cfg.name.clone();
@@ -89,11 +90,10 @@ pub(crate) fn placement_preview(
         // `None` means it reserves nothing, so there is nothing to show.
         crate::supervise::preview_command_placement(svc_cfg, &snapshot, &table, running)?
     } else {
-        let mut est = estimate?.clone();
-        // Match the supervisor: apply the rolling drift correction before packing.
-        est.weights_bytes =
-            (est.weights_bytes as f64 * state.rolling.get(&svc_cfg.name).effective_mean()) as u64;
-        crate::supervise::preview_placement(svc_cfg, &est, &snapshot, &table, running)
+        let est = estimate?;
+        // Match the supervisor: pack with the service's learned corrections.
+        let corrections = state.rolling.get(&svc_cfg.name).corrections();
+        crate::supervise::preview_placement(svc_cfg, est, &snapshot, &table, running, corrections)
     };
 
     // A dynamic command service can grow past its reserved floor up to its
@@ -149,7 +149,8 @@ pub(crate) fn placement_preview(
 /// estimator refuses the architecture.
 fn compute_estimate_entry(state: &AppState, svc_cfg: &ServiceConfig) -> Option<CacheEntry> {
     let lc = svc_cfg.llama_cpp()?;
-    let inputs = EstimatorInputs::from_service(svc_cfg)?;
+    let inputs = crate::config::service_inputs::estimator_inputs(svc_cfg)
+        .map(|i| i.with_visible_devices(state.snapshot.read().gpus.len() as u32))?;
     let config_fingerprint = inputs.config_fingerprint();
     let model_path = lc.model.clone();
     let mmproj_path = lc.mmproj.clone();

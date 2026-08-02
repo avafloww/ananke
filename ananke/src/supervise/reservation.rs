@@ -2,9 +2,12 @@
 //! (or the command-template GPU pick) to decide what a spawn would reserve,
 //! without touching the allocation table.
 
-use crate::supervise::{
-    RunLoop,
-    ensure::{MisconfiguredKind, ReservationFailure, pack_err_to_reservation_failure},
+use crate::{
+    config::service_inputs::placement_inputs,
+    supervise::{
+        RunLoop,
+        ensure::{MisconfiguredKind, ReservationFailure, pack_err_to_reservation_failure},
+    },
 };
 
 impl RunLoop {
@@ -44,7 +47,13 @@ impl RunLoop {
     {
         let current = self.current_svc();
         let svc = &current;
-        if matches!(svc.template(), crate::config::Template::Command) {
+        // An explicit allocation mode replaces the estimator outright: the
+        // operator states the reservation and the service is placed from that
+        // figure alone. Every command service is here, because ananke does not
+        // build its argv; a llama-cpp service is only here when its
+        // architecture is one the estimator refuses, which leaves the operator
+        // nothing else to place it with.
+        if !matches!(svc.allocation_mode, crate::config::AllocationMode::None) {
             return self.compute_command_reservation(svc, snap, table, optimistic);
         }
         if !svc.placement_override.is_empty() {
@@ -53,11 +62,13 @@ impl RunLoop {
         }
 
         // Estimator + placement path.
-        let inputs = crate::estimator::EstimatorInputs::from_service(svc).ok_or(
-            ReservationFailure::Misconfigured(MisconfiguredKind::NoModelPath),
-        )?;
+        let inputs = crate::config::service_inputs::estimator_inputs(svc)
+            .map(|i| i.with_visible_devices(snap.gpus.len() as u32))
+            .ok_or(ReservationFailure::Misconfigured(
+                MisconfiguredKind::NoModelPath,
+            ))?;
         let fingerprint = inputs.config_fingerprint();
-        let (summary, mut est) =
+        let (summary, est) =
             crate::estimator::estimate_with_summary(self.deps.system.fs.as_ref(), &inputs)
                 .map_err(ReservationFailure::EstimatorError)?;
         // Warm the daemon-wide estimate cache with the *base* estimate
@@ -83,18 +94,20 @@ impl RunLoop {
                 ),
             );
         }
-        // Apply rolling correction to weights_bytes. `effective_mean()` gates
-        // the factor to a neutral 1.0 until enough samples accumulate, so a
-        // single noisy early observation can't over-pledge a shard past a GPU's
-        // capacity.
-        let rc = self.deps.rolling.get(&svc.name);
-        est.weights_bytes = (est.weights_bytes as f64 * rc.effective_mean()) as u64;
-
-        let packed = if optimistic {
-            crate::allocator::placement::pack_optimistic(&est, svc, snap, table)
-        } else {
-            crate::allocator::placement::pack(&est, svc, snap, table)
-        }
+        // Hand the service's learned per-pool corrections to the packer, which
+        // scales every byte it charges to a device by that pool's factor.
+        // `RollingCorrection::corrections` gates each factor to a neutral 1.0
+        // until enough samples accumulate, so a single noisy early observation
+        // can't over-pledge a shard past a GPU's capacity.
+        let corrections = self.deps.rolling.get(&svc.name).corrections();
+        let packed = crate::allocator::placement::pack_corrected(
+            &est,
+            &placement_inputs(svc),
+            snap,
+            table,
+            corrections,
+            optimistic,
+        )
         .map_err(pack_err_to_reservation_failure)?;
         // Convert Allocation bytes (per-DeviceId, in bytes) to the
         // BTreeMap<DeviceSlot, u64> in MB that can_fit + insert expects.
@@ -150,6 +163,10 @@ impl RunLoop {
                 args: crate::allocator::placement::CommandArgs::default(),
                 expert_offload_bytes: 0,
                 expert_offload_layers: 0,
+                // A command service's reservation is the operator's declared
+                // `min_mb`, not an estimate, so there is nothing for the
+                // rolling correction to learn about. Zero bases skip it.
+                rolling: crate::allocator::placement::RollingInputs::default(),
             });
             return Ok(map);
         }
@@ -158,7 +175,10 @@ impl RunLoop {
         // land the whole `min_mb` on a single GPU.
         if !svc.placement_override.is_empty() {
             crate::allocator::placement::check_command_placement_override(
-                svc, snap, table, optimistic,
+                &placement_inputs(svc),
+                snap,
+                table,
+                optimistic,
             )
             .map_err(ReservationFailure::PackFailed)?;
             map = svc.placement_override.clone();
@@ -168,6 +188,10 @@ impl RunLoop {
                 args: crate::allocator::placement::CommandArgs::default(),
                 expert_offload_bytes: 0,
                 expert_offload_layers: 0,
+                // A command service's reservation is the operator's declared
+                // `min_mb`, not an estimate, so there is nothing for the
+                // rolling correction to learn about. Zero bases skip it.
+                rolling: crate::allocator::placement::RollingInputs::default(),
             });
             return Ok(map);
         }
@@ -178,21 +202,29 @@ impl RunLoop {
             crate::config::DeviceSlot::Cpu
         } else {
             match crate::allocator::placement::pick_command_gpu(
-                svc, snap, table, min_mb, prefer_mb, optimistic,
+                &placement_inputs(svc),
+                snap,
+                table,
+                min_mb,
+                prefer_mb,
+                optimistic,
             ) {
                 Some(id) => crate::config::DeviceSlot::Gpu(id),
                 None if snap.gpus.is_empty() => {
                     // No GPUs visible at all (typical in tests with a CPU-only
                     // snapshot). Fall back to CPU so the reservation lands
-                    // somewhere — matches the pre-fix behaviour and keeps
-                    // the test harness working.
+                    // somewhere rather than failing the pack outright.
                     crate::config::DeviceSlot::Cpu
                 }
                 None => {
                     return Err(ReservationFailure::PackFailed(
                         crate::allocator::placement::PackError::WeightsDoNotFit {
                             shortfalls: crate::allocator::placement::command_gpu_shortfalls(
-                                svc, snap, table, min_mb, optimistic,
+                                &placement_inputs(svc),
+                                snap,
+                                table,
+                                min_mb,
+                                optimistic,
                             ),
                         },
                     ));
@@ -206,6 +238,9 @@ impl RunLoop {
             args: crate::allocator::placement::CommandArgs::default(),
             expert_offload_bytes: 0,
             expert_offload_layers: 0,
+            // See the `min_mb == 0` arm above: an operator-declared reservation
+            // is not an estimate.
+            rolling: crate::allocator::placement::RollingInputs::default(),
         });
         Ok(map)
     }

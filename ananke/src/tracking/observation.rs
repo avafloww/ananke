@@ -32,12 +32,23 @@ struct ObservedState {
     /// High-water mark of GPU VRAM bytes alone, attributed across every
     /// pid in the per-service pid set. Tracked separately because the
     /// dynamic-allocation pledge models one component at a time —
-    /// pledging combined
-    /// VRAM+RSS would inflate the pledge with the python interpreter's
-    /// RSS and falsely trip the over-commit check (regression: an SDXL
-    /// inference's 8 GB VRAM + 12 GB RSS used to pledge as 20 GB on the
-    /// GPU and trigger a self-eviction that wasn't justified).
+    /// pledging combined VRAM+RSS would inflate the pledge with the python
+    /// interpreter's RSS and falsely trip the over-commit check — an SDXL
+    /// inference at 8 GB VRAM + 12 GB RSS pledges as 20 GB on the GPU and
+    /// self-evicts without justification.
     peak_vram_bytes: u64,
+    /// High-water mark of host RSS alone, the mirror of `peak_vram_bytes`.
+    /// Includes file-backed pages — see [`ObservationTable::read_peak_rss`].
+    peak_rss_bytes: u64,
+    /// High-water mark of host RSS the process *owns* — anonymous plus shmem,
+    /// the latter being where `cudaMallocHost` lands.
+    peak_rss_owned_bytes: u64,
+    /// High-water mark of mapped host RSS. For a llama.cpp child this is the
+    /// model's host-resident weights, which is what lets the rolling
+    /// correction tell a runtime that mapped its weights from one that read
+    /// them into anonymous memory — the two put the same bytes in different
+    /// counters, and no config flag reliably says which.
+    peak_rss_file_bytes: u64,
     /// Latest GPU VRAM sample. Retained alongside the peak because the
     /// balloon resolver has to be able to watch usage come *down*.
     current_vram_bytes: u64,
@@ -82,18 +93,27 @@ impl ObservationTable {
     /// (`vram + rss`) and each component. The peaks update monotonically;
     /// the current readings are replaced outright. `vram_bytes` may be zero
     /// on a CPU-only service.
-    pub fn record_sample(&self, service: &SmolStr, vram_bytes: u64, rss_bytes: u64) {
+    pub fn record_sample(&self, service: &SmolStr, vram_bytes: u64, rss: crate::system::Rss) {
         let mut guard = self.inner.write();
         let entry = guard.entry(service.clone()).or_default();
-        let total = vram_bytes.saturating_add(rss_bytes);
+        let total = vram_bytes.saturating_add(rss.total);
         if total > entry.peak_bytes {
             entry.peak_bytes = total;
         }
         if vram_bytes > entry.peak_vram_bytes {
             entry.peak_vram_bytes = vram_bytes;
         }
+        if rss.total > entry.peak_rss_bytes {
+            entry.peak_rss_bytes = rss.total;
+        }
+        if rss.owned > entry.peak_rss_owned_bytes {
+            entry.peak_rss_owned_bytes = rss.owned;
+        }
+        if rss.file > entry.peak_rss_file_bytes {
+            entry.peak_rss_file_bytes = rss.file;
+        }
         entry.current_vram_bytes = vram_bytes;
-        entry.current_rss_bytes = rss_bytes;
+        entry.current_rss_bytes = rss.total;
     }
 
     /// Combined `vram + rss` peak. The frontend / `/api/services`
@@ -107,13 +127,56 @@ impl ObservationTable {
     }
 
     /// VRAM-only peak. The rolling estimator correction folds this in at
-    /// drain time, and it is deliberately VRAM-only rather than the combined
-    /// `read_peak` — see the comment on `ObservedState::peak_vram_bytes`.
+    /// drain time against a GPU-slots-only reservation base, and it is
+    /// deliberately VRAM-only rather than the combined `read_peak` — see the
+    /// comment on `ObservedState::peak_vram_bytes`.
     pub fn read_peak_vram(&self, service: &SmolStr) -> u64 {
         self.inner
             .read()
             .get(service)
             .map(|s| s.peak_vram_bytes)
+            .unwrap_or(0)
+    }
+
+    /// Host-RSS-only peak, as `VmRSS` summed over the service's pid set.
+    ///
+    /// The operator-facing footprint, and the balloon resolver's signal for a
+    /// CPU-pinned service. The rolling correction uses
+    /// [`Self::read_peak_rss_owned`] and [`Self::read_peak_rss_file`] instead,
+    /// because the total mixes memory the process allocated with pages it
+    /// merely mapped, and only the former is comparable to a prediction.
+    pub fn read_peak_rss(&self, service: &SmolStr) -> u64 {
+        self.inner
+            .read()
+            .get(service)
+            .map(|s| s.peak_rss_bytes)
+            .unwrap_or(0)
+    }
+
+    /// Process-owned host-RSS peak: heap, the pinned graph arena, the prompt
+    /// cache, the CPU-side KV cache — everything the runtime allocated rather
+    /// than mapped, and the only host figure comparable to a modelled
+    /// prediction.
+    ///
+    /// Whether host-resident *weights* appear here depends on the runtime:
+    /// mainline llama.cpp maps them (so they land in [`Self::read_peak_rss_file`]
+    /// instead), while ik_llama was measured reading them into anonymous
+    /// memory. `RollingBase` uses the two peaks together rather than guessing.
+    pub fn read_peak_rss_owned(&self, service: &SmolStr) -> u64 {
+        self.inner
+            .read()
+            .get(service)
+            .map(|s| s.peak_rss_owned_bytes)
+            .unwrap_or(0)
+    }
+
+    /// Mapped host-RSS peak: the model's host-resident weights, plus a couple
+    /// of hundred MiB of shared libraries.
+    pub fn read_peak_rss_file(&self, service: &SmolStr) -> u64 {
+        self.inner
+            .read()
+            .get(service)
+            .map(|s| s.peak_rss_file_bytes)
             .unwrap_or(0)
     }
 
@@ -154,12 +217,11 @@ impl ObservationTable {
     }
 }
 
-/// Thin rename of [`crate::system::ProcFs::vm_rss`] so the snapshotter
-/// can keep calling `read_vm_rss(proc, pid)` and not have to know which
-/// `/proc` file actually backs it. Returns `None` when the pid has
-/// exited or the status entry isn't populated yet.
-pub fn read_vm_rss(proc: &dyn crate::system::ProcFs, pid: u32) -> Option<u64> {
-    proc.vm_rss(pid)
+/// Thin rename of [`crate::system::ProcFs::rss`] so the snapshotter can call
+/// `read_rss(proc, pid)` and not have to know which `/proc` file backs it.
+/// Returns `None` when the pid has exited or the entry isn't populated yet.
+pub fn read_rss(proc: &dyn crate::system::ProcFs, pid: u32) -> Option<crate::system::Rss> {
+    proc.rss(pid)
 }
 
 #[cfg(test)]
@@ -168,16 +230,16 @@ mod tests {
     use crate::system::InMemoryProcFs;
 
     #[test]
-    fn read_vm_rss_goes_through_procfs() {
+    fn read_rss_goes_through_procfs() {
         let proc = InMemoryProcFs::new();
         proc.set_vm_rss(4242, 5120 * 1024);
-        assert_eq!(read_vm_rss(&proc, 4242), Some(5120 * 1024));
+        assert_eq!(read_rss(&proc, 4242).map(|r| r.total), Some(5120 * 1024));
     }
 
     #[test]
-    fn read_vm_rss_none_when_pid_missing() {
+    fn read_rss_none_when_pid_missing() {
         let proc = InMemoryProcFs::new();
-        assert_eq!(read_vm_rss(&proc, 9999), None);
+        assert_eq!(read_rss(&proc, 9999).map(|r| r.total), None);
     }
 
     #[test]
@@ -185,9 +247,33 @@ mod tests {
         let t = ObservationTable::new();
         let svc = SmolStr::new("demo");
         // Combined peak walks up: vram+rss = 100, 50, 200.
-        t.record_sample(&svc, 60, 40);
-        t.record_sample(&svc, 30, 20);
-        t.record_sample(&svc, 120, 80);
+        t.record_sample(
+            &svc,
+            60,
+            crate::system::Rss {
+                total: 40,
+                owned: 40,
+                file: 0,
+            },
+        );
+        t.record_sample(
+            &svc,
+            30,
+            crate::system::Rss {
+                total: 20,
+                owned: 20,
+                file: 0,
+            },
+        );
+        t.record_sample(
+            &svc,
+            120,
+            crate::system::Rss {
+                total: 80,
+                owned: 80,
+                file: 0,
+            },
+        );
         assert_eq!(t.read_peak(&svc), 200);
         // VRAM-only peak tracks separately (60 → 30 doesn't lower it).
         assert_eq!(t.read_peak_vram(&svc), 120);
@@ -200,10 +286,26 @@ mod tests {
     fn current_follows_the_latest_sample_downwards() {
         let t = ObservationTable::new();
         let svc = SmolStr::new("demo");
-        t.record_sample(&svc, 120, 80);
+        t.record_sample(
+            &svc,
+            120,
+            crate::system::Rss {
+                total: 80,
+                owned: 80,
+                file: 0,
+            },
+        );
         assert_eq!(t.read_current_vram(&svc), 120);
         assert_eq!(t.read_current_rss(&svc), 80);
-        t.record_sample(&svc, 30, 20);
+        t.record_sample(
+            &svc,
+            30,
+            crate::system::Rss {
+                total: 20,
+                owned: 20,
+                file: 0,
+            },
+        );
         assert_eq!(t.read_current_vram(&svc), 30);
         assert_eq!(t.read_current_rss(&svc), 20);
         // …while the peaks are untouched by the fall.
@@ -230,11 +332,27 @@ mod tests {
         let t = ObservationTable::new();
         let svc = SmolStr::new("demo");
         // Tick 1: 4 GB VRAM + 6 GB RSS. Combined 10 GB, VRAM 4 GB.
-        t.record_sample(&svc, 4 * 1024 * 1024 * 1024, 6 * 1024 * 1024 * 1024);
+        t.record_sample(
+            &svc,
+            4 * 1024 * 1024 * 1024,
+            crate::system::Rss {
+                total: 6 * 1024 * 1024 * 1024,
+                owned: 6 * 1024 * 1024 * 1024,
+                file: 0,
+            },
+        );
         assert_eq!(t.read_peak(&svc), 10 * 1024 * 1024 * 1024);
         assert_eq!(t.read_peak_vram(&svc), 4 * 1024 * 1024 * 1024);
         // Tick 2: 8 GB VRAM + 1 GB RSS. Combined 9 GB (won't move), VRAM 8 GB.
-        t.record_sample(&svc, 8 * 1024 * 1024 * 1024, 1024 * 1024 * 1024);
+        t.record_sample(
+            &svc,
+            8 * 1024 * 1024 * 1024,
+            crate::system::Rss {
+                total: 1024 * 1024 * 1024,
+                owned: 1024 * 1024 * 1024,
+                file: 0,
+            },
+        );
         assert_eq!(t.read_peak(&svc), 10 * 1024 * 1024 * 1024);
         assert_eq!(t.read_peak_vram(&svc), 8 * 1024 * 1024 * 1024);
     }
@@ -246,8 +364,24 @@ mod tests {
     fn rss_tracks_a_service_with_no_vram() {
         let t = ObservationTable::new();
         let svc = SmolStr::new("cpu-only");
-        t.record_sample(&svc, 0, 6 * 1024 * 1024 * 1024);
-        t.record_sample(&svc, 0, 2 * 1024 * 1024 * 1024);
+        t.record_sample(
+            &svc,
+            0,
+            crate::system::Rss {
+                total: 6 * 1024 * 1024 * 1024,
+                owned: 6 * 1024 * 1024 * 1024,
+                file: 0,
+            },
+        );
+        t.record_sample(
+            &svc,
+            0,
+            crate::system::Rss {
+                total: 2 * 1024 * 1024 * 1024,
+                owned: 2 * 1024 * 1024 * 1024,
+                file: 0,
+            },
+        );
         assert_eq!(t.read_current_vram(&svc), 0);
         assert_eq!(
             t.read_current_rss(&svc),
@@ -264,7 +398,15 @@ mod tests {
     fn clear_resets() {
         let t = ObservationTable::new();
         let svc = SmolStr::new("demo");
-        t.record_sample(&svc, 50, 50);
+        t.record_sample(
+            &svc,
+            50,
+            crate::system::Rss {
+                total: 50,
+                owned: 50,
+                file: 0,
+            },
+        );
         t.clear(&svc);
         assert_eq!(t.read_peak(&svc), 0);
         assert_eq!(t.read_peak_vram(&svc), 0);

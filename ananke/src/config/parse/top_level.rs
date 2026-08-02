@@ -14,8 +14,8 @@ pub struct RawAllocation {
     pub mode: Option<SmolStr>,
     /// Static allocation only: the reservation in GiB. Lands on whichever
     /// device the service is placed on — host RAM for a cpu-only command
-    /// service, VRAM otherwise — hence the device-neutral name. The `vram_gb`
-    /// alias keeps pre-rename configs parsing.
+    /// service, VRAM otherwise — hence the device-neutral name. `vram_gb` is
+    /// accepted as a device-specific alias.
     #[serde(alias = "vram_gb")]
     pub reserve_gb: Option<f32>,
     /// Dynamic allocation only: the minimum reservation in GiB.

@@ -4,32 +4,10 @@
 
 use std::path::PathBuf;
 
+pub(crate) use ananke_config::placement::{flag_variant, variant_flag};
+pub use ananke_config::units::gib_to_mib;
+
 use crate::errors::ExpectedError;
-
-/// Convert GiB (as declared by users in config) to MiB using the same
-/// truncating cast the validator has always used. Centralised so the oneshot
-/// API path and the TOML path agree on rounding.
-pub fn gib_to_mib(gib: f32) -> u64 {
-    (gib * 1024.0) as u64
-}
-
-/// Look up a variant's flag string in its `VARIANTS` table. Every variant
-/// is registered (guarded by each enum's `*_variants_round_trip` test), so
-/// the lookup is total in practice.
-pub(crate) fn variant_flag<T: Copy + PartialEq>(
-    table: &[(T, &'static str)],
-    value: T,
-) -> &'static str {
-    table
-        .iter()
-        .find_map(|&(v, flag)| (v == value).then_some(flag))
-        .expect("enum variant is registered in its VARIANTS table")
-}
-
-/// Inverse of [`variant_flag`]: resolve an accepted string to its variant.
-pub(crate) fn flag_variant<T: Copy>(table: &[(T, &'static str)], s: &str) -> Option<T> {
-    table.iter().find_map(|&(v, flag)| (flag == s).then_some(v))
-}
 
 pub(crate) fn fail(msg: String) -> ExpectedError {
     ExpectedError::config_unparseable(PathBuf::from("<config>"), msg)

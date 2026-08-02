@@ -505,6 +505,16 @@ export interface components {
       /** @description The OpenAI-compatible API listen address (e.g. `"0.0.0.0:7070"`). */
       openai_listen: string;
     };
+    /** @description One device's share of a [`ServiceSummary`]'s footprint. */
+    DeviceFootprint: {
+      /**
+       * Format: int64
+       * @description Memory bytes the service would occupy on that device.
+       */
+      bytes: number;
+      /** @description Slot string: `"cpu"` or `"gpu:N"`, as the placement engine names it. */
+      device: string;
+    };
     /**
      * @description One device's share of a [`PlacementPreview`], with enough context to draw a
      *     utilisation bar: this service's share, what is already in use by everything
@@ -670,7 +680,7 @@ export interface components {
     };
     /**
      * @description Estimator output projected to the wire. Carries the components a
-     *     reader needs to answer "how much VRAM will this service take?"
+     *     reader needs to answer "how much memory will this service take?"
      *     without having to re-derive any of them client-side.
      */
     EstimateSummary: {
@@ -736,6 +746,7 @@ export interface components {
       | {
           /** Format: int64 */
           at_ms: number;
+          class: string;
           /** Format: float */
           rolling_mean: number;
           service: string;
@@ -1330,14 +1341,27 @@ export interface components {
       recent_restarts?: components["schemas"]["RestartEvent"][];
       /**
        * Format: float
-       * @description Rolling estimator correction factor.
+       * @description Rolling estimator correction factor for the service's VRAM footprint.
+       *     `None` until the first observation lands.
        */
       rolling_mean?: number | null;
       /**
+       * Format: float
+       * @description Rolling estimator correction factor for the service's host-RAM
+       *     footprint, learned independently of the VRAM one. `None` for a service
+       *     that holds nothing in host RAM, which never accumulates a sample.
+       */
+      rolling_mean_host?: number | null;
+      /**
        * Format: int64
-       * @description Sample count backing the rolling mean.
+       * @description Sample count backing [`Self::rolling_mean`].
        */
       rolling_samples: number;
+      /**
+       * Format: int64
+       * @description Sample count backing [`Self::rolling_mean_host`].
+       */
+      rolling_samples_host: number;
       /**
        * Format: int64
        * @description Active run id if any.
@@ -1405,6 +1429,20 @@ export interface components {
        *     reserves nothing, or a llama-cpp service whose GGUF hasn't been read).
        */
       footprint_bytes?: number | null;
+      /**
+       * @description Where [`Self::footprint_bytes`] would land, per device, sorted by device.
+       *
+       *     The same figure broken out rather than a second one: the total is this
+       *     list's sum, so a row can show both without the two disagreeing. Empty when
+       *     there is no placement to describe, which is the same condition that leaves
+       *     `footprint_bytes` `None`.
+       *
+       *     Deliberately slimmer than the detail view's `DevicePlacement`, which also
+       *     carries each device's capacity and what else is using it. Those support a
+       *     utilisation bar; a list row only names where the memory goes, and this
+       *     endpoint is polled every two seconds.
+       */
+      footprint_devices?: components["schemas"]["DeviceFootprint"][];
       /**
        * @description `true` when the service's `[[service.llama_cpp]]` config has a
        *     `mmproj` entry — the standard signal that it supports vision /

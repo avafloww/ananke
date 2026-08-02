@@ -56,7 +56,7 @@ impl WebSocketLifecycle {
 /// Per-service metrics context threaded from `provision_service` into the
 /// proxy request path. Present only for the per-service proxy (the OpenAI
 /// multiplexer records its own metrics); when `None` the proxy is a pure
-/// byte-forwarder as before.
+/// byte-forwarder.
 ///
 /// Cloned per connection, so every field is cheap to clone: `Database` is an
 /// `Arc`-backed handle, `model` is a `SmolStr`, and `run_id` is a closure

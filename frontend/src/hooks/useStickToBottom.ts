@@ -1,8 +1,7 @@
 // Auto-scroll a container to the bottom when new content arrives, but only
 // while the user is pinned to the bottom — scrolling up detaches so history
 // stays readable, and scrolling back to the bottom re-attaches. Shared by the
-// logs, events, and chat views, which previously each open-coded this (two
-// correctly, one not).
+// logs, events, and chat views.
 //
 // `dep` is the value that signals new content (e.g. line count, message
 // array); the layout effect re-runs and, if still pinned, snaps to the bottom

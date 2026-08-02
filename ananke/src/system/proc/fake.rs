@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, io};
 
 use parking_lot::RwLock;
 
-use crate::system::proc::{Meminfo, ProcFs};
+use crate::system::proc::{Meminfo, ProcFs, Rss};
 
 /// Test impl keyed on pid. Callers pre-populate the values a test run
 /// needs to see, including a single shared `meminfo`; reads that don't
@@ -22,7 +22,7 @@ pub struct InMemoryProcFs {
 #[derive(Default)]
 struct InMemoryProcFsState {
     meminfo: Option<Meminfo>,
-    vm_rss: BTreeMap<u32, u64>,
+    rss: BTreeMap<u32, Rss>,
     comm: BTreeMap<u32, String>,
     cmdline: BTreeMap<i32, String>,
     parent: BTreeMap<u32, u32>,
@@ -39,8 +39,22 @@ impl InMemoryProcFs {
         self.inner.write().meminfo = Some(m);
     }
 
+    /// Preload a process's resident memory as entirely owned (anonymous),
+    /// which is the shape of a service holding no mapped model.
     pub fn set_vm_rss(&self, pid: u32, bytes: u64) {
-        self.inner.write().vm_rss.insert(pid, bytes);
+        self.inner.write().rss.insert(
+            pid,
+            Rss {
+                total: bytes,
+                owned: bytes,
+                file: 0,
+            },
+        );
+    }
+
+    /// Preload the full breakdown, for tests that care which part is which.
+    pub fn set_rss(&self, pid: u32, rss: Rss) {
+        self.inner.write().rss.insert(pid, rss);
     }
 
     pub fn set_comm(&self, pid: u32, comm: impl Into<String>) {
@@ -78,8 +92,8 @@ impl ProcFs for InMemoryProcFs {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "meminfo not preloaded"))
     }
 
-    fn vm_rss(&self, pid: u32) -> Option<u64> {
-        self.inner.read().vm_rss.get(&pid).copied()
+    fn rss(&self, pid: u32) -> Option<Rss> {
+        self.inner.read().rss.get(&pid).copied()
     }
 
     fn comm(&self, pid: u32) -> Option<String> {
@@ -97,7 +111,7 @@ impl ProcFs for InMemoryProcFs {
     fn all_pids(&self) -> Vec<u32> {
         let s = self.inner.read();
         let mut out: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
-        out.extend(s.vm_rss.keys());
+        out.extend(s.rss.keys());
         out.extend(s.comm.keys());
         out.extend(s.parent.keys());
         out.extend(s.parent.values());
@@ -126,7 +140,7 @@ mod tests {
         proc.set_cmdline(4242, "llama-server -m model.gguf");
 
         assert_eq!(proc.meminfo().unwrap().available_bytes, 512);
-        assert_eq!(proc.vm_rss(4242), Some(8192));
+        assert_eq!(proc.rss(4242).map(|r| r.total), Some(8192));
         assert_eq!(proc.comm(4242), Some("llama-server".into()));
         assert_eq!(
             proc.cmdline(4242).as_deref(),
@@ -134,7 +148,7 @@ mod tests {
         );
 
         // Pids that weren't preloaded look exited.
-        assert_eq!(proc.vm_rss(9999), None);
+        assert_eq!(proc.rss(9999), None);
         assert_eq!(proc.comm(9999), None);
         assert_eq!(proc.cmdline(9999), None);
     }

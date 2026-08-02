@@ -69,6 +69,12 @@ pub struct RawLlamaCppService {
     /// retain idle slots' prompt-cache state. Unset leaves llama-server's
     /// default (idle-slot caching on).
     pub cache_idle_slots: Option<bool>,
+    /// Host RAM cap for the server's prompt cache (`-cram`, MiB), which
+    /// holds serialized evicted prompts so a returning conversation skips
+    /// reprocessing. Unset means llama.cpp's 8192 MiB default. The cap is
+    /// always passed through explicitly so the reservation and the runtime
+    /// agree on the same number; `0` disables the cache.
+    pub cache_ram_mb: Option<u32>,
     /// Expose the Prometheus `/metrics` endpoint (`--metrics`).
     pub metrics: Option<bool>,
     /// Expose the `/slots` introspection endpoint (`--slots`).
@@ -159,15 +165,6 @@ pub enum RawExpertOffload {
 pub struct EstimationConfig {
     pub compute_buffer_mb: Option<u32>,
     pub safety_factor: Option<f32>,
-    /// Accept the coarse fallback estimate when the GGUF's architecture
-    /// isn't recognised by any per-family estimator. Defaults to `false`
-    /// — unknown architectures hard-reject at config load so the
-    /// operator either adds the arch to the right family list or
-    /// explicitly opts in here. The silent fallback previously masked a
-    /// 67× under-reservation on glm4moe before it was a recognised
-    /// family. (See `ananke::estimator::fallback` for the current
-    /// formula.)
-    pub allow_fallback: Option<bool>,
 }
 
 /// Sampling parameters that map to `llama-server` CLI flags. Only the knobs

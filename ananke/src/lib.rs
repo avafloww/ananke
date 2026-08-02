@@ -7,8 +7,10 @@ pub mod daemon;
 pub mod db;
 pub mod devices;
 pub mod errors;
-pub mod estimator;
-pub mod gguf;
+/// The VRAM estimator, reachable as `crate::estimator::…`.
+pub use ananke_estimate as estimator;
+/// The GGUF reader, reachable as `crate::gguf::…`.
+pub use ananke_gguf as gguf;
 pub mod oneshot;
 pub mod supervise;
 pub mod system;

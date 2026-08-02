@@ -130,9 +130,9 @@ devices.placement_override = { "gpu:0" = 1000 }
     #[test]
     fn private_port_range_assigns_in_order_from_start() {
         // Two services in a custom window should get start, start+1 — not the
-        // 40000-base default, and not duplicates. Regression: an earlier
-        // formulation derived the private port from the public port via
-        // `40_000 + (port - 11_000)` and wrapped to 65535 for every service.
+        // 40000-base default, and not duplicates. Deriving the private port
+        // from the public one (`40_000 + (port - 11_000)`) ignores the window
+        // and wraps to 65535 for every service.
         let cfg = parse_and_merge(
             r#"
 [daemon]

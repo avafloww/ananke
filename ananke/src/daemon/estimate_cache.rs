@@ -10,7 +10,7 @@
 //!      pointed the service at a different file.
 //!   2. The estimator-relevant config fingerprint changes (context,
 //!      override_tensor, cache_type_*, compute_buffer_mb,
-//!      allow_fallback). The model on disk is the same but the
+//!      cache types). The model on disk is the same but the
 //!      estimate's numbers aren't, so the cached entry is stale.
 //!
 //! Cache lifetime is per daemon run. Editing the GGUF in place
@@ -20,6 +20,7 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use ananke_api::services::detail::{EstimateSummary, ModelInfo};
+use ananke_gguf::keys;
 use parking_lot::RwLock;
 use smol_str::SmolStr;
 
@@ -82,19 +83,19 @@ impl CacheEntry {
             .and_then(|v| v.as_u32());
         let model_name = summary
             .metadata
-            .get("general.name")
+            .get(keys::NAME)
             .and_then(GgufValue::as_str)
             .map(str::to_string)
             .filter(|s| !s.is_empty());
         let license = summary
             .metadata
-            .get("general.license")
+            .get(keys::LICENSE)
             .and_then(GgufValue::as_str)
             .map(str::to_string)
             .filter(|s| !s.is_empty());
         let parameter_count = summary
             .metadata
-            .get("general.parameter_count")
+            .get(keys::PARAMETER_COUNT)
             .and_then(GgufValue::as_u64);
 
         let has_mmproj = mmproj_path.is_some();
@@ -114,7 +115,7 @@ impl CacheEntry {
         let kv_bytes_for_context = estimate
             .kv_per_token
             .saturating_mul(estimate.context as u64);
-        let compute_buffer_bytes_per_device = (estimate.compute_buffer_mb as u64) * 1024 * 1024;
+        let compute_buffer_bytes_per_device = (estimate.buffers.compute_mb as u64) * 1024 * 1024;
         let estimate_summary = EstimateSummary {
             weights_bytes: estimate.weights_bytes,
             kv_per_token: estimate.kv_per_token,
@@ -188,6 +189,8 @@ impl EstimateCache {
 
 #[cfg(test)]
 mod tests {
+    use ananke_gguf::Architecture;
+
     use super::*;
 
     const FP: u64 = 0xC0FFEE;
@@ -219,17 +222,7 @@ mod tests {
             estimate_full: Estimate {
                 weights_bytes: 1,
                 kv_per_token: 0,
-                compute_buffer_mb: 0,
-                output_buffer_bytes: 0,
-                mtp_bytes: 0,
-                per_layer_bytes: None,
-                attention_layers: None,
-                non_layer: crate::estimator::NonLayer::default(),
-                override_tensor_bytes: std::collections::BTreeMap::new(),
-                expert_layers: Vec::new(),
-                expert_tensors: None,
-                context: 4096,
-                architecture: SmolStr::new("llama"),
+                ..Estimate::empty(Architecture::Llama, 4096)
             },
         }
     }

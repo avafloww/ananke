@@ -2,11 +2,10 @@
 //! the same priority queues on a broadcast bus and resumes once the peer's
 //! inflight counter drops to zero, rather than 503'ing immediately.
 //!
-//! Regression target: before the queue-on-busy-peer fix, any new request
-//! that arrived while a same-priority peer had an in-flight generation
-//! returned `503 insufficient_capacity` even though the request would have fit
-//! cleanly once the peer finished. That surfaced as "I asked for 35B while
-//! 31B was still writing its response and got a 503".
+//! Without the queue, any request arriving while a same-priority peer has an
+//! in-flight generation gets `503 insufficient_capacity` even though it would
+//! fit cleanly once the peer finished — "I asked for 35B while 31B was still
+//! writing its response and got a 503".
 #![cfg(feature = "test-fakes")]
 
 mod common;
@@ -77,11 +76,10 @@ async fn ensure_queues_behind_busy_same_priority_peer() {
     let alpha_inflight = h.state.inflight.counter(&SmolStr::new("alpha"));
     alpha_inflight.fetch_add(1, Ordering::Relaxed);
 
-    // Step 3: fire beta while alpha is "busy". The old code path rejected this
-    // with 503. With the queue-on-busy-peer fix, the Ensure parks on a
-    // broadcast bus and the Idle loop's poll-tick branch retries every ~250 ms
-    // until alpha idles, at which point alpha becomes evictable and beta
-    // proceeds normally.
+    // Step 3: fire beta while alpha is "busy". Rather than 503ing, the Ensure
+    // parks on a broadcast bus and the Idle loop's poll-tick branch retries
+    // every ~250 ms until alpha idles, at which point alpha becomes evictable
+    // and beta proceeds normally.
     //
     // Run the request concurrently with a task that clears alpha's inflight
     // after a short delay; assert that beta eventually returns 200.

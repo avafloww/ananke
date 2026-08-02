@@ -1,18 +1,16 @@
 //! Integration test: a busy dynamic-allocation service is evictable by a
 //! tied-priority peer that can't otherwise pack.
 //!
-//! Regression target: ComfyUI runs with `allocation.mode = "dynamic"` and
-//! keeps a `/ws` open from its web UI, which pegs its inflight counter at
-//! ≥1 even when no image is generating. Before this fix the eviction
-//! planner reported ComfyUI as "busy" and refused to displace it; an
-//! incoming tied-priority chat would queue indefinitely against a peer
-//! that was never going to idle, and the user would see the
-//! `anankectl chat` command hang silently.
+//! The hazard: ComfyUI runs with `allocation.mode = "dynamic"` and keeps a
+//! `/ws` open from its web UI, which pegs its inflight counter at ≥1 even
+//! when no image is generating. Read as "busy", it is never displaceable,
+//! so an incoming tied-priority chat queues indefinitely against a peer
+//! that is never going to idle and `anankectl chat` hangs silently.
 //!
-//! The new rule: a service whose operator-declared `allocation_mode` is
-//! `Dynamic` is logically idle for eviction purposes. The whole point of
-//! choosing dynamic mode is to opt the service into "kill me when a
-//! tied-priority peer needs the VRAM."
+//! The rule that avoids it: a service whose operator-declared
+//! `allocation_mode` is `Dynamic` is logically idle for eviction purposes.
+//! The whole point of choosing dynamic mode is to opt the service into
+//! "kill me when a tied-priority peer needs the VRAM."
 #![cfg(feature = "test-fakes")]
 
 mod common;
@@ -85,21 +83,19 @@ async fn busy_dynamic_peer_is_evicted_by_tied_priority_request() {
 
     // Step 2: simulate the open `/ws` from the ComfyUI web UI by pegging
     // comfy's inflight counter and holding it. No release task — the
-    // counter stays at 1 for the rest of the test. Before the fix this
-    // makes comfy "busy" and unreachable to eviction; with the fix the
-    // dynamic-mode declaration overrides the busy bit and comfy stays
-    // evictable.
+    // counter stays at 1 for the rest of the test. That would make comfy
+    // "busy" and unreachable to eviction, but the dynamic-mode declaration
+    // overrides the busy bit and comfy stays evictable.
     let comfy_inflight = h.state.inflight.counter(&SmolStr::new("comfy"));
     comfy_inflight.fetch_add(1, Ordering::Relaxed);
     assert_eq!(comfy_inflight.load(Ordering::Relaxed), 1);
 
     // Step 3: qwen fires while comfy is "busy". The OpenAI handler's
     // `await_ensure` is bounded by the service's `max_request_duration_ms`
-    // (5 s in `minimal_llama_service`); without the fix this would either
+    // (5 s in `minimal_llama_service`). A comfy read as busy would either
     // 503 immediately with `insufficient_capacity` or hang the full 5 s and
-    // 503 with "start timed out". With the fix, comfy is treated as
-    // logically idle, the planner picks it as the eviction victim, and
-    // qwen proceeds.
+    // 503 with "start timed out"; read as logically idle, it is picked as
+    // the eviction victim and qwen proceeds.
     let (st, body) = chat(openai::router(h.state.clone()), "qwen").await;
     assert_eq!(
         st,

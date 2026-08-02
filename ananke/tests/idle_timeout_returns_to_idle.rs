@@ -3,10 +3,10 @@
 //!
 //! Runs under `start_paused = true` with `current_thread` flavor so the
 //! supervisor's tokio-based idle deadline advances virtually rather than
-//! waiting wall-clock. The unification of activity tracking on
-//! `tokio::time::Instant` (see `tracking::activity`) is what makes this
-//! possible — previously the supervisor mixed wall-clock activity pings
-//! with tokio time arithmetic and the test had to sleep real seconds.
+//! waiting wall-clock. Activity tracking is unified on
+//! `tokio::time::Instant` (see `tracking::activity`), which is what makes
+//! this possible: mixing wall-clock activity pings with tokio time
+//! arithmetic would force the test to sleep real seconds.
 #![cfg(feature = "test-fakes")]
 
 mod common;

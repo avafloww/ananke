@@ -12,7 +12,7 @@ use crate::config::{
     parse::{EstimationConfig, SamplingConfig},
     validate::{
         AllocationMode, AutoRestartSettings, DeviceReserves, DeviceSlot, Filters, HealthSettings,
-        Lifecycle, NumaStrategy, OffloadMode, PlacementPolicy, Runtime, SplitMode, Template,
+        Lifecycle, NumaStrategy, OffloadMode, PlacementPolicy, RuntimeConfig, SplitMode, Template,
         TrackingSettings,
     },
 };
@@ -93,9 +93,9 @@ pub struct ServiceConfig {
     pub openai_compat: bool,
     pub description: Option<String>,
     /// What kind of model the service exposes (chat or embedding).
-    /// Default is [`Modality::Chat`] so configs and JSON shipped before
-    /// the field landed are unchanged. Embedding services opt in with
-    /// `modality = "embedding"` in their `[[service]]` block.
+    /// Defaults to [`Modality::Chat`], so a config that says nothing gets a
+    /// chat service. Embedding services opt in with `modality = "embedding"`
+    /// in their `[[service]]` block.
     pub modality: Modality,
     pub start_queue_depth: usize,
     pub extra_args: Vec<String>,
@@ -161,8 +161,8 @@ impl TemplateConfig {
 #[derive(Debug, Clone)]
 pub struct LlamaCppConfig {
     /// Serving runtime (mainline vs ik_llama.cpp fork with its
-    /// validated knobs). See [`Runtime`].
-    pub runtime: Runtime,
+    /// validated knobs). See [`RuntimeConfig`].
+    pub runtime: RuntimeConfig,
     pub model: PathBuf,
     pub mmproj: Option<PathBuf>,
     pub context: Option<u32>,
@@ -187,6 +187,10 @@ pub struct LlamaCppConfig {
     pub kv_unified: Option<bool>,
     /// When `Some(false)`, emit `--no-cache-idle-slots`.
     pub cache_idle_slots: Option<bool>,
+    /// Host RAM cap for the server's prompt cache (`-cram`, MiB). `None`
+    /// means llama.cpp's default; the spawn path emits the resolved value
+    /// either way so the reservation and the runtime cap agree.
+    pub cache_ram_mb: Option<u32>,
     /// `--metrics` endpoint toggle.
     pub metrics: Option<bool>,
     /// `--slots` endpoint toggle.

@@ -90,7 +90,7 @@ enum OneshotCommand {
         placement: String,
         /// Static reservation in GiB; conflicts with --min-reserve-gb/--max-reserve-gb.
         /// The reservation lands on host RAM for a cpu-only service and on VRAM
-        /// otherwise; `--vram-gb` remains accepted as the pre-rename spelling.
+        /// otherwise. `--vram-gb` is accepted as a device-specific alias.
         #[arg(long, alias = "vram-gb", conflicts_with_all = ["min_reserve_gb", "max_reserve_gb"])]
         reserve_gb: Option<f32>,
         /// Dynamic lower bound for the reservation in GiB; requires --max-reserve-gb.
@@ -319,7 +319,7 @@ async fn main() -> ExitCode {
 }
 
 /// Parse a `--since`/`--until` value into ms since epoch. Accepts, in order:
-/// a raw integer (ms since epoch, the historical form), a relative age like
+/// a raw integer (ms since epoch), a relative age like
 /// `2h` or `30m` (meaning that long ago), an RFC 3339 timestamp, or a civil
 /// datetime / date interpreted in the system timezone.
 fn parse_time_arg(s: &str) -> Result<i64, String> {

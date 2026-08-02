@@ -69,6 +69,7 @@ mod tests {
         let mut rx = bus.subscribe();
         for i in 0..(EVENT_BUS_CAPACITY + 5) {
             bus.publish(Event::EstimatorDrift {
+                class: "vram".to_string(),
                 service: SmolStr::new("demo"),
                 rolling_mean: i as f32,
                 at_ms: i as i64,

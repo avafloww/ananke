@@ -7,6 +7,7 @@ mod common;
 use std::path::Path;
 
 use ananke::estimator;
+use ananke_gguf::Architecture;
 use common::synth_gguf;
 
 #[test]
@@ -26,9 +27,9 @@ fn llama_family_weights_include_layers_and_non_layer() {
 
     let mut svc = common::minimal_llama_service("demo", 0);
     common::set_model_path(&mut svc, path);
-    let inputs = estimator::EstimatorInputs::from_service(&svc).unwrap();
+    let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
     let est = estimator::estimate_from_path(&fs, &inputs).unwrap();
     assert!(est.weights_bytes > 0, "weights_bytes must be positive");
-    assert_eq!(est.architecture, "qwen3");
+    assert_eq!(est.architecture, Architecture::Qwen3);
     assert!(est.kv_per_token > 0, "kv_per_token must be positive");
 }

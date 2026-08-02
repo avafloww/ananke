@@ -50,19 +50,15 @@ impl AllocationMode {
         max_reserve_gb: Option<f32>,
         min_borrower_runtime_ms: u64,
     ) -> Result<AllocationMode, String> {
-        match (template, mode) {
-            (Template::LlamaCpp, Some(m)) => Err(format!(
-                "allocation.mode `{m}` invalid for llama-cpp (use placement_override or estimator)"
-            )),
-            (Template::LlamaCpp, None) => Ok(AllocationMode::None),
-            (Template::Command, Some("static")) => {
+        match mode {
+            Some("static") => {
                 let gb = reserve_gb
                     .ok_or_else(|| "allocation.mode=static requires reserve_gb".to_string())?;
                 Ok(AllocationMode::Static {
                     reserve_mb: gib_to_mib(gb),
                 })
             }
-            (Template::Command, Some("dynamic")) => {
+            Some("dynamic") => {
                 let min = min_reserve_gb
                     .ok_or_else(|| "allocation.mode=dynamic requires min_reserve_gb".to_string())?;
                 let max = max_reserve_gb
@@ -76,10 +72,16 @@ impl AllocationMode {
                     min_borrower_runtime_ms,
                 })
             }
-            (Template::Command, Some(other)) => Err(format!("unknown allocation.mode `{other}`")),
-            (Template::Command, None) => {
-                Err("command template requires allocation.mode (static|dynamic)".to_string())
-            }
+            Some(other) => Err(format!("unknown allocation.mode `{other}`")),
+            // A llama-cpp service without one is estimated and packed, which
+            // is the normal path. A command service cannot be: ananke does not
+            // build its argv and so cannot know what it will allocate.
+            None => match template {
+                Template::LlamaCpp => Ok(AllocationMode::None),
+                Template::Command => {
+                    Err("command template requires allocation.mode (static|dynamic)".to_string())
+                }
+            },
         }
     }
 }
@@ -105,26 +107,7 @@ pub struct Filters {
     pub set_params: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlacementPolicy {
-    GpuOnly,
-    CpuOnly,
-    Hybrid,
-}
-
-/// Per-device VRAM/RAM the daemon keeps free, resolved from the global
-/// `[devices]` config. Copied onto each [`ServiceConfig`] so the (pure) packer
-/// can read reserves without a separate config handle. The per-service
-/// `gpu_headroom_mb` is layered on top of these by the packer.
-#[derive(Debug, Clone, Default)]
-pub struct DeviceReserves {
-    /// VRAM (MiB) kept free on every GPU that lacks a `per_gpu_mb` entry.
-    pub default_gpu_mb: u64,
-    /// VRAM (MiB) kept free on specific GPUs, keyed by GPU id.
-    pub per_gpu_mb: BTreeMap<u32, u64>,
-    /// Host RAM (bytes) kept free; bounds the packer's CPU expert offload.
-    pub cpu_bytes: u64,
-}
+pub use ananke_config::placement::{DeviceReserves, PlacementPolicy};
 
 #[derive(Debug, Clone)]
 pub struct HealthSettings {
@@ -135,11 +118,7 @@ pub struct HealthSettings {
     pub probe_interval_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DeviceSlot {
-    Cpu,
-    Gpu(u32),
-}
+pub use ananke_config::placement::DeviceSlot;
 
 #[cfg(test)]
 mod tests {
@@ -262,9 +241,9 @@ allocation.reserve_gb = 6
         ));
     }
 
-    /// `vram_gb` / `min_vram_gb` / `max_vram_gb` were the names before the
-    /// reservation was recognised as device-neutral. Configs on disk still use
-    /// them, so they have to keep parsing to the same allocation.
+    /// `vram_gb` / `min_vram_gb` / `max_vram_gb` are device-specific aliases
+    /// for the device-neutral reservation keys. Configs on disk use them, so
+    /// they have to keep parsing to the same allocation.
     #[test]
     fn legacy_vram_gb_keys_still_parse() {
         let cfg = parse_and_merge(

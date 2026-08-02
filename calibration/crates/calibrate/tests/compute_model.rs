@@ -1,0 +1,192 @@
+//! The fitter must reproduce the committed coefficients, on the real dataset.
+//!
+//! A fit that agrees on the design columns but disagrees on the coefficients would
+//! be silently wrong in the only way that matters, so this pins every group's
+//! coefficients — and the pooled default's — against a fixture captured over the
+//! same 582-record file.
+//!
+//! A disagreement here means the fitter or the fixture is wrong. It is not a
+//! tolerance to be loosened.
+
+use std::collections::BTreeMap;
+
+use ananke_calibrate::{
+    compute_model::{Groups, Section, collect, document_section, fit},
+    derive::dataset::latest_per_cell,
+    record::read_ndjson,
+};
+use ananke_config::placement::SplitMode;
+use ananke_measure::record::Status;
+
+/// Relative agreement demanded of every coefficient.
+///
+/// Far tighter than a floating-point comparison usually warrants, because the fit
+/// is a deterministic sum in a fixed order over the same doubles the fixture was
+/// captured from, and so agrees to the last bit or two of a division — the worst
+/// observed disagreement is 1.5e-16 relative, on `flat`. Anything looser would let
+/// a real modelling difference through, and a failure here means the fitter or the
+/// fixture is wrong rather than that the bound is mean.
+const TOLERANCE: f64 = 1e-9;
+
+#[derive(serde::Deserialize)]
+struct Fixture {
+    groups: Vec<FixtureGroup>,
+    pooled: FixtureFit,
+    notes: Vec<String>,
+    section: Section,
+}
+
+#[derive(serde::Deserialize)]
+struct FixtureGroup {
+    runtime: String,
+    split: String,
+    arch: String,
+    variant: Option<String>,
+    rows: usize,
+    coefficients: Option<BTreeMap<String, f64>>,
+    worst: Option<f64>,
+    /// The sum of every row's target, which catches a `collect` that grouped the
+    /// right number of rows out of the wrong records.
+    targets_sum: f64,
+}
+
+#[derive(serde::Deserialize)]
+struct FixtureFit {
+    rows: usize,
+    coefficients: BTreeMap<String, f64>,
+    worst: f64,
+}
+
+#[test]
+fn the_fit_reproduces_the_fixture() {
+    let (groups, fixture) = load();
+
+    assert_eq!(
+        groups.len(),
+        fixture.groups.len(),
+        "the fitter grouped the dataset differently"
+    );
+
+    for expected in &fixture.groups {
+        let label = match &expected.variant {
+            Some(variant) => format!(
+                "{}/{}/{}@{variant}",
+                expected.runtime, expected.split, expected.arch
+            ),
+            None => format!("{}/{}/{}", expected.runtime, expected.split, expected.arch),
+        };
+        let (_, points) = groups
+            .iter()
+            .find(|(key, _)| {
+                key.runtime == expected.runtime
+                    && key.split.as_flag() == expected.split
+                    && key.arch == expected.arch
+                    && key.variant.map(str::to_owned) == expected.variant
+            })
+            .unwrap_or_else(|| panic!("{label}: group missing from the Rust collect"));
+        assert_eq!(points.len(), expected.rows, "{label}: row count");
+        let sum: f64 = points.iter().map(|p| p.target).sum();
+        assert!(
+            (sum - expected.targets_sum).abs() <= 1e-6 * expected.targets_sum.abs().max(1.0),
+            "{label}: targets sum {sum} against {}",
+            expected.targets_sum
+        );
+        match (fit(points), &expected.coefficients) {
+            (None, None) => {}
+            (Some(_), None) => panic!("{label}: fitted a group the fixture could not"),
+            (None, Some(_)) => panic!("{label}: could not fit a group the fixture did"),
+            (Some((coefficients, worst)), Some(wanted)) => {
+                assert_coefficients(&label, &coefficients, wanted);
+                let wanted_worst = expected.worst.expect("a fitted group has a worst residual");
+                assert!(
+                    (worst - wanted_worst).abs() <= TOLERANCE * wanted_worst.abs().max(1.0),
+                    "{label}: worst residual {worst} against {wanted_worst}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_pooled_default_reproduces_the_fixture() {
+    let (groups, fixture) = load();
+    let pooled: Vec<_> = groups
+        .iter()
+        .filter(|(key, _)| key.runtime == "mainline" && key.split == SplitMode::Layer)
+        .flat_map(|(_, rows)| rows.iter().cloned())
+        .collect();
+    assert_eq!(pooled.len(), fixture.pooled.rows, "pooled row count");
+    let (coefficients, worst) = fit(&pooled).expect("the pooled default fits");
+    assert_coefficients("pooled", &coefficients, &fixture.pooled.coefficients);
+    assert!(
+        (worst - fixture.pooled.worst).abs() <= TOLERANCE * fixture.pooled.worst,
+        "pooled: worst residual {worst} against {}",
+        fixture.pooled.worst
+    );
+}
+
+/// The emitted `tuning.json` section must match the committed one, entry for entry.
+///
+/// Stronger than comparing coefficients alone: it also pins the entry ordering
+/// (variant-guarded first, so a lookup finds the specific graph before the general
+/// one), the rounding, the `runtime: null` convention for mainline, and the
+/// evidence strings — every part of the section a reader trusts.
+///
+/// Both sides are [`Section`], which is `deny_unknown_fields`, so a key gained or
+/// lost on either side fails here rather than being compared as absent.
+#[test]
+fn the_section_matches_the_committed_one() {
+    let (groups, fixture) = load();
+    let (section, notes) = document_section(&groups).expect("the section builds");
+    assert_eq!(notes, fixture.notes, "the coverage notes diverged");
+    assert_eq!(
+        section.columns, fixture.section.columns,
+        "the column list diverged"
+    );
+    assert_eq!(
+        section.entries, fixture.section.entries,
+        "the fitted entries diverged"
+    );
+    assert_eq!(
+        section.default, fixture.section.default,
+        "the pooled default diverged"
+    );
+}
+
+fn load() -> (Groups, Fixture) {
+    let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+    let text = std::fs::read_to_string(data.join("measurements.ndjson"))
+        .expect("the measurement file is checked in");
+    let records: Vec<_> = read_ndjson(&text)
+        .expect("every record parses")
+        .into_iter()
+        .filter(|r| r.status == Status::Ok)
+        .collect();
+    let rows = latest_per_cell(&records);
+    let copies = ananke_estimate::tuning::MAINLINE_LAYER_SPLIT_MASK_COPIES as u32;
+    let groups = collect(&rows, copies, false);
+
+    let fixture: Fixture =
+        serde_json::from_str(include_str!("fixtures/compute_fit.json")).expect("fixture parses");
+    (groups, fixture)
+}
+
+fn assert_coefficients(label: &str, got: &[(&str, f64)], wanted: &BTreeMap<String, f64>) {
+    let got: BTreeMap<&str, f64> = got.iter().copied().collect();
+    let names: Vec<&&str> = got.keys().collect();
+    assert_eq!(
+        got.len(),
+        wanted.len(),
+        "{label}: selected columns {names:?} against {:?}",
+        wanted.keys().collect::<Vec<_>>()
+    );
+    for (name, expected) in wanted {
+        let value = got
+            .get(name.as_str())
+            .unwrap_or_else(|| panic!("{label}: column `{name}` was not selected"));
+        assert!(
+            (value - expected).abs() <= TOLERANCE * expected.abs().max(1.0),
+            "{label}: column `{name}` fitted {value} against {expected}"
+        );
+    }
+}

@@ -23,11 +23,10 @@ fn registry_insert_and_get() {
     assert!(r.get("os_1").is_none());
 }
 
-/// Regression for the 404-after-TTL scenario: `mark_ended` must leave the
-/// record in place with `ended_at_ms` set, so callers polling
-/// `GET /api/oneshot/:id` across the TTL boundary still get 200. A plain
-/// `remove` on TTL expiry turned poll #2 into a 404 from the Python
-/// scenario (but not from a single pre-TTL curl).
+/// `mark_ended` must leave the record in place with `ended_at_ms` set, so
+/// callers polling `GET /api/oneshot/:id` across the TTL boundary still get
+/// 200. A plain `remove` on TTL expiry turns the second poll into a 404,
+/// which a single pre-TTL curl never sees.
 #[test]
 fn mark_ended_keeps_record_visible_with_terminal_fields() {
     let r = OneshotRegistry::new();

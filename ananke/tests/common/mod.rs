@@ -214,7 +214,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
 
 /// Set the llama-cpp service's model path. Tests that produce a synthetic
 /// GGUF under a specific path in `InMemoryFs` need the `ServiceConfig`'s
-/// `model` to point at that same path so `EstimatorInputs::from_service`
+/// `model` to point at that same path so `crate::config::service_inputs::estimator_inputs`
 /// resolves correctly.
 pub fn set_model_path(svc: &mut ServiceConfig, path: &std::path::Path) {
     match &mut svc.template_config {
@@ -285,6 +285,7 @@ pub fn minimal_llama_service(name: &str, port: u16) -> ServiceConfig {
             draft_model: None,
             kv_unified: None,
             cache_idle_slots: None,
+            cache_ram_mb: None,
             metrics: None,
             slots: None,
             batch_size: None,
@@ -372,6 +373,7 @@ pub mod synth_gguf {
     use std::path::Path;
 
     use ananke::system::InMemoryFs;
+    use ananke_gguf::keys;
 
     pub struct Builder {
         /// Accumulated KV + tensor-info bytes (written after the fixed header).
@@ -391,7 +393,7 @@ pub mod synth_gguf {
 
         /// Append `general.architecture = name` as a string KV entry.
         pub fn arch(self, name: &str) -> Self {
-            self.kv_string("general.architecture", name)
+            self.kv_string(keys::ARCHITECTURE, name)
         }
 
         /// Append a u32 KV entry (type tag 4 in GGUF).

@@ -257,10 +257,9 @@ impl RunLoop {
             }
         }
 
-        // Reserve in the allocation table before spawning. Capture the total
-        // reserved bytes (MB → bytes) for the rolling update that fires when
-        // the service later drains back to Idle.
-        self.base_total_bytes_for_rolling = want.values().sum::<u64>() * 1024 * 1024;
+        // Reserve in the allocation table before spawning, capturing what the
+        // rolling update will need when the service later drains back to Idle.
+        self.capture_rolling_base();
         self.deps
             .allocations
             .lock()
@@ -344,8 +343,8 @@ impl RunLoop {
                 grace_secs = QUEUE_BLOCKED_GRACE.as_secs(),
                 "queue grace exceeded; failing queued ensure"
             );
-            // The `message` field on `StartFailure` is now just a
-            // human-readable log breadcrumb; the wire layer renders
+            // The `message` field on `StartFailure` is a human-readable
+            // log breadcrumb only; the wire layer renders
             // off the structured `busy_peers` list inside the kind
             // and ignores this string.
             let log_message = format!(
@@ -440,7 +439,7 @@ impl RunLoop {
         // Commit the reservation + promote the queued bus to the start
         // carry, then transition to Starting. `handle_active_lifecycle`
         // will pick it up from here.
-        self.base_total_bytes_for_rolling = want.values().sum::<u64>() * 1024 * 1024;
+        self.capture_rolling_base();
         self.deps
             .allocations
             .lock()

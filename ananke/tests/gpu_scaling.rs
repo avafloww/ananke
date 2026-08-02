@@ -29,8 +29,9 @@ use ananke::{
     },
     config::{PlacementPolicy, ServiceConfig},
     devices::{Allocation, CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot, cuda_env},
-    estimator::{Estimate, NonLayer},
+    estimator::{Estimate, Layout},
 };
+use ananke_gguf::Architecture;
 use smol_str::SmolStr;
 
 /// Build a `DeviceSnapshot` from a list of `(gpu_id, total_gb, free_gb)`
@@ -64,17 +65,11 @@ fn flat_estimate(n_layers: usize, per_layer_mib: u64) -> Estimate {
     Estimate {
         weights_bytes: per_layer_bytes * n_layers as u64,
         kv_per_token: 0,
-        compute_buffer_mb: 0,
-        output_buffer_bytes: 0,
-        mtp_bytes: 0,
-        per_layer_bytes: Some(vec![per_layer_bytes; n_layers]),
-        attention_layers: None,
-        non_layer: NonLayer::default(),
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: 4096,
-        architecture: SmolStr::new("qwen3"),
+        layout: Layout {
+            per_layer_bytes: Some(vec![per_layer_bytes; n_layers]),
+            ..Layout::default()
+        },
+        ..Estimate::empty(Architecture::Qwen3, 4096)
     }
 }
 
@@ -96,8 +91,13 @@ fn single_gpu_packs_without_tensor_split() {
     let svc = svc_for_policy("solo", PlacementPolicy::GpuOnly);
     let snap = snapshot(&[(0, 16, 16)]);
     let est = flat_estimate(10, 600);
-    let packed = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect("model must fit on one 16 GB GPU");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect("model must fit on one 16 GB GPU");
 
     assert_eq!(
         packed.args.ngl,
@@ -126,8 +126,13 @@ fn single_gpu_with_nonzero_id_renders_cuda_env() {
     // before ananke runs, so nvml only enumerates that one card).
     let snap = snapshot(&[(3, 24, 24)]);
     let est = flat_estimate(8, 600);
-    let packed = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect("model must fit on the only GPU regardless of its id");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect("model must fit on the only GPU regardless of its id");
 
     assert!(packed.allocation.bytes.contains_key(&DeviceId::Gpu(3)));
     assert_eq!(
@@ -147,8 +152,13 @@ fn single_gpu_overflow_spills_to_cpu_under_hybrid() {
     // fudge headroom is reserved.
     let snap = snapshot(&[(0, 16, 8)]);
     let est = flat_estimate(30, 600);
-    let packed = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect("hybrid policy must spill rather than fail");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect("hybrid policy must spill rather than fail");
 
     assert!(packed.allocation.bytes.contains_key(&DeviceId::Gpu(0)));
     assert!(
@@ -170,8 +180,13 @@ fn single_gpu_overflow_under_gpu_only_returns_pack_error() {
     let svc = svc_for_policy("solo", PlacementPolicy::GpuOnly);
     let snap = snapshot(&[(0, 16, 8)]);
     let est = flat_estimate(30, 600);
-    let err = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect_err("GpuOnly with overflow must fail");
+    let err = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect_err("GpuOnly with overflow must fail");
     assert!(
         matches!(err, PackError::LayerDoesNotFit { .. }),
         "expected LayerDoesNotFit, got {err:?}"
@@ -188,8 +203,13 @@ fn three_gpus_split_layers_across_all_three() {
     let svc = svc_for_policy("triple", PlacementPolicy::GpuOnly);
     let snap = snapshot(&[(0, 16, 8), (1, 16, 8), (2, 16, 8)]);
     let est = flat_estimate(30, 600);
-    let packed = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect("a 17 GB model must pack across 3 × 8 GB GPUs");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect("a 17 GB model must pack across 3 × 8 GB GPUs");
 
     let split = packed
         .args
@@ -229,8 +249,13 @@ fn four_gpus_emit_tensor_split_with_one_entry_per_allowed_gpu() {
     let snap = snapshot(&[(0, 24, 24), (1, 24, 24), (2, 24, 24), (3, 24, 24)]);
     // 60 layers × 600 MiB ≈ 35 GB — needs ≥2 GPUs, comfortably fits across 4.
     let est = flat_estimate(60, 600);
-    let packed = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect("a 35 GB model must pack across 4 × 24 GB GPUs");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect("a 35 GB model must pack across 4 × 24 GB GPUs");
 
     let split = packed
         .args
@@ -266,8 +291,13 @@ fn four_gpus_with_gpu_allow_restricts_candidates() {
     svc.gpu_allow = vec![1, 3];
     let snap = snapshot(&[(0, 24, 24), (1, 24, 24), (2, 24, 24), (3, 24, 24)]);
     let est = flat_estimate(40, 600);
-    let packed = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect("model must pack across the two allowed GPUs");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect("model must pack across the two allowed GPUs");
 
     let split = packed
         .args
@@ -306,8 +336,13 @@ fn three_gpus_heterogeneous_pack_small_model_on_largest_headroom() {
     reserved.insert(SmolStr::new("peer"), peer);
 
     let est = flat_estimate(8, 600); // ≈ 4.7 GB, fits on a single large GPU.
-    let packed = placement::pack(&est, &svc, &snap, &reserved)
-        .expect("model must fit on the largest-headroom GPU");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &reserved,
+    )
+    .expect("model must fit on the largest-headroom GPU");
 
     assert!(
         packed.allocation.bytes.contains_key(&DeviceId::Gpu(2)),
@@ -338,7 +373,14 @@ fn pick_command_gpu_scales_to_four_gpus() {
     let svc = svc_for_policy("comfy", PlacementPolicy::GpuOnly);
     // Free bytes: 4, 12, 8, 18 GB. GPU 3 is the clear winner.
     let snap = snapshot(&[(0, 24, 4), (1, 24, 12), (2, 24, 8), (3, 24, 18)]);
-    let pick = pick_command_gpu(&svc, &snap, &AllocationTable::new(), 2 * 1024, None, false);
+    let pick = pick_command_gpu(
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+        2 * 1024,
+        None,
+        false,
+    );
     assert_eq!(
         pick,
         Some(3),
@@ -359,8 +401,13 @@ fn zero_gpus_cpu_only_packs_to_cpu() {
     svc.placement_override = BTreeMap::new();
     let snap = snapshot(&[]);
     let est = flat_estimate(12, 200);
-    let packed = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect("CpuOnly placement must succeed when no GPUs exist");
+    let packed = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect("CpuOnly placement must succeed when no GPUs exist");
 
     assert_eq!(
         packed.args.ngl,
@@ -392,8 +439,13 @@ fn zero_gpus_gpu_only_returns_pack_error() {
     let svc = svc_for_policy("gpu-only", PlacementPolicy::GpuOnly);
     let snap = snapshot(&[]);
     let est = flat_estimate(12, 200);
-    let err = placement::pack(&est, &svc, &snap, &AllocationTable::new())
-        .expect_err("GpuOnly with no GPUs must fail");
+    let err = placement::pack(
+        &est,
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+    )
+    .expect_err("GpuOnly with no GPUs must fail");
     assert!(
         matches!(err, PackError::LayerDoesNotFit { layer_index: 0, .. }),
         "expected LayerDoesNotFit{{layer_index: 0}}, got {err:?}"
@@ -407,7 +459,14 @@ fn zero_gpus_gpu_only_returns_pack_error() {
 fn pick_command_gpu_returns_none_with_zero_gpus() {
     let svc = svc_for_policy("comfy", PlacementPolicy::GpuOnly);
     let snap = snapshot(&[]);
-    let pick = pick_command_gpu(&svc, &snap, &AllocationTable::new(), 1024, None, false);
+    let pick = pick_command_gpu(
+        &ananke::config::service_inputs::placement_inputs(&svc),
+        &snap,
+        &AllocationTable::new(),
+        1024,
+        None,
+        false,
+    );
     assert_eq!(pick, None);
 }
 

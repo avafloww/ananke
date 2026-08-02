@@ -1,12 +1,12 @@
 //! Integration test: how `GET /api/services` reports a service that cannot be
 //! placed at all.
 //!
-//! Reproduces the `deepseek-v4-flash` case from issue #29. The model is far too
-//! large for the host, so every pack fails and the placement preview names no
-//! devices. Summing that empty map reported `0 B`, which read as "this service
-//! needs no memory" — indistinguishable from a genuinely CPU-only service or
-//! one that had never been estimated. The row must instead report the model's
-//! aggregate demand, and the verdict must name the device that came up short.
+//! The `deepseek-v4-flash` case: the model is far too large for the host, so
+//! every pack fails and the placement preview names no devices. Summing that
+//! empty map gives `0 B`, which reads as "this service needs no memory" —
+//! indistinguishable from a genuinely CPU-only service or one that has never
+//! been estimated. The row must instead report the model's aggregate demand,
+//! and the verdict must name the device that came up short.
 #![cfg(feature = "test-fakes")]
 
 mod common;
@@ -97,15 +97,41 @@ async fn unplaceable_service_reports_its_demand_and_names_the_short_device() {
         "a shortfall reports less available than requested, got {shortfalls:?}"
     );
 
-    // The regression: an unplaceable service must not report 0 B. With no
-    // placement to sum, the row falls back to the estimator's demand, which is
-    // at least the ~16 GiB of weights.
+    // An unplaceable service must not report 0 B. With no placement to sum,
+    // the row falls back to the estimator's demand, which is at least the
+    // ~16 GiB of weights.
     let footprint = svc["footprint_bytes"]
         .as_u64()
         .unwrap_or_else(|| panic!("expected a footprint, got {svc}"));
     assert!(
         footprint >= 16 * 1024 * 1024 * 1024,
         "the fallback reports the model's aggregate demand, got {footprint}"
+    );
+
+    // The row shows the total and the breakdown together, so they have to be the
+    // same figure. They are computed once and summed rather than derived twice —
+    // this is the assertion that keeps it that way, and it runs on the fallback
+    // path because that is the one where the total does not come from a
+    // placement and so could most easily drift from the parts.
+    let devices = svc["footprint_devices"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected a per-device breakdown, got {svc}"));
+    assert!(!devices.is_empty(), "the demand names its devices");
+    let summed: u64 = devices
+        .iter()
+        .map(|d| {
+            d["bytes"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("a device's share is a byte count, got {d}"))
+        })
+        .sum();
+    assert_eq!(
+        summed, footprint,
+        "the breakdown sums to the total, got {devices:?}"
+    );
+    assert!(
+        devices.iter().any(|d| d["device"] == "cpu"),
+        "with no GPUs the demand lands on the host, got {devices:?}"
     );
 
     h.cleanup().await;

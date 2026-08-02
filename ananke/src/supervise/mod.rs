@@ -31,6 +31,7 @@ mod dispatch;
 mod eviction;
 mod idle;
 mod reservation;
+mod rolling;
 mod running;
 mod starting;
 mod terminal;
@@ -157,9 +158,10 @@ struct RunLoop {
     packed_for_spawn: Option<Packed>,
     /// Counts consecutive OOM kills for the current service.
     oom_attempts: u32,
-    /// Total reserved bytes captured at Ensure time, used as the base for the
-    /// rolling update that fires when the service later drains back to Idle.
-    base_total_bytes_for_rolling: u64,
+    /// The placement inputs the rolling correction needs, captured when this
+    /// run's reservation was committed and consumed when the service drains
+    /// back to Idle. See [`rolling::RollingBase`].
+    rolling_base: rolling::RollingBase,
     /// Boot-time snapshot of this service's config, consulted by
     /// [`Self::current_svc`] as a fallback only when the live config has
     /// dropped the service (mid-reload). Never mutated — the live

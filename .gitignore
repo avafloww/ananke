@@ -3,3 +3,10 @@
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm
+
+# ik_llama writes this into the working directory.
+llama.log
+
+# Operator-specific model paths for the estimate dump script.
+# The .example file is committed as a template; the real file is gitignored.
+calibration/models.toml

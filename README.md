@@ -80,7 +80,7 @@ ananke is configured via TOML, which will be located in this order:
 4. `~/.config/ananke/config.toml`
 5. `/etc/ananke/config.toml`
 
-The full configuration guide - daemon settings, device and service configuration, placement, inheritance, and config hot-reload - lives in [docs/configuration.md](docs/configuration.md). The self-healing watchdogs, and the incidents that motivated each of them, are described in [docs/auto-restart.md](docs/auto-restart.md).
+The full configuration guide - daemon settings, device and service configuration, placement, inheritance, and config hot-reload - lives in [docs/configuration.md](docs/configuration.md). The self-healing watchdogs, and the incidents that motivated each of them, are described in [docs/auto-restart.md](docs/auto-restart.md). What ananke predicts a service will hold before it starts it — the VRAM and host-RAM terms, and where each comes from — is [docs/memory-model.md](docs/memory-model.md).
 
 ## Interacting with ananke
 

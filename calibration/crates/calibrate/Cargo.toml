@@ -1,0 +1,33 @@
+[package]
+name = "ananke-calibrate"
+edition.workspace = true
+version.workspace = true
+
+[features]
+# The campaign's fake version control, so a driver test needs no repository.
+test-fakes = []
+
+[dependencies]
+ananke-config.workspace = true
+ananke-dataset.workspace = true
+ananke-estimate.workspace = true
+ananke-fs.workspace = true
+ananke-gguf.workspace = true
+ananke-measure.workspace = true
+ananke-placement.workspace = true
+ananke-tuning-schema.workspace = true
+clap.workspace = true
+jiff.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+toml.workspace = true
+serde_json.workspace = true
+smol_str.workspace = true
+
+[dev-dependencies]
+# The harness's in-memory implementations, so the campaign driver can be run
+# end to end without a machine: `run_with` takes the seams, and the cadence only
+# means anything against the harness's per-cell notifications.
+ananke-measure = { workspace = true, features = ["test-fakes"] }
+flate2.workspace = true
+pretty_assertions.workspace = true

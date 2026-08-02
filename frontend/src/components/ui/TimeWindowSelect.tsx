@@ -1,7 +1,7 @@
 // Shared time-window selector: relative presets plus a custom absolute
-// range with datetime-local inputs. Extracted from the logs viewer so
-// logs, per-service stats, the global stats view, and the dashboard all
-// present the same time controls. Model + helpers live in
+// range with datetime-local inputs. Shared by the logs viewer, per-service
+// stats, the global stats view, and the dashboard so they all present the
+// same time controls. Model + helpers live in
 // ./timeWindow.ts (react-refresh needs this file components-only).
 
 import { useState } from "react";
@@ -16,7 +16,6 @@ import {
   type TimeWindowPreset,
 } from "./timeWindow.ts";
 
-// Matches the logs viewer's original custom-range inputs.
 const inputClassName =
   "h-6 rounded-sm border border-border-default bg-base px-1.5 text-xs " +
   "text-primary focus:border-accent focus:outline-none";

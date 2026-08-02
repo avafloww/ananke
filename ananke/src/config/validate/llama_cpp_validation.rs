@@ -10,7 +10,7 @@ use crate::{
     config::{
         parse::{RawExpertOffload, RawLlamaCppService, RawRuntime},
         validate::{
-            IkSettings, LlamaCppConfig, NumaStrategy, OffloadMode, Runtime,
+            IkSettings, LlamaCppConfig, NumaStrategy, OffloadMode, Runtime, RuntimeConfig,
             check_launcher_placeholders, fail,
         },
     },
@@ -40,7 +40,7 @@ pub(crate) fn validate_llama_cpp(
                      runtime = {{ kind = \"ik-llama\" }})"
                 )));
             }
-            Runtime::LlamaCpp
+            RuntimeConfig::Mainline
         }
         Some(RawRuntime::IkLlama(ik)) => {
             if let Some(m) = ik.mla
@@ -75,7 +75,7 @@ pub(crate) fn validate_llama_cpp(
                     }
                 }
             }
-            Runtime::IkLlama(IkSettings {
+            RuntimeConfig::Ik(IkSettings {
                 mla: ik.mla,
                 dsa: ik.dsa.unwrap_or(false),
                 attn_max_batch: ik.attn_max_batch,
@@ -84,7 +84,7 @@ pub(crate) fn validate_llama_cpp(
         }
     };
 
-    if let Runtime::IkLlama(ik) = &runtime
+    if let RuntimeConfig::Ik(ik) = &runtime
         && ik.attn_max_batch == Some(0)
     {
         return Err(fail(format!(
@@ -96,7 +96,7 @@ pub(crate) fn validate_llama_cpp(
     // ik_llama predates mainline's FA-required-for-quantised-KV rule and
     // handles quantised caches without the flag, so the check is
     // mainline-only.
-    if runtime == Runtime::LlamaCpp {
+    if runtime.fork() == Runtime::Mainline {
         for (key, val) in [
             ("cache_type_k", lc.cache_type_k.as_deref()),
             ("cache_type_v", lc.cache_type_v.as_deref()),
@@ -182,6 +182,7 @@ pub(crate) fn validate_llama_cpp(
         draft_model: lc.draft_model.clone(),
         kv_unified: lc.kv_unified,
         cache_idle_slots: lc.cache_idle_slots,
+        cache_ram_mb: lc.cache_ram_mb,
         metrics: lc.metrics,
         slots: lc.slots,
         batch_size: lc.batch_size,
@@ -278,7 +279,8 @@ lifecycle = "persistent"
     }
     #[test]
     fn n_cpu_moe_is_rejected_as_unknown_field() {
-        // The legacy knob no longer exists; deny_unknown_fields surfaces it.
+        // `n_cpu_moe` is not a config key; deny_unknown_fields surfaces it
+        // as an error rather than dropping it in silence.
         let err = parse_toml(
             r#"
 [[service]]

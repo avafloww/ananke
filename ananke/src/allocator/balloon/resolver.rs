@@ -101,8 +101,8 @@ pub fn spawn_resolver(
             // Sample the single component the reservation actually consumes,
             // never the combined footprint. On a GPU service the pledge
             // models GPU bytes, not the python interpreter's RSS: combining
-            // the two used to inflate the pledge with multi-GB CPU footprint
-            // and trigger false over-commit signals during normal SDXL
+            // the two inflates the pledge with multi-GB CPU footprint and
+            // trips false over-commit signals during normal SDXL
             // inference. On a CPU-pinned service the reservation *is* host
             // RAM, so the mirror-image reading applies.
             //
@@ -113,8 +113,8 @@ pub fn spawn_resolver(
             let slot = pledged_slot_of(&allocations, &service_name);
             let observed = match slot {
                 Some(DeviceSlot::Cpu) => observation.read_current_rss(&service_name),
-                // No row yet (idle/draining) reads VRAM, matching the
-                // pre-existing behaviour for a service that hasn't pledged.
+                // No row yet (idle/draining) reads VRAM, the default for a
+                // service that hasn't pledged.
                 Some(DeviceSlot::Gpu(_)) | None => observation.read_current_vram(&service_name),
             };
             let ceiling_enforceable =
@@ -130,8 +130,8 @@ pub fn spawn_resolver(
             // Fast-kill self once current usage has stayed above
             // `max_mb * 110 %` for the whole grace period. The reading is
             // current, so a spike that subsides disarms the timer instead of
-            // latching — which is what made this a kill/respawn loop when the
-            // input was a high-water mark.
+            // latching. A high-water-mark input would latch, turning this
+            // into a kill/respawn loop.
             //
             // The resolver does NOT terminate after firing — fast_kill
             // drains the supervisor, which then re-ensures via its
@@ -180,10 +180,10 @@ pub fn spawn_resolver(
             // Contention resolver. Pre-condition for firing:
             // 1. Growth detected in the recent sample window.
             // 2. A GPU the service holds is OOM-pressured — physical
-            //    NVML free has dropped below `OOM_MARGIN_BYTES`. The
-            //    earlier "pledge sum > total" gate over-fired: pledges
-            //    are upper-bound reservations (estimator predictions
-            //    pad ~10–20 %, dynamic services hold the recent-peak
+            //    NVML free has dropped below `OOM_MARGIN_BYTES`. A bare
+            //    "pledge sum > total" gate over-fires: pledges are
+            //    upper-bound reservations (estimator predictions pad
+            //    ~10-20 %, dynamic services hold the recent-peak
             //    high-water mark), so two services can pledge to >100 %
             //    without ever actually filling the GPU. Only the kernel
             //    knows when the next allocation is about to fail, and

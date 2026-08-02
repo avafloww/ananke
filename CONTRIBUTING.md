@@ -2,10 +2,93 @@
 
 The repository contains two main components:
 
-- The Rust backend at the crate root (`src/`, `Cargo.toml`), which produces two binaries: `ananke` (the daemon) and `anankectl` (the CLI).
+- The Rust backend, a workspace producing two binaries: `ananke` (the daemon) and `anankectl` (the CLI).
 - The frontend at `frontend/`, which is the web UI for this project. It is a Vite-based React 19 application written in TypeScript, styled with Tailwind CSS 4, and built with the React Compiler enabled.
 
 Both components share the general conventions below. The Rust- and TypeScript-specific sections that follow apply to their respective trees.
+
+The backend's crates, leaves first. Package names keep the `ananke-` prefix; the
+directories do not.
+
+| crate | path | holds | depends on |
+|---|---|---|---|
+| `ananke-fs` | `crates/fs` | the `Fs` trait with its local and in-memory implementations | `parking_lot` |
+| `ananke-gguf` | `crates/gguf` | the GGUF reader, including sharded models; the `Architecture` enum and every metadata key the workspace reads; `dump-gguf` | `ananke-fs` |
+| `ananke-tuning-schema` | `crates/tuning-schema` | the type of `tuning.json`, shared by everything that reads or writes it | `serde` |
+| `ananke-tuning` | `crates/tuning` | `tuning.json` and the build script that turns it into constants | `ananke-tuning-schema` (build) |
+| `ananke-config` | `crates/config` | config defaults, the descriptor table the docs are generated from, the placement vocabulary (`SplitMode`, `DeviceSlot`), the fork marker (`Runtime`), and the byte-unit conversions everything shares | — |
+| `ananke-estimate` | `crates/estimate` | the VRAM estimator and the design-column contract the fitter shares | the four above |
+| `ananke-placement` | `crates/placement` | the packer, the device snapshot types, and the `estimate` example | `ananke-config`, `ananke-estimate`, `ananke-gguf` |
+| `ananke-api` | `crates/api` | the DTOs that cross the wire to the frontend | — |
+| `ananke` | `ananke` | the daemon: supervision, scheduling, HTTP surface, the NVML probe | all of the above |
+| `anankectl` | `anankectl` | the CLI | `ananke-api` |
+
+Three more live under `calibration/crates/`, because nothing shipped links them —
+see [`calibration/README.md`](calibration/README.md):
+
+| crate | path | holds | depends on |
+|---|---|---|---|
+| `ananke-dataset` | `calibration/crates/dataset` | the one schema `calibration/data/measurements.ndjson` is written and read with, and the JSON writer that is part of that format | `serde`, `serde_json` |
+| `ananke-measure` | `calibration/crates/measure` | the measurement harness and its log parser | `ananke-dataset`, `regex`, `nix` |
+| `ananke-calibrate` | `calibration/crates/calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-dataset`, `ananke-measure`, `ananke-estimate`, `ananke-placement`, `ananke-gguf`, `ananke-tuning-schema` |
+
+That boundary is the useful one to hold in mind: `crates/tuning/tuning.json` is the
+entire interface between the two halves. Delete `calibration/` and the daemon still
+builds, runs, and estimates — what is lost is the ability to re-derive that file and
+the evidence for why each number in it is what it is. One exception, and it is a
+test: `ananke/tests/estimator_matches_measurements.rs` holds the shipped estimator
+against the campaign's own cells, so it takes `ananke-dataset` as a dev-dependency,
+reads `calibration/data` directly, and `cargo test --workspace` wants the directory
+present. That is the point of the test —
+a fixture copy would drift from the dataset the constants are derived from. The arrow only points inward:
+`ananke-calibrate` runs the real estimator and packer in-process, which is what makes
+`validate` and `scoreboard` mean anything, but nothing shipped links back.
+
+`xtask` sits at the root beside the products it builds.
+
+The split is for compile times as much as for structure. `ananke`'s build script
+runs the frontend's `npm run build`, so anything sharing that script pays for a
+UI rebuild on every change — which is why `tuning.json` lives in its own crate:
+regenerating the estimator's constants during a calibration campaign is the
+inner loop of that work, and it now costs a few seconds instead of a UI build.
+The estimator and then the packer followed for the same reason, and with them the
+`estimate` example — so no part of the calibration loop builds the UI any more.
+No part of the calibration loop needs `ANANKE_SKIP_FRONTEND_BUILD`.
+
+`ananke-tuning-schema` is a leaf for a different reason: a build script cannot
+depend on the crate it builds, so the type of `tuning.json` — read by
+`crates/tuning`'s `build.rs`, by the derivers, by the emitter, and by the
+compute-model fitter — has to sit below all four. It is `serde` and nothing else.
+
+`ananke` re-exports `gguf`, `estimator`, `allocator::placement`, `system::fs`, and
+`tracking::rolling::Corrections`, so `crate::…` paths inside the daemon are
+unchanged by the split.
+
+`ananke-measure` deliberately depends on neither `ananke-estimate` nor
+`ananke-placement`: measurement and estimation stay apart so that nothing on the
+estimation side ever links a process spawner.
+
+### Calibration
+
+The tuned constants in `crates/tuning/tuning.json` are derived from a measurement
+dataset, not chosen. Every one carries its evidence in its own doc comment, and CI
+regenerates the document and compares, so a value cannot drift from the data that
+justifies it without the drift showing up as a diff.
+
+Two documents, and neither is duplicated here.
+[`calibration/README.md`](calibration/README.md) is the workflow — how to add a
+model, run the campaign, refit, and decide whether to trust the result.
+[`calibration/docs/design.md`](calibration/docs/design.md) is why the calibration
+code is shaped the way it is: the binaries and what each is for, the fixed
+`emit`-then-`fit` order, what `validate` and `crossval` do and do not tell you,
+and the rule that a derivation's key must pin every factor that could differ.
+
+Getting the estimator and the packer out took a real decoupling rather than a file
+move. Both had taken a whole `ServiceConfig`; both now take a distilled input
+struct — `EstimatorInputs` and `PlacementInputs` — built by free functions in
+`ananke::config::service_inputs`. Reading a service config is the daemon's
+business; estimating and packing are pure functions over the fields they actually
+need. Prefer that shape for anything else that wants to come out.
 
 ### Platform scope
 
@@ -99,12 +182,13 @@ Today the shared DTOs live in the `ananke-api` crate (hand-written, consumed by 
 - Use inline comments to explain "why," not just "what".
 - Don't add narrative comments in function bodies. Only add a comment if what you're doing is non-obvious or special in some way, or if something needs a deeper "why" explanation.
 - Module-level documentation should explain purpose and responsibilities.
+- Item docs are three lines at most, unless the comment is a guardrail. The test: if it vanished, could someone reintroduce a bug it was warning about, or fail to find something they'd need? If so, write as much as it takes. Otherwise cut it — don't restate the identifier, don't describe fields that have names, and don't narrate what the code plainly does.
 - **Always** use periods at the end of code comments.
 - **Never** use title case in headings and titles. Always use sentence case.
 - Always use the Oxford comma.
 - Don't omit articles ("a", "an", "the"). Write "the file has a newer version" not "file has newer version".
 - Comments describe the present state. Reserve past-tense narration for the rare case where history explains a standing "why".
-- Keep the user-facing docs in sync with code changes. The source of truth for config defaults is the `DEFAULT_*` constants in `ananke-config/src/docs.rs` and `ananke-config/src/defaults.rs`; the source of truth for config struct fields is `ananke/src/config/parse.rs` and `ananke/src/config/validate.rs`. When you add, remove, rename, or change the default of a config field, update the descriptor table in `ananke_config::docs::all_sections()` and run `cargo xtask gen-config-docs` to regenerate `docs/configuration.md`. CI enforces this with `--check`. Likewise, changes to service states or the management/OpenAI API surface should be reflected in `docs/api.md` (run `cargo xtask gen-api-docs` to regenerate). Treat a code change that touches these areas as incomplete until the docs are updated.
+- Keep the user-facing docs in sync with code changes. The source of truth for config defaults is the `DEFAULT_*` constants in `crates/config/src/docs/` and `crates/config/src/defaults.rs`; the source of truth for config struct fields is `ananke/src/config/parse/` and `ananke/src/config/validate/`. When you add, remove, rename, or change the default of a config field, update the descriptor table in `ananke_config::docs::all_sections()` and run `cargo xtask gen-config-docs` to regenerate `docs/configuration.md`. CI enforces this with `--check`. Likewise, changes to service states or the management/OpenAI API surface should be reflected in `docs/api.md` (run `cargo xtask gen-api-docs` to regenerate). Treat a code change that touches these areas as incomplete until the docs are updated.
 
 ### Code organization
 
@@ -231,46 +315,33 @@ The Rust stack is chosen; don't silently introduce alternatives when one of thes
 
 ### Adding a new model architecture
 
-When a new model family ships with a `general.architecture` value that ananke does not yet recognise, the daemon rejects it with `UnknownArchitecture` and the service stays disabled until the operator sets `estimation.allow_fallback = true` (which skips KV modelling and estimates weights-only). Adding proper support takes three steps:
+When a new model family ships with a `general.architecture` value that ananke does not yet recognise, the estimator refuses it with `UnknownArchitecture`. The operator's only recourse is to declare the reservation explicitly — `mode` plus `reserve_gb`, the same way a `command` service does — which skips the estimator and the packer entirely. Adding proper support takes three steps:
 
 1. **Dump the GGUF metadata.** Run the `dump-gguf` example against the first shard:
 
    ```bash
-   cargo run --example dump-gguf -- /path/to/model-00001-of-NNNN.gguf
+   cargo run -p ananke-gguf --example dump-gguf -- /path/to/model-00001-of-NNNN.gguf
    ```
 
    The output shows the architecture name, block count, tensor categories, and every attention-related metadata key. This is the ground truth for what the estimator needs to read.
 
-2. **Choose the right family module.** The estimator dispatches on `general.architecture` through the family modules in `ananke/src/estimator/`. Each module's `*_FAMILY` constant lists the architectures it covers, and the module docs and per-entry comments describe the tensor layouts and metadata quirks already handled. Read those alongside the dump from step 1, and pick the module whose expectations the new architecture's tensors and metadata actually match — the existing entries are worked examples of what "matching" looks like.
+2. **Choose the right family module.** The estimator dispatches on `Architecture` through the family modules in `crates/estimate/src/`. Each module's `*_FAMILY` constant lists the architectures it covers, and the module docs and per-entry comments describe the tensor layouts and metadata quirks already handled. Read those alongside the dump from step 1, and pick the module whose expectations the new architecture's tensors and metadata actually match — the existing entries are worked examples of what "matching" looks like.
 
 3. **Register and test.**
 
-   a. Add the architecture name to the chosen family's `*_FAMILY` constant, with a comment describing the quirks it brings.
+   a. Add a variant to `Architecture` in `crates/gguf/src/architecture.rs`, and its `general.architecture` spelling to `as_str` and `known()`. The tests there hold every variant to a round-trip and to distinct names, so a half-registered one fails immediately.
 
-   b. If the architecture needs a custom compute-buffer tuning curve, add a match arm in `ananke/src/estimator/compute_buffer.rs::tuning_for()`. The formula is `base + slope * (ctx / 1024)` MiB per device. Derive the curve like this:
+   b. Add that variant to the chosen family's `*_FAMILY` constant, with a comment describing the quirks it brings.
 
-   - Sweep `llama-server -m <model> -c <ctx> -ngl 99` over a few context lengths, pinning one card with `CUDA_VISIBLE_DEVICES=0`. For an embedding model, add `--embeddings` (the modality implies the same flag in production); the calibration is otherwise identical.
-   - Read each run's process VRAM from `nvidia-smi --query-compute-apps=pid,used_memory`. Match the row to the server's actual pid and wait for each server to fully exit before the next run — a leftover server silently wins the port bind and you measure the same process at every "ctx".
-   - Compute the residual `compute_buffer = used - gpu_weights - kv_total`, where `gpu_weights` is the estimator's `weights_bytes` minus its `token_embd_bytes` (llama.cpp keeps token embeddings on CPU) and `kv_total = kv_per_token * ctx`. Both terms come straight from `cargo run --example estimate -- --model <model> --context <ctx>`.
-   - Fit `base + slope * (ctx / 1024)` to the residuals: pick a base that covers the worst case with a little headroom, and keep the slope as low as the data allows. A flat residual across the sweep also confirms `kv_per_token` is right — a wrong KV term makes the residual trend with context.
-   - One gotcha: the `estimate` example's printed `gpu_vram_mib` doubles the compute buffer (`active_devices.min(2)`) for a 2-GPU split, so pass `--active-devices 1` when comparing its total to a single-card `nvidia-smi` reading.
-   - Most architectures' compute buffers are effectively independent of `--ubatch-size`, so the curve is calibrated at llama.cpp's default (512) and `tuning_for` ignores ubatch. A minority scale with it — notably `deepseek4`, whose NSA "lightning indexer" scores every one of the `ubatch` query tokens against the whole context, so its residual is `≈ k * ubatch * ctx`. For such an arch, take the slope as a function of ubatch (`deepseek4_cb_slope` scales the calibrated 512-slope linearly) and thread the service's `ubatch` through `EstimatorInputs` → `compute_buffer::default_for`. Sweep a second ubatch (e.g. 1024) to confirm the scaling before trusting the extrapolation.
+   c. Measure the architecture into the calibration dataset and re-run the campaign, so the compute model picks up coefficients for it rather than falling to the pooled default. [`calibration/README.md`](calibration/README.md) is that loop.
 
-   c. Add a unit test in the family module that exercises the key behaviour (KV computation, layer collection, expert detection, etc.). Use `synth_gguf::Builder` from `ananke/tests/common/mod.rs` to construct a fake GGUF summary, or write one inline with the same pattern.
+   d. Add a unit test in the family module that exercises the key behaviour (KV computation, layer collection, expert detection, etc.). Use `synth_gguf::Builder` from `ananke/tests/common/mod.rs` to construct a fake GGUF summary, or write one inline with the same pattern.
 
-   d. Run the full test suite: `cargo test --workspace --all-features` and `cargo clippy --all-targets --all-features -- -D warnings`.
+   e. Run the full test suite: `cargo test --workspace --all-features` and `cargo clippy --all-targets --all-features -- -D warnings`.
 
-**Reference implementation:** the `dump-gguf` example at `ananke/examples/dump-gguf.rs` is the canonical tool for gathering GGUF metadata. The llama.cpp source (ask the operator where it lives) is the ground truth for tensor naming, metadata keys, and architecture classification. When in doubt about how a tensor is routed at runtime, check `llama-arch.cpp` (`LLM_TENSOR_NAMES`, `LLM_ARCH_NAMES`, `llm_arch_is_hybrid`), `llama-model.cpp` (hparams loading), and `llama-memory*.cpp` (KV cache vs recurrent state).
+[`docs/memory-model.md`](docs/memory-model.md) is what those estimators are modelling — the VRAM and host-side terms, and where each one comes from.
 
-### Multi-token prediction (MTP / NextN) overhead
-
-When a service sets `spec_type = "draft-mtp"`, llama.cpp enables multi-token-prediction speculative decoding. For models that ship an embedded MTP head (`{arch}.nextn_predict_layers > 0` — e.g. Qwen 3.6's `qwen35` and `qwen35moe`), this needs *no separate draft model*: llama.cpp creates a second context against the same target model whose KV cache covers only the trailing `nextn_predict_layers` block(s) — the dense-attention MTP head — using the draft cache types (f16 by default, independent of `--cache-type-*`). No extra weights load, because the nextn-layer tensors are resident regardless.
-
-`ananke/src/estimator/mtp.rs` models this as `nextn × head_count_kv × (key_length + value_length) × 2 (f16) × context` for the KV term, plus a roughly constant `MTP_COMPUTE_MIB` compute buffer. The estimator computes it once in `estimate_with_summary` (architecture-independent — it reads the metadata directly), stores it on `Estimate::mtp_bytes`, and the packer reserves it as a single lump on the primary GPU (`Packer::seed_mtp_overhead`). The compute constant is calibrated against llama.cpp's own `[spec] estimated memory usage of MTP context is N MiB` log line; re-derive it the same way (run `llama-server … --spec-type draft-mtp`, read the figure, subtract the modelled KV) if a new MTP arch lands with a materially different curve.
-
-Some families ship the MTP head as a **separate draft GGUF** instead of embedding it (e.g. Gemma 4's `gemma4-assistant`, a 4-block model loaded via `-md`). Set `draft_model = "…/mtp-head.gguf"` alongside `spec_type = "draft-mtp"`; the validator requires `spec_type` whenever `draft_model` is set, and the estimator reads the draft file in `estimate_with_summary` and passes its summary to `mtp_overhead_bytes`. The draft's attention layers *share the target model's KV cache* (the load log shows `llama_kv_cache: layer 3: sharing with layer 59`), so there is no context-scaling KV term — the overhead is just the draft's GPU-resident weights (everything but the CPU-side `token_embd.weight`) plus a small `DRAFT_MODEL_COMPUTE_MIB` buffer. That constant is calibrated against the production 2×3090 Gemma 4 run: the estimator landed within ~10 MiB of the measured 40858 MiB peak. Because the cache keys on the `model` and `mmproj` paths but not the draft path, `draft_model` is folded into `EstimatorInputs::config_fingerprint` so swapping the draft GGUF invalidates a stale estimate.
-
-MTP composes with `parallel > 1` and `mmproj` — both are supported by current llama.cpp, including image inference, so there is deliberately no validator rejection of those combinations. Note that `parallel > 1` with a non-unified KV splits the `-c` budget across slots, so each request's effective context is `context / parallel`; raise `context` if every slot needs the full window.
+**Reference implementation:** the `dump-gguf` example at `crates/gguf/examples/dump-gguf.rs` is the canonical tool for gathering GGUF metadata. The llama.cpp source (ask the operator where it lives) is the ground truth for tensor naming, metadata keys, and architecture classification. When in doubt about how a tensor is routed at runtime, check `llama-arch.cpp` (`LLM_TENSOR_NAMES`, `LLM_ARCH_NAMES`, `llm_arch_is_hybrid`), `llama-model.cpp` (hparams loading), and `llama-memory*.cpp` (KV cache vs recurrent state).
 
 ## TypeScript code style
 

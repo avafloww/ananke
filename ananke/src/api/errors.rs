@@ -123,9 +123,9 @@ impl ApiErrorCode {
 
     /// OpenAI's error-type taxonomy. `invalid_request_error` for
     /// anything the client could have avoided, `server_error` for
-    /// daemon-side problems. The management `ApiError` envelope used
-    /// to fix this to `server_error` unconditionally; with the
-    /// unified enum every surface now reports the accurate value.
+    /// daemon-side problems. One enum across every surface, so the
+    /// management envelope reports the same accurate value the OpenAI
+    /// one does rather than a blanket `server_error`.
     pub fn kind(&self) -> ApiErrorKind {
         match self {
             Self::ModelNotFound { .. }

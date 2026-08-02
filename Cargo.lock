@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -23,6 +29,11 @@ version = "0.2.0"
 dependencies = [
  "ananke-api",
  "ananke-config",
+ "ananke-dataset",
+ "ananke-estimate",
+ "ananke-fs",
+ "ananke-gguf",
+ "ananke-placement",
  "arc-swap",
  "async-trait",
  "axum 0.7.9",
@@ -76,10 +87,124 @@ dependencies = [
 ]
 
 [[package]]
+name = "ananke-calibrate"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "ananke-dataset",
+ "ananke-estimate",
+ "ananke-fs",
+ "ananke-gguf",
+ "ananke-measure",
+ "ananke-placement",
+ "ananke-tuning-schema",
+ "clap",
+ "flate2",
+ "jiff",
+ "parking_lot",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "toml",
+]
+
+[[package]]
 name = "ananke-config"
 version = "0.2.0"
 dependencies = [
  "serde",
+ "serde_json",
+ "smol_str",
+]
+
+[[package]]
+name = "ananke-dataset"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ananke-estimate"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "ananke-fs",
+ "ananke-gguf",
+ "ananke-tuning",
+ "regex",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "tracing",
+]
+
+[[package]]
+name = "ananke-fs"
+version = "0.2.0"
+dependencies = [
+ "parking_lot",
+]
+
+[[package]]
+name = "ananke-gguf"
+version = "0.2.0"
+dependencies = [
+ "ananke-fs",
+ "smol_str",
+]
+
+[[package]]
+name = "ananke-measure"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "ananke-dataset",
+ "clap",
+ "flate2",
+ "jiff",
+ "nix",
+ "parking_lot",
+ "pretty_assertions",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "ananke-placement"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "ananke-estimate",
+ "ananke-fs",
+ "ananke-gguf",
+ "clap",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "tracing",
+]
+
+[[package]]
+name = "ananke-tuning"
+version = "0.2.0"
+dependencies = [
+ "ananke-tuning-schema",
+ "serde_json",
+]
+
+[[package]]
+name = "ananke-tuning-schema"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -565,6 +690,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc32fast"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -879,6 +1013,16 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+
+[[package]]
+name = "flate2"
+version = "1.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
+dependencies = [
+ "crc32fast",
+ "miniz_oxide",
+]
 
 [[package]]
 name = "fnv"
@@ -1656,6 +1800,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "memoffset"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1669,6 +1822,16 @@ checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
 dependencies = [
  "mime",
  "unicase",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+ "simd-adler32",
 ]
 
 [[package]]
@@ -1705,6 +1868,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -2589,6 +2753,12 @@ dependencies = [
  "errno",
  "libc",
 ]
+
+[[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "similar"

@@ -8,6 +8,7 @@ pub mod file;
 pub mod manager;
 pub mod merge;
 pub mod parse;
+pub mod service_inputs;
 pub mod validate;
 
 pub use file::{PathSources, resolve_config_path, resolve_from_env};
@@ -17,8 +18,8 @@ pub use validate::{
     AllocationMode, AutoRestartSettings, CommandConfig, DaemonSettings, DeviceReserves, DeviceSlot,
     EffectiveConfig, ErrorRateTrigger, ErrorStatusClass, Filters, GenerationStallTrigger,
     HealthSettings, IkSettings, Lifecycle, LlamaCppConfig, NumaStrategy, OffloadMode, PeriodicMode,
-    PeriodicTrigger, PlacementPolicy, Runtime, ServiceConfig, SpecCollapseTrigger, SplitMode,
-    Template, TemplateConfig, TrackingSettings, TtftStallTrigger, validate,
+    PeriodicTrigger, PlacementPolicy, Runtime, RuntimeConfig, ServiceConfig, SpecCollapseTrigger,
+    SplitMode, Template, TemplateConfig, TrackingSettings, TtftStallTrigger, validate,
 };
 
 /// Load, parse, merge, validate, and preflight a config file from disk.
@@ -26,7 +27,7 @@ pub use validate::{
 /// Unlike [`load_config_from_str`], this also walks each llama-cpp service's
 /// GGUF model to surface unsupported dtypes at config-load time rather
 /// than at first-request time. The alternative — silent dtype fallback —
-/// produced 4× over-reservations for MXFP4 experts before being caught.
+/// produces 4× over-reservations for MXFP4 experts.
 pub fn load_config(path: &Path) -> Result<(EffectiveConfig, Vec<Migration>), ExpectedError> {
     let fs = crate::system::LocalFs;
     let source = crate::system::Fs::read_to_string(&fs, path)

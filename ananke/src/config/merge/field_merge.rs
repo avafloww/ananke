@@ -45,6 +45,7 @@ pub(crate) fn merge_llama_cpp(
         draft_model: inherit!(draft_model),
         kv_unified: inherit!(kv_unified),
         cache_idle_slots: inherit!(cache_idle_slots),
+        cache_ram_mb: inherit!(cache_ram_mb),
         metrics: inherit!(metrics),
         slots: inherit!(slots),
         batch_size: inherit!(batch_size),
@@ -74,7 +75,6 @@ pub(crate) fn merge_llama_cpp(
             (Some(p), Some(c)) => Some(crate::config::parse::EstimationConfig {
                 compute_buffer_mb: c.compute_buffer_mb.or(p.compute_buffer_mb),
                 safety_factor: c.safety_factor.or(p.safety_factor),
-                allow_fallback: c.allow_fallback.or(p.allow_fallback),
             }),
         },
     })

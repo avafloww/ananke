@@ -163,7 +163,7 @@ placement_override = { "gpu:0" = 22000, "gpu:1" = 22000 } # Hand-pin per-slot VR
 | `gpu_headroom_mb` | u64 | `0` | Extra per-GPU VRAM (MiB) to keep free when placing *this* service, added on top of the global `[devices]` reserve. Lets a single model be packed more conservatively without bypassing the estimator. |
 | `placement_override` | map string → u64 | none | Hand-pin VRAM (MiB) per device slot. Keys: `"cpu"` or `"gpu:N"`. Overrides the estimator's per-slot distribution. Must be non-empty if present; zero values and `cpu` keys under `gpu-only` are rejected. |
 | `split` | string | `"layer"` | Multi-GPU split mode for llama.cpp services: `"layer"`, `"row"`, `"tensor"`. Maps to llama.cpp's `--split-mode`. See [Multi-GPU split modes](#multi-gpu-split-modes) for constraints. |
-| `tensor_split_weights` | array of f32 | none | Optional per-GPU weights for the `--tensor-split` ratio in sharded (`row`/`tensor`) modes. One positive weight per allowed GPU, in ascending GPU-id order. Unset keeps the historical equal `1,1,...` split. Use this for heterogeneous GPUs (e.g. weight by relative memory bandwidth). Weights are meaningful to four decimal places; additional precision is rounded when converting to the integer `--tensor-split` ratio. See [Multi-GPU split modes](#multi-gpu-split-modes). |
+| `tensor_split_weights` | array of f32 | none | Optional per-GPU weights for the `--tensor-split` ratio in sharded (`row`/`tensor`) modes. One positive weight per allowed GPU, in ascending GPU-id order. Unset gives an equal `1,1,...` split. Use this for heterogeneous GPUs (e.g. weight by relative memory bandwidth). Weights are meaningful to four decimal places; additional precision is rounded when converting to the integer `--tensor-split` ratio. See [Multi-GPU split modes](#multi-gpu-split-modes). |
 
 Placement policies:
 
@@ -244,7 +244,7 @@ min_borrower_runtime = "60s" # dynamic: balloon resolver grace period
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `mode` | string | *required* (command only) | `"static"` or `"dynamic"`. Rejected for llama-cpp services. Applies to `command` services only. |
+| `mode` | string | *required* (command only) | `"static"` or `"dynamic"`. Required on every `command` service. Optional on a `llama-cpp` one, where it replaces the estimator entirely — the only way to place a model whose architecture ananke does not recognise. |
 | `reserve_gb` | f32 | none | `static` only. Memory to reserve, in GiB — host RAM for a cpu-only service, VRAM otherwise. Required for `static`. Accepted as `vram_gb` for pre-rename configs. |
 | `min_reserve_gb` | f32 | none | `dynamic` only. Minimum reservation in GiB. Required for `dynamic`. Accepted as `min_vram_gb` for pre-rename configs. |
 | `max_reserve_gb` | f32 | none | `dynamic` only. Maximum reservation in GiB. Required for `dynamic`; must be > `min_reserve_gb`. Accepted as `max_vram_gb` for pre-rename configs. |
@@ -497,6 +497,7 @@ llama_server = "/opt/llama-cuda/llama-server"
 | `draft_model` | path | none | Separate draft-model GGUF for speculative decoding (`-md` / `--model-draft`). Requires `spec_type` to be set. |
 | `kv_unified` | bool | `false` | Use a single unified KV cache pool shared across all parallel slots (`-kvu` / `--kv-unified`). With `parallel > 1`, idle slots lend their share to active ones; total KV footprint is unchanged. |
 | `cache_idle_slots` | bool | `true` | When `false`, pass `--no-cache-idle-slots` so idle slots' prompt-cache state is dropped (a stability mitigation). |
+| `cache_ram_mb` | int (MiB) | `8192` | Host RAM cap for llama-server's prompt cache (`-cram`), which holds serialized evicted prompts so a returning conversation skips reprocessing. Always passed through explicitly, so the packer's host reservation and the runtime's cap are the same number; `0` disables the cache and frees the reservation with it. |
 | `metrics` | bool | `false`, but auto-enabled while the `generation_stall` watchdog is on | Expose llama-server's Prometheus `/metrics` endpoint. The generation-stall watchdog needs it and passes `--metrics` automatically while active; an explicit `metrics = false` suppresses the flag and disables that watchdog. |
 | `slots` | bool | `false` | Expose the `/slots` introspection endpoint. Note: reveals prompt contents - avoid on network-reachable ports. |
 | `batch_size` | u32 | none | Context batch size (`-b`). |
@@ -519,14 +520,12 @@ Override the internal GGUF-aware VRAM estimator's parameters:
 [service.estimation]
 compute_buffer_mb = 512
 safety_factor = 1.1
-allow_fallback = false
 ```
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `compute_buffer_mb` | u32 | none | Override the estimated compute buffer size (MiB). |
 | `safety_factor` | f32 | none | Multiplier applied to the estimated VRAM footprint. |
-| `allow_fallback` | bool | `false` | Accept the coarse fallback estimate when the GGUF's architecture isn't recognised by any per-family estimator. Unknown architectures hard-reject at config load by default so the operator either adds the arch to the right family list or explicitly opts in here. |
 
 #### Sampling
 Sampling parameters mapped to `llama-server` CLI flags:

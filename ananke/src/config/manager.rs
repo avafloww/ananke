@@ -1,6 +1,6 @@
 //! Owns the raw TOML + parsed `EffectiveConfig` plus all disk I/O for the
-//! config file. Replaces the previous `Arc<EffectiveConfig>` held directly
-//! by `AppState`.
+//! config file. `AppState` holds this rather than an `EffectiveConfig`
+//! directly, so a reload swaps one shared value.
 
 use std::{io, path::PathBuf, sync::Arc, time::Duration};
 
@@ -331,6 +331,8 @@ fn diff_services(old: &EffectiveConfig, new: &EffectiveConfig) -> Vec<smol_str::
 mod tests {
     use std::path::PathBuf;
 
+    use ananke_gguf::keys;
+
     use super::*;
     use crate::system::{Fs, InMemoryFs};
 
@@ -342,7 +344,7 @@ mod tests {
         bytes.extend_from_slice(&3u32.to_le_bytes()); // version
         bytes.extend_from_slice(&0u64.to_le_bytes()); // tensor_count
         bytes.extend_from_slice(&1u64.to_le_bytes()); // kv_count
-        let arch_key = "general.architecture";
+        let arch_key = keys::ARCHITECTURE;
         bytes.extend_from_slice(&(arch_key.len() as u64).to_le_bytes());
         bytes.extend_from_slice(arch_key.as_bytes());
         bytes.extend_from_slice(&8u32.to_le_bytes()); // string tag

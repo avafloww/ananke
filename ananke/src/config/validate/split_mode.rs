@@ -1,10 +1,6 @@
 //! The `--split-mode` vocabulary: how a multi-GPU llama.cpp service divides
 //! a model across the GPUs it spans.
 
-use ananke_config::flags;
-
-use crate::config::validate::{flag_variant, variant_flag};
-
 /// How a multi-GPU llama.cpp service divides the model across the GPUs it
 /// spans. Orthogonal to [`PlacementPolicy`], which decides CPU-vs-GPU and
 /// whether CPU spill is allowed; this decides the *inter-GPU* strategy and
@@ -19,78 +15,13 @@ use crate::config::validate::{flag_variant, variant_flag};
 ///   `tensor` is llama.cpp's newer, faster implementation; `row` is the
 ///   older one, kept for parity. Both require [`PlacementPolicy::GpuOnly`]
 ///   (no CPU spill) and a llama-cpp service.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SplitMode {
-    #[default]
-    Layer,
-    Row,
-    Tensor,
-}
-
-impl SplitMode {
-    /// Variant ↔ flag binding. The strings come from
-    /// [`ananke_config::flags::split_mode`], so `as_flag`, `from_flag`, and
-    /// `valid_values` all resolve to the same single-sourced vocabulary the
-    /// schema docs use.
-    const VARIANTS: &'static [(Self, &'static str)] = &[
-        (Self::Layer, flags::split_mode::LAYER),
-        (Self::Row, flags::split_mode::ROW),
-        (Self::Tensor, flags::split_mode::TENSOR),
-    ];
-
-    /// The `--split-mode` flag value.
-    pub fn as_flag(self) -> &'static str {
-        variant_flag(Self::VARIANTS, self)
-    }
-
-    /// Parse an accepted `devices.split` string into a variant.
-    pub fn from_flag(s: &str) -> Option<Self> {
-        flag_variant(Self::VARIANTS, s)
-    }
-
-    /// Accepted values as a quoted list for operator-facing errors.
-    pub fn valid_values() -> String {
-        flags::quoted_list(flags::split_mode::ALL)
-    }
-
-    /// Whether this mode shards every layer across all spanned GPUs (as
-    /// opposed to `Layer`'s whole-layer pipeline). Drives the packer's
-    /// balanced-distribution path.
-    pub fn is_sharded(self) -> bool {
-        matches!(self, SplitMode::Row | SplitMode::Tensor)
-    }
-}
+pub use ananke_config::placement::SplitMode;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::validate::{test_fixtures::parse_and_merge, validate};
 
-    #[test]
-    fn split_mode_vocab_is_single_sourced_and_complete() {
-        for &(variant, flag) in SplitMode::VARIANTS {
-            assert_eq!(variant.as_flag(), flag);
-            assert_eq!(SplitMode::from_flag(flag), Some(variant));
-        }
-        // Completeness: the exhaustive match makes a newly added variant a
-        // compile error until it is handled, and the assert then requires it
-        // to be registered in VARIANTS (so `as_flag` never hits its expect).
-        for variant in [SplitMode::Layer, SplitMode::Row, SplitMode::Tensor] {
-            match variant {
-                SplitMode::Layer | SplitMode::Row | SplitMode::Tensor => {}
-            }
-            assert!(
-                SplitMode::VARIANTS.iter().any(|&(v, _)| v == variant),
-                "{variant:?} missing from SplitMode::VARIANTS"
-            );
-        }
-        assert_eq!(SplitMode::from_flag("bogus"), None);
-        // Errors and docs draw from the same vocabulary.
-        assert_eq!(
-            SplitMode::valid_values(),
-            flags::quoted_list(flags::split_mode::ALL)
-        );
-    }
     #[test]
     fn parses_tensor_split_mode() {
         let cfg = parse_and_merge(

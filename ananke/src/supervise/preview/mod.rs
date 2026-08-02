@@ -22,12 +22,16 @@ use crate::{
         AllocationTable,
         placement::{self, CommandArgs, PackError},
     },
-    config::{AllocationMode, DeviceSlot, PlacementPolicy, ServiceConfig, Template},
+    config::{
+        AllocationMode, DeviceSlot, PlacementPolicy, ServiceConfig, Template,
+        service_inputs::placement_inputs,
+    },
     devices::{Allocation, DeviceId, DeviceSnapshot},
-    estimator::{self, EstimatorError, EstimatorInputs},
+    estimator::{self, EstimatorError},
     supervise::spawn::{SpawnConfig, render_argv},
     system::Fs,
     templates::SubstituteError,
+    tracking::rolling::Corrections,
 };
 
 /// Why a launch-command preview could not be produced.
@@ -58,17 +62,18 @@ impl std::fmt::Display for PreviewError {
 impl std::error::Error for PreviewError {}
 
 /// Render the command line a service would launch with, given the current
-/// config, device snapshot, and pledge book. `rolling_mean` is the estimator
-/// drift correction for this service (1.0 if none) — pass it so the preview
-/// matches the placement the supervisor would actually compute.
+/// config, device snapshot, and pledge book. `corrections` are the service's
+/// learned per-pool estimator corrections ([`Corrections::NEUTRAL`] if none) —
+/// pass them so the preview matches the placement the supervisor would
+/// actually compute.
 pub fn preview_command(
     svc: &ServiceConfig,
     snapshot: &DeviceSnapshot,
     table: &AllocationTable,
     fs: &dyn Fs,
-    rolling_mean: f64,
+    corrections: Corrections,
 ) -> Result<SpawnConfig, PreviewError> {
-    let (alloc, cmd_args) = plan(svc, snapshot, table, fs, rolling_mean)?;
+    let (alloc, cmd_args) = plan(svc, snapshot, table, fs, corrections)?;
     render_argv(svc, &alloc, cmd_args.as_ref()).map_err(PreviewError::Render)
 }
 
@@ -81,7 +86,7 @@ fn plan(
     snapshot: &DeviceSnapshot,
     table: &AllocationTable,
     fs: &dyn Fs,
-    rolling_mean: f64,
+    corrections: Corrections,
 ) -> Result<(Allocation, Option<CommandArgs>), PreviewError> {
     if matches!(svc.template(), Template::Command) {
         let map = plan_command_map(svc, snapshot, table)?;
@@ -90,12 +95,20 @@ fn plan(
     if !svc.placement_override.is_empty() {
         return Ok((Allocation::from_override(&svc.placement_override), None));
     }
-    let inputs = EstimatorInputs::from_service(svc).ok_or(PreviewError::NoModelPath)?;
-    let (_summary, mut est) =
+    let inputs = crate::config::service_inputs::estimator_inputs(svc)
+        .map(|i| i.with_visible_devices(snapshot.gpus.len() as u32))
+        .ok_or(PreviewError::NoModelPath)?;
+    let (_summary, est) =
         estimator::estimate_with_summary(fs, &inputs).map_err(PreviewError::Estimator)?;
-    est.weights_bytes = (est.weights_bytes as f64 * rolling_mean) as u64;
-    let packed =
-        placement::pack_optimistic(&est, svc, snapshot, table).map_err(PreviewError::Pack)?;
+    let packed = placement::pack_corrected(
+        &est,
+        &placement_inputs(svc),
+        snapshot,
+        table,
+        corrections,
+        true,
+    )
+    .map_err(PreviewError::Pack)?;
     Ok((packed.allocation, Some(packed.args)))
 }
 
@@ -119,20 +132,31 @@ fn plan_command_map(
         return Ok(map);
     }
     if !svc.placement_override.is_empty() {
-        placement::check_command_placement_override(svc, snapshot, table, true)
+        placement::check_command_placement_override(&placement_inputs(svc), snapshot, table, true)
             .map_err(PreviewError::Pack)?;
         return Ok(svc.placement_override.clone());
     }
     let slot = if matches!(svc.placement_policy, PlacementPolicy::CpuOnly) {
         DeviceSlot::Cpu
     } else {
-        match placement::pick_command_gpu(svc, snapshot, table, min_mb, prefer_mb, true) {
+        match placement::pick_command_gpu(
+            &placement_inputs(svc),
+            snapshot,
+            table,
+            min_mb,
+            prefer_mb,
+            true,
+        ) {
             Some(id) => DeviceSlot::Gpu(id),
             None if snapshot.gpus.is_empty() => DeviceSlot::Cpu,
             None => {
                 return Err(PreviewError::Pack(PackError::WeightsDoNotFit {
                     shortfalls: placement::command_gpu_shortfalls(
-                        svc, snapshot, table, min_mb, true,
+                        &placement_inputs(svc),
+                        snapshot,
+                        table,
+                        min_mb,
+                        true,
                     ),
                 }));
             }
