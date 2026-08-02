@@ -975,8 +975,8 @@ export interface components {
      *     rotation, RAG indexers) filter the model list by purpose without
      *     parsing `metadata.*` strings.
      *
-     *     Defaults to `Chat` so existing configs and JSON payloads stay
-     *     byte-identical — the field is elided from the wire when it's `Chat`.
+     *     Defaults to `Chat`, and the field is elided from the wire when it is,
+     *     so a chat service carries no `modality` key in its config or payloads.
      * @enum {string}
      */
     Modality: "chat" | "embedding";
@@ -1065,8 +1065,8 @@ export interface components {
       /**
        * @description What kind of OpenAI endpoint this model serves. Non-standard
        *     OpenAI field, elided when [`Modality::Chat`] (the default), so
-       *     strict OpenAI clients see exactly what they saw before this
-       *     field landed; embedding clients can filter on it.
+       *     strict OpenAI clients never see it; embedding clients can filter
+       *     on it.
        */
       modality?: components["schemas"]["Modality"];
       /** @description Always `"model"`. */
@@ -1099,7 +1099,7 @@ export interface components {
        * Format: float
        * @description Static reservation in GiB. Lands on whichever device the service is
        *     placed on — host RAM for a cpu-only command service, VRAM otherwise.
-       *     The `vram_gb` alias keeps pre-rename clients working.
+       *     `vram_gb` is accepted as an alias for clients that spell it that way.
        */
       reserve_gb?: number | null;
     };
@@ -1404,9 +1404,9 @@ export interface components {
     ServiceSummary: {
       /**
        * @description Passthrough entries from `[[service]] metadata.*`. Empty when
-       *     none were set; the field is elided from JSON when the map is
-       *     empty so existing consumers see no change unless a service opts
-       *     in to metadata.
+       *     none are set, and the field is elided from JSON when the map is
+       *     empty, so the key appears only for a service that opts in to
+       *     metadata.
        */
       ananke_metadata?: Record<string, never>;
       /** @description Placeholder for elastic-borrower tracking (future work). */
@@ -1467,8 +1467,8 @@ export interface components {
       lifecycle: string;
       /**
        * @description What kind of OpenAI endpoint the service serves. Elided from
-       *     JSON when [`Modality::Chat`] (the default) so existing chat
-       *     services emit unchanged wire bytes; embedding services explicitly
+       *     JSON when [`Modality::Chat`] (the default), so a chat service's
+       *     row carries no `modality` key; embedding services explicitly
        *     declare `modality = "embedding"` in their `[[service]]` block.
        */
       modality?: components["schemas"]["Modality"];
