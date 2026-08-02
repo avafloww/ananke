@@ -11,13 +11,13 @@ use std::{
 };
 
 use ananke_calibrate::{
-    derive::units::MIB,
     record::{Record, read_ndjson},
     validate::{
         Comparison, ConfigurationKey, NEUTRAL, configuration_key, estimator_inputs,
         placement_inputs, skip_reason, snapshot,
     },
 };
+use ananke_config::units::MIB;
 use ananke_fs::LocalFs;
 use ananke_placement::{devices::DeviceId, pack_demand};
 

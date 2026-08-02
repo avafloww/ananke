@@ -11,7 +11,10 @@
 //! production Qwen3.6-27B cell the two differ by 472 MiB, which is the
 //! difference between +1.1% and −0.1%.
 
-use ananke_config::placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode};
+use ananke_config::{
+    placement::{OffloadMode, PlacementInputs, PlacementPolicy, SplitMode},
+    units::MIB,
+};
 use ananke_estimate::{EstimatorInputs, Fork, Speculation};
 use ananke_measure::record::Status;
 use ananke_placement::{
@@ -19,10 +22,7 @@ use ananke_placement::{
     devices::{DeviceSnapshot, GpuSnapshot},
 };
 
-use crate::{
-    derive::units::MIB,
-    record::{FlashAttn, KvType, Record, Runtime},
-};
+use crate::record::{FlashAttn, KvType, Record, Runtime};
 
 /// Host memory the packer is told it has. The campaign machine has 256 GiB and
 /// nothing here depends on the exact figure — it only has to be large enough not

@@ -14,10 +14,11 @@ use std::{
 use ananke_calibrate::{
     derive::{
         Table, arena, baseline, dataset, emit, graph, keys::VariantKey, mtp, pinned, recurrent,
-        shape::query_head_count, tuning::Tuning, units::MIB_F64, vram,
+        shape::query_head_count, tuning::Tuning, vram,
     },
     record::Record,
 };
+use ananke_config::units::MIB_F64;
 use ananke_estimate::host_buffer::pad_to_kv_cache;
 use ananke_tuning_schema::{Document, RateTable, RateTableName};
 

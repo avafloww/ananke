@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use ananke_config::placement::SplitMode;
+use ananke_config::{placement::SplitMode, units::MIB_F64};
 
 use crate::{
     derive::{
@@ -21,7 +21,6 @@ use crate::{
         shape::CHECKPOINT_MIN_STEP,
         stats::{consensus, consensus_default, median, round_half_even},
         tuning::Tuning,
-        units::MIB_F64,
     },
     record::Record,
 };

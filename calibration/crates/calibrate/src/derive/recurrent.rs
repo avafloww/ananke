@@ -2,13 +2,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ananke_config::units::MIB_F64;
 use ananke_gguf::keys::suffix;
 
 use crate::{
     derive::{
         Scalar,
         error::{DeriveError, Result},
-        units::MIB_F64,
     },
     record::{Parsed, Record, RsPool},
 };

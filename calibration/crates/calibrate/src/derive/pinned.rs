@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use ananke_config::placement::SplitMode;
+use ananke_config::{placement::SplitMode, units::MIB_F64};
 use ananke_dataset::{FlashAttn, KvType};
 
 use crate::{
@@ -15,7 +15,6 @@ use crate::{
         keys::{ArchKey, VariantKey},
         stats::{consensus, consensus_default, median, round_half_even},
         tuning::Tuning,
-        units::MIB_F64,
     },
     record::Record,
 };

@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ananke_config::placement::SplitMode;
+use ananke_config::{placement::SplitMode, units::MIB_F64};
 
 use crate::{
     derive::{
@@ -14,7 +14,6 @@ use crate::{
         keys::{ArchCardsKey, ArchKey},
         stats::{consensus_default, median, round_half_even, round_tenths_half_even},
         tuning::Tuning,
-        units::MIB_F64,
     },
     record::Record,
 };

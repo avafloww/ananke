@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use ananke_config::placement::SplitMode;
+use ananke_config::{placement::SplitMode, units::MIB_F64};
 use ananke_estimate::host_buffer::{pad_to_kv_cache, swa_mask_copies};
 
 use crate::{
@@ -16,7 +16,6 @@ use crate::{
         error::{DeriveError, Result},
         keys::{ArchKey, VariantKey},
         tuning::Tuning,
-        units::MIB_F64,
     },
     record::Record,
 };

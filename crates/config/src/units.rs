@@ -10,6 +10,8 @@ pub const GIB: u64 = 1024 * MIB;
 
 /// [`MIB`], for the fractional arithmetic reports and tolerances do.
 pub const MIB_F64: f64 = MIB as f64;
+/// [`GIB`], for the fractional arithmetic reports do.
+pub const GIB_F64: f64 = GIB as f64;
 /// [`MIB`], for the signed arithmetic a correction that can go either way does.
 pub const MIB_I64: i64 = MIB as i64;
 

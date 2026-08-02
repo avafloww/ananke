@@ -6,13 +6,14 @@
 
 use std::collections::BTreeMap;
 
+use ananke_config::units::MIB_I64;
+
 use crate::{
     derive::{
         Scalar,
         error::{DeriveError, Result},
         mtp::pairs::{MtpShape, mtp_pairs},
         ordered::OrderedMap,
-        units::MIB_I64,
     },
     record::Record,
 };

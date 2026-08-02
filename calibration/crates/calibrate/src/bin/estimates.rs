@@ -20,17 +20,16 @@
 use std::process::ExitCode;
 
 use ananke_calibrate::{
-    derive::units::MIB,
     models::{self, ModelConfig},
     validate::{NEUTRAL, snapshot_for},
 };
+use ananke_config::units::{GIB_F64, MIB};
 use ananke_estimate::Estimate;
 use ananke_fs::LocalFs;
 use ananke_placement::{Packed, devices::DeviceId, pack_demand};
 use serde::Serialize;
 
 const MODELS_TOML: &str = "calibration/models.toml";
-const GIB_F64: f64 = ananke_config::units::GIB as f64;
 
 /// One model's estimate, or why it has none.
 ///

@@ -9,7 +9,10 @@
 
 use std::collections::BTreeMap;
 
-use ananke_config::placement::SplitMode;
+use ananke_config::{
+    placement::SplitMode,
+    units::{MIB_F64, MIB_I64},
+};
 use ananke_dataset::{FlashAttn, KvType};
 use ananke_measure::record::Status;
 
@@ -21,7 +24,6 @@ use crate::{
         pair::Pair,
         shape::CHECKPOINT_MIN_STEP,
         stats::{OUTLIER_TOLERANCE, check_no_outlier_dominates, round_half_even},
-        units::{MIB_F64, MIB_I64},
     },
     record::Record,
 };
