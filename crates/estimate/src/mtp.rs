@@ -18,6 +18,13 @@
 //! no context-scaling KV. The whole cost is its GPU-resident weights,
 //! everything but the CPU-side token embeddings, plus a small and roughly
 //! constant draft compute buffer.
+//!
+//! Both shapes are mainline's, and both constants were fitted against
+//! mainline's logs. Nothing here runs for an ik_llama service: [`Speculation`]
+//! is set only from `spec_type = "draft-mtp"`, which ik does not accept, so an
+//! ik draft context costs nothing in the estimate.
+//!
+//! [`Speculation`]: crate::Speculation
 
 use ananke_gguf::{Architecture, GgufSummary, keys};
 

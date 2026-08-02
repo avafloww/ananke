@@ -45,6 +45,9 @@ pub fn estimator_inputs(svc: &ServiceConfig) -> Option<EstimatorInputs<'_>> {
         cache_type_v: lc.cache_type_v.as_deref(),
         override_tensor: &lc.override_tensor,
         compute_buffer_mb: lc.estimation.compute_buffer_mb,
+        // Mainline's spelling only. ik's `mtp:n_max=…` reads as no speculation,
+        // so an ik draft context costs nothing in the estimate. See
+        // `ananke_estimate::mtp`.
         speculation: match (
             lc.spec_type.as_deref() == Some("draft-mtp"),
             lc.draft_model.as_deref(),
