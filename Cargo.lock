@@ -184,6 +184,8 @@ dependencies = [
  "ananke-estimate",
  "ananke-fs",
  "ananke-gguf",
+ "clap",
+ "serde",
  "serde_json",
  "smol_str",
  "tracing",
