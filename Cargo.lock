@@ -4000,6 +4000,7 @@ dependencies = [
  "cargo_metadata",
  "clap",
  "insta",
+ "serde",
  "serde_json",
  "toml_edit",
 ]

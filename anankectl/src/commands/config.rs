@@ -3,6 +3,10 @@
 //! Reads/writes `~/.config/anankectl/config.toml` via the `crate::config`
 //! module. Daemon-side configuration lives under `anankectl server-config`.
 
+use std::path::Path;
+
+use serde::Serialize;
+
 use crate::{
     client::ApiClientError,
     config::{KNOWN_KEYS, config_path, ensure_known_key, load, load_doc, save_doc, validate_value},
@@ -17,7 +21,7 @@ pub async fn get(json: bool, key: &str) -> Result<(), ApiClientError> {
         _ => unreachable!("ensure_known_key gates this match"),
     };
     if json {
-        output::print_json(&serde_json::json!({ "key": key, "value": value }));
+        output::print_json(&KeyValue { key, value });
     } else if let Some(v) = value {
         println!("{v}");
     }
@@ -31,7 +35,11 @@ pub async fn set(json: bool, key: &str, value: &str) -> Result<(), ApiClientErro
     doc[key] = toml_edit::value(value);
     save_doc(&path, &doc)?;
     if json {
-        output::print_json(&serde_json::json!({ "key": key, "value": value, "path": path }));
+        output::print_json(&KeyValueWritten {
+            key,
+            value,
+            path: &path,
+        });
     } else {
         println!("ok: set {key} = {value}");
     }
@@ -44,7 +52,7 @@ pub async fn unset(json: bool, key: &str) -> Result<(), ApiClientError> {
     let removed = doc.remove(key).is_some();
     save_doc(&path, &doc)?;
     if json {
-        output::print_json(&serde_json::json!({ "key": key, "removed": removed }));
+        output::print_json(&KeyRemoved { key, removed });
     } else if removed {
         println!("ok: unset {key}");
     } else {
@@ -56,9 +64,9 @@ pub async fn unset(json: bool, key: &str) -> Result<(), ApiClientError> {
 pub async fn list(json: bool) -> Result<(), ApiClientError> {
     let cfg = load()?;
     if json {
-        output::print_json(&serde_json::json!({
-            "endpoint": cfg.endpoint,
-        }));
+        output::print_json(&ConfigList {
+            endpoint: cfg.endpoint,
+        });
         return Ok(());
     }
     for key in KNOWN_KEYS {
@@ -77,7 +85,7 @@ pub async fn list(json: bool) -> Result<(), ApiClientError> {
 pub async fn path(json: bool) -> Result<(), ApiClientError> {
     let p = config_path()?;
     if json {
-        output::print_json(&serde_json::json!({ "path": p }));
+        output::print_json(&ConfigPath { path: &p });
     } else {
         println!("{}", p.display());
     }
@@ -103,4 +111,39 @@ pub async fn edit() -> Result<(), ApiClientError> {
         )));
     }
     Ok(())
+}
+
+/// `config get --json`.
+#[derive(Serialize)]
+struct KeyValue<'a> {
+    key: &'a str,
+    value: Option<String>,
+}
+
+/// `config set --json`. Reports the file written as well as the pair, so
+/// a caller scripting a change knows which config it landed in.
+#[derive(Serialize)]
+struct KeyValueWritten<'a> {
+    key: &'a str,
+    value: &'a str,
+    path: &'a Path,
+}
+
+/// `config unset --json`. `removed` is false when the key was already absent.
+#[derive(Serialize)]
+struct KeyRemoved<'a> {
+    key: &'a str,
+    removed: bool,
+}
+
+/// `config list --json`. One field per entry in `KNOWN_KEYS`.
+#[derive(Serialize)]
+struct ConfigList {
+    endpoint: Option<String>,
+}
+
+/// `config path --json`.
+#[derive(Serialize)]
+struct ConfigPath<'a> {
+    path: &'a Path,
 }

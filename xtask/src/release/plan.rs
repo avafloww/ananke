@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde::Deserialize;
 use toml_edit::{DocumentMut, value};
 
 use crate::release::Error;
@@ -191,17 +192,21 @@ fn rewrite_cargo_lock(
     Ok(doc.to_string())
 }
 
+/// The one field the bump reads. npm owns the rest of the schema, so
+/// everything else is ignored rather than modelled.
+#[derive(Deserialize)]
+struct PackageJson {
+    version: Option<String>,
+}
+
 fn rewrite_package_json(path: &Path, old: &str, new_version: &str) -> Result<String, Error> {
     let content = read(path)?;
-    let parsed: serde_json::Value =
+    let parsed: PackageJson =
         serde_json::from_str(&content).map_err(|source| Error::JsonParse {
             path: path.to_path_buf(),
             source,
         })?;
-    let current = parsed
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
+    let current = parsed.version.as_deref().unwrap_or_default();
     if current != old {
         return Err(Error::VersionMismatch {
             path: path.to_path_buf(),

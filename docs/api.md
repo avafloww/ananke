@@ -296,6 +296,7 @@ Get device memory samples
 | Status | Description | Body |
 | --- | --- | --- |
 | 200 |  | `DeviceSamplesResponse` |
+| 500 | query_failed | `ApiError` |
 
 **Response (200)**:
 
@@ -347,6 +348,7 @@ Get request metrics (time-bucketed)
 | --- | --- | --- |
 | 200 |  | `MetricsResponse` |
 | 400 | invalid_request_error | `ApiError` |
+| 500 | query_failed | `ApiError` |
 
 **Response (200)**:
 
@@ -501,6 +503,7 @@ Get auto-restart firings
 | Status | Description | Body |
 | --- | --- | --- |
 | 200 |  | `RestartsResponse` |
+| 500 | query_failed | `ApiError` |
 
 **Response (200)**:
 
@@ -714,7 +717,7 @@ Get launch command preview
 | --- | --- | --- |
 | 200 |  | `LaunchCommandResponse` |
 | 404 | service_not_found | `ApiError` |
-| 422 | insufficient_capacity | `ApiError` |
+| 422 | preview_failed | `ApiError` |
 
 **Response (200)**:
 
@@ -865,7 +868,7 @@ Restart a service
   // unavailable
   | {
     error: {
-      code: "model_not_found" | "service_not_found" | "service_disabled" | "start_queue_full" | "start_failed" | "insufficient_capacity" | "service_blocked" | "upstream_unavailable" | "proxy_internal" | "not_implemented" | "invalid_request_error" | "invalid_cursor" | "if_match_required" | "hash_mismatch" | "persist_failed" | "other"
+      code: "model_not_found" | "service_not_found" | "service_disabled" | "start_queue_full" | "start_failed" | "insufficient_capacity" | "service_blocked" | "upstream_unavailable" | "proxy_internal" | "not_implemented" | "invalid_request_error" | "invalid_cursor" | "if_match_required" | "hash_mismatch" | "persist_failed" | "query_failed" | "preview_failed" | "other"
       message: string
       type: "invalid_request_error" | "server_error" | "other"
     }
@@ -906,7 +909,7 @@ Start a service
   // unavailable
   | {
     error: {
-      code: "model_not_found" | "service_not_found" | "service_disabled" | "start_queue_full" | "start_failed" | "insufficient_capacity" | "service_blocked" | "upstream_unavailable" | "proxy_internal" | "not_implemented" | "invalid_request_error" | "invalid_cursor" | "if_match_required" | "hash_mismatch" | "persist_failed" | "other"
+      code: "model_not_found" | "service_not_found" | "service_disabled" | "start_queue_full" | "start_failed" | "insufficient_capacity" | "service_blocked" | "upstream_unavailable" | "proxy_internal" | "not_implemented" | "invalid_request_error" | "invalid_cursor" | "if_match_required" | "hash_mismatch" | "persist_failed" | "query_failed" | "preview_failed" | "other"
       message: string
       type: "invalid_request_error" | "server_error" | "other"
     }
@@ -1215,6 +1218,8 @@ The `POST /api/services/{name}/start` endpoint returns `202 Accepted` even when 
 | `if_match_required` | Config PUT arrived without an If-Match header. |
 | `hash_mismatch` | Config PUT's If-Match didn't match the current hash. |
 | `persist_failed` | Config write failed at the IO layer. |
+| `query_failed` | The daemon could not read the metrics, restart, or device history you asked for. |
+| `preview_failed` | The launch command for this service could not be built. |
 | `other` | Forward-compatibility fallback for unknown codes. |
 
 ## Prometheus metrics

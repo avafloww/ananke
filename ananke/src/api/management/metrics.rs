@@ -17,7 +17,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{daemon::app_state::AppState, db::MetricBucket};
+use crate::{api::errors::ApiErrorCode, daemon::app_state::AppState, db::MetricBucket};
 
 #[derive(Debug, Deserialize)]
 pub struct MetricsQuery {
@@ -37,7 +37,7 @@ pub struct MetricsQuery {
         ("until" = Option<i64>, Query, description = "Latest timestamp_ms, inclusive (default: now)"),
         ("bucket" = Option<String>, Query, description = "Bucket size: \"1m\", \"5m\", \"1h\" (default: \"5m\")"),
     ),
-    responses((status = 200, body = MetricsResponse), (status = 400, body = ApiError, description = "invalid_request_error"))
+    responses((status = 200, body = MetricsResponse), (status = 400, body = ApiError, description = "invalid_request_error"), (status = 500, body = ApiError, description = "query_failed"))
 )]
 pub async fn get_metrics(State(state): State<AppState>, Query(q): Query<MetricsQuery>) -> Response {
     let now = crate::tracking::now_unix_ms();
@@ -49,11 +49,10 @@ pub async fn get_metrics(State(state): State<AppState>, Query(q): Query<MetricsQ
     let bucket_ms = match crate::config::validate::parse_duration_ms(bucket_str) {
         Ok(ms) => ms.max(1000) as i64, // minimum 1s bucket
         Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("invalid bucket: {bucket_str}")})),
-            )
-                .into_response();
+            return ApiErrorCode::InvalidRequest {
+                reason: format!("invalid bucket: {bucket_str}"),
+            }
+            .into_response();
         }
     };
 
@@ -89,11 +88,10 @@ pub async fn get_metrics(State(state): State<AppState>, Query(q): Query<MetricsQ
             };
             (StatusCode::OK, Json(resp)).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => ApiErrorCode::QueryFailed {
+            reason: e.to_string(),
+        }
+        .into_response(),
     }
 }
 
@@ -113,7 +111,7 @@ pub struct RestartsQuery {
         ("since" = Option<i64>, Query, description = "Earliest at_ms, inclusive (default: 1h ago)"),
         ("until" = Option<i64>, Query, description = "Latest at_ms, inclusive (default: now)"),
     ),
-    responses((status = 200, body = RestartsResponse))
+    responses((status = 200, body = RestartsResponse), (status = 500, body = ApiError, description = "query_failed"))
 )]
 pub async fn get_restarts(
     State(state): State<AppState>,
@@ -154,11 +152,10 @@ pub async fn get_restarts(
             };
             (StatusCode::OK, Json(resp)).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => ApiErrorCode::QueryFailed {
+            reason: e.to_string(),
+        }
+        .into_response(),
     }
 }
 
@@ -178,7 +175,7 @@ pub struct DeviceSamplesQuery {
         ("since" = Option<i64>, Query, description = "Earliest timestamp_ms (default: 1h ago)"),
         ("until" = Option<i64>, Query, description = "Latest timestamp_ms (default: now)"),
     ),
-    responses((status = 200, body = DeviceSamplesResponse))
+    responses((status = 200, body = DeviceSamplesResponse), (status = 500, body = ApiError, description = "query_failed"))
 )]
 pub async fn get_device_samples(
     State(state): State<AppState>,
@@ -208,11 +205,10 @@ pub async fn get_device_samples(
             };
             (StatusCode::OK, Json(resp)).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => ApiErrorCode::QueryFailed {
+            reason: e.to_string(),
+        }
+        .into_response(),
     }
 }
 

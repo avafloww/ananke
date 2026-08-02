@@ -1,6 +1,10 @@
 //! `anankectl status`: combined daemon health, devices, and services snapshot.
 
-use ananke_api::{devices::list::DeviceSummary, services::list::ServicesResponse};
+use ananke_api::{
+    devices::list::DeviceSummary,
+    services::list::{ServiceSummary, ServicesResponse},
+};
+use serde::Serialize;
 
 use crate::{
     client::{ApiClient, ApiClientError},
@@ -14,12 +18,12 @@ pub async fn run(client: &ApiClient, json: bool) -> Result<(), ApiClientError> {
     )?;
 
     if json {
-        output::print_json(&serde_json::json!({
-            "endpoint": client.endpoint.as_str(),
-            "openai_api_port": services.openai_api_port,
-            "services": services.services,
-            "devices": devices,
-        }));
+        output::print_json(&StatusReport {
+            endpoint: client.endpoint.as_str(),
+            openai_api_port: services.openai_api_port,
+            services: &services.services,
+            devices: &devices,
+        });
         return Ok(());
     }
 
@@ -60,4 +64,14 @@ pub async fn run(client: &ApiClient, json: bool) -> Result<(), ApiClientError> {
     output::print_services_table(&services.services, false);
 
     Ok(())
+}
+
+/// `status --json`: the two API responses joined under the endpoint they
+/// came from. Borrows both, since it is serialised and dropped.
+#[derive(Serialize)]
+struct StatusReport<'a> {
+    endpoint: &'a str,
+    openai_api_port: u16,
+    services: &'a [ServiceSummary],
+    devices: &'a [DeviceSummary],
 }

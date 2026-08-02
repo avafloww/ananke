@@ -104,6 +104,8 @@ impl Lifecycle {
 #[derive(Debug, Clone, Default)]
 pub struct Filters {
     pub strip_params: Vec<String>,
+    /// Operator-supplied values injected into the request body. Opaque
+    /// to ananke — the shape is whatever the upstream engine accepts.
     pub set_params: BTreeMap<String, serde_json::Value>,
 }
 

@@ -8,6 +8,10 @@
 //! Each endpoint shows a **TypeScript type** for its request body and
 //! success response. All schemas are expanded inline at their point of
 //! use — there is no separate schema reference section.
+//!
+//! The spec stays a `serde_json::Value` throughout: the generator walks
+//! whatever shape utoipa emitted, and a partial model of OpenAPI would
+//! silently drop the parts it didn't anticipate.
 
 mod render;
 mod ts;

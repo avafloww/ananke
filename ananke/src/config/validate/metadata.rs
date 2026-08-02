@@ -20,6 +20,8 @@ pub(crate) fn build_ananke_metadata(
         .collect()
 }
 
+/// Coerce one TOML value to its JSON counterpart. Untyped on both
+/// sides: the operator writes these, and ananke never interprets them.
 pub(crate) fn toml_value_to_json(v: toml::Value) -> Result<serde_json::Value, String> {
     Ok(match v {
         toml::Value::String(s) => serde_json::Value::String(s),

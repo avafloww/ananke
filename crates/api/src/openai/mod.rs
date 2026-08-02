@@ -8,6 +8,7 @@ pub mod chat;
 pub mod completions;
 pub mod embeddings;
 pub mod models;
+pub mod response;
 pub mod unimplemented;
 
 pub use chat::ChatCompletionEnvelope;

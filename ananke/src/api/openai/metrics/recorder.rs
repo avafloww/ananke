@@ -3,8 +3,8 @@
 
 use std::time::Instant;
 
+use ananke_api::openai::response::{ChatCompletionChunk, Timings};
 use bytes::Bytes;
-use serde_json::Value;
 use tracing::warn;
 
 use crate::db::{Database, models::RequestMetric};
@@ -113,29 +113,21 @@ impl MetricsRecorder {
         if data == "[DONE]" {
             return;
         }
-        let Ok(v) = serde_json::from_str::<Value>(data) else {
+        let Ok(chunk) = serde_json::from_str::<ChatCompletionChunk>(data) else {
             return;
         };
         // Extract usage (usually in the final chunk).
-        if let Some(usage) = v.get("usage") {
-            self.prompt_tokens = usage.get("prompt_tokens").and_then(|t| t.as_i64());
-            self.completion_tokens = usage.get("completion_tokens").and_then(|t| t.as_i64());
+        if let Some(usage) = &chunk.usage {
+            self.prompt_tokens = usage.prompt_tokens;
+            self.completion_tokens = usage.completion_tokens;
         }
-        self.extract_timings(&v);
+        self.extract_timings(chunk.timings.as_ref());
         // Record TTFT on the first content or reasoning chunk.
         if self.first_token_at.is_none() {
-            let has_content = v
-                .get("choices")
-                .and_then(|c| c.get(0))
-                .and_then(|c| c.get("delta"))
-                .and_then(|d| {
-                    d.get("content")
-                        .or(d.get("reasoning_content"))
-                        .or(d.get("reasoning"))
-                })
-                .and_then(|c| c.as_str())
-                .map(|s| !s.is_empty())
-                .unwrap_or(false);
+            let has_content = chunk
+                .delta()
+                .and_then(|d| d.any_text())
+                .is_some_and(|s| !s.is_empty());
             if has_content {
                 self.first_token_at = Some(Instant::now());
             }
@@ -150,23 +142,23 @@ impl MetricsRecorder {
     /// (cache misses) — the correct prefill-throughput numerator, since
     /// `usage.prompt_tokens` counts the cached prefix too. Absent for engines
     /// that do not emit it, in which case the fields stay null.
-    fn extract_timings(&mut self, v: &Value) {
-        let Some(timings) = v.get("timings") else {
+    fn extract_timings(&mut self, timings: Option<&Timings>) {
+        let Some(timings) = timings else {
             return;
         };
-        if let Some(ms) = timings.get("prompt_ms").and_then(|t| t.as_f64()) {
+        if let Some(ms) = timings.prompt_ms {
             self.prompt_ms = Some(ms.round() as i64);
         }
-        if let Some(ms) = timings.get("predicted_ms").and_then(|t| t.as_f64()) {
+        if let Some(ms) = timings.predicted_ms {
             self.predicted_ms = Some(ms.round() as i64);
         }
-        if let Some(n) = timings.get("prompt_n").and_then(|t| t.as_i64()) {
+        if let Some(n) = timings.prompt_n {
             self.prompt_eval_tokens = Some(n);
         }
-        if let Some(n) = timings.get("draft_n").and_then(|t| t.as_i64()) {
+        if let Some(n) = timings.draft_n {
             self.draft_tokens = Some(n);
         }
-        if let Some(n) = timings.get("draft_n_accepted").and_then(|t| t.as_i64()) {
+        if let Some(n) = timings.draft_n_accepted {
             self.draft_tokens_accepted = Some(n);
         }
     }
@@ -179,13 +171,13 @@ impl MetricsRecorder {
         // For non-streaming, parse the accumulated body as JSON.
         if !rec.is_streaming
             && !rec.buf.is_empty()
-            && let Ok(v) = serde_json::from_str::<Value>(&rec.buf)
+            && let Ok(body) = serde_json::from_str::<ChatCompletionChunk>(&rec.buf)
         {
-            if let Some(usage) = v.get("usage") {
-                rec.prompt_tokens = usage.get("prompt_tokens").and_then(|t| t.as_i64());
-                rec.completion_tokens = usage.get("completion_tokens").and_then(|t| t.as_i64());
+            if let Some(usage) = &body.usage {
+                rec.prompt_tokens = usage.prompt_tokens;
+                rec.completion_tokens = usage.completion_tokens;
             }
-            rec.extract_timings(&v);
+            rec.extract_timings(body.timings.as_ref());
         }
 
         let duration_ms = rec.start.elapsed().as_millis() as i64;
@@ -311,16 +303,10 @@ mod tests {
         // non-streaming parse path directly. We can't call finish()
         // because it spawns a tokio task, so we replicate the check.
         assert!(!rec.buf.is_empty());
-        let v: Value = serde_json::from_str(&rec.buf).unwrap();
-        let usage = v.get("usage").unwrap();
-        assert_eq!(
-            usage.get("prompt_tokens").and_then(|t| t.as_i64()),
-            Some(10)
-        );
-        assert_eq!(
-            usage.get("completion_tokens").and_then(|t| t.as_i64()),
-            Some(3)
-        );
+        let body: ChatCompletionChunk = serde_json::from_str(&rec.buf).unwrap();
+        let usage = body.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, Some(10));
+        assert_eq!(usage.completion_tokens, Some(3));
     }
 
     /// Streaming: llama.cpp's `timings` object in the final chunk yields
@@ -353,8 +339,8 @@ mod tests {
         rec.ingest(&Bytes::from(body));
 
         // Replicate finish()'s non-streaming parse path (finish spawns a task).
-        let v: Value = serde_json::from_str(&rec.buf).unwrap();
-        rec.extract_timings(&v);
+        let body: ChatCompletionChunk = serde_json::from_str(&rec.buf).unwrap();
+        rec.extract_timings(body.timings.as_ref());
         assert_eq!(rec.prompt_ms, Some(50));
         assert_eq!(rec.predicted_ms, Some(200));
         assert_eq!(rec.prompt_eval_tokens, Some(10));

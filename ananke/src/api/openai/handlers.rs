@@ -116,22 +116,16 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
         }
         match handle.peek_state() {
             ServiceState::Idle | ServiceState::Starting | ServiceState::Running => {
-                data.push(ModelListing {
-                    id: name.to_string(),
-                    object: "model",
-                    created: 0,
-                    owned_by: "ananke",
-                    modality: svc.modality,
-                    ananke_metadata: svc.metadata.clone(),
-                });
+                data.push(ModelListing::new(
+                    name.to_string(),
+                    svc.modality,
+                    svc.metadata.clone(),
+                ));
             }
             _ => {}
         }
     }
-    let body = ModelsResponse {
-        object: "list",
-        data,
-    };
+    let body = ModelsResponse::new(data);
     (StatusCode::OK, Json(body)).into_response()
 }
 
@@ -205,6 +199,10 @@ async fn forward_json_post(
     body_bytes: Bytes,
 ) -> Response {
     let request_start = Instant::now();
+    // Untyped on purpose: the body belongs to the client and is forwarded
+    // verbatim. The daemon reads `model` and `stream` and writes back at
+    // most `model` and `timings_per_token`; every other key has to survive
+    // the round trip unexamined, which a struct would not let it do.
     let mut parsed: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {

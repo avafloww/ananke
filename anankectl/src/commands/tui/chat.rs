@@ -1,6 +1,7 @@
 //! Wire-format types and the background dispatcher that streams chat
 //! completions from the daemon's OpenAI-compatible endpoint over SSE.
 
+use ananke_api::openai::response::ChatCompletionChunk;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
@@ -163,32 +164,19 @@ struct DeltaParts {
 /// Reasoning may arrive under `reasoning_content` (DeepSeek style) or
 /// plain `reasoning`; we accept either.
 fn extract_delta(data: &str) -> DeltaParts {
-    let Ok(val) = serde_json::from_str::<serde_json::Value>(data) else {
+    let delta = serde_json::from_str::<ChatCompletionChunk>(data)
+        .ok()
+        .and_then(|chunk| chunk.delta().cloned());
+    let Some(delta) = delta else {
         return DeltaParts {
             content: None,
             reasoning: None,
         };
     };
-    let Some(delta) = val
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("delta"))
-    else {
-        return DeltaParts {
-            content: None,
-            reasoning: None,
-        };
-    };
-    let content = delta
-        .get("content")
-        .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let reasoning = delta
-        .get("reasoning_content")
-        .and_then(|v| v.as_str())
-        .or_else(|| delta.get("reasoning").and_then(|v| v.as_str()))
-        .map(str::to_string);
-    DeltaParts { content, reasoning }
+    DeltaParts {
+        content: delta.content.clone(),
+        reasoning: delta.reasoning_text().map(str::to_string),
+    }
 }
 
 struct UsageInfo {
@@ -200,16 +188,11 @@ struct UsageInfo {
 /// servers emit these in a final delta when `stream_options.include_usage`
 /// is set; chunks without a `usage` object return `None`.
 fn extract_usage(data: &str) -> Option<UsageInfo> {
-    let val = serde_json::from_str::<serde_json::Value>(data).ok()?;
-    let usage = val.get("usage")?;
-    let prompt = usage
-        .get("prompt_tokens")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u32);
-    let completion = usage
-        .get("completion_tokens")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u32);
+    let usage = serde_json::from_str::<ChatCompletionChunk>(data)
+        .ok()?
+        .usage?;
+    let prompt = usage.prompt_tokens.map(|n| n as u32);
+    let completion = usage.completion_tokens.map(|n| n as u32);
     if prompt.is_none() && completion.is_none() {
         return None;
     }
