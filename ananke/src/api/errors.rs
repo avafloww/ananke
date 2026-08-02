@@ -74,6 +74,15 @@ pub enum ApiErrorCode {
     HashMismatch { server_hash: String },
     /// Config write failed at the IO layer.
     PersistFailed { reason: String },
+    /// A read against the daemon's local store failed.
+    QueryFailed { reason: String },
+    /// A launch-command preview could not be built. Distinct from
+    /// `InsufficientCapacity`: not fitting is only one of the reasons a
+    /// preview fails, and the others — no model path, an unreadable
+    /// GGUF, an unsubstitutable placeholder — are service config the
+    /// operator can correct rather than transient pressure to retry
+    /// through.
+    PreviewFailed { name: SmolStr, reason: String },
 }
 
 impl ApiErrorCode {
@@ -98,6 +107,8 @@ impl ApiErrorCode {
             Self::IfMatchRequired => ApiErrorCodeSlug::IfMatchRequired,
             Self::HashMismatch { .. } => ApiErrorCodeSlug::HashMismatch,
             Self::PersistFailed { .. } => ApiErrorCodeSlug::PersistFailed,
+            Self::QueryFailed { .. } => ApiErrorCodeSlug::QueryFailed,
+            Self::PreviewFailed { .. } => ApiErrorCodeSlug::PreviewFailed,
         }
     }
 
@@ -111,11 +122,12 @@ impl ApiErrorCode {
             | Self::InsufficientCapacity { .. }
             | Self::ServiceBlocked { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::UpstreamUnavailable { .. } => StatusCode::BAD_GATEWAY,
-            Self::ProxyInternal { .. } | Self::PersistFailed { .. } => {
+            Self::ProxyInternal { .. } | Self::PersistFailed { .. } | Self::QueryFailed { .. } => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
             Self::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
             Self::InvalidRequest { .. } | Self::InvalidCursor => StatusCode::BAD_REQUEST,
+            Self::PreviewFailed { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::IfMatchRequired => StatusCode::PRECONDITION_REQUIRED,
             Self::HashMismatch { .. } => StatusCode::PRECONDITION_FAILED,
         }
@@ -134,7 +146,8 @@ impl ApiErrorCode {
             | Self::InvalidRequest { .. }
             | Self::InvalidCursor
             | Self::IfMatchRequired
-            | Self::HashMismatch { .. } => ApiErrorKind::InvalidRequestError,
+            | Self::HashMismatch { .. }
+            | Self::PreviewFailed { .. } => ApiErrorKind::InvalidRequestError,
             Self::ServiceDisabled { .. }
             | Self::StartQueueFull { .. }
             | Self::StartFailed { .. }
@@ -142,7 +155,8 @@ impl ApiErrorCode {
             | Self::ServiceBlocked { .. }
             | Self::UpstreamUnavailable { .. }
             | Self::ProxyInternal { .. }
-            | Self::PersistFailed { .. } => ApiErrorKind::ServerError,
+            | Self::PersistFailed { .. }
+            | Self::QueryFailed { .. } => ApiErrorKind::ServerError,
         }
     }
 
@@ -188,6 +202,12 @@ impl ApiErrorCode {
                 format!("config was modified since last GET; current hash is {server_hash}")
             }
             Self::PersistFailed { reason } => format!("writing config to disk failed: {reason}"),
+            Self::QueryFailed { reason } => {
+                format!("reading from the local store failed: {reason}")
+            }
+            Self::PreviewFailed { name, reason } => {
+                format!("cannot preview the launch command for service `{name}`: {reason}")
+            }
         }
     }
 }

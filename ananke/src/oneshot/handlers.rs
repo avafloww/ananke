@@ -16,6 +16,7 @@ use smol_str::SmolStr;
 use ulid::Ulid;
 
 use crate::{
+    api::errors::ApiErrorCode,
     config::validate::parse_duration_ms,
     daemon::app_state::AppState,
     oneshot::{OneshotId, OneshotRecord},
@@ -46,21 +47,19 @@ pub async fn post_oneshot(
     let ttl_str = match &req.ttl {
         Some(s) => s.as_str(),
         None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "ttl is required"})),
-            )
-                .into_response();
+            return ApiErrorCode::InvalidRequest {
+                reason: "ttl is required".to_string(),
+            }
+            .into_response();
         }
     };
     let ttl_ms = match parse_duration_ms(ttl_str) {
         Ok(ms) => ms,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("invalid ttl: {e}")})),
-            )
-                .into_response();
+            return ApiErrorCode::InvalidRequest {
+                reason: format!("invalid ttl: {e}"),
+            }
+            .into_response();
         }
     };
 
@@ -74,11 +73,11 @@ pub async fn post_oneshot(
     let port = match state.port_pool.lock().allocate() {
         Some(p) => p,
         None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "port pool exhausted"})),
-            )
-                .into_response();
+            return ApiErrorCode::StartFailed {
+                name: id.clone(),
+                reason: "port pool exhausted".to_string(),
+            }
+            .into_response();
         }
     };
 
@@ -97,11 +96,11 @@ pub async fn post_oneshot(
         Err(e) => {
             // Release the port back to the pool on spawn failure.
             state.port_pool.lock().release(port);
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": e})),
-            )
-                .into_response()
+            ApiErrorCode::StartFailed {
+                name: id.clone(),
+                reason: e,
+            }
+            .into_response()
         }
     }
 }
@@ -127,11 +126,10 @@ pub async fn list_oneshots(State(state): State<AppState>) -> Response {
 pub async fn get_oneshot(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     match state.oneshots.get(&id) {
         Some(r) => (StatusCode::OK, Json(record_to_status(&r))).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found"})),
-        )
-            .into_response(),
+        None => ApiErrorCode::ServiceNotFound {
+            name: id.as_str().into(),
+        }
+        .into_response(),
     }
 }
 
@@ -143,11 +141,10 @@ pub async fn get_oneshot(State(state): State<AppState>, Path(id): Path<String>) 
 )]
 pub async fn delete_oneshot(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let Some(record) = state.oneshots.remove(&id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found"})),
-        )
-            .into_response();
+        return ApiErrorCode::ServiceNotFound {
+            name: id.as_str().into(),
+        }
+        .into_response();
     };
 
     // If the TTL watcher has already drained and released the port, skip both

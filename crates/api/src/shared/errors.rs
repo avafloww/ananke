@@ -82,6 +82,10 @@ pub enum ApiErrorCodeSlug {
     HashMismatch,
     /// Config write failed at the IO layer.
     PersistFailed,
+    /// A read against the daemon's local store failed.
+    QueryFailed,
+    /// A launch-command preview could not be built for the service.
+    PreviewFailed,
     /// Deserialization fallback for forward compatibility.
     #[serde(other)]
     Other,

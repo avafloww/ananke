@@ -18,7 +18,10 @@ use axum::{
 
 use crate::{
     allocator::placement,
-    api::management::handlers::{model_estimate_entry, placement_preview, read_current_allocation},
+    api::{
+        errors::ApiErrorCode,
+        management::handlers::{model_estimate_entry, placement_preview, read_current_allocation},
+    },
     config::{ServiceConfig, service_inputs::placement_inputs},
     daemon::{app_state::AppState, estimate_cache::CacheEntry},
 };
@@ -110,11 +113,10 @@ pub async fn list_services(State(state): State<AppState>) -> Response {
 pub async fn service_detail(State(state): State<AppState>, Path(name): Path<String>) -> Response {
     let eff = state.config.effective();
     let Some(svc_cfg) = eff.services.iter().find(|s| s.name == name) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found"})),
-        )
-            .into_response();
+        return ApiErrorCode::ServiceNotFound {
+            name: name.as_str().into(),
+        }
+        .into_response();
     };
     let handle = state.registry.get(&svc_cfg.name);
     let snap = handle.as_ref().map(|h| h.peek());
@@ -251,17 +253,16 @@ pub async fn service_detail(State(state): State<AppState>, Path(name): Path<Stri
     responses(
         (status = 200, body = LaunchCommandResponse),
         (status = 404, body = ApiError, description = "service_not_found"),
-        (status = 422, body = ApiError, description = "insufficient_capacity")
+        (status = 422, body = ApiError, description = "preview_failed")
     )
 )]
 pub async fn service_command(State(state): State<AppState>, Path(name): Path<String>) -> Response {
     let eff = state.config.effective();
     let Some(svc_cfg) = eff.services.iter().find(|s| s.name == name) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "not found"})),
-        )
-            .into_response();
+        return ApiErrorCode::ServiceNotFound {
+            name: name.as_str().into(),
+        }
+        .into_response();
     };
 
     let running = state
@@ -293,11 +294,11 @@ pub async fn service_command(State(state): State<AppState>, Path(name): Path<Str
     ) {
         Ok(cfg) => render_launch_command(cfg, source),
         Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
+            return ApiErrorCode::PreviewFailed {
+                name: svc_cfg.name.clone(),
+                reason: e.to_string(),
+            }
+            .into_response();
         }
     };
 

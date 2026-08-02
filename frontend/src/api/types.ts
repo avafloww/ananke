@@ -441,6 +441,8 @@ export interface components {
       | "if_match_required"
       | "hash_mismatch"
       | "persist_failed"
+      | "query_failed"
+      | "preview_failed"
       | "other";
     /**
      * @description OpenAI's error-type taxonomy. `InvalidRequestError` for anything the
@@ -1773,6 +1775,15 @@ export interface operations {
           "application/json": components["schemas"]["DeviceSamplesResponse"];
         };
       };
+      /** @description query_failed */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiError"];
+        };
+      };
     };
   };
   get_info: {
@@ -1822,6 +1833,15 @@ export interface operations {
       };
       /** @description invalid_request_error */
       400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiError"];
+        };
+      };
+      /** @description query_failed */
+      500: {
         headers: {
           [name: string]: unknown;
         };
@@ -1973,6 +1993,15 @@ export interface operations {
           "application/json": components["schemas"]["RestartsResponse"];
         };
       };
+      /** @description query_failed */
+      500: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ApiError"];
+        };
+      };
     };
   };
   list_services: {
@@ -2053,7 +2082,7 @@ export interface operations {
           "application/json": components["schemas"]["ApiError"];
         };
       };
-      /** @description insufficient_capacity */
+      /** @description preview_failed */
       422: {
         headers: {
           [name: string]: unknown;

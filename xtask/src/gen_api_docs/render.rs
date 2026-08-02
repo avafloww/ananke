@@ -364,6 +364,10 @@ fn render_error_code_table(out: &mut String, spec: &Value) {
             "if_match_required" => "Config PUT arrived without an If-Match header.",
             "hash_mismatch" => "Config PUT's If-Match didn't match the current hash.",
             "persist_failed" => "Config write failed at the IO layer.",
+            "query_failed" => {
+                "The daemon could not read the metrics, restart, or device history you asked for."
+            }
+            "preview_failed" => "The launch command for this service could not be built.",
             "other" => "Forward-compatibility fallback for unknown codes.",
             _ => "",
         };
