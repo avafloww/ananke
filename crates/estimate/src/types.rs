@@ -231,71 +231,58 @@ impl<'a> Speculation<'a> {
 
 /// Base estimate for a service's VRAM footprint, pre-safety-factor and
 /// pre-rolling-correction.
+///
+/// The two headline terms sit at the top; the rest is grouped by what reads it
+/// — the layout to walk layers, the buffers to reserve per device, the host
+/// bytes to charge to the `Cpu` slot.
 #[derive(Debug, Clone)]
 pub struct Estimate {
     /// Static weight bytes (including mmproj if present).
     pub weights_bytes: u64,
     /// KV cache bytes per context token (zero for architectures without KV).
     pub kv_per_token: u64,
-    /// Compute buffer per device in MB (default 400).
-    pub compute_buffer_mb: u32,
-    /// Output logits buffer bytes — the `n_vocab × ubatch`-sized activation
-    /// llama.cpp allocates only on the device that holds the output head
-    /// (the first GPU). Every other GPU's real compute buffer is smaller by
-    /// this amount, since it never materialises logits. The packer reserves
-    /// the full [`Self::compute_buffer_mb`] on the head GPU but subtracts
-    /// this term on the secondaries, so they fill with more expert weight
-    /// instead of a phantom logits buffer. Deliberately a conservative
-    /// under-estimate of the real logits allocation (see
-    /// [`crate::compute_buffer::output_logits_bytes`]): subtracting less than
-    /// the true value keeps the secondaries safe, subtracting more would
-    /// under-reserve and OOM them.
-    pub output_buffer_bytes: u64,
-    /// Expert layers the MTP head accounted for, dropped from
-    /// [`Self::expert_layers`] because ik does not load them. Non-zero only for
-    /// an ik service on a model with an embedded head. See
-    /// `Ncmoe` for why the count
-    /// matters to `-ncmoe`.
-    pub mtp_head_expert_layers: u32,
-    /// Weights `--split-mode tensor` holds on *every* spanned card instead of
-    /// dividing: the narrow gating and shared-expert paths every shard consumes.
-    /// Zero for an architecture that ships none, which is every dense model
-    /// measured. See [`crate::replicated`].
-    pub tensor_split_replicated_bytes: u64,
-    /// Extra VRAM (bytes) for the MTP / NextN draft context when the
-    /// service runs `--spec-type draft-mtp`. Zero when MTP is off or the
-    /// model carries no MTP head. Reserved as a single lump on the
-    /// primary GPU by the packer. See [`crate::mtp`].
-    pub mtp_bytes: u64,
-    /// The share of [`Self::mtp_bytes`] that is model tensors read from a GGUF
-    /// — non-zero only for a separate draft model. See
-    /// [`crate::mtp::mtp_weight_bytes`].
-    pub mtp_weight_bytes: u64,
-    /// The vision projector's CLIP graph buffer, beyond its weights. llama.cpp
-    /// puts it on one device and says so — `[mtmd] adding N MiB to
-    /// fit_params_target for device CUDA0` — so the packer charges it to the
-    /// main GPU as runtime, not as weight: it is a device allocation and never
-    /// appears in the host RSS the rolling correction subtracts weights from.
-    /// Zero without an mmproj.
-    pub mmproj_graph_bytes: u64,
-    /// Host bytes the runtime is predicted to hold that are neither weights
-    /// nor KV: the pinned graph arena and the process baseline. Charged to the
-    /// `Cpu` slot whatever the placement, because a fully GPU-offloaded model
-    /// pays them too. See [`crate::host_buffer`].
-    pub host_overhead_bytes: u64,
-    /// The server prompt cache's host-RAM cap (`-cram`). Reserved but not
-    /// predicted — it fills with use rather than at load — so the packer
-    /// charges it as slop and the rolling correction never divides by it.
-    pub host_cache_bytes: u64,
-    /// Host RAM the slots beyond the first need when they are all busy.
-    /// Reserved but not predicted, like [`Self::host_cache_bytes`]: an idle
-    /// slot costs nothing, so the packer charges this as slop and the rolling
-    /// correction never divides by it.
-    pub host_slot_bytes: u64,
-    /// Host RAM the server's context checkpoints need once prompts are long
-    /// enough to be checkpointed. Reserved but not predicted, like
-    /// [`Self::host_cache_bytes`]: a short-prompt service never allocates it.
-    pub host_checkpoint_bytes: u64,
+    /// `context` that was used to compute `kv_per_token × context`.
+    pub context: u32,
+    /// The model's graph, carried through for diagnostics and for the
+    /// packer's architecture-specific decisions.
+    pub architecture: Architecture,
+    /// Where [`Self::weights_bytes`] sits: per layer, off-layer, and per
+    /// device.
+    pub layout: Layout,
+    /// Device allocations that are neither weights nor KV.
+    pub buffers: Buffers,
+    /// The MTP / NextN draft context, if the service runs one.
+    pub mtp: Mtp,
+    /// Host RAM the runtime is predicted — or merely permitted — to hold.
+    pub host: HostBytes,
+}
+
+impl Estimate {
+    /// An estimate of `architecture` at `context` with every term at zero.
+    ///
+    /// `Default` cannot express this: neither field has a meaningful default.
+    /// Each family estimator fills in the terms its architecture carries and
+    /// spreads this over the rest, so a new term does not have to be written
+    /// out as zero in every one of them.
+    pub fn empty(architecture: Architecture, context: u32) -> Self {
+        Self {
+            weights_bytes: 0,
+            kv_per_token: 0,
+            context,
+            architecture,
+            layout: Layout::default(),
+            buffers: Buffers::default(),
+            mtp: Mtp::default(),
+            host: HostBytes::default(),
+        }
+    }
+}
+
+/// How a model's weights are distributed: over layers, over the tensors that
+/// belong to no layer, and over devices where an override or a tensor split
+/// moves them.
+#[derive(Debug, Clone, Default)]
+pub struct Layout {
     /// Per-layer weight bytes for index-ordered packing. `None` for
     /// architectures where layer-aware placement isn't applicable
     /// (currently SSM/Mamba; in that case `placement` uses single-device
@@ -323,11 +310,78 @@ pub struct Estimate {
     /// accounting) stays correct without special-casing MoE. `None` for non-MoE
     /// architectures.
     pub expert_tensors: Option<Vec<ExpertTensor>>,
-    /// `context` that was used to compute `kv_per_token × context`.
-    pub context: u32,
-    /// The model's graph, carried through for diagnostics and for the
-    /// packer's architecture-specific decisions.
-    pub architecture: Architecture,
+    /// Weights `--split-mode tensor` holds on *every* spanned card instead of
+    /// dividing: the narrow gating and shared-expert paths every shard consumes.
+    /// Zero for an architecture that ships none, which is every dense model
+    /// measured. See [`crate::replicated`].
+    pub tensor_split_replicated_bytes: u64,
+}
+
+/// Device-side allocations that are neither weights nor KV cache.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Buffers {
+    /// Compute buffer per device in MB (default 400).
+    pub compute_mb: u32,
+    /// Output logits buffer bytes — the `n_vocab × ubatch`-sized activation
+    /// llama.cpp allocates only on the device that holds the output head
+    /// (the first GPU). Every other GPU's real compute buffer is smaller by
+    /// this amount, since it never materialises logits. The packer reserves
+    /// the full [`Self::compute_mb`] on the head GPU but subtracts this term on
+    /// the secondaries, so they fill with more expert weight instead of a
+    /// phantom logits buffer. Deliberately a conservative under-estimate of the
+    /// real logits allocation (see
+    /// [`crate::compute_buffer::output_logits_bytes`]): subtracting less than
+    /// the true value keeps the secondaries safe, subtracting more would
+    /// under-reserve and OOM them.
+    pub output_bytes: u64,
+    /// The vision projector's CLIP graph buffer, beyond its weights. llama.cpp
+    /// puts it on one device and says so — `[mtmd] adding N MiB to
+    /// fit_params_target for device CUDA0` — so the packer charges it to the
+    /// main GPU as runtime, not as weight: it is a device allocation and never
+    /// appears in the host RSS the rolling correction subtracts weights from.
+    /// Zero without an mmproj.
+    pub mmproj_graph_bytes: u64,
+}
+
+/// The multi-token-prediction draft context's share of the estimate. All zero
+/// when the service runs no MTP, or the model carries no head. See
+/// [`crate::mtp`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Mtp {
+    /// Extra VRAM (bytes) for the draft context, reserved as a single lump on
+    /// the primary GPU by the packer.
+    pub bytes: u64,
+    /// The share of [`Self::bytes`] that is model tensors read from a GGUF —
+    /// non-zero only for a separate draft model. See
+    /// [`crate::mtp::mtp_weight_bytes`].
+    pub weight_bytes: u64,
+    /// Expert layers the MTP head accounted for, dropped from
+    /// [`Layout::expert_layers`] because ik does not load them. Non-zero only
+    /// for an ik service on a model with an embedded head. See `Ncmoe` for why
+    /// the count matters to `-ncmoe`.
+    pub head_expert_layers: u32,
+}
+
+/// Host RAM a service costs, charged to the `Cpu` slot whatever the placement
+/// — a fully GPU-offloaded model pays these too.
+///
+/// Only [`Self::overhead_bytes`] is a *prediction*; the rest are caps the
+/// runtime fills with use rather than at load, so the packer charges them as
+/// slop and the rolling correction never divides an observation by them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HostBytes {
+    /// Host bytes the runtime is predicted to hold that are neither weights
+    /// nor KV: the pinned graph arena and the process baseline. See
+    /// [`crate::host_buffer`].
+    pub overhead_bytes: u64,
+    /// The server prompt cache's host-RAM cap (`-cram`).
+    pub cache_bytes: u64,
+    /// Host RAM the slots beyond the first need when they are all busy. An idle
+    /// slot costs nothing.
+    pub slot_bytes: u64,
+    /// Host RAM the server's context checkpoints need once prompts are long
+    /// enough to be checkpointed. A short-prompt service never allocates it.
+    pub checkpoint_bytes: u64,
 }
 
 /// One offloadable fused expert tensor on a MoE layer. llama.cpp stacks every

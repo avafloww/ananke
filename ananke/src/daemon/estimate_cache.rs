@@ -115,7 +115,7 @@ impl CacheEntry {
         let kv_bytes_for_context = estimate
             .kv_per_token
             .saturating_mul(estimate.context as u64);
-        let compute_buffer_bytes_per_device = (estimate.compute_buffer_mb as u64) * 1024 * 1024;
+        let compute_buffer_bytes_per_device = (estimate.buffers.compute_mb as u64) * 1024 * 1024;
         let estimate_summary = EstimateSummary {
             weights_bytes: estimate.weights_bytes,
             kv_per_token: estimate.kv_per_token,
@@ -222,25 +222,7 @@ mod tests {
             estimate_full: Estimate {
                 weights_bytes: 1,
                 kv_per_token: 0,
-                compute_buffer_mb: 0,
-                output_buffer_bytes: 0,
-                mtp_bytes: 0,
-                mtp_weight_bytes: 0,
-                mmproj_graph_bytes: 0,
-                mtp_head_expert_layers: 0,
-                tensor_split_replicated_bytes: 0,
-                host_overhead_bytes: 0,
-                host_cache_bytes: 0,
-                host_slot_bytes: 0,
-                host_checkpoint_bytes: 0,
-                per_layer_bytes: None,
-                attention_layers: None,
-                non_layer: crate::estimator::NonLayer::default(),
-                override_tensor_bytes: std::collections::BTreeMap::new(),
-                expert_layers: Vec::new(),
-                expert_tensors: None,
-                context: 4096,
-                architecture: Architecture::Llama,
+                ..Estimate::empty(Architecture::Llama, 4096)
             },
         }
     }

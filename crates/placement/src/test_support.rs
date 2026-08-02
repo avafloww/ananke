@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use ananke_config::placement::{DeviceSlot, OffloadMode, PlacementInputs, PlacementPolicy};
 pub(crate) use ananke_config::units::{GIB, MIB};
-use ananke_estimate::{Estimate, ExpertKind, ExpertTensor, NonLayer};
+use ananke_estimate::{Buffers, Estimate, ExpertKind, ExpertTensor, Layout};
 use ananke_gguf::Architecture;
 
 use crate::{
@@ -51,25 +51,15 @@ pub(crate) fn trivial_estimate(n_layers: u32, per_layer_mb: u64) -> Estimate {
     Estimate {
         weights_bytes: per_layer_mb * 1024 * 1024 * n_layers as u64,
         kv_per_token: 0,
-        compute_buffer_mb: 400,
-        output_buffer_bytes: 0,
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        per_layer_bytes: Some(vec![per_layer_mb * 1024 * 1024; n_layers as usize]),
-        attention_layers: None,
-        non_layer: NonLayer::default(),
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: 4096,
-        architecture: Architecture::Qwen3,
+        layout: Layout {
+            per_layer_bytes: Some(vec![per_layer_mb * 1024 * 1024; n_layers as usize]),
+            ..Layout::default()
+        },
+        buffers: Buffers {
+            compute_mb: 400,
+            ..Buffers::default()
+        },
+        ..Estimate::empty(Architecture::Qwen3, 4096)
     }
 }
 
@@ -105,25 +95,17 @@ pub(crate) fn moe_estimate(n_layers: u32, nonexp_mb: u64, exp_mb: u64) -> Estima
     Estimate {
         weights_bytes: layer_total * n_layers as u64,
         kv_per_token: 0,
-        compute_buffer_mb: 400,
-        output_buffer_bytes: 0,
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        per_layer_bytes: Some(per_layer),
-        attention_layers: None,
-        non_layer: NonLayer::default(),
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: (0..n_layers).collect(),
-        expert_tensors: Some(experts),
-        context: 4096,
-        architecture: Architecture::Qwen3Moe,
+        layout: Layout {
+            per_layer_bytes: Some(per_layer),
+            expert_layers: (0..n_layers).collect(),
+            expert_tensors: Some(experts),
+            ..Layout::default()
+        },
+        buffers: Buffers {
+            compute_mb: 400,
+            ..Buffers::default()
+        },
+        ..Estimate::empty(Architecture::Qwen3Moe, 4096)
     }
 }
 

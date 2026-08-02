@@ -11,7 +11,7 @@ use super::*;
 use crate::{
     config::validate::test_fixtures::{minimal_command_service, minimal_service},
     devices::{CpuSnapshot, GpuSnapshot},
-    estimator::NonLayer,
+    estimator::Layout,
     supervise::preview::preview_command,
     system::SystemDeps,
 };
@@ -62,25 +62,11 @@ fn estimate_gib(n_layers: u32, per_gib: u64) -> Estimate {
     Estimate {
         weights_bytes: per * n_layers as u64,
         kv_per_token: 0,
-        compute_buffer_mb: 0,
-        output_buffer_bytes: 0,
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        per_layer_bytes: Some(vec![per; n_layers as usize]),
-        attention_layers: None,
-        non_layer: NonLayer::default(),
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: 4096,
-        architecture: Architecture::Qwen3,
+        layout: Layout {
+            per_layer_bytes: Some(vec![per; n_layers as usize]),
+            ..Layout::default()
+        },
+        ..Estimate::empty(Architecture::Qwen3, 4096)
     }
 }
 

@@ -17,7 +17,7 @@ impl<'a> Packer<'a> {
     /// *before* the layer walk so the walker reserves room for it. Zero when
     /// MTP is off or the model carries no MTP head.
     pub(crate) fn seed_mtp_overhead(&mut self) {
-        if self.estimate.mtp_bytes == 0 {
+        if self.estimate.mtp.bytes == 0 {
             return;
         }
         let target = match self.allowed_gpus.last() {
@@ -27,11 +27,11 @@ impl<'a> Packer<'a> {
         // A separate draft model's weights are read through its own mmap, so
         // they belong in the weight tally the host observation subtracts; an
         // embedded head's overhead is all runtime allocation.
-        let weights = self.estimate.mtp_weight_bytes.min(self.estimate.mtp_bytes);
+        let weights = self.estimate.mtp.weight_bytes.min(self.estimate.mtp.bytes);
         self.charge(target.clone(), weights, Charge::Weights);
         self.charge(
             target,
-            self.estimate.mtp_bytes.saturating_sub(weights),
+            self.estimate.mtp.bytes.saturating_sub(weights),
             Charge::Runtime,
         );
     }
@@ -39,10 +39,9 @@ impl<'a> Packer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use ananke_config::placement::PlacementPolicy;
-    use ananke_estimate::{Estimate, NonLayer};
+    use ananke_estimate::{Buffers, Estimate, Layout, Mtp};
     use ananke_gguf::Architecture;
 
     use crate::{
@@ -68,25 +67,19 @@ mod tests {
         let e = Estimate {
             weights_bytes,
             kv_per_token: 0,
-            compute_buffer_mb: 1000,
-            output_buffer_bytes: 0,
-            mtp_bytes,
-            mtp_weight_bytes: 0,
-            mmproj_graph_bytes: 0,
-            mtp_head_expert_layers: 0,
-            tensor_split_replicated_bytes: 0,
-            host_overhead_bytes: 0,
-            host_cache_bytes: 0,
-            host_slot_bytes: 0,
-            host_checkpoint_bytes: 0,
-            per_layer_bytes: Some(per_layer_bytes),
-            attention_layers: None,
-            non_layer: NonLayer::default(),
-            override_tensor_bytes: BTreeMap::new(),
-            expert_layers: Vec::new(),
-            expert_tensors: None,
-            context: 4096,
-            architecture: Architecture::Qwen35,
+            layout: Layout {
+                per_layer_bytes: Some(per_layer_bytes),
+                ..Layout::default()
+            },
+            buffers: Buffers {
+                compute_mb: 1000,
+                ..Buffers::default()
+            },
+            mtp: Mtp {
+                bytes: mtp_bytes,
+                ..Mtp::default()
+            },
+            ..Estimate::empty(Architecture::Qwen35, 4096)
         };
         let snap = snapshot(&[24, 24]);
         let alloc = AllocationTable::new();
@@ -128,25 +121,20 @@ mod tests {
         let e = Estimate {
             weights_bytes,
             kv_per_token: 0,
-            compute_buffer_mb: 400,
-            output_buffer_bytes: 0,
-            mtp_bytes: draft_weights + compute,
-            mtp_weight_bytes: draft_weights,
-            mmproj_graph_bytes: 0,
-            mtp_head_expert_layers: 0,
-            tensor_split_replicated_bytes: 0,
-            host_overhead_bytes: 0,
-            host_cache_bytes: 0,
-            host_slot_bytes: 0,
-            host_checkpoint_bytes: 0,
-            per_layer_bytes: Some(per_layer_bytes),
-            attention_layers: None,
-            non_layer: NonLayer::default(),
-            override_tensor_bytes: BTreeMap::new(),
-            expert_layers: Vec::new(),
-            expert_tensors: None,
-            context: 4096,
-            architecture: Architecture::Gemma4,
+            layout: Layout {
+                per_layer_bytes: Some(per_layer_bytes),
+                ..Layout::default()
+            },
+            buffers: Buffers {
+                compute_mb: 400,
+                ..Buffers::default()
+            },
+            mtp: Mtp {
+                bytes: draft_weights + compute,
+                weight_bytes: draft_weights,
+                ..Mtp::default()
+            },
+            ..Estimate::empty(Architecture::Gemma4, 4096)
         };
         let packed = pack(
             &e,

@@ -57,7 +57,7 @@ impl<'a> Packer<'a> {
                     // — so the distributable fills the leftover room evenly and
                     // both cards land at the same total. MiB counts act as
                     // proportions; llama normalises.
-                    let compute_bytes = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
+                    let compute_bytes = self.estimate.buffers.compute_mb as u64 * 1024 * 1024;
                     // Same head as the reservation (lowest id = CUDA visible 0 =
                     // runtime main_gpu), and the same capped logits term, so the
                     // split and the pledge book agree on which card is the head.
@@ -80,7 +80,8 @@ impl<'a> Packer<'a> {
                             .map(|g| {
                                 let mut fixed = compute_bytes;
                                 if head == Some(*g) {
-                                    fixed += logits + self.estimate.non_layer.output_head_bytes;
+                                    fixed +=
+                                        logits + self.estimate.layout.non_layer.output_head_bytes;
                                 }
                                 if last == Some(*g) && experts_clump {
                                     // Only when experts clump: count half the

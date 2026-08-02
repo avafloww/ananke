@@ -2,14 +2,12 @@
 //! top-level `estimate` entry point that dispatches KV sizing to the
 //! deepseek4 / MLA specialisations or the generic hybrid path.
 
-use std::collections::BTreeMap;
-
 use ananke_gguf::{Architecture, GgufSummary, keys};
 
 use crate::{
     llama::{collect_non_layer, layer_index},
     moe::{deepseek4::deepseek4_kv_per_token, mla::mla_kv_per_token},
-    types::{Estimate, EstimatorInputs, ExpertKind, ExpertTensor},
+    types::{Buffers, Estimate, EstimatorInputs, ExpertKind, ExpertTensor, Layout},
 };
 
 pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
@@ -90,25 +88,18 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     Estimate {
         weights_bytes,
         kv_per_token,
-        compute_buffer_mb: crate::compute_buffer::per_device_for(summary, inputs),
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        output_buffer_bytes: 0,
-        per_layer_bytes: Some(per_layer_total),
-        attention_layers: None,
-        non_layer,
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers,
-        expert_tensors: Some(expert_tensors),
-        context: inputs.context,
-        architecture: arch.clone(),
+        layout: Layout {
+            per_layer_bytes: Some(per_layer_total),
+            non_layer,
+            expert_layers,
+            expert_tensors: Some(expert_tensors),
+            ..Layout::default()
+        },
+        buffers: Buffers {
+            compute_mb: crate::compute_buffer::per_device_for(summary, inputs),
+            ..Buffers::default()
+        },
+        ..Estimate::empty(arch.clone(), inputs.context)
     }
 }
 
@@ -313,7 +304,10 @@ mod tests {
 
         let e = estimate(&summary, &inputs);
         // Every layer's experts are itemised; nothing is pre-offloaded.
-        let experts = e.expert_tensors.expect("MoE arch must itemise experts");
+        let experts = e
+            .layout
+            .expert_tensors
+            .expect("MoE arch must itemise experts");
         assert_eq!(experts.len(), 3, "one fused gate tensor per layer");
         // Sorted by (layer, kind).
         assert_eq!(experts[0].layer, 0);
@@ -323,7 +317,7 @@ mod tests {
         assert_eq!(experts[2].layer, 2);
         assert_eq!(experts[2].bytes, 2 * 1024 * 1024);
         // per_layer_bytes keeps the full cost (1 MiB attn + experts).
-        let per_layer = e.per_layer_bytes.expect("per-layer breakdown");
+        let per_layer = e.layout.per_layer_bytes.expect("per-layer breakdown");
         assert_eq!(per_layer[1], (1 + 10) * 1024 * 1024);
     }
 
@@ -451,11 +445,14 @@ mod tests {
         // 141 itemised expert tensors. The dense layer 0 has none, and
         // the `_shexp` shared experts are excluded (always-on, not
         // offloadable).
-        let experts = e.expert_tensors.expect("MoE arch must itemise experts");
+        let experts = e
+            .layout
+            .expert_tensors
+            .expect("MoE arch must itemise experts");
         assert_eq!(experts.len(), 141);
-        assert_eq!(e.expert_layers.len(), 47);
+        assert_eq!(e.layout.expert_layers.len(), 47);
         // Layer 0 (dense) must not appear in the expert layer list.
-        assert!(!e.expert_layers.contains(&0u32));
+        assert!(!e.layout.expert_layers.contains(&0u32));
 
         // q8_0 KV shrinks by the element-width ratio (1.0625 / 2.0).
         let inputs_q8 = EstimatorInputs {

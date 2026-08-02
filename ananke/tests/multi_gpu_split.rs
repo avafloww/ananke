@@ -14,7 +14,7 @@ use ananke::{
     allocator::{AllocationTable, placement},
     config::{PlacementPolicy, ServiceConfig},
     devices::{DeviceId, DeviceSnapshot, GpuSnapshot},
-    estimator::{Estimate, NonLayer},
+    estimator::{Estimate, Layout},
 };
 use ananke_gguf::Architecture;
 
@@ -57,25 +57,11 @@ fn large_estimate() -> Estimate {
     Estimate {
         weights_bytes: per_layer_bytes * n_layers as u64,
         kv_per_token: 0,
-        compute_buffer_mb: 0, // suppress compute buffer overhead for clarity
-        output_buffer_bytes: 0,
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        per_layer_bytes: Some(vec![per_layer_bytes; n_layers]),
-        attention_layers: None,
-        non_layer: NonLayer::default(),
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: 4096,
-        architecture: Architecture::Qwen3,
+        layout: Layout {
+            per_layer_bytes: Some(vec![per_layer_bytes; n_layers]),
+            ..Layout::default()
+        },
+        ..Estimate::empty(Architecture::Qwen3, 4096)
     }
 }
 

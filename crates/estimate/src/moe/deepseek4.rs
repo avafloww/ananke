@@ -154,7 +154,7 @@ mod tests {
         );
         // Expert itemisation still works: 43 fused gate tensors, shared
         // experts (`_shexp`) excluded.
-        assert_eq!(e.expert_tensors.as_ref().unwrap().len(), 43);
+        assert_eq!(e.layout.expert_tensors.as_ref().unwrap().len(), 43);
     }
 
     #[test]

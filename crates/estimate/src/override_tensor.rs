@@ -8,7 +8,7 @@
 //!
 //! Rules apply in array order; first match wins. Matched tensor bytes are
 //! subtracted from per-layer / non-layer accounting (so the layer walker
-//! packs only the residual) and accumulated into `Estimate.override_tensor_bytes`.
+//! packs only the residual) and accumulated into `Estimate.layout.override_tensor_bytes`.
 
 use std::collections::BTreeMap;
 
@@ -66,7 +66,7 @@ fn parse_device(s: &str) -> Option<DeviceSlot> {
 }
 
 /// Apply `rules` to `summary`, moving matched tensor bytes out of
-/// `estimate.per_layer_bytes` / `non_layer` into `override_tensor_bytes`.
+/// `estimate.layout.per_layer_bytes` / `non_layer` into `override_tensor_bytes`.
 ///
 /// The placement walker will then use the reduced per-layer totals and the
 /// pre-seeded per-device map (via `override_tensor_bytes`) to produce a
@@ -88,7 +88,7 @@ pub fn apply(estimate: &mut Estimate, summary: &GgufSummary, rules: &[OverrideRu
         *override_bytes.entry(rule.target.clone()).or_default() += tensor.byte_size;
 
         if let Some(idx) = layer_index(tensor.name.as_str()) {
-            if let Some(per_layer) = estimate.per_layer_bytes.as_mut()
+            if let Some(per_layer) = estimate.layout.per_layer_bytes.as_mut()
                 && (idx as usize) < per_layer.len()
             {
                 per_layer[idx as usize] = per_layer[idx as usize].saturating_sub(tensor.byte_size);
@@ -97,26 +97,29 @@ pub fn apply(estimate: &mut Estimate, summary: &GgufSummary, rules: &[OverrideRu
             // packer's auto-offload pool: drop it from the itemised experts so
             // the packer doesn't double-place or re-offload it.
             if let Some(kind) = expert_kind(tensor.name.as_str())
-                && let Some(experts) = estimate.expert_tensors.as_mut()
+                && let Some(experts) = estimate.layout.expert_tensors.as_mut()
             {
                 experts.retain(|e| !(e.layer == idx && e.kind == kind));
             }
         } else {
             match tensor.name.as_str() {
                 "output.weight" => {
-                    estimate.non_layer.output_head_bytes = estimate
+                    estimate.layout.non_layer.output_head_bytes = estimate
+                        .layout
                         .non_layer
                         .output_head_bytes
                         .saturating_sub(tensor.byte_size)
                 }
                 "token_embd.weight" => {
-                    estimate.non_layer.token_embd_bytes = estimate
+                    estimate.layout.non_layer.token_embd_bytes = estimate
+                        .layout
                         .non_layer
                         .token_embd_bytes
                         .saturating_sub(tensor.byte_size)
                 }
                 _ => {
-                    estimate.non_layer.other_bytes = estimate
+                    estimate.layout.non_layer.other_bytes = estimate
+                        .layout
                         .non_layer
                         .other_bytes
                         .saturating_sub(tensor.byte_size)
@@ -126,7 +129,7 @@ pub fn apply(estimate: &mut Estimate, summary: &GgufSummary, rules: &[OverrideRu
     }
 
     let override_total: u64 = override_bytes.values().sum();
-    estimate.override_tensor_bytes = override_bytes;
+    estimate.layout.override_tensor_bytes = override_bytes;
 
     // Recompute the weights total to reflect the redirected tensors.
     //
@@ -139,16 +142,17 @@ pub fn apply(estimate: &mut Estimate, summary: &GgufSummary, rules: &[OverrideRu
     // total. Recomputing from zero would clobber the one sensible number it
     // does have, so subtract the redirected bytes from that total instead and
     // let the remainder account for what stays on the device.
-    if estimate.per_layer_bytes.is_some() {
+    if estimate.layout.per_layer_bytes.is_some() {
         let per_layer_sum = estimate
+            .layout
             .per_layer_bytes
             .as_ref()
             .map(|p| p.iter().sum::<u64>())
             .unwrap_or(0);
         estimate.weights_bytes = per_layer_sum
-            + estimate.non_layer.output_head_bytes
-            + estimate.non_layer.token_embd_bytes
-            + estimate.non_layer.other_bytes;
+            + estimate.layout.non_layer.output_head_bytes
+            + estimate.layout.non_layer.token_embd_bytes
+            + estimate.layout.non_layer.other_bytes;
     } else {
         estimate.weights_bytes = estimate.weights_bytes.saturating_sub(override_total);
     }
@@ -172,7 +176,7 @@ mod tests {
     use smol_str::SmolStr;
 
     use super::*;
-    use crate::types::{Estimate, NonLayer};
+    use crate::types::{Buffers, Estimate, Layout};
 
     fn tensor(name: &str, bytes: u64) -> GgufTensor {
         GgufTensor {
@@ -190,25 +194,15 @@ mod tests {
         Estimate {
             weights_bytes: weights,
             kv_per_token: 0,
-            compute_buffer_mb: 400,
-            output_buffer_bytes: 0,
-            mtp_bytes: 0,
-            mtp_weight_bytes: 0,
-            mmproj_graph_bytes: 0,
-            mtp_head_expert_layers: 0,
-            tensor_split_replicated_bytes: 0,
-            host_overhead_bytes: 0,
-            host_cache_bytes: 0,
-            host_slot_bytes: 0,
-            host_checkpoint_bytes: 0,
-            per_layer_bytes: Some(per_layer),
-            attention_layers: None,
-            non_layer: NonLayer::default(),
-            override_tensor_bytes: BTreeMap::new(),
-            expert_layers: Vec::new(),
-            expert_tensors: None,
-            context: 4096,
-            architecture: Architecture::Qwen3Moe,
+            layout: Layout {
+                per_layer_bytes: Some(per_layer),
+                ..Layout::default()
+            },
+            buffers: Buffers {
+                compute_mb: 400,
+                ..Buffers::default()
+            },
+            ..Estimate::empty(Architecture::Qwen3Moe, 4096)
         }
     }
 
@@ -273,11 +267,14 @@ mod tests {
         apply(&mut est, &summary, &rules);
 
         // Each layer drops to 1 MiB (just the attn tensor).
-        let per_layer = est.per_layer_bytes.unwrap();
+        let per_layer = est.layout.per_layer_bytes.unwrap();
         assert_eq!(per_layer, vec![1024 * 1024, 1024 * 1024]);
         // CPU gets 20 MiB total.
         assert_eq!(
-            est.override_tensor_bytes.get(&DeviceSlot::Cpu).copied(),
+            est.layout
+                .override_tensor_bytes
+                .get(&DeviceSlot::Cpu)
+                .copied(),
             Some(20 * 1024 * 1024)
         );
         // weights_bytes reflects the reduced per-layer + non-layer.
@@ -307,25 +304,11 @@ mod tests {
         let mut est = Estimate {
             weights_bytes: total_on_disk,
             kv_per_token: 0,
-            compute_buffer_mb: 400,
-            output_buffer_bytes: 0,
-            mtp_bytes: 0,
-            mtp_weight_bytes: 0,
-            mmproj_graph_bytes: 0,
-            mtp_head_expert_layers: 0,
-            tensor_split_replicated_bytes: 0,
-            host_overhead_bytes: 0,
-            host_cache_bytes: 0,
-            host_slot_bytes: 0,
-            host_checkpoint_bytes: 0,
-            per_layer_bytes: None,
-            attention_layers: None,
-            non_layer: NonLayer::default(),
-            override_tensor_bytes: BTreeMap::new(),
-            expert_layers: Vec::new(),
-            expert_tensors: None,
-            context: 4096,
-            architecture: Architecture::Glm4Moe,
+            buffers: Buffers {
+                compute_mb: 400,
+                ..Buffers::default()
+            },
+            ..Estimate::empty(Architecture::Glm4Moe, 4096)
         };
 
         let rules = parse_rules(&[".ffn_(up|down)_exps.=CPU".into()]).unwrap();
@@ -334,7 +317,10 @@ mod tests {
         // 20 MiB of experts moved to CPU; remaining on-GPU weights =
         // total − override = 1 MiB attn.
         assert_eq!(
-            est.override_tensor_bytes.get(&DeviceSlot::Cpu).copied(),
+            est.layout
+                .override_tensor_bytes
+                .get(&DeviceSlot::Cpu)
+                .copied(),
             Some(20 * 1024 * 1024)
         );
         assert_eq!(est.weights_bytes, 1024 * 1024);
@@ -352,9 +338,16 @@ mod tests {
         apply(&mut est, &summary, &rules);
 
         assert_eq!(
-            est.override_tensor_bytes.get(&DeviceSlot::Gpu(1)).copied(),
+            est.layout
+                .override_tensor_bytes
+                .get(&DeviceSlot::Gpu(1))
+                .copied(),
             Some(10 * 1024 * 1024)
         );
-        assert!(!est.override_tensor_bytes.contains_key(&DeviceSlot::Cpu));
+        assert!(
+            !est.layout
+                .override_tensor_bytes
+                .contains_key(&DeviceSlot::Cpu)
+        );
     }
 }

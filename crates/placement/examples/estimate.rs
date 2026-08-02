@@ -290,25 +290,25 @@ fn main() {
         .saturating_mul(estimate.context as u64);
 
     let active_devices = args.active_devices.unwrap_or(3);
-    let cb_total_bytes = (estimate.compute_buffer_mb as u64)
+    let cb_total_bytes = (estimate.buffers.compute_mb as u64)
         .saturating_mul(active_devices)
         .saturating_mul(1024 * 1024);
     let total_bytes = estimate
         .weights_bytes
         .saturating_add(kv_total_bytes)
         .saturating_add(cb_total_bytes)
-        .saturating_add(estimate.mtp_bytes);
+        .saturating_add(estimate.mtp.bytes);
 
-    let cpu_resident_bytes = estimate.non_layer.token_embd_bytes;
+    let cpu_resident_bytes = estimate.layout.non_layer.token_embd_bytes;
     let gpu_weights_bytes = estimate.weights_bytes.saturating_sub(cpu_resident_bytes);
     let gpu_total_bytes = gpu_weights_bytes
         .saturating_add(kv_total_bytes)
         .saturating_add(
-            (estimate.compute_buffer_mb as u64)
+            (estimate.buffers.compute_mb as u64)
                 .saturating_mul(active_devices.min(2))
                 .saturating_mul(1024 * 1024),
         )
-        .saturating_add(estimate.mtp_bytes);
+        .saturating_add(estimate.mtp.bytes);
 
     let mut out = json!({
         "architecture": estimate.architecture.as_str(),
@@ -318,25 +318,25 @@ fn main() {
         "kv_per_token_bytes": estimate.kv_per_token,
         "kv_total_bytes": kv_total_bytes,
         "kv_total_mib": kv_total_bytes / (1024 * 1024),
-        "compute_buffer_mb": estimate.compute_buffer_mb,
-        "tensor_split_replicated_mib": estimate.tensor_split_replicated_bytes / (1024 * 1024),
-        "mtp_bytes": estimate.mtp_bytes,
-        "mtp_mib": estimate.mtp_bytes / (1024 * 1024),
-        "output_buffer_bytes": estimate.output_buffer_bytes,
-        "output_buffer_mib": estimate.output_buffer_bytes / (1024 * 1024),
-        "host_overhead_mib": estimate.host_overhead_bytes / (1024 * 1024),
-        "host_cache_mib": estimate.host_cache_bytes / (1024 * 1024),
-        "per_layer_count": estimate.per_layer_bytes.as_ref().map(|v| v.len()),
-        "non_layer_output_head_bytes": estimate.non_layer.output_head_bytes,
-        "non_layer_token_embd_bytes": estimate.non_layer.token_embd_bytes,
-        "non_layer_other_bytes": estimate.non_layer.other_bytes,
-        "expert_layer_count": estimate.expert_layers.len(),
-        "expert_tensor_count": estimate.expert_tensors.as_ref().map(|v| v.len()),
+        "compute_buffer_mb": estimate.buffers.compute_mb,
+        "tensor_split_replicated_mib": estimate.layout.tensor_split_replicated_bytes / (1024 * 1024),
+        "mtp_bytes": estimate.mtp.bytes,
+        "mtp_mib": estimate.mtp.bytes / (1024 * 1024),
+        "output_buffer_bytes": estimate.buffers.output_bytes,
+        "output_buffer_mib": estimate.buffers.output_bytes / (1024 * 1024),
+        "host_overhead_mib": estimate.host.overhead_bytes / (1024 * 1024),
+        "host_cache_mib": estimate.host.cache_bytes / (1024 * 1024),
+        "per_layer_count": estimate.layout.per_layer_bytes.as_ref().map(|v| v.len()),
+        "non_layer_output_head_bytes": estimate.layout.non_layer.output_head_bytes,
+        "non_layer_token_embd_bytes": estimate.layout.non_layer.token_embd_bytes,
+        "non_layer_other_bytes": estimate.layout.non_layer.other_bytes,
+        "expert_layer_count": estimate.layout.expert_layers.len(),
+        "expert_tensor_count": estimate.layout.expert_tensors.as_ref().map(|v| v.len()),
         "expert_total_bytes": estimate
-            .expert_tensors
+            .layout.expert_tensors
             .as_ref()
             .map(|v| v.iter().map(|e| e.bytes).sum::<u64>()),
-        "override_tensor_bytes": estimate.override_tensor_bytes
+        "override_tensor_bytes": estimate.layout.override_tensor_bytes
             .iter()
             .map(|(k, v)| (format!("{k:?}"), serde_json::Value::from(*v)))
             .collect::<serde_json::Map<_, _>>(),

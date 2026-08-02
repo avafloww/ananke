@@ -18,7 +18,10 @@ pub mod types;
 use ananke_fs::Fs;
 use ananke_gguf::{self, Architecture, GgufSummary};
 use tracing::{info, warn};
-pub use types::{Estimate, EstimatorInputs, ExpertKind, ExpertTensor, Fork, NonLayer, Speculation};
+pub use types::{
+    Buffers, Estimate, EstimatorInputs, ExpertKind, ExpertTensor, Fork, HostBytes, Layout, Mtp,
+    NonLayer, Speculation,
+};
 
 /// One per-architecture family, paired with the `general.architecture`
 /// values it accepts and the function that produces an `Estimate` for
@@ -165,32 +168,32 @@ pub fn estimate_with_summary(
         },
         _ => None,
     };
-    est.mtp_bytes = mtp::mtp_overhead_bytes(&summary, draft_summary.as_ref(), inputs);
-    est.mtp_weight_bytes = mtp::mtp_weight_bytes(draft_summary.as_ref(), inputs);
+    est.mtp.bytes = mtp::mtp_overhead_bytes(&summary, draft_summary.as_ref(), inputs);
+    est.mtp.weight_bytes = mtp::mtp_weight_bytes(draft_summary.as_ref(), inputs);
 
     // What the head GPU holds beyond every other card, which the packer trims
     // off the secondaries. The compute model derives it — the logits buffer, the
     // head card's flat graph cost, and the expert-staging buffers a hybrid
     // places on the primary — rather than approximating it with a bare
     // `n_vocab x ubatch` term, which can only be a deliberate under-estimate.
-    est.output_buffer_bytes =
+    est.buffers.output_bytes =
         u64::from(compute_model::head_extra_mib(&summary, inputs)).saturating_mul(1024 * 1024);
 
     // Host-side overhead: the pinned graph arena and the server's prompt
     // cache. Architecture-independent apart from the sliding-window lookup,
     // and charged to the `Cpu` slot regardless of where the layers land, so
     // it is computed here rather than in each family estimate.
-    est.host_overhead_bytes = host_buffer::host_overhead_bytes(&summary, inputs);
-    est.host_cache_bytes = host_buffer::prompt_cache_bytes(inputs);
-    est.host_slot_bytes = host_buffer::slot_host_bytes(&summary.architecture, inputs);
-    est.host_checkpoint_bytes = host_buffer::checkpoint_headroom_bytes(&summary, inputs);
+    est.host.overhead_bytes = host_buffer::host_overhead_bytes(&summary, inputs);
+    est.host.cache_bytes = host_buffer::prompt_cache_bytes(inputs);
+    est.host.slot_bytes = host_buffer::slot_host_bytes(&summary.architecture, inputs);
+    est.host.checkpoint_bytes = host_buffer::checkpoint_headroom_bytes(&summary, inputs);
 
     info!(
         service = %inputs.name,
         weights_gb = est.weights_bytes / (1024 * 1024 * 1024),
-        per_layer_len = est.per_layer_bytes.as_ref().map(|v| v.len()).unwrap_or(0),
+        per_layer_len = est.layout.per_layer_bytes.as_ref().map(|v| v.len()).unwrap_or(0),
         kv_per_token = est.kv_per_token,
-        mtp_mb = est.mtp_bytes / (1024 * 1024),
+        mtp_mb = est.mtp.bytes / (1024 * 1024),
         "post-dispatch estimate",
     );
 
@@ -214,11 +217,12 @@ pub fn estimate_with_summary(
         match ananke_gguf::read(fs, mmproj) {
             Ok(proj) => {
                 est.weights_bytes = est.weights_bytes.saturating_add(proj.total_tensor_bytes);
-                est.non_layer.other_bytes = est
+                est.layout.non_layer.other_bytes = est
+                    .layout
                     .non_layer
                     .other_bytes
                     .saturating_add(proj.total_tensor_bytes);
-                est.mmproj_graph_bytes = tuning::MMPROJ_GRAPH_BYTES;
+                est.buffers.mmproj_graph_bytes = tuning::MMPROJ_GRAPH_BYTES;
             }
             Err(e) => warn!(error = %e, path = %mmproj.display(), "mmproj read failed"),
         }
@@ -227,7 +231,7 @@ pub fn estimate_with_summary(
     // Weights a tensor split holds on every card rather than dividing. Read from
     // the tensor table, so it is zero for an architecture without them — which is
     // every dense model measured. See [`crate::replicated`].
-    est.tensor_split_replicated_bytes = replicated::tensor_split_replicated_bytes(&summary);
+    est.layout.tensor_split_replicated_bytes = replicated::tensor_split_replicated_bytes(&summary);
 
     Ok((summary, est))
 }
@@ -247,7 +251,7 @@ pub fn estimate_with_summary(
 /// block whose per-layer cost is zero.
 fn drop_mtp_head_blocks(est: &mut Estimate, summary: &GgufSummary) {
     let span = recurrent::context_layer_span(summary);
-    let Some(per_layer) = est.per_layer_bytes.as_mut() else {
+    let Some(per_layer) = est.layout.per_layer_bytes.as_mut() else {
         return;
     };
     if span as usize >= per_layer.len() {
@@ -257,13 +261,13 @@ fn drop_mtp_head_blocks(est: &mut Estimate, summary: &GgufSummary) {
         est.weights_bytes = est.weights_bytes.saturating_sub(*bytes);
         *bytes = 0;
     }
-    let before = est.expert_layers.len();
-    est.expert_layers.retain(|&l| l < span);
+    let before = est.layout.expert_layers.len();
+    est.layout.expert_layers.retain(|&l| l < span);
     // How many expert layers the head accounted for. ik's `-ncmoe` window is
     // taken over the *full* block range, so a trailing window swallows these —
     // it logs an override for them and then never loads them, wasting the slot.
-    est.mtp_head_expert_layers = (before - est.expert_layers.len()) as u32;
-    if let Some(tensors) = est.expert_tensors.as_mut() {
+    est.mtp.head_expert_layers = (before - est.layout.expert_layers.len()) as u32;
+    if let Some(tensors) = est.layout.expert_tensors.as_mut() {
         tensors.retain(|t| t.layer < span);
     }
 }

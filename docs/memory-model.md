@@ -40,8 +40,8 @@ Two things worth knowing before measuring one:
 
 The curve above is VRAM. The host side is modelled separately in
 `crates/estimate/src/host_buffer.rs`, and the two are not interchangeable: the
-`Cpu` slot must never be charged `compute_buffer_mb`, which describes a device
-and was never measured against a host backend.
+`Cpu` slot must never be charged `Estimate::buffers.compute_mb`, which describes
+a device and was never measured against a host backend.
 
 What llama-server actually holds in host RAM, beyond weights and the CPU's KV
 share:
@@ -159,7 +159,7 @@ over-reservation.
 
 When a service sets `spec_type = "draft-mtp"`, llama.cpp enables multi-token-prediction speculative decoding. For models that ship an embedded MTP head (`{arch}.nextn_predict_layers > 0` — e.g. Qwen 3.6's `qwen35` and `qwen35moe`), this needs *no separate draft model*: llama.cpp creates a second context against the same target model whose KV cache covers only the trailing `nextn_predict_layers` block(s) — the dense-attention MTP head — using the draft cache types (f16 by default, independent of `--cache-type-*`). No extra weights load, because the nextn-layer tensors are resident regardless.
 
-`crates/estimate/src/mtp.rs` models this as `nextn × head_count_kv × (key_length + value_length) × 2 (f16) × context` for the KV term, plus a roughly constant `MTP_COMPUTE_MIB` compute buffer. The estimator computes it once in `estimate_with_summary` (architecture-independent — it reads the metadata directly), stores it on `Estimate::mtp_bytes`, and the packer reserves it as a single lump on the primary GPU (`Packer::seed_mtp_overhead`). The compute constant is calibrated against llama.cpp's own `[spec] estimated memory usage of MTP context is N MiB` log line; re-derive it the same way (run `llama-server … --spec-type draft-mtp`, read the figure, subtract the modelled KV) if a new MTP arch lands with a materially different curve.
+`crates/estimate/src/mtp.rs` models this as `nextn × head_count_kv × (key_length + value_length) × 2 (f16) × context` for the KV term, plus a roughly constant `MTP_COMPUTE_MIB` compute buffer. The estimator computes it once in `estimate_with_summary` (architecture-independent — it reads the metadata directly), stores it on `Estimate::mtp.bytes`, and the packer reserves it as a single lump on the primary GPU (`Packer::seed_mtp_overhead`). The compute constant is calibrated against llama.cpp's own `[spec] estimated memory usage of MTP context is N MiB` log line; re-derive it the same way (run `llama-server … --spec-type draft-mtp`, read the figure, subtract the modelled KV) if a new MTP arch lands with a materially different curve.
 
 Some families ship the MTP head as a **separate draft GGUF** instead of embedding it (e.g. Gemma 4's `gemma4-assistant`, a 4-block model loaded via `-md`). Set `draft_model = "…/mtp-head.gguf"` alongside `spec_type = "draft-mtp"`; the validator requires `spec_type` whenever `draft_model` is set, and the estimator reads the draft file in `estimate_with_summary` and passes its summary to `mtp_overhead_bytes`. The draft's attention layers *share the target model's KV cache* (the load log shows `llama_kv_cache: layer 3: sharing with layer 59`), so there is no context-scaling KV term — the overhead is just the draft's GPU-resident weights (everything but the CPU-side `token_embd.weight`) plus a small `DRAFT_MODEL_COMPUTE_MIB` buffer. That constant is calibrated against the production 2×3090 Gemma 4 run: the estimator landed within ~10 MiB of the measured 40858 MiB peak. Because the cache keys on the `model` and `mmproj` paths but not the draft path, `draft_model` is folded into `EstimatorInputs::config_fingerprint` so swapping the draft GGUF invalidates a stale estimate.
 

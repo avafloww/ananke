@@ -164,7 +164,7 @@ impl<'a> Packer<'a> {
         // Which end this runtime takes, and how it counts (see [`Ncmoe`]). The
         // greedy `Auto` walk starts from whichever end stays on the GPU.
         let gpu_count = self.allowed_gpus.len();
-        let head_layers = self.estimate.mtp_head_expert_layers;
+        let head_layers = self.estimate.mtp.head_expert_layers;
         let plan = match self.offload_mode {
             OffloadMode::Layers(n) => {
                 Ncmoe::for_runtime(self.placement, n, &layers, gpu_count, head_layers)

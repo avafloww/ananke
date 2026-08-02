@@ -49,7 +49,7 @@ impl<'a> Packer<'a> {
         // ik picks a different end depending on how many devices the model spans,
         // and a trailing window wastes the MTP head's slots.
         let gpu_count = self.allowed_gpus.len();
-        let head_layers = self.estimate.mtp_head_expert_layers;
+        let head_layers = self.estimate.mtp.head_expert_layers;
         let plan = match self.offload_mode {
             OffloadMode::Off => {
                 Ncmoe::for_runtime(self.placement, 0, &layers, gpu_count, head_layers)
@@ -125,7 +125,7 @@ impl<'a> Packer<'a> {
             .sum::<u64>()
             .saturating_sub(offloaded_total_bytes);
         let per_layer_avg = per_layer_sum / n_layers;
-        let non_layer = &self.estimate.non_layer;
+        let non_layer = &self.estimate.layout.non_layer;
         // The vision projector ("other") stays on the main GPU; the output head
         // is sharded across all of them (see below).
         let main_only = non_layer.other_bytes;
@@ -151,7 +151,7 @@ impl<'a> Packer<'a> {
         // reserves every card by a factor of the GPU count — Qwen3.6-35B-A3B
         // needs 1332 MiB *per* card against 685 pledged across both. See
         // [`ananke_estimate::compute_model`].
-        let compute_per_gpu = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
+        let compute_per_gpu = self.estimate.buffers.compute_mb as u64 * 1024 * 1024;
         let fudge_total = ONE_LAYER_FUDGE_MULTIPLIER * (per_layer_avg + kv_total / n_layers);
 
         // Default weights give an equal split; explicit weights are
@@ -207,10 +207,10 @@ impl<'a> Packer<'a> {
         // they shard as weights; an embedded head's overhead is all runtime
         // allocation. Same split as `seed_mtp_overhead`, which this path
         // bypasses.
-        let mtp_weight = self.estimate.mtp_weight_bytes.min(self.estimate.mtp_bytes);
+        let mtp_weight = self.estimate.mtp.weight_bytes.min(self.estimate.mtp.bytes);
         let mtp_weight_shares = integer_shares(mtp_weight, &tensor_split, ratio_sum);
         let mtp_runtime_shares = integer_shares(
-            self.estimate.mtp_bytes.saturating_sub(mtp_weight),
+            self.estimate.mtp.bytes.saturating_sub(mtp_weight),
             &tensor_split,
             ratio_sum,
         );
@@ -229,6 +229,7 @@ impl<'a> Packer<'a> {
         // which totals the one extra copy a two-way split was measured holding.
         let replicated_extra = self
             .estimate
+            .layout
             .tensor_split_replicated_bytes
             .saturating_mul(gpus.len().saturating_sub(1) as u64)
             / gpus.len().max(1) as u64;
@@ -245,7 +246,7 @@ impl<'a> Packer<'a> {
                 weight_bytes += main_only + remainder;
                 // The CLIP graph buffer rides the main GPU whatever the split:
                 // llama.cpp names one device for it.
-                runtime_bytes += self.estimate.mmproj_graph_bytes;
+                runtime_bytes += self.estimate.buffers.mmproj_graph_bytes;
             }
             let slot = DeviceSlot::Gpu(gpu);
             // Charge first, then gate on what was actually charged: the three

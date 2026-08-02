@@ -4,14 +4,12 @@
 //! metadata. flash_attn and cache_type_* don't apply and validation
 //! rejects them for this architecture.
 
-use std::collections::BTreeMap;
-
 use ananke_gguf::{Architecture, GgufSummary};
 
 use crate::{
     compute_buffer,
     llama::{collect_non_layer, collect_per_layer},
-    types::{Estimate, EstimatorInputs},
+    types::{Buffers, Estimate, EstimatorInputs, Layout},
 };
 
 /// Default mamba.ssm.state_size when the model metadata omits it. Matches the
@@ -75,25 +73,16 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     Estimate {
         weights_bytes,
         kv_per_token,
-        compute_buffer_mb: compute_buffer::per_device_for(summary, inputs),
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        output_buffer_bytes: 0,
-        per_layer_bytes: Some(per_layer),
-        attention_layers: None,
-        non_layer,
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context,
-        architecture: arch.clone(),
+        layout: Layout {
+            per_layer_bytes: Some(per_layer),
+            non_layer,
+            ..Layout::default()
+        },
+        buffers: Buffers {
+            compute_mb: compute_buffer::per_device_for(summary, inputs),
+            ..Buffers::default()
+        },
+        ..Estimate::empty(arch.clone(), context)
     }
 }
 

@@ -10,15 +10,13 @@
 //! Weight accounting uses the same `blk.N.*` layout as llama-family.
 //! KV cache is scaled down by the attention interval.
 
-use std::collections::BTreeMap;
-
 use ananke_gguf::{Architecture, GgufSummary, GgufType, keys};
 
 use crate::{
     compute_buffer, kv,
     llama::{collect_non_layer, collect_per_layer},
     recurrent,
-    types::{Estimate, EstimatorInputs},
+    types::{Buffers, Estimate, EstimatorInputs, Layout},
 };
 
 /// Architectures that mix attention with recurrent SSM layers (no MoE).
@@ -107,25 +105,16 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     Estimate {
         weights_bytes,
         kv_per_token,
-        compute_buffer_mb: compute_buffer::per_device_for(summary, inputs),
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        output_buffer_bytes: 0,
-        per_layer_bytes: Some(per_layer),
-        attention_layers: None,
-        non_layer,
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: inputs.context,
-        architecture: arch.clone(),
+        layout: Layout {
+            per_layer_bytes: Some(per_layer),
+            non_layer,
+            ..Layout::default()
+        },
+        buffers: Buffers {
+            compute_mb: compute_buffer::per_device_for(summary, inputs),
+            ..Buffers::default()
+        },
+        ..Estimate::empty(arch.clone(), inputs.context)
     }
 }
 

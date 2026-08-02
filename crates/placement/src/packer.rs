@@ -134,10 +134,10 @@ impl<'a> Packer<'a> {
                 placement.policy,
                 PlacementPolicy::CpuOnly | PlacementPolicy::Hybrid
             );
-        let per_layer = estimate.per_layer_bytes.clone().unwrap_or_default();
+        let per_layer = estimate.layout.per_layer_bytes.clone().unwrap_or_default();
 
         let offload_mode = placement.expert_offload;
-        let expert_tensors = estimate.expert_tensors.clone().unwrap_or_default();
+        let expert_tensors = estimate.layout.expert_tensors.clone().unwrap_or_default();
         let expert_aware = offload_mode.is_enabled() && !expert_tensors.is_empty();
         let mut expert_bytes_by_layer: BTreeMap<u32, u64> = BTreeMap::new();
         for e in &expert_tensors {
@@ -182,7 +182,7 @@ impl<'a> Packer<'a> {
     /// there is no GPU). override_tensor has its own pre-computed map from the
     /// estimator.
     pub(crate) fn seed_non_layer(&mut self) {
-        let non_layer = self.estimate.non_layer.clone();
+        let non_layer = self.estimate.layout.non_layer.clone();
 
         if non_layer.token_embd_bytes > 0 {
             self.charge(DeviceSlot::Cpu, non_layer.token_embd_bytes, Charge::Weights);
@@ -210,7 +210,7 @@ impl<'a> Packer<'a> {
             self.charge(head_target, non_layer.other_bytes, Charge::Weights);
         }
 
-        for (slot, bytes) in self.estimate.override_tensor_bytes.clone() {
+        for (slot, bytes) in self.estimate.layout.override_tensor_bytes.clone() {
             self.charge(slot, bytes, Charge::Weights);
         }
     }
@@ -236,8 +236,8 @@ impl<'a> Packer<'a> {
     /// card's compute reservation. Shipping calibrated archs have
     /// `compute_buffer_mb` far above this term, so the cap never binds there.
     pub(crate) fn head_logits_bytes(&self) -> u64 {
-        let compute = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
-        self.estimate.output_buffer_bytes.min(compute / 2)
+        let compute = self.estimate.buffers.compute_mb as u64 * 1024 * 1024;
+        self.estimate.buffers.output_bytes.min(compute / 2)
     }
 
     /// Reserve the fixed per-GPU headroom that does not depend on how layers
@@ -260,7 +260,7 @@ impl<'a> Packer<'a> {
             .kv_per_token
             .saturating_mul(self.estimate.context as u64);
         let per_layer_kv = kv_total.checked_div(n_layers).unwrap_or(0);
-        let compute_headroom = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
+        let compute_headroom = self.estimate.buffers.compute_mb as u64 * 1024 * 1024;
         let fudge = (per_layer_avg + per_layer_kv) * ONE_LAYER_FUDGE_MULTIPLIER;
         // The output logits buffer lives only on the head GPU, so every
         // secondary GPU needs that much less compute headroom — freeing the
@@ -402,12 +402,12 @@ mod tests {
         let svc = moe_svc(OffloadMode::Auto);
 
         let mut without = moe_estimate(40, 150, 700);
-        without.compute_buffer_mb = 3000;
-        without.output_buffer_bytes = 0;
+        without.buffers.compute_mb = 3000;
+        without.buffers.output_bytes = 0;
 
         let mut with = without.clone();
         // A logits buffer worth ~two 700 MiB expert tensors on the secondary.
-        with.output_buffer_bytes = 1400 * MIB;
+        with.buffers.output_bytes = 1400 * MIB;
 
         let cpu_without = cpu_bytes(&pack(&without, &svc, &snap, &AllocationTable::new()).unwrap());
         let cpu_with = cpu_bytes(&pack(&with, &svc, &snap, &AllocationTable::new()).unwrap());
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn output_head_goes_to_lowest_id_gpu_under_asymmetric_headroom() {
         let mut e = trivial_estimate(1, 1024); // 1 layer, ~1 GiB
-        e.non_layer.output_head_bytes = 5 * GIB;
+        e.layout.non_layer.output_head_bytes = 5 * GIB;
         let svc = PlacementInputs {
             policy: PlacementPolicy::GpuOnly,
             ..PlacementInputs::named("m")

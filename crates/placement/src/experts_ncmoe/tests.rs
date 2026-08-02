@@ -2,9 +2,7 @@
 //! [`crate::experts_ncmoe`]: auto and manual offload
 //! counts, the pooled-overflow rejection, and multi-GPU expert spread.
 
-use std::collections::BTreeMap;
-
-use ananke_estimate::{Estimate, ExpertKind, ExpertTensor, NonLayer};
+use ananke_estimate::{Buffers, Estimate, ExpertKind, ExpertTensor, Layout, NonLayer};
 use ananke_gguf::Architecture;
 
 use super::*;
@@ -132,9 +130,12 @@ fn the_offloaded_end_is_the_leading_one_when_layer_sizes_differ() {
     }
     let e = Estimate {
         weights_bytes: per_layer.iter().sum(),
-        expert_layers: (0..n_layers).collect(),
-        expert_tensors: Some(experts),
-        per_layer_bytes: Some(per_layer),
+        layout: Layout {
+            per_layer_bytes: Some(per_layer),
+            expert_layers: (0..n_layers).collect(),
+            expert_tensors: Some(experts),
+            ..Layout::default()
+        },
         ..moe_estimate(1, 0, 0)
     };
     let packed = pack(
@@ -356,30 +357,23 @@ fn deepseek4_like_auto_fits_two_24gib_cards() {
     let e = Estimate {
         weights_bytes: (nonexp + 3 * exp) * n_layers as u64 + 414 * MIB,
         kv_per_token: 6657,
-        compute_buffer_mb: 9848,
-        output_buffer_bytes: 0,
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        per_layer_bytes: Some(per_layer),
-        attention_layers: None,
-        non_layer: NonLayer {
-            output_head_bytes: 414 * MIB,
-            token_embd_bytes: 414 * MIB,
-            tied_head_bytes: 0,
-            other_bytes: 0,
+        layout: Layout {
+            per_layer_bytes: Some(per_layer),
+            non_layer: NonLayer {
+                output_head_bytes: 414 * MIB,
+                token_embd_bytes: 414 * MIB,
+                tied_head_bytes: 0,
+                other_bytes: 0,
+            },
+            expert_layers: (0..n_layers).collect(),
+            expert_tensors: Some(experts),
+            ..Layout::default()
         },
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: (0..n_layers).collect(),
-        expert_tensors: Some(experts),
-        context: 131072,
-        architecture: Architecture::DeepSeek4,
+        buffers: Buffers {
+            compute_mb: 9848,
+            ..Buffers::default()
+        },
+        ..Estimate::empty(Architecture::DeepSeek4, 131072)
     };
     // The real box has 125 GiB RAM for the ~60 GiB of CPU-side experts;
     // widen the default snapshot's host budget to match.

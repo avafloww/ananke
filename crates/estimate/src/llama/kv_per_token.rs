@@ -275,7 +275,7 @@ mod tests {
         // Shortconv layers contribute exactly zero.
         assert_eq!(e.kv_per_token, 10240);
         // All 16 layers still carry weights for the layer split.
-        assert_eq!(e.per_layer_bytes.as_ref().unwrap().len(), 16);
+        assert_eq!(e.layout.per_layer_bytes.as_ref().unwrap().len(), 16);
     }
 
     #[test]

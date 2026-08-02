@@ -34,7 +34,7 @@ fn moe_estimator_identifies_expert_layers() {
     let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
     let est = estimator::estimate_from_path(&fs, &inputs).unwrap();
     assert!(
-        !est.expert_layers.is_empty(),
+        !est.layout.expert_layers.is_empty(),
         "expert_layers must be non-empty"
     );
     assert!(est.weights_bytes > 0, "weights_bytes must be positive");

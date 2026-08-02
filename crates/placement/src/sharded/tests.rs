@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use ananke_config::placement::{PlacementPolicy, SplitMode};
-use ananke_estimate::{Estimate, NonLayer};
+use ananke_estimate::{Buffers, Estimate, Layout, Mtp, NonLayer};
 use ananke_gguf::Architecture;
 
 use super::*;
@@ -74,30 +74,25 @@ fn tensor_split_shards_output_head_and_mtp_across_gpus() {
     let e = Estimate {
         weights_bytes,
         kv_per_token: 0,
-        compute_buffer_mb: 400,
-        output_buffer_bytes: 0,
-        mtp_bytes,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        per_layer_bytes: Some(per_layer_bytes),
-        attention_layers: None,
-        non_layer: NonLayer {
-            output_head_bytes: output_head,
-            token_embd_bytes: token_embd,
-            tied_head_bytes: 0,
-            other_bytes: other,
+        layout: Layout {
+            per_layer_bytes: Some(per_layer_bytes),
+            non_layer: NonLayer {
+                output_head_bytes: output_head,
+                token_embd_bytes: token_embd,
+                tied_head_bytes: 0,
+                other_bytes: other,
+            },
+            ..Layout::default()
         },
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: 4096,
-        architecture: Architecture::Qwen35,
+        buffers: Buffers {
+            compute_mb: 400,
+            ..Buffers::default()
+        },
+        mtp: Mtp {
+            bytes: mtp_bytes,
+            ..Mtp::default()
+        },
+        ..Estimate::empty(Architecture::Qwen35, 4096)
     };
     let snap = snapshot(&[24, 24]);
     let alloc = AllocationTable::new();
@@ -157,32 +152,23 @@ fn a_tied_head_is_copied_onto_the_cards_only_when_sharded() {
     let build = |output_head: u64| Estimate {
         weights_bytes: 20 * gib + output_head + token_embd,
         kv_per_token: 0,
-        compute_buffer_mb: 400,
-        output_buffer_bytes: 0,
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        per_layer_bytes: Some((0..20).map(|_| gib).collect()),
-        attention_layers: None,
-        non_layer: NonLayer {
-            output_head_bytes: output_head,
-            token_embd_bytes: token_embd,
-            // `collect_non_layer` sets this to `token_embd.weight`'s size
-            // exactly when the model ships no head of its own.
-            tied_head_bytes: if output_head == 0 { token_embd } else { 0 },
-            other_bytes: 0,
+        layout: Layout {
+            per_layer_bytes: Some((0..20).map(|_| gib).collect()),
+            non_layer: NonLayer {
+                output_head_bytes: output_head,
+                token_embd_bytes: token_embd,
+                // `collect_non_layer` sets this to `token_embd.weight`'s size
+                // exactly when the model ships no head of its own.
+                tied_head_bytes: if output_head == 0 { token_embd } else { 0 },
+                other_bytes: 0,
+            },
+            ..Layout::default()
         },
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: 4096,
-        architecture: Architecture::Gemma4,
+        buffers: Buffers {
+            compute_mb: 400,
+            ..Buffers::default()
+        },
+        ..Estimate::empty(Architecture::Gemma4, 4096)
     };
     let gpu_total = |cards: &[u64], estimate: &Estimate| -> u64 {
         let mut s = svc(PlacementPolicy::GpuOnly, None);
@@ -399,25 +385,20 @@ fn a_sharded_separate_draft_models_weights_are_tallied_as_weights() {
     let e = Estimate {
         weights_bytes,
         kv_per_token: 0,
-        compute_buffer_mb: 400,
-        output_buffer_bytes: 0,
-        mtp_bytes: draft_weights + compute,
-        mtp_weight_bytes: draft_weights,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        per_layer_bytes: Some(per_layer_bytes),
-        attention_layers: None,
-        non_layer: NonLayer::default(),
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: 4096,
-        architecture: Architecture::Gemma4,
+        layout: Layout {
+            per_layer_bytes: Some(per_layer_bytes),
+            ..Layout::default()
+        },
+        buffers: Buffers {
+            compute_mb: 400,
+            ..Buffers::default()
+        },
+        mtp: Mtp {
+            bytes: draft_weights + compute,
+            weight_bytes: draft_weights,
+            ..Mtp::default()
+        },
+        ..Estimate::empty(Architecture::Gemma4, 4096)
     };
     let mut svc = svc(PlacementPolicy::GpuOnly, Some(vec![0, 1]));
     svc.placement_override = BTreeMap::new();

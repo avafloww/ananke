@@ -188,11 +188,11 @@ fn estimate_one(fs: &LocalFs, config: &ModelConfig) -> Row {
         name: config.name.clone(),
         arch: estimate.architecture.to_string(),
         weights_gib: estimate.weights_bytes as f64 / GIB_F64,
-        compute_buffer_mb: estimate.compute_buffer_mb,
+        compute_buffer_mb: estimate.buffers.compute_mb,
         kv_total_mib: kv_total_mib(&estimate, config),
-        mtp_mib: estimate.mtp_bytes / MIB,
+        mtp_mib: estimate.mtp.bytes / MIB,
         gpu_vram_gib: (gpu_vram_mib * MIB) as f64 / GIB_F64,
-        host_overhead_mib: estimate.host_overhead_bytes / MIB,
+        host_overhead_mib: estimate.host.overhead_bytes / MIB,
         expert_offload_mib: packed.as_ref().map(|p| p.expert_offload_bytes / MIB),
         expert_offload_layers: packed.as_ref().map(|p| p.expert_offload_layers),
         packed,
@@ -211,7 +211,7 @@ fn estimate_one(fs: &LocalFs, config: &ModelConfig) -> Row {
 fn notional_gpu_mib(estimate: &Estimate, config: &ModelConfig) -> u64 {
     let gpu_weights = estimate
         .weights_bytes
-        .saturating_sub(estimate.non_layer.token_embd_bytes);
+        .saturating_sub(estimate.layout.non_layer.token_embd_bytes);
     gpu_weights
         .saturating_add(
             estimate
@@ -219,11 +219,11 @@ fn notional_gpu_mib(estimate: &Estimate, config: &ModelConfig) -> u64 {
                 .saturating_mul(u64::from(config.context)),
         )
         .saturating_add(
-            u64::from(estimate.compute_buffer_mb)
+            u64::from(estimate.buffers.compute_mb)
                 .saturating_mul(u64::from(config.cards()).min(2))
                 .saturating_mul(MIB),
         )
-        .saturating_add(estimate.mtp_bytes)
+        .saturating_add(estimate.mtp.bytes)
         / MIB
 }
 

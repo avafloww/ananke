@@ -1,13 +1,11 @@
 //! Weights accounting for llama-family models: per-layer tensor collection,
 //! non-layer tensor bucketing, and the top-level `estimate` entry point.
 
-use std::collections::BTreeMap;
-
 use ananke_gguf::GgufSummary;
 
 use crate::{
     llama::kv_per_token::compute_kv_per_token,
-    types::{Estimate, EstimatorInputs, NonLayer},
+    types::{Buffers, Estimate, EstimatorInputs, Layout, NonLayer},
 };
 
 pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate {
@@ -27,25 +25,16 @@ pub fn estimate(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -> Estimate
     Estimate {
         weights_bytes,
         kv_per_token,
-        compute_buffer_mb: crate::compute_buffer::per_device_for(summary, inputs),
-        mtp_bytes: 0,
-        mtp_weight_bytes: 0,
-        mmproj_graph_bytes: 0,
-        mtp_head_expert_layers: 0,
-        tensor_split_replicated_bytes: 0,
-        host_overhead_bytes: 0,
-        host_cache_bytes: 0,
-        host_slot_bytes: 0,
-        host_checkpoint_bytes: 0,
-        output_buffer_bytes: 0,
-        per_layer_bytes: Some(per_layer_bytes),
-        attention_layers: None,
-        non_layer,
-        override_tensor_bytes: BTreeMap::new(),
-        expert_layers: Vec::new(),
-        expert_tensors: None,
-        context: inputs.context,
-        architecture: arch.clone(),
+        layout: Layout {
+            per_layer_bytes: Some(per_layer_bytes),
+            non_layer,
+            ..Layout::default()
+        },
+        buffers: Buffers {
+            compute_mb: crate::compute_buffer::per_device_for(summary, inputs),
+            ..Buffers::default()
+        },
+        ..Estimate::empty(arch.clone(), inputs.context)
     }
 }
 
@@ -114,7 +103,7 @@ mod tests {
         // per-layer: 2 layers × 3 tensors × 1 MiB = 6 MiB weights from layers.
         // non-layer: 2 MiB output + 4 MiB token_embd = 6 MiB.
         assert_eq!(e.weights_bytes, 12 * 1024 * 1024);
-        assert_eq!(e.per_layer_bytes.as_ref().unwrap().len(), 2);
+        assert_eq!(e.layout.per_layer_bytes.as_ref().unwrap().len(), 2);
     }
 
     #[test]

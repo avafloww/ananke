@@ -131,7 +131,7 @@ impl<'a> Packer<'a> {
     /// exist even when every layer is on a GPU — see
     /// [`ananke_estimate::host_buffer`].
     pub(crate) fn add_compute_buffer(&mut self) {
-        let compute_bytes = self.estimate.compute_buffer_mb as u64 * 1024 * 1024;
+        let compute_bytes = self.estimate.buffers.compute_mb as u64 * 1024 * 1024;
         // The output logits buffer is materialised only on the head GPU.
         // `compute_buffer_mb` is calibrated against that head GPU, so it already
         // includes the logits term; every *other* GPU's real compute buffer is
@@ -157,7 +157,7 @@ impl<'a> Packer<'a> {
                     // The vision projector's CLIP graph buffer rides one
                     // device, and llama.cpp names it: the same head GPU that
                     // holds the projector's weights.
-                    add = add.saturating_add(self.estimate.mmproj_graph_bytes);
+                    add = add.saturating_add(self.estimate.buffers.mmproj_graph_bytes);
                 }
             }
             self.charge(slot, add, Charge::Runtime);
@@ -176,22 +176,22 @@ impl<'a> Packer<'a> {
     /// default against tens of MiB actually held — and pin the correction to
     /// its clamp floor.
     pub(crate) fn add_host_overhead(&mut self) {
-        if self.estimate.host_overhead_bytes > 0 {
+        if self.estimate.host.overhead_bytes > 0 {
             self.charge(
                 DeviceSlot::Cpu,
-                self.estimate.host_overhead_bytes,
+                self.estimate.host.overhead_bytes,
                 Charge::Runtime,
             );
         }
-        if self.estimate.host_cache_bytes > 0 {
+        if self.estimate.host.cache_bytes > 0 {
             self.charge(
                 DeviceSlot::Cpu,
-                self.estimate.host_cache_bytes,
+                self.estimate.host.cache_bytes,
                 Charge::Slop,
             );
         }
-        if self.estimate.host_slot_bytes > 0 {
-            self.charge(DeviceSlot::Cpu, self.estimate.host_slot_bytes, Charge::Slop);
+        if self.estimate.host.slot_bytes > 0 {
+            self.charge(DeviceSlot::Cpu, self.estimate.host.slot_bytes, Charge::Slop);
         }
     }
 
@@ -228,7 +228,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use ananke_config::placement::PlacementPolicy;
-    use ananke_estimate::{Estimate, NonLayer};
+    use ananke_estimate::{Buffers, Estimate, Layout};
     use ananke_gguf::Architecture;
     use smol_str::SmolStr;
 
@@ -260,10 +260,10 @@ mod tests {
     fn the_mmproj_graph_buffer_rides_the_head_gpu_alone() {
         let mut e = trivial_estimate(20, 200);
         let graph = 248 * 1024 * 1024;
-        e.mmproj_graph_bytes = graph;
+        e.buffers.mmproj_graph_bytes = graph;
         let plain = {
             let mut without = e.clone();
-            without.mmproj_graph_bytes = 0;
+            without.buffers.mmproj_graph_bytes = 0;
             pack(
                 &without,
                 &svc(PlacementPolicy::GpuOnly, Some(vec![0, 1])),
@@ -412,25 +412,15 @@ mod tests {
         let e = Estimate {
             weights_bytes,
             kv_per_token: 45220,
-            compute_buffer_mb: 3792,
-            output_buffer_bytes: 0,
-            mtp_bytes: 0,
-            mtp_weight_bytes: 0,
-            mmproj_graph_bytes: 0,
-            mtp_head_expert_layers: 0,
-            tensor_split_replicated_bytes: 0,
-            host_overhead_bytes: 0,
-            host_cache_bytes: 0,
-            host_slot_bytes: 0,
-            host_checkpoint_bytes: 0,
-            per_layer_bytes: Some(per_layer_bytes),
-            attention_layers: None,
-            non_layer: NonLayer::default(),
-            override_tensor_bytes: BTreeMap::new(),
-            expert_layers: Vec::new(),
-            expert_tensors: None,
-            context: 262_144,
-            architecture: Architecture::Gemma4,
+            layout: Layout {
+                per_layer_bytes: Some(per_layer_bytes),
+                ..Layout::default()
+            },
+            buffers: Buffers {
+                compute_mb: 3792,
+                ..Buffers::default()
+            },
+            ..Estimate::empty(Architecture::Gemma4, 262_144)
         };
         // Two 24 GB cards, fully free, empty pledge book.
         let snap = snapshot(&[24, 24]);
@@ -462,25 +452,15 @@ mod tests {
         let e = Estimate {
             weights_bytes,
             kv_per_token: 120_000,
-            compute_buffer_mb: 2048,
-            output_buffer_bytes: 0,
-            mtp_bytes: 0,
-            mtp_weight_bytes: 0,
-            mmproj_graph_bytes: 0,
-            mtp_head_expert_layers: 0,
-            tensor_split_replicated_bytes: 0,
-            host_overhead_bytes: 0,
-            host_cache_bytes: 0,
-            host_slot_bytes: 0,
-            host_checkpoint_bytes: 0,
-            per_layer_bytes: Some(per_layer_bytes),
-            attention_layers: None,
-            non_layer: NonLayer::default(),
-            override_tensor_bytes: BTreeMap::new(),
-            expert_layers: Vec::new(),
-            expert_tensors: None,
-            context: 131_072,
-            architecture: Architecture::Qwen3,
+            layout: Layout {
+                per_layer_bytes: Some(per_layer_bytes),
+                ..Layout::default()
+            },
+            buffers: Buffers {
+                compute_mb: 2048,
+                ..Buffers::default()
+            },
+            ..Estimate::empty(Architecture::Qwen3, 131_072)
         };
         // Single 24 GB GPU, no spill allowed.
         let snap = snapshot(&[24]);

@@ -270,7 +270,7 @@ mod tests {
     fn gpu_weight_bytes_excludes_runtime_allocations() {
         let mut est = trivial_estimate(20, 200);
         est.kv_per_token = 64 * 1024;
-        est.compute_buffer_mb = 400;
+        est.buffers.compute_mb = 400;
         let s = {
             let mut s = svc(PlacementPolicy::Hybrid, Some(vec![0]));
             s.placement_override = Default::default();
@@ -310,7 +310,7 @@ mod tests {
         // grow the reservation and the base together and leave any relative
         // assertion satisfied.
         let weights = 20 * 200 * MIB;
-        let compute = est.compute_buffer_mb as u64 * MIB;
+        let compute = est.buffers.compute_mb as u64 * MIB;
         let fudge = 200 * MIB;
         assert_eq!(
             packed.rolling.uncorrected_vram_bytes,
@@ -348,7 +348,7 @@ mod tests {
         // [`ananke_estimate::compute_model`] being a
         // per-device figure.
         let weights = 20 * 200 * MIB;
-        let compute = est.compute_buffer_mb as u64 * MIB * 2;
+        let compute = est.buffers.compute_mb as u64 * MIB * 2;
         let fudge = 200 * MIB;
         assert_eq!(
             packed.rolling.uncorrected_vram_bytes,
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn both_pack_paths_charge_the_same_host_overhead() {
         let mut est = trivial_estimate(20, 200);
-        est.non_layer.token_embd_bytes = GIB;
+        est.layout.non_layer.token_embd_bytes = GIB;
         let s = svc(PlacementPolicy::GpuOnly, Some(vec![0, 1]));
         let mut s = s;
         s.placement_override = Default::default();
@@ -392,7 +392,7 @@ mod tests {
         );
         assert_eq!(
             layer_split.rolling.uncorrected_host_bytes - GIB,
-            est.host_overhead_bytes,
+            est.host.overhead_bytes,
             "the only non-weight host term is the modelled overhead"
         );
     }
@@ -409,7 +409,7 @@ mod tests {
         // `moe_estimate` carries no token embeddings, so the offloaded
         // experts are the whole of the host-resident weight; with embeddings
         // the invariant is `token_embd + offloaded experts`.
-        assert_eq!(est.non_layer.token_embd_bytes, 0);
+        assert_eq!(est.layout.non_layer.token_embd_bytes, 0);
         assert_eq!(
             packed.rolling.cpu_weight_bytes, packed.expert_offload_bytes,
             "the host weight is exactly what was offloaded"
