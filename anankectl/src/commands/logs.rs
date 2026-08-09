@@ -12,7 +12,10 @@ use crate::{
     output,
 };
 
-#[allow(clippy::too_many_arguments)]
+// The signature mirrors the clap CLI surface, so the argument count is owned
+// by the flag definitions rather than this function; grouping them into a
+// struct would fight the derive.
+#[expect(clippy::too_many_arguments)]
 pub async fn run(
     client: &ApiClient,
     json: bool,

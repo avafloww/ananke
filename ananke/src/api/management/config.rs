@@ -111,7 +111,6 @@ pub async fn post_validate(
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
 fn _force_link() {
     let _: Vec<ananke_api::config::validate::ValidationError> = vec![];
 }

@@ -59,7 +59,9 @@ pub struct GgufTensor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(non_camel_case_types)]
+// GGUF type tags (Q4_0, IQ2_XXS, ...) are the file format's wire spelling;
+// renaming them to camelCase would corrupt the reader.
+#[expect(non_camel_case_types)]
 pub enum GgufType {
     F32,
     F16,

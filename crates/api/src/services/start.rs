@@ -8,7 +8,9 @@ use crate::shared::errors::ApiErrorBody;
 /// `POST /api/services/{name}/start` response body.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
-#[allow(missing_docs)]
+// `StartResponse` is a wire enum; the status tag is the API contract and
+// the variants are self-describing.
+#[expect(missing_docs)]
 pub enum StartResponse {
     AlreadyRunning,
     Started {

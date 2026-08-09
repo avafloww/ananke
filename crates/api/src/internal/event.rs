@@ -14,7 +14,9 @@ use utoipa::ToSchema;
 /// variant; `at_ms` is present on every variant except `overflow`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[allow(missing_docs)]
+// Wire-serialized event variants; the snake_case `type` tag is the API
+// contract, and each variant's field names are self-describing in JSON.
+#[expect(missing_docs)]
 pub enum Event {
     StateChanged {
         #[schema(value_type = String)]
