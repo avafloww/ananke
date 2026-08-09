@@ -21,7 +21,7 @@ use crate::{
 
 const MAGIC: &[u8; 4] = b"GGUF";
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReadError(pub String);
 
 impl std::fmt::Display for ReadError {

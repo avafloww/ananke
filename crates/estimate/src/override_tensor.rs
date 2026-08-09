@@ -30,7 +30,7 @@ pub struct ParseError(pub String);
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "failed to parse override_tensor rule: {}", self.0)
     }
 }
 

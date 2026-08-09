@@ -61,10 +61,10 @@ const FAMILIES: &[Family] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EstimatorError {
     /// `ananke_gguf::read` failed (bad magic, IO error, unsupported dtype, …).
-    /// The inner string is the reader's own diagnostic.
+    /// The inner error is the reader's own diagnostic.
     GgufRead {
         path: std::path::PathBuf,
-        cause: String,
+        cause: ananke_gguf::ReadError,
     },
     /// The GGUF parsed cleanly but no per-family estimator covers its
     /// `general.architecture`. Nothing here can price the model's KV cache or
@@ -103,7 +103,14 @@ impl std::fmt::Display for EstimatorError {
     }
 }
 
-impl std::error::Error for EstimatorError {}
+impl std::error::Error for EstimatorError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::GgufRead { cause, .. } => Some(cause),
+            Self::UnknownArchitecture { .. } => None,
+        }
+    }
+}
 
 /// Produce a base estimate for the model described by `inputs`. Reads the
 /// GGUF (including any mmproj) through `fs` and dispatches on
@@ -132,7 +139,7 @@ pub fn estimate_with_summary(
 ) -> Result<(GgufSummary, Estimate), EstimatorError> {
     let summary = ananke_gguf::read(fs, inputs.model).map_err(|e| EstimatorError::GgufRead {
         path: inputs.model.to_path_buf(),
-        cause: e.to_string(),
+        cause: e,
     })?;
 
     info!(

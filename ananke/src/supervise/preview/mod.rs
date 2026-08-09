@@ -59,7 +59,16 @@ impl std::fmt::Display for PreviewError {
     }
 }
 
-impl std::error::Error for PreviewError {}
+impl std::error::Error for PreviewError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Estimator(e) => Some(e),
+            Self::Pack(e) => Some(e),
+            Self::Render(e) => Some(e),
+            Self::NoModelPath => None,
+        }
+    }
+}
 
 /// Render the command line a service would launch with, given the current
 /// config, device snapshot, and pledge book. `corrections` are the service's
