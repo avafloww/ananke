@@ -20,6 +20,8 @@
 use std::{collections::BTreeMap, ffi::OsString, io, pin::Pin, process::ExitStatus};
 
 use async_trait::async_trait;
+#[cfg(any(test, feature = "test-fakes"))]
+pub use fake::{FakeChildSnapshot, FakeProcessState, FakeSpawner};
 use tokio::io::AsyncRead;
 
 use crate::{errors::ExpectedError, supervise::spawn::SpawnConfig};
@@ -193,9 +195,6 @@ impl ManagedChild for LocalChild {
 // ---------------------------------------------------------------------------
 // Test impl: virtual children with no OS state.
 // ---------------------------------------------------------------------------
-
-#[cfg(any(test, feature = "test-fakes"))]
-pub use fake::{FakeChildSnapshot, FakeProcessState, FakeSpawner};
 
 #[cfg(any(test, feature = "test-fakes"))]
 mod fake {

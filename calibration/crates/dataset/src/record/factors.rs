@@ -2,6 +2,10 @@
 
 use std::fmt;
 
+/// Which llama.cpp the cell was measured against. The two forks size the graph
+/// arena by different rules, so the fork is a factor rather than a detail — and
+/// the same fork marker the daemon's runtime config carries.
+pub use ananke_config::runtime::Runtime;
 use ananke_config::{flags::cache_type, placement::SplitMode};
 use serde::{Deserialize, Serialize};
 
@@ -108,11 +112,6 @@ impl Default for Factors {
         }
     }
 }
-
-/// Which llama.cpp the cell was measured against. The two forks size the graph
-/// arena by different rules, so the fork is a factor rather than a detail — and
-/// the same fork marker the daemon's runtime config carries.
-pub use ananke_config::runtime::Runtime;
 
 /// What `-fa` was set to, which decides whether the attention pass is fused.
 ///

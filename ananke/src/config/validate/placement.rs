@@ -3,6 +3,8 @@
 
 use std::collections::BTreeMap;
 
+pub use ananke_config::placement::{DeviceReserves, DeviceSlot, PlacementPolicy};
+
 use crate::config::validate::gib_to_mib;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,8 +111,6 @@ pub struct Filters {
     pub set_params: BTreeMap<String, serde_json::Value>,
 }
 
-pub use ananke_config::placement::{DeviceReserves, PlacementPolicy};
-
 #[derive(Debug, Clone)]
 pub struct HealthSettings {
     /// HTTP path to probe for readiness. `None` means no health check —
@@ -119,8 +119,6 @@ pub struct HealthSettings {
     pub timeout_ms: u64,
     pub probe_interval_ms: u64,
 }
-
-pub use ananke_config::placement::DeviceSlot;
 
 #[cfg(test)]
 mod tests {
