@@ -263,7 +263,7 @@ Within each module, organize code as follows:
 
 - Use `Arc` or borrows for shared immutable data.
 - Use `smol_str` for efficient small string storage.
-- Use `smallvec` for collections that are usually small, to avoid heap allocations in the common case.
+- Use `smallvec` for collections that are usually small, to avoid heap allocations in the common case. No site in the daemon or calibration harness currently meets the bar: request and config collections are built at request or reload rate, the balloon window is a `VecDeque` ring, and the proxy data plane streams via `Bytes`. Reconsider where a per-token or per-chunk `Vec` appears.
 - Careful attention to cloning referencing. Avoid cloning if code has a natural tree structure.
 - Stream data (e.g. iterators) where possible rather than buffering.
 - To borrow the value inside a lock guard, a `Box`, or an `Arc`, prefer `.as_ref()`/`.as_mut()` over a manual double-deref: write `state.config.read().as_ref()`, not `&**state.config.read()`. The named form reads as "borrow the config" rather than as deref bookkeeping. The same applies to an `Arc<dyn Trait>`: `probe.as_ref()`, not `&**probe`.
