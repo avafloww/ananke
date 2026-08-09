@@ -1,5 +1,6 @@
 //! Interactive service-name picker used when `anankectl chat` is invoked
 //! without an explicit model.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::{collections::HashSet, io};
 
@@ -59,7 +60,11 @@ pub async fn pick_service(client: &ApiClient) -> Result<Option<String>, ApiClien
         ));
     }
     if candidates.len() == 1 {
-        return Ok(Some(candidates.into_iter().next().unwrap().name));
+        // Invariant: the length check above guarantees one candidate remains.
+        let Some(candidate) = candidates.into_iter().next() else {
+            unreachable!("candidates.len() == 1 implies a first element");
+        };
+        return Ok(Some(candidate.name));
     }
 
     tokio::task::spawn_blocking(move || run_picker(candidates))

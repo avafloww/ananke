@@ -1,4 +1,5 @@
 //! `anankectl logs` command — paginated historical fetch with optional live tail.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use ananke_api::{
     internal::log_line::LogLine,
@@ -62,10 +63,15 @@ pub async fn run(
     }
 
     // Upgrade to a WebSocket for the live tail.
+    let stream_path = format!("/api/services/{name}/logs/stream");
     let ws_url = client
         .endpoint
-        .join(&format!("/api/services/{name}/logs/stream"))
-        .expect("valid path")
+        .join(&stream_path)
+        .map_err(|cause| ApiClientError::InvalidPath {
+            endpoint: client.endpoint.to_string(),
+            path: stream_path,
+            cause,
+        })?
         .to_string()
         .replace("http://", "ws://")
         .replace("https://", "wss://");

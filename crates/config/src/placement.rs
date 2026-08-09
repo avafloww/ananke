@@ -1,4 +1,5 @@
 //! Types describing how a model is spread over devices.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 //!
 //! These live beside the flag vocabulary rather than with the config validator
 //! because the estimator reasons about them without knowing what a
@@ -17,10 +18,12 @@ use crate::flags;
 /// registered (guarded by each enum's round-trip test), so the lookup is total
 /// in practice.
 pub fn variant_flag<T: Copy + PartialEq>(table: &[(T, &'static str)], value: T) -> &'static str {
+    // Invariant: every variant is registered in its `VARIANTS` table, guarded
+    // by each enum's round-trip test, so the lookup is total in practice.
     table
         .iter()
         .find_map(|&(v, flag)| (v == value).then_some(flag))
-        .expect("enum variant is registered in its VARIANTS table")
+        .unwrap_or_else(|| unreachable!("enum variant is registered in its VARIANTS table"))
 }
 
 /// Inverse of [`variant_flag`]: resolve an accepted string to its variant.

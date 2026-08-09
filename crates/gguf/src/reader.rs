@@ -1,4 +1,5 @@
 //! Single-file GGUF reader.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 //!
 //! GGUF v3 layout: magic "GGUF" (4 bytes), version u32, tensor_count u64,
 //! kv_count u64, then kv_count metadata entries, then tensor_count
@@ -273,8 +274,10 @@ fn tensor_byte_size(dtype: GgufType, shape: &[u64]) -> u64 {
         }
     };
     bytes
+        // Invariant: a tensor byte size is the product of small count fields
+        // parsed from a u64 metadata header, so it fits in u64.
         .try_into()
-        .expect("tensor byte size exceeds u64 range")
+        .unwrap_or_else(|_| unreachable!("tensor byte size exceeds u64 range"))
 }
 
 #[cfg(test)]
