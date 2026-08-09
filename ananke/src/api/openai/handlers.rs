@@ -1,4 +1,5 @@
 //! Handlers for /v1/models and the three POST body-rewriting endpoints.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::{
     task::Poll,
@@ -344,9 +345,11 @@ async fn forward_json_post(
         Box<dyn std::error::Error + Send + Sync>,
     >>();
 
+    // Invariant: the port is a validated `u16` and `path` is a static route
+    // string, so the constructed http URL always parses.
     let uri = format!("http://127.0.0.1:{}{}", svc.private_port, path)
         .parse::<hyper::Uri>()
-        .unwrap();
+        .unwrap_or_else(|_| unreachable!("uri from a validated port and static route path parses"));
     let mut req = hyper::Request::builder().method("POST").uri(uri);
     for (k, v) in headers.iter() {
         if k == hyper::header::HOST || k == hyper::header::CONTENT_LENGTH {

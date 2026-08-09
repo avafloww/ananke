@@ -2,6 +2,7 @@
 //! generation-stall, and spec-collapse signals and returning a human-readable
 //! detail string when one should fire. The actual restart/disable action
 //! lives in [`crate::supervise::auto_restart`].
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::time::Duration;
 
@@ -91,7 +92,8 @@ impl RunLoop {
             client: reqwest::Client::builder()
                 .timeout(GENSTALL_FETCH_TIMEOUT)
                 .build()
-                .expect("reqwest client build"),
+                // Invariant: a default builder with no custom connector cannot fail.
+                .unwrap_or_else(|_| unreachable!("reqwest client from default builder builds")),
             url: format!(
                 "http://127.0.0.1:{}/metrics",
                 self.init.identity.private_port

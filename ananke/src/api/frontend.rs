@@ -6,6 +6,7 @@
 //! requested path in the embedded bundle and falls back to `index.html`
 //! so the frontend's client-side routing (if/when it grows any) still
 //! resolves.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use axum::{
     Router,
@@ -48,5 +49,7 @@ fn asset_response(path: &str, file: rust_embed::EmbeddedFile) -> Response {
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime)
         .body(Body::from(file.data.into_owned()))
-        .unwrap()
+        // Invariant: the status and single content-type header are fixed
+        // valid values, so the response builder cannot fail.
+        .unwrap_or_else(|_| unreachable!("response with fixed status and headers builds"))
 }
