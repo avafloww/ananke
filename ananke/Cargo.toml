@@ -91,4 +91,13 @@ tokio-tungstenite = { version = "0.26", default-features = false, features = ["c
 
 [features]
 default = []
-test-fakes = []
+# Integration tests (separate crates) use fakes from several split crates;
+# `cfg(test)` can't gate them, so the daemon's test-fakes forwards to the
+# crates whose fakes those tests reach for. ananke-system + ananke-config
+# are also unconditional deps because the daemon lib's own cfg(test) unit
+# tests need their fakes (a dependency's cfg(test) does not propagate).
+test-fakes = [
+    "ananke-config/test-fakes",
+    "ananke-system/test-fakes",
+    "ananke-supervise/test-fakes",
+]
