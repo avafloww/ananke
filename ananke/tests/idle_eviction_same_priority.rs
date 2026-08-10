@@ -11,11 +11,8 @@
 
 mod common;
 
-use ananke::{
-    api::openai,
-    config::DeviceSlot,
-    devices::{CpuSnapshot, DeviceSnapshot},
-};
+use ananke::{api::openai, config::DeviceSlot};
+use ananke_placement::devices::{CpuSnapshot, DeviceSnapshot};
 use axum::{
     body::Body,
     http::{Request, StatusCode},

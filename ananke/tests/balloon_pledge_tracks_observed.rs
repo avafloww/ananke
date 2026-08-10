@@ -16,17 +16,17 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ananke::{
-    allocator::{
-        AllocationTable,
-        balloon::{BalloonConfig, ResolverDeps, spawn_resolver},
-    },
     config::{DaemonSettings, DeviceSlot, EffectiveConfig, Lifecycle, manager::ConfigManager},
-    daemon::events::EventBus,
-    devices::snapshotter,
+    snapshotter,
     supervise::{SupervisorCommand, SupervisorHandle, registry::ServiceRegistry},
-    tracking::observation::ObservationTable,
+};
+use ananke_allocator::{
+    AllocationTable,
+    balloon::{BalloonConfig, ResolverDeps, spawn_resolver},
 };
 use ananke_api::events::Event;
+use ananke_events::EventBus;
+use ananke_observation::ObservationTable;
 use parking_lot::Mutex;
 use smol_str::SmolStr;
 use tokio::sync::watch;
@@ -177,7 +177,7 @@ async fn pledge_grows_to_observed_peak() {
     h.observation.record_sample(
         &h.svc,
         mb(10 * 1024),
-        ananke::system::Rss {
+        ananke_system::Rss {
             total: 0,
             owned: 0,
             file: 0,
@@ -210,7 +210,7 @@ async fn pledge_clamps_to_max_on_overshoot() {
     h.observation.record_sample(
         &h.svc,
         mb(28 * 1024),
-        ananke::system::Rss {
+        ananke_system::Rss {
             total: 0,
             owned: 0,
             file: 0,
@@ -231,7 +231,7 @@ async fn pledge_decays_as_spike_rolls_out_of_window() {
     h.observation.record_sample(
         &h.svc,
         mb(12 * 1024),
-        ananke::system::Rss {
+        ananke_system::Rss {
             total: 0,
             owned: 0,
             file: 0,
@@ -247,7 +247,7 @@ async fn pledge_decays_as_spike_rolls_out_of_window() {
     h.observation.record_sample(
         &h.svc,
         mb(4 * 1024),
-        ananke::system::Rss {
+        ananke_system::Rss {
             total: 0,
             owned: 0,
             file: 0,
@@ -277,7 +277,7 @@ async fn pledge_does_not_emit_for_sub_threshold_drift() {
     h.observation.record_sample(
         &h.svc,
         mb(12 * 1024),
-        ananke::system::Rss {
+        ananke_system::Rss {
             total: 0,
             owned: 0,
             file: 0,
@@ -292,7 +292,7 @@ async fn pledge_does_not_emit_for_sub_threshold_drift() {
     h.observation.record_sample(
         &h.svc,
         mb(12 * 1024) + mb(50),
-        ananke::system::Rss {
+        ananke_system::Rss {
             total: 0,
             owned: 0,
             file: 0,
@@ -323,7 +323,7 @@ async fn cpu_pinned_service_pledges_from_rss() {
     h.observation.record_sample(
         &h.svc,
         0,
-        ananke::system::Rss {
+        ananke_system::Rss {
             total: mb(10 * 1024),
             owned: mb(10 * 1024),
             file: 0,
@@ -351,7 +351,7 @@ async fn gpu_service_pledges_from_vram_and_ignores_rss() {
     h.observation.record_sample(
         &h.svc,
         mb(6 * 1024),
-        ananke::system::Rss {
+        ananke_system::Rss {
             total: mb(30 * 1024),
             owned: mb(30 * 1024),
             file: 0,

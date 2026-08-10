@@ -22,16 +22,16 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use ananke::{
-    allocator::{
-        AllocationTable,
-        placement::{self, PackError, pick_command_gpu},
-    },
-    config::{PlacementPolicy, ServiceConfig},
-    devices::{Allocation, CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot, cuda_env},
-    estimator::{Estimate, Layout},
-};
+use ananke::config::{PlacementPolicy, ServiceConfig};
+use ananke_allocator::AllocationTable;
+use ananke_devices::cuda_env;
+use ananke_estimate::{Estimate, Layout};
 use ananke_gguf::Architecture;
+use ananke_placement::{
+    self as placement, PackError,
+    devices::{Allocation, CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot},
+    pick_command_gpu,
+};
 use smol_str::SmolStr;
 
 /// Build a `DeviceSnapshot` from a list of `(gpu_id, total_gb, free_gb)`

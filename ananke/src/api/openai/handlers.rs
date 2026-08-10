@@ -7,6 +7,7 @@ use std::{
 };
 
 use ananke_api::shared::errors::ApiError;
+use ananke_tracking::{inflight::InflightGuard, progress::ProgressCell};
 use axum::{
     Json,
     body::Body,
@@ -34,7 +35,6 @@ use crate::{
     },
     daemon::app_state::AppState,
     supervise::{EnsureFailure, EnsureOutcome, await_ensure, state::ServiceState},
-    tracking::{inflight::InflightGuard, progress::ProgressCell},
 };
 
 pin_project_lite::pin_project! {

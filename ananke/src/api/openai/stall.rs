@@ -14,10 +14,11 @@
 
 use std::{sync::Arc, time::Duration};
 
+use ananke_tracking::progress::ProgressCell;
 use tokio::sync::oneshot;
 use tracing::info;
 
-use crate::{supervise::SupervisorHandle, tracking::progress::ProgressCell};
+use crate::supervise::SupervisorHandle;
 
 /// Disarm handle for a live stall timer, held by the proxied response body.
 /// Calling [`Self::disarm`] on the first upstream frame cancels the pending

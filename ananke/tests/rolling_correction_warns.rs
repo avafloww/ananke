@@ -2,7 +2,7 @@
 //! converges that pool's rolling mean above the 1.2 warning threshold.
 #![cfg(feature = "test-fakes")]
 
-use ananke::tracking::rolling::{MemoryClass, RollingTable};
+use ananke_tracking::rolling::{MemoryClass, RollingTable};
 use smol_str::SmolStr;
 
 #[test]

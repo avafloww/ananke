@@ -6,7 +6,7 @@ mod common;
 
 use std::path::Path;
 
-use ananke::estimator;
+use ananke_estimate as estimator;
 use common::synth_gguf;
 
 #[test]

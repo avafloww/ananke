@@ -20,10 +20,10 @@ use std::time::Duration;
 use ananke::{
     api::openai,
     config::{AutoRestartSettings, ServiceConfig, SpecCollapseTrigger, TemplateConfig},
-    db::models::RequestMetric,
     supervise::state::ServiceState,
-    system::FakeProcessState,
 };
+use ananke_db::models::RequestMetric;
+use ananke_system::FakeProcessState;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -69,7 +69,7 @@ fn spec_service(min_draft_tokens: u64) -> ServiceConfig {
 /// `draft` proposed and `accepted` accepted tokens, stamped ~now so they
 /// land inside a default-length window.
 async fn inject_drafting_requests(
-    db: &ananke::db::Database,
+    db: &ananke_db::Database,
     service_id: i64,
     run_id: i64,
     n: i64,
@@ -84,7 +84,7 @@ async fn inject_drafting_requests(
 /// tokio clock does not advance — so a test that needs rows to sit outside
 /// the watchdog's window must backdate them explicitly.
 async fn inject_drafting_requests_at(
-    db: &ananke::db::Database,
+    db: &ananke_db::Database,
     service_id: i64,
     run_id: i64,
     n: i64,
@@ -92,7 +92,7 @@ async fn inject_drafting_requests_at(
     accepted: i64,
     age_ms: i64,
 ) {
-    let now = ananke::tracking::now_unix_ms() - age_ms;
+    let now = ananke_time::now_unix_ms() - age_ms;
     for i in 0..n {
         db.insert_request_metric(&RequestMetric {
             metric_id: 0,

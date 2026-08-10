@@ -2,20 +2,21 @@
 
 use std::sync::Arc;
 
+use ananke_allocator::AllocationTable;
+use ananke_db::{Database, logs::BatcherHandle};
+use ananke_events::EventBus;
+use ananke_observation::ObservationTable;
+use ananke_tracking::{
+    activity::ActivityTable, inflight::InflightTable, progress::ProgressTable,
+    rolling::RollingTable,
+};
 use parking_lot::Mutex;
 
 use crate::{
-    allocator::AllocationTable,
     config::manager::ConfigManager,
-    daemon::{estimate_cache::EstimateCacheHandle, events::EventBus},
-    db::{Database, logs::BatcherHandle},
-    devices::snapshotter::SharedSnapshot,
     oneshot::{OneshotRegistry, PortPool},
-    supervise::registry::SupervisorRegistry,
-    tracking::{
-        activity::ActivityTable, inflight::InflightTable, observation::ObservationTable,
-        progress::ProgressTable, rolling::RollingTable,
-    },
+    snapshotter::SharedSnapshot,
+    supervise::{estimate_cache::EstimateCacheHandle, registry::SupervisorRegistry},
 };
 
 #[derive(Clone)]
@@ -37,7 +38,7 @@ pub struct AppState {
     pub oneshots: OneshotRegistry,
     pub batcher: BatcherHandle,
     pub events: EventBus,
-    pub system: crate::system::SystemDeps,
+    pub system: ananke_system::SystemDeps,
     /// Memoised GGUF summary + estimator output, keyed by service
     /// name. Populated lazily by the management `ServiceDetail`
     /// handler so successive detail polls don't re-parse the GGUF.

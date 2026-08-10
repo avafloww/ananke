@@ -1,12 +1,10 @@
 //! Dry-run every `{placeholder}` a service's argv can contain at validate
 //! time, so a typo fails `config validate` rather than a runtime spawn.
 
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
-use crate::{
-    config::validate::{PlaceholderChecker, fail},
-    errors::ExpectedError,
-};
+use crate::config::validate::{PlaceholderChecker, fail};
 
 /// The daemon's placeholder dry-run checker: validates `command`,
 /// `shutdown_command`, and llama-cpp `launcher` argv at config time.
@@ -31,10 +29,8 @@ pub(crate) fn check_placeholders(
     field: &str,
     argv: &[String],
 ) -> Result<(), ExpectedError> {
-    use crate::{
-        devices::{Allocation, DeviceId},
-        templates::{PlaceholderContext, substitute},
-    };
+    use ananke_placement::devices::{Allocation, DeviceId};
+    use ananke_templates::{PlaceholderContext, substitute};
     let mut alloc_bytes = std::collections::BTreeMap::new();
     alloc_bytes.insert(DeviceId::Gpu(0), 1);
     let alloc = Allocation { bytes: alloc_bytes };
@@ -65,10 +61,8 @@ pub(crate) fn check_launcher_placeholders(
     name: &SmolStr,
     argv: &[String],
 ) -> Result<(), ExpectedError> {
-    use crate::{
-        devices::{Allocation, DeviceId},
-        templates::{PlaceholderContext, substitute_launcher_argv},
-    };
+    use ananke_placement::devices::{Allocation, DeviceId};
+    use ananke_templates::{PlaceholderContext, substitute_launcher_argv};
     let mut alloc_bytes = std::collections::BTreeMap::new();
     alloc_bytes.insert(DeviceId::Gpu(0), 1);
     let alloc = Allocation { bytes: alloc_bytes };

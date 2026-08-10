@@ -21,10 +21,10 @@ use ananke::{
         HealthSettings, Lifecycle, PlacementPolicy, ServiceConfig, SplitMode, TemplateConfig,
         parse::DEFAULT_START_QUEUE_DEPTH,
     },
-    devices::{CpuSnapshot, DeviceSnapshot, GpuSnapshot},
     supervise::EnsureSource,
-    system::FakeProcessState,
 };
+use ananke_placement::devices::{CpuSnapshot, DeviceSnapshot, GpuSnapshot};
+use ananke_system::FakeProcessState;
 use common::build_harness;
 use smol_str::SmolStr;
 

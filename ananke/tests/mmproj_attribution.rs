@@ -6,7 +6,9 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use ananke::{config::TemplateConfig, estimator, system::InMemoryFs};
+use ananke::config::TemplateConfig;
+use ananke_estimate as estimator;
+use ananke_system::InMemoryFs;
 use common::synth_gguf;
 
 fn svc_with_mmproj(model: PathBuf, mmproj: Option<PathBuf>) -> ananke::config::ServiceConfig {

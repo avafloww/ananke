@@ -5,10 +5,8 @@ mod common;
 
 use std::path::Path;
 
-use ananke::{
-    config::{AllocationMode, Template},
-    estimator::{self, EstimatorError},
-};
+use ananke::config::{AllocationMode, Template};
+use ananke_estimate::{self as estimator, EstimatorError};
 use ananke_gguf::{Architecture, keys};
 use common::synth_gguf;
 

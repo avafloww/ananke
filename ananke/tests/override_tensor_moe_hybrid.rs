@@ -6,11 +6,12 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use ananke::{
-    allocator::{AllocationTable, placement},
-    config::{OffloadMode, PlacementPolicy, ServiceConfig, TemplateConfig},
+use ananke::config::{OffloadMode, PlacementPolicy, ServiceConfig, TemplateConfig};
+use ananke_allocator::AllocationTable;
+use ananke_estimate as estimator;
+use ananke_placement::{
+    self as placement,
     devices::{CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot},
-    estimator,
 };
 use common::synth_gguf;
 

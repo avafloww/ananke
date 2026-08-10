@@ -10,14 +10,15 @@ use std::{
     time::Duration,
 };
 
-use ananke::{api::proxy, db::Database};
+use ananke_db::Database;
+use ananke_proxy as proxy;
 use futures::future::BoxFuture;
 use tokio::sync::watch;
 
 /// Sum of `request_count` across every bucket for a service — the number of
 /// recorded metric rows regardless of how the query buckets them in time.
 async fn recorded_metrics(db: &Database, service_id: i64) -> i64 {
-    let now = ananke::tracking::now_unix_ms();
+    let now = ananke_time::now_unix_ms();
     db.query_request_metrics(Some(service_id), 0, now + 60_000, 1_000)
         .await
         .expect("query request metrics")
@@ -41,7 +42,7 @@ async fn per_service_proxy_records_token_endpoints_only() {
 
     let db = Database::open_in_memory().await.unwrap();
     let service_id = db
-        .upsert_service("demo", ananke::tracking::now_unix_ms())
+        .upsert_service("demo", ananke_time::now_unix_ms())
         .await
         .unwrap();
 

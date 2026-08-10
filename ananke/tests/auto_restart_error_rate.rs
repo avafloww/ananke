@@ -16,10 +16,10 @@ use std::time::Duration;
 use ananke::{
     api::openai,
     config::{AutoRestartSettings, ErrorRateTrigger, ErrorStatusClass},
-    db::models::RequestMetric,
     supervise::state::ServiceState,
-    system::FakeProcessState,
 };
+use ananke_db::models::RequestMetric;
+use ananke_system::FakeProcessState;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -39,13 +39,13 @@ fn chat_request() -> Request<Body> {
 /// Record `n` server-error requests against `(service_id, run_id)`, stamped
 /// ~now so they land inside a default-length window.
 async fn inject_server_errors(
-    db: &ananke::db::Database,
+    db: &ananke_db::Database,
     service_id: i64,
     run_id: i64,
     n: i64,
     status: i64,
 ) {
-    let now = ananke::tracking::now_unix_ms();
+    let now = ananke_time::now_unix_ms();
     for i in 0..n {
         db.insert_request_metric(&RequestMetric {
             metric_id: 0,

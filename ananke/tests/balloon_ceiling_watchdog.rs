@@ -17,16 +17,16 @@ mod common;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ananke::{
-    allocator::{
-        AllocationTable,
-        balloon::{BalloonConfig, ResolverDeps, spawn_resolver},
-    },
     config::{DaemonSettings, DeviceSlot, EffectiveConfig, Lifecycle, manager::ConfigManager},
-    daemon::events::EventBus,
-    devices::snapshotter,
+    snapshotter,
     supervise::{SupervisorCommand, SupervisorHandle, registry::ServiceRegistry},
-    tracking::observation::ObservationTable,
 };
+use ananke_allocator::{
+    AllocationTable,
+    balloon::{BalloonConfig, ResolverDeps, spawn_resolver},
+};
+use ananke_events::EventBus;
+use ananke_observation::ObservationTable;
 use common::minimal_llama_service;
 use parking_lot::Mutex;
 use smol_str::SmolStr;
@@ -123,7 +123,7 @@ impl Harness {
         self.observation.record_sample(
             &self.svc,
             vram,
-            ananke::system::Rss {
+            ananke_system::Rss {
                 total: rss,
                 owned: rss,
                 file: 0,

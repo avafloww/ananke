@@ -1,7 +1,7 @@
 #![cfg(feature = "test-fakes")]
 use std::collections::VecDeque;
 
-use ananke::allocator::balloon::detect_growth;
+use ananke_allocator::balloon::detect_growth;
 
 #[test]
 fn growing_window_with_floor_detected() {

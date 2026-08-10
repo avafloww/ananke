@@ -3,8 +3,8 @@
 
 mod common;
 
-use ananke::db::logs::{LogLine, Stream};
 use ananke_api::services::LogStreamMessage;
+use ananke_db::logs::{LogLine, Stream};
 use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
 

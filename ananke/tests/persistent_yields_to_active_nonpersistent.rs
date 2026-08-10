@@ -20,9 +20,9 @@ mod common;
 use ananke::{
     api::openai,
     config::{DeviceSlot, Lifecycle},
-    devices::{CpuSnapshot, DeviceSnapshot},
     supervise::{EnsureFailure, EnsureResponse, EnsureSource},
 };
+use ananke_placement::devices::{CpuSnapshot, DeviceSnapshot};
 use axum::{
     body::Body,
     http::{Request, StatusCode},

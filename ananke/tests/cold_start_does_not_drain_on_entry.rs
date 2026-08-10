@@ -25,7 +25,8 @@ mod common;
 
 use std::time::Duration;
 
-use ananke::{api::openai, supervise::state::ServiceState, system::FakeProcessState};
+use ananke::{api::openai, supervise::state::ServiceState};
+use ananke_system::FakeProcessState;
 use axum::{
     body::Body,
     http::{Request, StatusCode},

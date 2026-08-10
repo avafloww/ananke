@@ -12,8 +12,9 @@ mod common;
 
 use std::time::Duration;
 
-use ananke::{config::EffectiveConfig, system::FakeProcessState};
+use ananke::config::EffectiveConfig;
 use ananke_api::events::Event;
+use ananke_system::FakeProcessState;
 use common::{build_harness, minimal_llama_service};
 use smol_str::SmolStr;
 

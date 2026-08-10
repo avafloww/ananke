@@ -2,16 +2,14 @@
 //! handlers.
 
 use ananke_api::services::detail::{DevicePlacement, PlacementPreview};
+use ananke_estimate::estimate_with_summary;
 use smol_str::SmolStr;
 use tracing::warn;
 
 use crate::{
     config::ServiceConfig,
-    daemon::{
-        app_state::AppState,
-        estimate_cache::{EstimateCacheEntry, build_cache_entry},
-    },
-    estimator::estimate_with_summary,
+    daemon::app_state::AppState,
+    supervise::estimate_cache::{EstimateCacheEntry, build_cache_entry},
 };
 
 /// Look up the cached `(ModelInfo, EstimateSummary)` for a service,
@@ -56,7 +54,7 @@ pub(crate) fn model_estimate_entry(
 pub(crate) fn placement_preview(
     state: &AppState,
     svc_cfg: &ServiceConfig,
-    estimate: Option<&crate::estimator::Estimate>,
+    estimate: Option<&ananke_estimate::Estimate>,
     running: bool,
 ) -> Option<PlacementPreview> {
     let snapshot = state.snapshot.read().clone();
@@ -74,8 +72,10 @@ pub(crate) fn placement_preview(
             .into_iter()
             .map(|(slot, mb)| {
                 let id = match slot {
-                    crate::config::DeviceSlot::Cpu => crate::devices::DeviceId::Cpu,
-                    crate::config::DeviceSlot::Gpu(n) => crate::devices::DeviceId::Gpu(n),
+                    crate::config::DeviceSlot::Cpu => ananke_placement::devices::DeviceId::Cpu,
+                    crate::config::DeviceSlot::Gpu(n) => {
+                        ananke_placement::devices::DeviceId::Gpu(n)
+                    }
                 };
                 (id, mb.saturating_mul(1024 * 1024))
             })
@@ -116,8 +116,8 @@ pub(crate) fn placement_preview(
         .into_iter()
         .map(|(id, bytes)| {
             let slot = match id {
-                crate::devices::DeviceId::Cpu => crate::config::DeviceSlot::Cpu,
-                crate::devices::DeviceId::Gpu(n) => crate::config::DeviceSlot::Gpu(n),
+                ananke_placement::devices::DeviceId::Cpu => crate::config::DeviceSlot::Cpu,
+                ananke_placement::devices::DeviceId::Gpu(n) => crate::config::DeviceSlot::Gpu(n),
             };
             let total_bytes = snapshot.total_bytes(&slot).unwrap_or(0);
             let used = total_bytes.saturating_sub(snapshot.free_bytes(&slot).unwrap_or(0));

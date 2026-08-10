@@ -36,11 +36,12 @@ pub use ananke_config::{
 };
 use ananke_config::{load_config_from_str_with_checks, preflight_ggufs};
 use ananke_errors::ExpectedError;
+use ananke_system::{Fs, LocalFs};
 
 /// Load, parse, merge, validate, and preflight a config file from disk.
 pub fn load_config(path: &Path) -> Result<(EffectiveConfig, Vec<Migration>), ExpectedError> {
-    let fs = crate::system::LocalFs;
-    let source = crate::system::Fs::read_to_string(&fs, path)
+    let fs = LocalFs;
+    let source = Fs::read_to_string(&fs, path)
         .map_err(|_| ExpectedError::config_file_missing(path.to_path_buf()))?;
     load_config_with_fs(path, &fs, &source)
 }
@@ -50,7 +51,7 @@ pub fn load_config(path: &Path) -> Result<(EffectiveConfig, Vec<Migration>), Exp
 /// it through the fs).
 pub fn load_config_with_fs(
     origin: &Path,
-    fs: &dyn crate::system::Fs,
+    fs: &dyn ananke_system::Fs,
     source: &str,
 ) -> Result<(EffectiveConfig, Vec<Migration>), ExpectedError> {
     let (effective, migrations) = load_config_from_str_with_checks(

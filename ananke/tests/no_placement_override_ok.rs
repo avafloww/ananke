@@ -13,9 +13,9 @@ use std::{
 use ananke::{
     api::openai,
     config::{PlacementPolicy, ServiceConfig, TemplateConfig},
-    devices::{CpuSnapshot, DeviceSnapshot},
-    system::Fs,
 };
+use ananke_placement::devices::{CpuSnapshot, DeviceSnapshot};
+use ananke_system::Fs;
 use axum::{
     body::Body,
     http::{Request, StatusCode},

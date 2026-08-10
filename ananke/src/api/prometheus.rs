@@ -92,7 +92,7 @@ fn format_prometheus(families: &[MetricFamily]) -> String {
 /// Collect all Prometheus metrics from the daemon state.
 async fn collect_metrics(state: &AppState) -> Vec<MetricFamily> {
     let eff = state.config.effective();
-    let now = crate::tracking::now_unix_ms();
+    let now = ananke_time::now_unix_ms();
     let since = now - 7 * 24 * 60 * 60 * 1000;
     let big_bucket = 7 * 24 * 60 * 60 * 1000;
 

@@ -10,9 +10,9 @@ use ananke::{
             PlacementPolicy, ServiceConfig, SplitMode,
         },
     },
-    devices::Allocation,
     supervise::render_argv,
 };
+use ananke_placement::devices::Allocation;
 use smol_str::SmolStr;
 
 #[test]

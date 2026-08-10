@@ -5,6 +5,7 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use ananke_api::oneshot::OneshotRequest;
+use ananke_placement::devices::Allocation;
 
 use crate::{
     config::{
@@ -17,7 +18,6 @@ use crate::{
         },
     },
     daemon::app_state::AppState,
-    devices::Allocation,
     oneshot::{OneshotId, OneshotRecord},
 };
 
@@ -150,7 +150,7 @@ pub async fn spawn_oneshot(
         template_config,
     };
 
-    let now_ms = crate::tracking::now_unix_ms();
+    let now_ms = ananke_time::now_unix_ms();
     let service_id = state
         .db
         .upsert_service(&svc.name, now_ms)

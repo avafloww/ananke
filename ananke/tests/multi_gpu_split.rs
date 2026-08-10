@@ -10,13 +10,14 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use ananke::{
-    allocator::{AllocationTable, placement},
-    config::{PlacementPolicy, ServiceConfig},
-    devices::{DeviceId, DeviceSnapshot, GpuSnapshot},
-    estimator::{Estimate, Layout},
-};
+use ananke::config::{PlacementPolicy, ServiceConfig};
+use ananke_allocator::AllocationTable;
+use ananke_estimate::{Estimate, Layout};
 use ananke_gguf::Architecture;
+use ananke_placement::{
+    self as placement,
+    devices::{DeviceId, DeviceSnapshot, GpuSnapshot},
+};
 
 fn two_gpu_svc() -> ServiceConfig {
     // No placement_override — the test drives pack() directly.

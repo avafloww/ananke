@@ -17,13 +17,13 @@ use axum::{
 };
 
 use crate::{
-    allocator::placement,
     api::{
         errors::ApiErrorCode,
         management::handlers::{model_estimate_entry, placement_preview, read_current_allocation},
     },
     config::{ServiceConfig, service_inputs::placement_inputs},
-    daemon::{app_state::AppState, estimate_cache::EstimateCacheEntry},
+    daemon::app_state::AppState,
+    supervise::estimate_cache::EstimateCacheEntry,
 };
 
 #[utoipa::path(
@@ -288,7 +288,7 @@ pub async fn service_command(State(state): State<AppState>, Path(name): Path<Str
     let on_empty = match crate::supervise::preview_command(
         svc_cfg,
         &snapshot,
-        &crate::allocator::AllocationTable::new(),
+        &ananke_allocator::AllocationTable::new(),
         fs,
         corrections,
     ) {
@@ -450,7 +450,7 @@ fn summary_footprint(
     // one-layer fudge, MTP, expert offload — falls out of the same code that
     // computes a real placement, so the two cannot disagree.
     let Ok(packed) =
-        placement::pack_demand(est, &placement_inputs(svc_cfg), &snapshot, corrections)
+        ananke_placement::pack_demand(est, &placement_inputs(svc_cfg), &snapshot, corrections)
     else {
         return Vec::new();
     };

@@ -20,8 +20,8 @@ use ananke::{
     api::openai,
     config::{AutoRestartSettings, TtftStallTrigger},
     supervise::state::ServiceState,
-    system::FakeProcessState,
 };
+use ananke_system::FakeProcessState;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
