@@ -189,8 +189,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
     // wires up, so integration tests can PUT a synthetic config that
     // drops or adds a service and observe the supervisor lifecycle.
     let (reconciler_shutdown, reconciler_rx) = tokio::sync::watch::channel(false);
-    let provisioning_deps =
-        ananke::supervise::provision::ProvisioningDeps::from_state(&state, reconciler_rx.clone());
+    let provisioning_deps = state.provisioning_deps(reconciler_rx.clone());
     let reconciler_join = ananke::supervise::reconciler::spawn(
         events,
         state.config.clone(),

@@ -21,14 +21,14 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ananke_api::events::Event;
+use ananke_events::EventBus;
 use smol_str::SmolStr;
 use tokio::sync::{broadcast::error::RecvError, watch};
 use tracing::{error, info, warn};
 
 use crate::{
     config::manager::ConfigManager,
-    daemon::events::EventBus,
-    supervise::{provision::ProvisioningDeps, registry::ServiceRegistry},
+    supervise::{provision::ProvisioningDeps, registry::SupervisorRegistry},
 };
 
 /// Spawn the reconciler task. Returns a `JoinHandle` so the caller can
@@ -41,7 +41,7 @@ use crate::{
 pub fn spawn(
     events: EventBus,
     config: Arc<ConfigManager>,
-    registry: ServiceRegistry,
+    registry: SupervisorRegistry,
     provisioning: Option<ProvisioningDeps>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
@@ -71,7 +71,7 @@ pub fn spawn(
 
 async fn handle_reload(
     config: &ConfigManager,
-    registry: &ServiceRegistry,
+    registry: &SupervisorRegistry,
     provisioning: Option<&ProvisioningDeps>,
     changed: &[SmolStr],
 ) {
@@ -151,14 +151,14 @@ mod tests {
     /// needs.
     async fn fixture(
         services: Vec<crate::config::ServiceConfig>,
-    ) -> (ServiceRegistry, EventBus, Arc<ConfigManager>) {
+    ) -> (SupervisorRegistry, EventBus, Arc<ConfigManager>) {
         let effective = EffectiveConfig {
             daemon: crate::config::DaemonSettings::default(),
             services: services.clone(),
         };
         let events = EventBus::new();
         let config = ConfigManager::in_memory(effective.clone(), events.clone());
-        let registry = ServiceRegistry::new();
+        let registry = SupervisorRegistry::new();
 
         let db = Database::open_in_memory().await.unwrap();
         let batcher = spawn_batcher(db.clone());
@@ -179,7 +179,7 @@ mod tests {
             system: crate::system::SystemDeps::fake().0,
             inflight: crate::tracking::inflight::InflightTable::new(),
             activity: activity.clone(),
-            estimate_cache: crate::daemon::estimate_cache::EstimateCache::new(),
+            estimate_cache: crate::supervise::estimate_cache::EstimateCacheHandle::new(),
         };
 
         for svc in services {

@@ -25,7 +25,7 @@ use crate::{
     devices::{GpuProbe, cpu, nvml::NvmlProbe, snapshotter},
     errors::ExpectedError,
     oneshot::{OneshotRegistry, PortPool},
-    supervise::{SupervisorHandle, orphans::reconcile, registry::ServiceRegistry},
+    supervise::{SupervisorHandle, orphans::reconcile, registry::SupervisorRegistry},
     tracking::{activity::ActivityTable, inflight::InflightTable, progress::ProgressTable},
 };
 
@@ -73,7 +73,7 @@ pub async fn run() -> Result<(), ExpectedError> {
 
     let rolling = crate::tracking::rolling::RollingTable::with_events(events.clone());
     let observation = crate::tracking::observation::ObservationTable::new();
-    let registry = ServiceRegistry::new();
+    let registry = SupervisorRegistry::new();
 
     let shared_snapshot = snapshotter::new_shared();
     let snapshotter_join = snapshotter::spawn(
@@ -123,11 +123,10 @@ pub async fn run() -> Result<(), ExpectedError> {
         batcher: batcher.clone(),
         events: events.clone(),
         system: system.clone(),
-        estimate_cache: crate::daemon::estimate_cache::EstimateCache::new(),
+        estimate_cache: crate::daemon::estimate_cache::EstimateCacheHandle::new(),
     };
 
-    let provisioning_deps =
-        crate::supervise::provision::ProvisioningDeps::from_state(&app_state, shutdown_rx.clone());
+    let provisioning_deps = app_state.provisioning_deps(shutdown_rx.clone());
 
     let mut supervisors: Vec<Arc<SupervisorHandle>> = Vec::new();
     let mut proxy_tasks = Vec::new();
@@ -227,7 +226,10 @@ pub async fn run() -> Result<(), ExpectedError> {
     let sampler_task =
         crate::tracking::sampler::spawn(db.clone(), shared_snapshot.clone(), shutdown_rx.clone());
     let persistent_watcher_task = tokio::spawn(crate::supervise::persistent_watcher::run_loop(
-        app_state.clone(),
+        crate::supervise::PersistentWatchDeps {
+            config: app_state.config.clone(),
+            registry: app_state.registry.clone(),
+        },
         shutdown_rx.clone(),
     ));
 

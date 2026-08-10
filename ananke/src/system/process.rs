@@ -19,12 +19,13 @@
 
 use std::{collections::BTreeMap, ffi::OsString, io, pin::Pin, process::ExitStatus};
 
+use ananke_spawn::SpawnConfig;
 use async_trait::async_trait;
 #[cfg(any(test, feature = "test-fakes"))]
 pub use fake::{FakeChildSnapshot, FakeProcessState, FakeSpawner};
 use tokio::io::AsyncRead;
 
-use crate::{errors::ExpectedError, supervise::spawn::SpawnConfig};
+use crate::errors::ExpectedError;
 
 /// Owned reader for a child's stdout or stderr.
 ///

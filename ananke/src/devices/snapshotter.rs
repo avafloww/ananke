@@ -16,7 +16,7 @@ use tracing::{debug, warn};
 
 use crate::{
     devices::{CpuSnapshot, DeviceSnapshot, GpuProbe, GpuSnapshot, cpu},
-    supervise::registry::ServiceRegistry,
+    supervise::registry::SupervisorRegistry,
     system::{
         ProcFs, Rss,
         proc::{descendants_from_map, parent_map, pids_in_cgroup_subtree},
@@ -37,7 +37,7 @@ pub fn spawn(
     snapshot: SharedSnapshot,
     probe: Option<Arc<dyn GpuProbe>>,
     observation: ObservationTable,
-    registry: ServiceRegistry,
+    registry: SupervisorRegistry,
     proc: Arc<dyn ProcFs>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
@@ -78,7 +78,7 @@ pub fn spawn(
 fn sample_observation(
     probe: &Option<Arc<dyn GpuProbe>>,
     observation: &ObservationTable,
-    registry: &ServiceRegistry,
+    registry: &SupervisorRegistry,
     proc: &dyn ProcFs,
 ) {
     let parents = parent_map(proc);
@@ -239,7 +239,7 @@ mod tests {
             fake::{FakeGpu, FakeProbe},
             probe::GpuInfo,
         },
-        supervise::registry::ServiceRegistry,
+        supervise::registry::SupervisorRegistry,
         system::InMemoryProcFs,
         tracking::observation::ObservationTable,
     };
@@ -264,7 +264,7 @@ mod tests {
             snapshot.clone(),
             Some(Arc::new(fake)),
             ObservationTable::new(),
-            ServiceRegistry::new(),
+            SupervisorRegistry::new(),
             proc,
             rx,
         );

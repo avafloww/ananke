@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+pub use ananke_placement::DrainReason;
 use tracing::{info, warn};
 
 use crate::system::ManagedChild;
@@ -22,19 +23,6 @@ const INFLIGHT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// SIGTERM grace used by `fast_kill`. Short because the caller has already
 /// decided the child has misbehaved and must go; no streaming-client courtesy.
 const FAST_KILL_SIGTERM_GRACE: Duration = Duration::from_secs(5);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DrainReason {
-    Shutdown,
-    IdleTimeout,
-    Eviction,
-    TtlExpired,
-    UserKilled,
-    ConfigChanged,
-    /// Self-healing restart: the error-rate watchdog or periodic timer
-    /// decided a `Running` service should be drained and respawned.
-    AutoRestart,
-}
 
 #[derive(Debug, Clone)]
 pub struct DrainConfig {

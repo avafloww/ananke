@@ -4,10 +4,14 @@ members = [
     "anankectl",
     "crates/api",
     "crates/config",
+    "crates/errors",
     "crates/estimate",
+    "crates/events",
     "crates/fs",
     "crates/gguf",
     "crates/placement",
+    "crates/spawn",
+    "crates/time",
     "crates/tuning",
     "crates/tuning-schema",
     "calibration/crates/calibrate",
@@ -23,10 +27,14 @@ default-members = [
     "anankectl",
     "crates/api",
     "crates/config",
+    "crates/errors",
     "crates/estimate",
+    "crates/events",
     "crates/fs",
     "crates/gguf",
     "crates/placement",
+    "crates/spawn",
+    "crates/time",
     "crates/tuning",
     "crates/tuning-schema",
     "calibration/crates/calibrate",
@@ -43,10 +51,14 @@ version = "0.2.0"
 # Internal crates
 ananke-api = { path = "crates/api" }
 ananke-config = { path = "crates/config" }
+ananke-errors = { path = "crates/errors" }
 ananke-estimate = { path = "crates/estimate" }
+ananke-events = { path = "crates/events" }
 ananke-fs = { path = "crates/fs" }
 ananke-gguf = { path = "crates/gguf" }
 ananke-placement = { path = "crates/placement" }
+ananke-spawn = { path = "crates/spawn" }
+ananke-time = { path = "crates/time" }
 ananke-tuning = { path = "crates/tuning" }
 ananke-tuning-schema = { path = "crates/tuning-schema" }
 ananke-calibrate = { path = "calibration/crates/calibrate" }

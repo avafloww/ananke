@@ -6,9 +6,11 @@
 use ananke_config::placement::DeviceSlot;
 
 pub mod devices;
+pub mod registry;
 
 pub use command_gpu::{check_command_placement_override, command_gpu_shortfalls, pick_command_gpu};
 pub use entry::{PackMode, pack, pack_corrected, pack_demand, pack_optimistic};
+pub use registry::{DrainReason, KillHandle, ServiceRegistry, slot_to_key};
 pub use types::{CommandArgs, DeviceShortfall, PackError, Packed, RollingInputs};
 
 /// The reservation table: what each service has pledged on each device.

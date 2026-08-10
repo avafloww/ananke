@@ -30,10 +30,14 @@ dependencies = [
  "ananke-api",
  "ananke-config",
  "ananke-dataset",
+ "ananke-errors",
  "ananke-estimate",
+ "ananke-events",
  "ananke-fs",
  "ananke-gguf",
  "ananke-placement",
+ "ananke-spawn",
+ "ananke-time",
  "arc-swap",
  "async-trait",
  "axum 0.7.9",
@@ -129,6 +133,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ananke-errors"
+version = "0.2.0"
+
+[[package]]
 name = "ananke-estimate"
 version = "0.2.0"
 dependencies = [
@@ -141,6 +149,16 @@ dependencies = [
  "serde_json",
  "smol_str",
  "tracing",
+]
+
+[[package]]
+name = "ananke-events"
+version = "0.2.0"
+dependencies = [
+ "ananke-api",
+ "parking_lot",
+ "smol_str",
+ "tokio",
 ]
 
 [[package]]
@@ -184,12 +202,22 @@ dependencies = [
  "ananke-estimate",
  "ananke-fs",
  "ananke-gguf",
+ "async-trait",
  "clap",
+ "parking_lot",
  "serde",
  "serde_json",
  "smol_str",
  "tracing",
 ]
+
+[[package]]
+name = "ananke-spawn"
+version = "0.2.0"
+
+[[package]]
+name = "ananke-time"
+version = "0.2.0"
 
 [[package]]
 name = "ananke-tuning"

@@ -16,20 +16,31 @@
 //! Starting/Running, so racing it against a user-driven
 //! `/v1/chat/completions` causes no harm.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use tokio::sync::watch;
 use tracing::info;
 
 use crate::{
-    config::Lifecycle,
-    daemon::app_state::AppState,
-    supervise::state::{DisableReason, ServiceState},
+    config::{Lifecycle, manager::ConfigManager},
+    supervise::{
+        registry::SupervisorRegistry,
+        state::{DisableReason, ServiceState},
+    },
 };
 
 const TICK: Duration = Duration::from_secs(5);
 
-pub async fn run_loop(state: AppState, mut shutdown: watch::Receiver<bool>) {
+/// Everything the persistent-service re-ensure loop needs from the daemon.
+/// Kept as its own struct (rather than taking `AppState`) so supervise
+/// never imports the daemon's composition root.
+#[derive(Clone)]
+pub struct PersistentWatchDeps {
+    pub config: Arc<ConfigManager>,
+    pub registry: SupervisorRegistry,
+}
+
+pub async fn run_loop(deps: PersistentWatchDeps, mut shutdown: watch::Receiver<bool>) {
     let mut tick = tokio::time::interval(TICK);
     // Skip rather than burst on missed ticks: if a prior `tick.tick()`
     // was blocked (e.g. awaiting a peer snapshot that queued behind a
@@ -47,14 +58,14 @@ pub async fn run_loop(state: AppState, mut shutdown: watch::Receiver<bool>) {
                 if *shutdown.borrow() { return; }
             }
             _ = tick.tick() => {
-                re_ensure_persistent(&state).await;
+                re_ensure_persistent(&deps).await;
             }
         }
     }
 }
 
-async fn re_ensure_persistent(state: &AppState) {
-    let effective = state.config.effective();
+async fn re_ensure_persistent(deps: &PersistentWatchDeps) {
+    let effective = deps.config.effective();
 
     // Passive: if *any* other service is currently active
     // (Starting/Running), defer. The watcher's job is to
@@ -63,7 +74,7 @@ async fn re_ensure_persistent(state: &AppState) {
     // finds the pool quiet and re-ensures; if the operator stops the
     // on-demand service explicitly, same. This keeps the persistent
     // service's respawn from ping-ponging against every peer start.
-    let any_peer_active = state.registry.all().into_iter().any(|(name, handle)| {
+    let any_peer_active = deps.registry.all().into_iter().any(|(name, handle)| {
         let is_persistent = effective
             .services
             .iter()
@@ -84,7 +95,7 @@ async fn re_ensure_persistent(state: &AppState) {
         if svc_cfg.lifecycle != Lifecycle::Persistent {
             continue;
         }
-        let Some(handle) = state.registry.get(&svc_cfg.name) else {
+        let Some(handle) = deps.registry.get(&svc_cfg.name) else {
             continue;
         };
         // Read state via the lock-free mirror so the watcher doesn't

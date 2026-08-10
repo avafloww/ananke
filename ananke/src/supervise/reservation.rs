@@ -85,7 +85,7 @@ impl RunLoop {
         if let Some(lc) = lc {
             self.deps.estimate_cache.insert(
                 svc.name.clone(),
-                crate::daemon::estimate_cache::CacheEntry::build(
+                crate::supervise::estimate_cache::build_cache_entry(
                     &summary,
                     &est,
                     lc.model.clone(),

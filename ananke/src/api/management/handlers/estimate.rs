@@ -7,7 +7,10 @@ use tracing::warn;
 
 use crate::{
     config::ServiceConfig,
-    daemon::{app_state::AppState, estimate_cache::CacheEntry},
+    daemon::{
+        app_state::AppState,
+        estimate_cache::{EstimateCacheEntry, build_cache_entry},
+    },
     estimator::estimate_with_summary,
 };
 
@@ -19,7 +22,7 @@ use crate::{
 pub(crate) fn model_estimate_entry(
     state: &AppState,
     svc_cfg: &ServiceConfig,
-) -> Option<CacheEntry> {
+) -> Option<EstimateCacheEntry> {
     svc_cfg.llama_cpp()?;
     // Build the inputs once so the fingerprint we compare against is
     // identical to the one `compute_estimate_entry` would write into
@@ -144,10 +147,10 @@ pub(crate) fn placement_preview(
 }
 
 /// Run the estimator against the service's configured paths and
-/// project the result through the shared `CacheEntry::build`
+/// project the result through the shared `build_cache_entry`
 /// constructor. Returns `None` when the GGUF can't be read or the
 /// estimator refuses the architecture.
-fn compute_estimate_entry(state: &AppState, svc_cfg: &ServiceConfig) -> Option<CacheEntry> {
+fn compute_estimate_entry(state: &AppState, svc_cfg: &ServiceConfig) -> Option<EstimateCacheEntry> {
     let lc = svc_cfg.llama_cpp()?;
     let inputs = crate::config::service_inputs::estimator_inputs(svc_cfg)
         .map(|i| i.with_visible_devices(state.snapshot.read().gpus.len() as u32))?;
@@ -156,7 +159,7 @@ fn compute_estimate_entry(state: &AppState, svc_cfg: &ServiceConfig) -> Option<C
     let mmproj_path = lc.mmproj.clone();
 
     match estimate_with_summary(state.system.fs.as_ref(), &inputs) {
-        Ok((summary, estimate)) => Some(CacheEntry::build(
+        Ok((summary, estimate)) => Some(build_cache_entry(
             &summary,
             &estimate,
             model_path,

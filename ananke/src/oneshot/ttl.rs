@@ -12,7 +12,7 @@ use tracing::info;
 use crate::{
     db::Database,
     oneshot::{OneshotRegistry, PortPool},
-    supervise::{drain::DrainReason, registry::ServiceRegistry},
+    supervise::{drain::DrainReason, registry::SupervisorRegistry},
 };
 
 /// Inputs to [`spawn_watcher`].
@@ -21,7 +21,7 @@ pub struct WatcherConfig {
     pub service_name: SmolStr,
     pub ttl: Duration,
     pub port: u16,
-    pub registry: ServiceRegistry,
+    pub registry: SupervisorRegistry,
     pub oneshots: OneshotRegistry,
     pub db: Database,
     pub port_pool: Arc<Mutex<PortPool>>,

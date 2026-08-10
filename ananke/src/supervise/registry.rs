@@ -1,53 +1,16 @@
 //! Shared lookup from service name to `SupervisorHandle`.
 //!
-//! Read-heavy; wrapped in an `Arc<RwLock<...>>` so both HTTP routers and
-//! the daemon lifecycle code can share visibility without cloning the
-//! whole map per request.
+//! The generic `ServiceRegistry<T>` lives in `ananke-placement`; this
+//! module instantiates it with the daemon's `SupervisorHandle` and
+//! re-exports the concrete alias so `crate::supervise::registry::…`
+//! keeps resolving.
 
-use std::{collections::BTreeMap, sync::Arc};
-
-use parking_lot::RwLock;
-use smol_str::SmolStr;
+pub use ananke_placement::{DrainReason, KillHandle, ServiceRegistry, slot_to_key};
 
 use crate::supervise::SupervisorHandle;
 
-#[derive(Clone, Default)]
-pub struct ServiceRegistry {
-    inner: Arc<RwLock<BTreeMap<SmolStr, Arc<SupervisorHandle>>>>,
-}
-
-impl ServiceRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn insert(&self, name: SmolStr, handle: Arc<SupervisorHandle>) {
-        self.inner.write().insert(name, handle);
-    }
-
-    pub fn get(&self, name: &str) -> Option<Arc<SupervisorHandle>> {
-        self.inner.read().get(name).cloned()
-    }
-
-    /// Evict `name` and return its handle if present. The caller typically
-    /// awaits `shutdown()` on the returned handle to drain the underlying
-    /// child before the `Arc` is dropped.
-    pub fn remove(&self, name: &str) -> Option<Arc<SupervisorHandle>> {
-        self.inner.write().remove(name)
-    }
-
-    pub fn names(&self) -> Vec<SmolStr> {
-        self.inner.read().keys().cloned().collect()
-    }
-
-    pub fn all(&self) -> Vec<(SmolStr, Arc<SupervisorHandle>)> {
-        self.inner
-            .read()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
-    }
-}
+/// The daemon's registry: service name → supervisor handle.
+pub type SupervisorRegistry = ServiceRegistry<SupervisorHandle>;
 
 #[cfg(test)]
 mod tests {
@@ -72,7 +35,7 @@ mod tests {
             daemon: crate::config::DaemonSettings::default(),
             services: vec![svc.clone()],
         };
-        let events = crate::daemon::events::EventBus::new();
+        let events = ananke_events::EventBus::new();
         let config = crate::config::manager::ConfigManager::in_memory(effective, events.clone());
         let init = crate::supervise::SupervisorInit {
             identity: crate::supervise::ServiceIdentity::from_service(&svc),
@@ -90,17 +53,17 @@ mod tests {
             )),
             rolling: crate::tracking::rolling::RollingTable::new(),
             observation: crate::tracking::observation::ObservationTable::new(),
-            registry: ServiceRegistry::new(),
+            registry: SupervisorRegistry::new(),
             config,
             events,
             system: crate::system::SystemDeps::fake().0,
             inflight: crate::tracking::inflight::InflightTable::new(),
             activity: crate::tracking::activity::ActivityTable::new(),
-            estimate_cache: crate::daemon::estimate_cache::EstimateCache::new(),
+            estimate_cache: crate::supervise::estimate_cache::EstimateCacheHandle::new(),
         };
         let handle = Arc::new(spawn_supervisor(init, svc.clone(), deps));
 
-        let registry = ServiceRegistry::new();
+        let registry = SupervisorRegistry::new();
         registry.insert(SmolStr::new("demo"), handle.clone());
         assert!(registry.get("demo").is_some());
         assert!(registry.get("missing").is_none());

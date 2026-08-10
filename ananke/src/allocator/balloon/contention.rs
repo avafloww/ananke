@@ -9,7 +9,7 @@ use crate::{
         Lifecycle,
         validate::{DEFAULT_SERVICE_PRIORITY, DeviceSlot},
     },
-    supervise::registry::ServiceRegistry,
+    supervise::registry::SupervisorRegistry,
 };
 
 /// Outcome of the contention resolver's peer pick.
@@ -96,7 +96,7 @@ pub(crate) fn resolve_contention(
     svc_lifecycle: Lifecycle,
     reservations: &AllocationTable,
     overcommitted_gpus: &[u32],
-    registry: &ServiceRegistry,
+    registry: &SupervisorRegistry,
     services: &[crate::config::ServiceConfig],
 ) -> ContentionAction {
     let lifecycle_of = |name: &SmolStr| -> Lifecycle {
@@ -299,13 +299,13 @@ mod tests {
     /// checks registry membership (`registry.get(...).is_some()`), not
     /// handle health, so this is sufficient for the unit-level pure-data
     /// tests.
-    fn with_handles(names: &[&str]) -> ServiceRegistry {
+    fn with_handles(names: &[&str]) -> SupervisorRegistry {
         // We can't construct a real SupervisorHandle here without the full
         // supervisor stack; build a registry with synthetic entries by
         // taking handles from a tiny side-helper that spawns a no-op
         // supervisor. For the pure-data scope of these tests, presence is
         // all that matters, so just clone the same handle into each slot.
-        let registry = ServiceRegistry::new();
+        let registry = SupervisorRegistry::new();
         let handle = std::sync::Arc::new(crate::supervise::SupervisorHandle::stub_for_test());
         for n in names {
             registry.insert(SmolStr::new(*n), handle.clone());

@@ -37,27 +37,6 @@ pub struct ProvisioningDeps {
     pub shutdown_rx: watch::Receiver<bool>,
 }
 
-impl ProvisioningDeps {
-    /// Assemble a `ProvisioningDeps` from a daemon [`AppState`] and the
-    /// daemon-wide shutdown channel. Every field already lives on
-    /// `AppState`; this constructor keeps the call sites in
-    /// `daemon::run` and the test harness from enumerating them by hand.
-    pub fn from_state(
-        state: &crate::daemon::app_state::AppState,
-        shutdown_rx: watch::Receiver<bool>,
-    ) -> Self {
-        Self {
-            db: state.db.clone(),
-            activity: state.activity.clone(),
-            inflight: state.inflight.clone(),
-            observation: state.observation.clone(),
-            allocations: state.allocations.clone(),
-            supervisor_deps: state.supervisor_deps(),
-            shutdown_rx,
-        }
-    }
-}
-
 /// Tasks owned by a provisioned service. The daemon keeps these in a pool
 /// and aborts them on shutdown; the reconciler, for now, fires-and-forgets
 /// (teardown on service-remove lives in `reconciler::handle_reload`, and

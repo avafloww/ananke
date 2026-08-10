@@ -12,6 +12,7 @@
 
 pub mod drain;
 pub mod ensure;
+pub mod estimate_cache;
 pub mod genstall;
 pub mod handle;
 pub mod health;
@@ -39,6 +40,7 @@ mod watchdogs;
 
 use std::{sync::Arc, time::Duration};
 
+pub use ananke_placement::{DrainReason, KillHandle};
 pub use context::slot_to_key;
 pub use ensure::{EnsureFailure, EnsureOutcome, await_ensure};
 pub use handle::{
@@ -48,6 +50,7 @@ pub use handle::{
 };
 pub use orphans::{OrphanDisposition, reconcile};
 use parking_lot::Mutex as SyncMutex;
+pub use persistent_watcher::PersistentWatchDeps;
 pub use preview::{
     PlacementOutcome, PreviewError, preview_command, preview_command_placement,
     preview_override_placement, preview_placement,

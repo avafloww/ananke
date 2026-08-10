@@ -23,7 +23,7 @@ use crate::{
         management::handlers::{model_estimate_entry, placement_preview, read_current_allocation},
     },
     config::{ServiceConfig, service_inputs::placement_inputs},
-    daemon::{app_state::AppState, estimate_cache::CacheEntry},
+    daemon::{app_state::AppState, estimate_cache::EstimateCacheEntry},
 };
 
 #[utoipa::path(
@@ -416,7 +416,7 @@ fn summary_footprint(
     state: &AppState,
     svc_cfg: &ServiceConfig,
     placement: Option<&PlacementPreview>,
-    entry: &Option<CacheEntry>,
+    entry: &Option<EstimateCacheEntry>,
 ) -> Vec<DeviceFootprint> {
     let Some(placement) = placement else {
         return Vec::new();

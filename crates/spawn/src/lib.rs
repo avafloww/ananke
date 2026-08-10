@@ -1,34 +1,36 @@
-//! Linux-only: render llama-server argv from an `EffectiveConfig` service
-//! entry. Actual child spawning lives behind the
-//! [`crate::system::ProcessSpawner`] trait, with the production
-//! [`crate::system::LocalSpawner`] applying `prctl(PR_SET_PDEATHSIG, SIGTERM)`
-//! so the child dies if the daemon exits unexpectedly.
+//! Child-process launch configuration shared by the system spawner and the
+//! supervisor's argv renderers.
 
-mod command;
-mod llama_cpp;
+use std::collections::BTreeMap;
 
-pub use ananke_spawn::SpawnConfig;
-pub use command::render_shutdown_argv;
+/// Resolved command line plus environment for a child process, produced by
+/// the supervise spawn renderers and consumed by the process spawner.
+#[derive(Debug, Clone)]
+pub struct SpawnConfig {
+    pub binary: String,
+    pub args: Vec<String>,
+    pub env: BTreeMap<String, String>,
+    pub env_inherit: bool,
+}
 
-use crate::{
-    config::validate::{ServiceConfig, TemplateConfig},
-    devices::Allocation,
-};
-
-/// Render the child command line plus env from a validated `ServiceConfig`,
-/// its `Allocation`, and optional placement `CommandArgs`.
-///
-/// When `cmd_args` is `Some`, the placement engine has already computed
-/// `-ngl`/`--tensor-split`/`-ot` values. Any existing `-ngl` flags from the
-/// static config path are replaced by the placement-derived value.
-pub fn render_argv(
-    svc: &ServiceConfig,
-    alloc: &Allocation,
-    cmd_args: Option<&crate::allocator::placement::CommandArgs>,
-) -> Result<SpawnConfig, crate::templates::SubstituteError> {
-    match &svc.template_config {
-        TemplateConfig::LlamaCpp(lc) => llama_cpp::render_llama_cpp_argv(svc, lc, alloc, cmd_args),
-        TemplateConfig::Command(_) => command::render_command_argv(svc, alloc),
+impl SpawnConfig {
+    /// Resolve the final environment map for the child process.
+    ///
+    /// When `env_inherit` is `true`, the child inherits the daemon's
+    /// environment with per-service `env` entries overriding individual
+    /// keys. When `false`, the child starts from a clean slate containing
+    /// only the `env` entries (plus `CUDA_VISIBLE_DEVICES`, which is
+    /// already folded into `self.env` by the render functions).
+    pub fn resolve_env(&self, inherited: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+        let mut env = if self.env_inherit {
+            inherited.clone()
+        } else {
+            BTreeMap::new()
+        };
+        for (k, v) in &self.env {
+            env.insert(k.clone(), v.clone());
+        }
+        env
     }
 }
 

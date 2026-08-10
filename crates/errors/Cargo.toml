@@ -1,0 +1,11 @@
+[package]
+name = "ananke-errors"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "ananke_errors"
+path = "src/lib.rs"
+
+[dependencies]

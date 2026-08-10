@@ -24,7 +24,7 @@ use crate::{
     config::{DeviceSlot, Lifecycle, PlacementPolicy, manager::ConfigManager},
     daemon::events::EventBus,
     devices::snapshotter::SharedSnapshot,
-    supervise::{drain::DrainReason, registry::ServiceRegistry},
+    supervise::{drain::DrainReason, registry::SupervisorRegistry},
     tracking::observation::ObservationTable,
 };
 
@@ -36,7 +36,7 @@ const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 /// callers can build the inputs once and clone.
 pub struct ResolverDeps {
     pub observation: ObservationTable,
-    pub registry: ServiceRegistry,
+    pub registry: SupervisorRegistry,
     pub allocations: std::sync::Arc<Mutex<AllocationTable>>,
     pub events: EventBus,
     /// Live snapshot used to compute per-GPU pledge totals against

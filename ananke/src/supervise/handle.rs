@@ -4,15 +4,18 @@
 
 use std::sync::{Arc, atomic::AtomicU64};
 
+use ananke_events::EventBus;
 use parking_lot::Mutex as SyncMutex;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
     config::validate::ServiceConfig,
-    daemon::events::EventBus,
     db::{Database, logs::BatcherHandle},
     devices::Allocation,
-    supervise::{ensure::EnsureFailure, registry::ServiceRegistry, run, state::ServiceState},
+    supervise::{
+        KillHandle, ensure::EnsureFailure, estimate_cache::EstimateCacheHandle,
+        registry::SupervisorRegistry, run, state::ServiceState,
+    },
     tracking::{observation::ObservationTable, rolling::RollingTable},
 };
 
@@ -295,6 +298,13 @@ impl SupervisorHandle {
     }
 }
 
+#[async_trait::async_trait]
+impl KillHandle for SupervisorHandle {
+    async fn fast_kill(&self, reason: crate::supervise::drain::DrainReason) {
+        self.fast_kill(reason).await;
+    }
+}
+
 /// Daemon-wide shared state every supervisor borrows. Cloning it is cheap
 /// (every field is `Arc`-backed). Outside-world capabilities live inside
 /// `system` ([`crate::system::SystemDeps`]); everything else is
@@ -315,7 +325,7 @@ pub struct SupervisorDeps {
     pub allocations: Arc<parking_lot::Mutex<crate::allocator::AllocationTable>>,
     pub rolling: RollingTable,
     pub observation: ObservationTable,
-    pub registry: ServiceRegistry,
+    pub registry: SupervisorRegistry,
     pub config: Arc<crate::config::manager::ConfigManager>,
     pub events: EventBus,
     pub system: crate::system::SystemDeps,
@@ -327,7 +337,7 @@ pub struct SupervisorDeps {
     /// estimator run writes into this cache so the management
     /// `ServiceDetail` handler sees the same numbers without doing a
     /// second GGUF read.
-    pub estimate_cache: crate::daemon::estimate_cache::EstimateCache,
+    pub estimate_cache: EstimateCacheHandle,
 }
 
 /// Identity fields that don't change across a reload. Everything else a

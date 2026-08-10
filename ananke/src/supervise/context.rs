@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
 use crate::{
-    config::{DeviceSlot, validate::ServiceConfig},
+    config::validate::ServiceConfig,
     db::Database,
     supervise::{
         RunLoop,
@@ -228,14 +228,7 @@ impl RunLoop {
     }
 }
 
-/// Convert a `DeviceSlot` to the canonical string key used in
-/// `AllocationChanged` reservations (`"cpu"` or `"gpu:N"`).
-pub fn slot_to_key(slot: &DeviceSlot) -> String {
-    match slot {
-        DeviceSlot::Cpu => "cpu".to_string(),
-        DeviceSlot::Gpu(n) => format!("gpu:{n}"),
-    }
-}
+pub use ananke_placement::slot_to_key;
 
 /// Delete the `running_services` row for `(service_id, run_id)` if present.
 async fn delete_running_row(db: &Database, service_id: i64, run_id: i64) {
