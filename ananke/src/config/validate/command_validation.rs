@@ -8,7 +8,7 @@ use smol_str::SmolStr;
 use crate::{
     config::{
         parse::RawCommandService,
-        validate::{CommandConfig, OpenAiProxyConfig, check_placeholders, fail},
+        validate::{CommandConfig, OpenAiProxyConfig, PlaceholderChecker, fail},
     },
     errors::ExpectedError,
 };
@@ -16,6 +16,7 @@ use crate::{
 pub(crate) fn validate_command(
     name: &SmolStr,
     cmd: &RawCommandService,
+    checker: &dyn PlaceholderChecker,
 ) -> Result<CommandConfig, ExpectedError> {
     let command = cmd.command.clone().ok_or_else(|| {
         fail(format!(
@@ -36,9 +37,9 @@ pub(crate) fn validate_command(
     // than at spawn/drain time. Uses a synthetic context — values are
     // arbitrary but cover every placeholder the supervisor will later
     // supply, so anything the runtime will accept also passes here.
-    check_placeholders(name, "command", &command)?;
+    checker.check(name, "command", &command)?;
     if let Some(sd) = &cmd.shutdown_command {
-        check_placeholders(name, "shutdown_command", sd)?;
+        checker.check(name, "shutdown_command", sd)?;
     }
     let openai_proxy = match &cmd.openai_proxy {
         None => None,

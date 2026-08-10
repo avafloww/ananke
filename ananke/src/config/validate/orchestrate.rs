@@ -14,14 +14,25 @@ use crate::{
     config::{
         parse::RawConfig,
         validate::{
-            DaemonSettings, DeviceReserves, EffectiveConfig, PrivatePortAllocator,
-            PrivatePortRange, fail, parse_duration_ms, validate_service,
+            DaemonSettings, DaemonPlaceholderChecker, DeviceReserves, EffectiveConfig,
+            PlaceholderChecker, PrivatePortAllocator, PrivatePortRange, fail, parse_duration_ms,
+            validate_service,
         },
     },
     errors::ExpectedError,
 };
 
 pub fn validate(cfg: &RawConfig) -> Result<EffectiveConfig, ExpectedError> {
+    validate_with_checks(cfg, &DaemonPlaceholderChecker)
+}
+
+/// [`validate`] with an injected placeholder dry-run checker. The daemon
+/// passes its template-based checker here; lib-internal callers use the
+/// no-op default.
+pub fn validate_with_checks(
+    cfg: &RawConfig,
+    checker: &dyn PlaceholderChecker,
+) -> Result<EffectiveConfig, ExpectedError> {
     let data_dir = cfg.daemon.data_dir.clone().unwrap_or_else(|| {
         std::env::var("XDG_DATA_HOME")
             .map(PathBuf::from)
@@ -88,6 +99,7 @@ pub fn validate(cfg: &RawConfig) -> Result<EffectiveConfig, ExpectedError> {
         daemon_llama_server: daemon_llama_server.as_deref(),
         reserves: &device_reserves,
         devices: &cfg.devices,
+        placeholder_checker: checker,
     };
     let mut svc_state = ServiceValidationState {
         names: &mut names,
@@ -155,6 +167,8 @@ pub(crate) struct DaemonValidationCtx<'a> {
     /// Raw `[devices]` config so per-service validation can check the
     /// configured GPU count when `gpu_allow` is unset.
     pub(crate) devices: &'a crate::config::parse::DevicesConfig,
+    /// Placeholder dry-run checker injected by the daemon.
+    pub(crate) placeholder_checker: &'a dyn PlaceholderChecker,
 }
 
 /// Mutable bookkeeping that accumulates across the per-service loop:

@@ -3,7 +3,28 @@
 
 use smol_str::SmolStr;
 
-use crate::{config::validate::fail, errors::ExpectedError};
+use crate::{
+    config::validate::{PlaceholderChecker, fail},
+    errors::ExpectedError,
+};
+
+/// The daemon's placeholder dry-run checker: validates `command`,
+/// `shutdown_command`, and llama-cpp `launcher` argv at config time.
+pub struct DaemonPlaceholderChecker;
+
+impl PlaceholderChecker for DaemonPlaceholderChecker {
+    fn check(
+        &self,
+        name: &SmolStr,
+        field: &str,
+        argv: &[String],
+    ) -> Result<(), ExpectedError> {
+        match field {
+            "launcher" => check_launcher_placeholders(name, argv),
+            _ => check_placeholders(name, field, argv),
+        }
+    }
+}
 
 /// Resolve every `{placeholder}` in `argv` against a synthetic context
 /// covering every substitution the supervisor can produce. Propagates

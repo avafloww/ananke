@@ -10,8 +10,8 @@ use crate::{
     config::{
         parse::{RawExpertOffload, RawLlamaCppService, RawRuntime},
         validate::{
-            IkSettings, LlamaCppConfig, NumaStrategy, OffloadMode, Runtime, RuntimeConfig,
-            check_launcher_placeholders, fail,
+            IkSettings, LlamaCppConfig, NumaStrategy, OffloadMode, PlaceholderChecker, Runtime,
+            RuntimeConfig, fail,
         },
     },
     errors::ExpectedError,
@@ -21,6 +21,7 @@ pub(crate) fn validate_llama_cpp(
     name: &SmolStr,
     lc: &RawLlamaCppService,
     daemon_llama_server: Option<&std::path::Path>,
+    checker: &dyn PlaceholderChecker,
 ) -> Result<LlamaCppConfig, ExpectedError> {
     let model = lc.model.clone().ok_or_else(|| {
         fail(format!(
@@ -128,7 +129,7 @@ pub(crate) fn validate_llama_cpp(
                     "service {name}: launcher is present but empty"
                 )));
             }
-            check_launcher_placeholders(name, argv)?;
+            checker.check(name, "launcher", argv)?;
             Some(argv.clone())
         }
     };

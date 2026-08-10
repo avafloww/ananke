@@ -20,6 +20,7 @@ pub use validate::{
     HealthSettings, IkSettings, Lifecycle, LlamaCppConfig, NumaStrategy, OffloadMode, PeriodicMode,
     PeriodicTrigger, PlacementPolicy, Runtime, RuntimeConfig, ServiceConfig, SpecCollapseTrigger,
     SplitMode, Template, TemplateConfig, TrackingSettings, TtftStallTrigger, validate,
+    validate_with_checks,
 };
 
 /// Load, parse, merge, validate, and preflight a config file from disk.
@@ -56,7 +57,7 @@ pub fn load_config_from_str(
     let mut raw = parse_toml(source, origin)?;
     resolve_inheritance(&mut raw)?;
     let migrations = resolve_migrations(&mut raw)?;
-    let effective = validate(&raw)?;
+    let effective = validate_with_checks(&raw, &validate::DaemonPlaceholderChecker)?;
     Ok((effective, migrations))
 }
 

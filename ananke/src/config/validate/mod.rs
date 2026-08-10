@@ -1,6 +1,10 @@
 //! Validate a post-merge `RawConfig`, producing an `EffectiveConfig` of
 //! per-service validated configs plus daemon-global settings.
 
+use smol_str::SmolStr;
+
+use crate::errors::ExpectedError;
+
 mod auto_restart_types;
 mod auto_restart_validation;
 mod command_validation;
@@ -48,9 +52,34 @@ pub use common::gib_to_mib;
 pub(crate) use common::{fail, flag_variant, parse_duration_ms, variant_flag};
 pub(crate) use llama_cpp_validation::validate_llama_cpp;
 pub(crate) use metadata::{build_ananke_metadata, toml_value_to_json};
-pub use orchestrate::validate;
+pub use orchestrate::{validate, validate_with_checks};
 pub(crate) use orchestrate::{DaemonValidationCtx, ServiceValidationState};
-pub(crate) use placeholders::{check_launcher_placeholders, check_placeholders};
+// Placeholder dry-run checking cannot live in this crate: it needs the
+// template substitution + allocation types, which would create a
+// config → templates → devices → placement → config cycle. The daemon
+// injects it through `validate_with_checks`.
+pub trait PlaceholderChecker {
+    /// Dry-run substitute `argv` for `field`, failing on unresolved or
+    /// malformed placeholders.
+    fn check(&self, name: &SmolStr, field: &str, argv: &[String]) -> Result<(), ExpectedError>;
+}
+
+/// Checker that skips the dry-run. Used by `validate` when the caller
+/// doesn't supply a checker (lib-internal tests); the daemon always uses
+/// `validate_with_checks` with the real template-based checker.
+pub struct NoopPlaceholderChecker;
+
+impl PlaceholderChecker for NoopPlaceholderChecker {
+    fn check(
+        &self,
+        _name: &SmolStr,
+        _field: &str,
+        _argv: &[String],
+    ) -> Result<(), ExpectedError> {
+        Ok(())
+    }
+}
+pub(crate) use placeholders::DaemonPlaceholderChecker;
 pub use placement::{
     AllocationMode, DeviceReserves, DeviceSlot, Filters, HealthSettings, Lifecycle,
     PlacementPolicy, Template,

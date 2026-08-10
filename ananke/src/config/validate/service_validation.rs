@@ -59,7 +59,7 @@ pub(crate) fn validate_service(
 
     let (allocation_mode, template_config) = match raw {
         RawService::LlamaCpp(lc) => {
-            let tc = validate_llama_cpp(&name, lc, daemon.daemon_llama_server)?;
+            let tc = validate_llama_cpp(&name, lc, daemon.daemon_llama_server, daemon.placeholder_checker)?;
             // llama-cpp never takes an allocation.mode; none of the dynamic
             // knobs apply here.
             let alloc = AllocationMode::from_parts(
@@ -91,7 +91,7 @@ pub(crate) fn validate_service(
                 runtime_ms,
             )
             .map_err(|e| fail(format!("service {name}: {e}")))?;
-            let tc = validate_command(&name, cmd)?;
+            let tc = validate_command(&name, cmd, daemon.placeholder_checker)?;
             (alloc, TemplateConfig::Command(tc))
         }
     };
