@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use crate::allocator::balloon::WINDOW_SIZE;
+use crate::balloon::WINDOW_SIZE;
 
 /// Detect growth in a sample window using linear-regression slope and a
 /// majority-non-decreasing jitter check.
@@ -67,7 +67,7 @@ pub fn detect_growth(window: &VecDeque<u64>, floor_bytes: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allocator::balloon::test_support::mk_window;
+    use crate::balloon::test_support::mk_window;
 
     #[test]
     fn flat_window_no_growth() {

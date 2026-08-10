@@ -2,6 +2,7 @@
 members = [
     "ananke",
     "anankectl",
+    "crates/allocator",
     "crates/api",
     "crates/config",
     "crates/db",
@@ -32,6 +33,7 @@ members = [
 default-members = [
     "ananke",
     "anankectl",
+    "crates/allocator",
     "crates/api",
     "crates/config",
     "crates/db",
@@ -63,6 +65,7 @@ version = "0.2.0"
 
 [workspace.dependencies]
 # Internal crates
+ananke-allocator = { path = "crates/allocator" }
 ananke-api = { path = "crates/api" }
 ananke-config = { path = "crates/config" }
 ananke-db = { path = "crates/db" }

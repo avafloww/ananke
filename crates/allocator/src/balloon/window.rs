@@ -3,7 +3,9 @@
 
 use std::collections::VecDeque;
 
-use crate::{allocator::balloon::WINDOW_SIZE, config::DeviceSlot};
+use ananke_config::DeviceSlot;
+
+use crate::balloon::WINDOW_SIZE;
 
 /// A bounded window of the most recent memory samples for one service.
 ///

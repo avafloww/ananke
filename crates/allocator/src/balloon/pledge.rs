@@ -9,14 +9,14 @@ use std::{
     time::Duration,
 };
 
+use ananke_config::validate::DeviceSlot;
+use ananke_events::EventBus;
+use ananke_placement::slot_to_key;
 use parking_lot::Mutex;
 use smol_str::SmolStr;
 use tracing::debug;
 
-use crate::{
-    allocator::AllocationTable, config::validate::DeviceSlot, daemon::events::EventBus,
-    supervise::slot_to_key,
-};
+use crate::AllocationTable;
 
 /// Pledge update rate-limit: ignore deltas smaller than this many MiB. A
 /// dynamic service drifting by a few hundred MiB shouldn't churn the event
@@ -139,14 +139,14 @@ pub(crate) fn reconcile_pledge(
     events.publish(ananke_api::events::Event::AllocationChanged {
         service: service_name.clone(),
         reservations,
-        at_ms: crate::tracking::now_unix_ms(),
+        at_ms: ananke_time::now_unix_ms(),
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allocator::balloon::test_support::mk_window;
+    use crate::balloon::test_support::mk_window;
 
     fn mb(n: u64) -> u64 {
         n * 1024 * 1024

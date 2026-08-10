@@ -1,16 +1,14 @@
 //! Picking which peer yields when a balloon wants to grow onto a
 //! over-committed GPU.
 
+use ananke_config::{
+    Lifecycle,
+    validate::{DEFAULT_SERVICE_PRIORITY, DeviceSlot},
+};
+use ananke_placement::ServiceRegistry;
 use smol_str::SmolStr;
 
-use crate::{
-    allocator::AllocationTable,
-    config::{
-        Lifecycle,
-        validate::{DEFAULT_SERVICE_PRIORITY, DeviceSlot},
-    },
-    supervise::registry::SupervisorRegistry,
-};
+use crate::AllocationTable;
 
 /// Outcome of the contention resolver's peer pick.
 #[derive(Debug, PartialEq, Eq)]
@@ -28,7 +26,7 @@ pub(crate) enum ContentionAction {
 /// A GPU whose pledge sum leaves less than this much slack is treated
 /// as over-committed — the balloon won't be able to climb without
 /// eating into a peer's reservation. Aligned with
-/// [`crate::allocator::balloon::BalloonConfig::margin_bytes`] by convention.
+/// [`crate::balloon::BalloonConfig::margin_bytes`] by convention.
 const OVERCOMMIT_MARGIN_BYTES: u64 = 512 * 1024 * 1024;
 
 /// GPUs the named service holds an allocation on where the sum of all
@@ -47,7 +45,7 @@ const OVERCOMMIT_MARGIN_BYTES: u64 = 512 * 1024 * 1024;
 pub(crate) fn overcommitted_gpus_for(
     service_name: &SmolStr,
     reservations: &AllocationTable,
-    snapshot: &crate::devices::DeviceSnapshot,
+    snapshot: &ananke_placement::devices::DeviceSnapshot,
 ) -> Vec<u32> {
     let mine: std::collections::BTreeSet<u32> = reservations
         .get(service_name)
@@ -90,14 +88,14 @@ fn pledged_bytes_on_slot(reservations: &AllocationTable, slot: DeviceSlot) -> u6
 /// Pick a contention peer on one of `overcommitted_gpus` and decide whose
 /// turn it is to leave. Pure-data over the inputs so unit tests can drive
 /// every branch without spawning supervisors.
-pub(crate) fn resolve_contention(
+pub(crate) fn resolve_contention<T>(
     service_name: &SmolStr,
     svc_priority: u8,
     svc_lifecycle: Lifecycle,
     reservations: &AllocationTable,
     overcommitted_gpus: &[u32],
-    registry: &SupervisorRegistry,
-    services: &[crate::config::ServiceConfig],
+    registry: &ServiceRegistry<T>,
+    services: &[ananke_config::ServiceConfig],
 ) -> ContentionAction {
     let lifecycle_of = |name: &SmolStr| -> Lifecycle {
         services
@@ -172,11 +170,15 @@ pub(crate) fn resolve_contention(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::allocator::AllocationTable;
+    use crate::AllocationTable;
 
-    fn snap_with_free(id: u32, total_gb: u64, free_bytes: u64) -> crate::devices::DeviceSnapshot {
-        crate::devices::DeviceSnapshot {
-            gpus: vec![crate::devices::GpuSnapshot {
+    fn snap_with_free(
+        id: u32,
+        total_gb: u64,
+        free_bytes: u64,
+    ) -> ananke_placement::devices::DeviceSnapshot {
+        ananke_placement::devices::DeviceSnapshot {
+            gpus: vec![ananke_placement::devices::GpuSnapshot {
                 id,
                 name: format!("GPU {id}"),
                 total_bytes: total_gb * 1024 * 1024 * 1024,
@@ -251,15 +253,15 @@ mod tests {
     /// Pressure on a GPU we don't hold isn't our problem.
     #[test]
     fn overcommit_filters_to_held_gpus() {
-        let snap = crate::devices::DeviceSnapshot {
+        let snap = ananke_placement::devices::DeviceSnapshot {
             gpus: vec![
-                crate::devices::GpuSnapshot {
+                ananke_placement::devices::GpuSnapshot {
                     id: 1,
                     name: "GPU 1".into(),
                     total_bytes: 24 * 1024 * 1024 * 1024,
                     free_bytes: 10 * 1024 * 1024 * 1024, // plenty
                 },
-                crate::devices::GpuSnapshot {
+                ananke_placement::devices::GpuSnapshot {
                     id: 2,
                     name: "GPU 2".into(),
                     total_bytes: 24 * 1024 * 1024 * 1024,
@@ -287,8 +289,8 @@ mod tests {
         assert!(gpus.is_empty());
     }
 
-    fn svc(name: &str, priority: u8, lifecycle: Lifecycle) -> crate::config::ServiceConfig {
-        let mut s = crate::config::validate::test_fixtures::minimal_service(name);
+    fn svc(name: &str, priority: u8, lifecycle: Lifecycle) -> ananke_config::ServiceConfig {
+        let mut s = ananke_config::validate::test_fixtures::minimal_service(name);
         s.priority = priority;
         s.lifecycle = lifecycle;
         s
@@ -299,18 +301,23 @@ mod tests {
     /// checks registry membership (`registry.get(...).is_some()`), not
     /// handle health, so this is sufficient for the unit-level pure-data
     /// tests.
-    fn with_handles(names: &[&str]) -> SupervisorRegistry {
-        // We can't construct a real SupervisorHandle here without the full
-        // supervisor stack; build a registry with synthetic entries by
-        // taking handles from a tiny side-helper that spawns a no-op
-        // supervisor. For the pure-data scope of these tests, presence is
-        // all that matters, so just clone the same handle into each slot.
-        let registry = SupervisorRegistry::new();
-        let handle = std::sync::Arc::new(crate::supervise::SupervisorHandle::stub_for_test());
+    fn with_handles(names: &[&str]) -> ServiceRegistry<StubHandle> {
+        // The resolver never awaits kill on these handles (membership is
+        // all it reads), so a no-op `KillHandle` stub suffices.
+        let registry = ServiceRegistry::new();
+        let handle = std::sync::Arc::new(StubHandle);
         for n in names {
             registry.insert(SmolStr::new(*n), handle.clone());
         }
         registry
+    }
+
+    /// No-op kill-capable handle for pure-data registry tests.
+    struct StubHandle;
+
+    #[async_trait::async_trait]
+    impl ananke_placement::KillHandle for StubHandle {
+        async fn fast_kill(&self, _reason: ananke_placement::DrainReason) {}
     }
 
     /// Strict numeric priority always wins: an on-demand requester at

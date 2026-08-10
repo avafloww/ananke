@@ -4,28 +4,25 @@
 
 use std::time::Duration;
 
+use ananke_config::{DeviceSlot, Lifecycle, PlacementPolicy, manager::ConfigManager};
+use ananke_events::EventBus;
+use ananke_observation::{ObservationTable, SharedSnapshot};
+use ananke_placement::{DrainReason, ServiceRegistry};
 use parking_lot::Mutex;
 use smol_str::SmolStr;
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::{
-    allocator::{
-        AllocationTable,
-        balloon::{
-            BalloonConfig,
-            ceiling::{CeilingAction, ceiling_action, ceiling_bytes},
-            contention::{ContentionAction, overcommitted_gpus_for, resolve_contention},
-            growth::detect_growth,
-            pledge::{pledged_slot, reconcile_pledge},
-            window::SampleWindow,
-        },
+    AllocationTable,
+    balloon::{
+        BalloonConfig,
+        ceiling::{CeilingAction, ceiling_action, ceiling_bytes},
+        contention::{ContentionAction, overcommitted_gpus_for, resolve_contention},
+        growth::detect_growth,
+        pledge::{pledged_slot, reconcile_pledge},
+        window::SampleWindow,
     },
-    config::{DeviceSlot, Lifecycle, PlacementPolicy, manager::ConfigManager},
-    daemon::events::EventBus,
-    devices::snapshotter::SharedSnapshot,
-    supervise::{drain::DrainReason, registry::SupervisorRegistry},
-    tracking::observation::ObservationTable,
 };
 
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
@@ -34,9 +31,9 @@ const SAMPLE_INTERVAL: Duration = Duration::from_secs(2);
 /// the shared collaborators every resolver task needs. Bundled into a
 /// struct so the spawn signature stays under clippy's argument limit and
 /// callers can build the inputs once and clone.
-pub struct ResolverDeps {
+pub struct ResolverDeps<T> {
     pub observation: ObservationTable,
-    pub registry: SupervisorRegistry,
+    pub registry: ServiceRegistry<T>,
     pub allocations: std::sync::Arc<Mutex<AllocationTable>>,
     pub events: EventBus,
     /// Live snapshot used to compute per-GPU pledge totals against
@@ -58,17 +55,20 @@ pub struct ResolverDeps {
 ///    that decays, and so a breach can be seen to subside.
 /// 2. Reconciles the pledge book against that recent peak so other services'
 ///    fit decisions see realistic usage rather than the stale `min_mb`
-///    floor (rate-limited by [`crate::allocator::balloon::should_update_pledge`]).
+///    floor (rate-limited by [`crate::balloon::should_update_pledge`]).
 /// 3. Enforces the `max_mb * 110 %` ceiling against a sustained breach.
 /// 4. Resolves contention by fast-killing the lower-priority side when
 ///    growth pressure is detected and a borrower is present.
-pub fn spawn_resolver(
+pub fn spawn_resolver<T>(
     service_name: SmolStr,
     cfg: BalloonConfig,
     svc_priority: u8,
     svc_lifecycle: Lifecycle,
-    deps: ResolverDeps,
-) -> tokio::task::JoinHandle<()> {
+    deps: ResolverDeps<T>,
+) -> tokio::task::JoinHandle<()>
+where
+    T: Send + Sync + 'static + ananke_placement::KillHandle,
+{
     let ResolverDeps {
         observation,
         registry,

@@ -1,0 +1,26 @@
+[package]
+name = "ananke-allocator"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "ananke_allocator"
+path = "src/lib.rs"
+
+[dependencies]
+ananke-api.workspace = true
+ananke-config.workspace = true
+ananke-events.workspace = true
+ananke-observation.workspace = true
+ananke-placement.workspace = true
+ananke-time.workspace = true
+parking_lot.workspace = true
+smol_str.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+ananke-config = { workspace = true, features = ["test-fakes"] }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

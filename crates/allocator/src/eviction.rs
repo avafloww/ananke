@@ -15,9 +15,8 @@
 
 use std::collections::BTreeMap;
 
+use ananke_config::{DeviceSlot, Lifecycle, ServiceConfig};
 use smol_str::SmolStr;
-
-use crate::config::{DeviceSlot, Lifecycle, ServiceConfig};
 
 #[derive(Debug, Clone)]
 pub struct EvictionCandidate {

@@ -27,6 +27,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 name = "ananke"
 version = "0.2.0"
 dependencies = [
+ "ananke-allocator",
  "ananke-api",
  "ananke-config",
  "ananke-dataset",
@@ -84,6 +85,23 @@ dependencies = [
  "ulid",
  "utoipa",
  "utoipa-axum",
+]
+
+[[package]]
+name = "ananke-allocator"
+version = "0.2.0"
+dependencies = [
+ "ananke-api",
+ "ananke-config",
+ "ananke-events",
+ "ananke-observation",
+ "ananke-placement",
+ "ananke-time",
+ "async-trait",
+ "parking_lot",
+ "smol_str",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
