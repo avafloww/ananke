@@ -1,0 +1,21 @@
+[package]
+name = "ananke-system"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "ananke_system"
+path = "src/lib.rs"
+
+[dependencies]
+ananke-errors.workspace = true
+ananke-fs.workspace = true
+ananke-spawn.workspace = true
+async-trait.workspace = true
+nix.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+
+[features]
+test-fakes = []

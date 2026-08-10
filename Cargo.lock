@@ -30,14 +30,20 @@ dependencies = [
  "ananke-api",
  "ananke-config",
  "ananke-dataset",
+ "ananke-db",
+ "ananke-devices",
  "ananke-errors",
  "ananke-estimate",
  "ananke-events",
  "ananke-fs",
  "ananke-gguf",
+ "ananke-observation",
  "ananke-placement",
  "ananke-spawn",
+ "ananke-system",
+ "ananke-templates",
  "ananke-time",
+ "ananke-tracking",
  "arc-swap",
  "async-trait",
  "axum 0.7.9",
@@ -133,6 +139,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "ananke-db"
+version = "0.2.0"
+dependencies = [
+ "ananke-api",
+ "ananke-errors",
+ "ananke-time",
+ "parking_lot",
+ "rusqlite",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "ananke-devices"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "ananke-observation",
+ "ananke-placement",
+ "ananke-system",
+ "ananke-time",
+ "nvml-wrapper",
+ "parking_lot",
+ "smol_str",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ananke-errors"
 version = "0.2.0"
 
@@ -195,6 +230,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ananke-observation"
+version = "0.2.0"
+dependencies = [
+ "ananke-placement",
+ "ananke-system",
+ "parking_lot",
+ "smol_str",
+]
+
+[[package]]
 name = "ananke-placement"
 version = "0.2.0"
 dependencies = [
@@ -216,8 +261,46 @@ name = "ananke-spawn"
 version = "0.2.0"
 
 [[package]]
+name = "ananke-system"
+version = "0.2.0"
+dependencies = [
+ "ananke-errors",
+ "ananke-fs",
+ "ananke-spawn",
+ "async-trait",
+ "nix",
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
+name = "ananke-templates"
+version = "0.2.0"
+dependencies = [
+ "ananke-config",
+ "ananke-devices",
+]
+
+[[package]]
 name = "ananke-time"
 version = "0.2.0"
+
+[[package]]
+name = "ananke-tracking"
+version = "0.2.0"
+dependencies = [
+ "ananke-api",
+ "ananke-config",
+ "ananke-db",
+ "ananke-events",
+ "ananke-observation",
+ "ananke-placement",
+ "ananke-time",
+ "parking_lot",
+ "smol_str",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "ananke-tuning"

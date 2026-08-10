@@ -1,0 +1,18 @@
+[package]
+name = "ananke-observation"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "ananke_observation"
+path = "src/lib.rs"
+
+[dependencies]
+ananke-placement.workspace = true
+ananke-system.workspace = true
+parking_lot.workspace = true
+smol_str.workspace = true
+
+[dev-dependencies]
+ananke-system = { workspace = true, features = ["test-fakes"] }

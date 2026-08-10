@@ -1,0 +1,15 @@
+[package]
+name = "ananke-templates"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "ananke_templates"
+path = "src/lib.rs"
+
+[dependencies]
+ananke-devices.workspace = true
+
+[dev-dependencies]
+ananke-config.workspace = true

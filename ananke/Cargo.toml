@@ -14,14 +14,20 @@ path = "src/lib.rs"
 [dependencies]
 ananke-api.workspace = true
 ananke-config.workspace = true
+ananke-db.workspace = true
+ananke-devices.workspace = true
 ananke-errors.workspace = true
 ananke-estimate.workspace = true
 ananke-events.workspace = true
 ananke-fs.workspace = true
 ananke-gguf.workspace = true
+ananke-observation.workspace = true
 ananke-placement.workspace = true
 ananke-spawn.workspace = true
+ananke-system = { workspace = true, features = ["test-fakes"] }
+ananke-templates.workspace = true
 ananke-time.workspace = true
+ananke-tracking.workspace = true
 
 tokio.workspace = true
 hyper.workspace = true
