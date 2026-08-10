@@ -212,16 +212,6 @@ impl MetricsRecorder {
     }
 }
 
-impl ananke_proxy::ErasedRecorder for MetricsRecorder {
-    fn ingest(&mut self, data: &Bytes) {
-        self.ingest(data);
-    }
-
-    fn finish(self: Box<Self>, _status_code: u16) {
-        unreachable!("plain MetricsRecorder has no db; use RequestMetricsRecorder")
-    }
-}
-
 /// Erased recorder for the proxy data plane: pairs the token-usage
 /// recorder with the db handle it writes to at finish time.
 pub struct RequestMetricsRecorder {
