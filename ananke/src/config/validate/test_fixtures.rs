@@ -171,7 +171,6 @@ fn llama_cpp_fixture() -> LlamaCppConfig {
 }
 
 // Silence unused warnings on types that only specific tests use.
-#[allow(dead_code)]
 fn _coerce_template_used() {
     let _ = Template::LlamaCpp;
 }

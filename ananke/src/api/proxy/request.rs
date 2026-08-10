@@ -2,6 +2,7 @@
 //! (for the token-generating endpoints) wrap the response body with a
 //! metrics recorder. Upgrade requests are delegated to the sibling
 //! `upgrade` module.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::{convert::Infallible, error::Error, net::SocketAddr, time::Instant};
 
@@ -50,7 +51,9 @@ pub fn error_response(code: ApiErrorCode) -> ProxyError {
         .status(status)
         .header("content-type", "application/json")
         .body(full)
-        .unwrap()
+        // Invariant: the status and single content-type header are fixed
+        // valid values, so the response builder cannot fail.
+        .unwrap_or_else(|_| unreachable!("response with fixed status and headers builds"))
 }
 
 /// Reverse-proxy a single request to the upstream, returning an infallible result.

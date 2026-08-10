@@ -223,7 +223,13 @@ async fn main() -> ExitCode {
             return e.exit_code();
         }
     };
-    let client = client::ApiClient::new(&endpoint);
+    let client = match client::ApiClient::new(&endpoint) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("anankectl: {e}");
+            return e.exit_code();
+        }
+    };
     let result = match cli.command {
         Command::Status => commands::status::run(&client, cli.json).await,
         Command::Devices => commands::devices::run(&client, cli.json).await,

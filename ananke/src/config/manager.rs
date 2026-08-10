@@ -54,7 +54,14 @@ impl std::fmt::Display for ApplyError {
     }
 }
 
-impl std::error::Error for ApplyError {}
+impl std::error::Error for ApplyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PersistFailed(e) => Some(e),
+            Self::HashMismatch { .. } | Self::Invalid(_) => None,
+        }
+    }
+}
 
 impl ConfigManager {
     /// Load the config from disk, construct the manager, and spawn the

@@ -1,4 +1,5 @@
 //! HTTP health-probe loop.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::time::Duration;
 
@@ -24,7 +25,8 @@ pub async fn wait_healthy(cfg: HealthConfig, mut cancel: watch::Receiver<bool>) 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
-        .expect("reqwest client build");
+        // Invariant: a default builder with no custom connector cannot fail.
+        .unwrap_or_else(|_| unreachable!("reqwest client from default builder builds"));
     let start = tokio::time::Instant::now();
 
     loop {

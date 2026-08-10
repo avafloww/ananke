@@ -225,4 +225,24 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::GitSpawn(source) => Some(source),
+            Self::Io { source, .. } => Some(source),
+            Self::TomlParse { source, .. } => Some(source),
+            Self::JsonParse { source, .. } => Some(source),
+            Self::CargoMetadata(source) => Some(source),
+            Self::InvalidVersion { .. }
+            | Self::SameVersion { .. }
+            | Self::DirtyTree { .. }
+            | Self::WrongBranch { .. }
+            | Self::TagExists(_)
+            | Self::GitCommand { .. }
+            | Self::MissingKey { .. }
+            | Self::VersionMismatch { .. }
+            | Self::WorkspaceCratesIncomplete { .. }
+            | Self::UnexpectedMatchCount { .. } => None,
+        }
+    }
+}

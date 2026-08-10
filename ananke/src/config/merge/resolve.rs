@@ -1,5 +1,6 @@
 //! Topological resolution of `extends` chains: cycle detection, dispatch to
 //! the per-template field merge, and same-template enforcement.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -75,7 +76,15 @@ fn resolve_one(
                 ));
             }
             resolve_one(&parent_name, source, resolved, stack)?;
-            let parent = resolved.get(&parent_name).unwrap().clone();
+            let parent = resolved
+                .get(&parent_name)
+                .ok_or_else(|| {
+                    ExpectedError::config_unparseable(
+                        std::path::PathBuf::from("<config>"),
+                        format!("service {name} extends {parent_name} which resolved to nothing"),
+                    )
+                })?
+                .clone();
             merge_service(&parent, &raw, name)?
         }
     };

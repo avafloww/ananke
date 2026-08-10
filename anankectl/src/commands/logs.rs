@@ -1,4 +1,5 @@
 //! `anankectl logs` command — paginated historical fetch with optional live tail.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use ananke_api::{
     internal::log_line::LogLine,
@@ -12,7 +13,10 @@ use crate::{
     output,
 };
 
-#[allow(clippy::too_many_arguments)]
+// The signature mirrors the clap CLI surface, so the argument count is owned
+// by the flag definitions rather than this function; grouping them into a
+// struct would fight the derive.
+#[expect(clippy::too_many_arguments)]
 pub async fn run(
     client: &ApiClient,
     json: bool,
@@ -59,10 +63,15 @@ pub async fn run(
     }
 
     // Upgrade to a WebSocket for the live tail.
+    let stream_path = format!("/api/services/{name}/logs/stream");
     let ws_url = client
         .endpoint
-        .join(&format!("/api/services/{name}/logs/stream"))
-        .expect("valid path")
+        .join(&stream_path)
+        .map_err(|cause| ApiClientError::InvalidPath {
+            endpoint: client.endpoint.to_string(),
+            path: stream_path,
+            cause,
+        })?
         .to_string()
         .replace("http://", "ws://")
         .replace("https://", "wss://");

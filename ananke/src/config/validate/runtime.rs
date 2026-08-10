@@ -2,6 +2,7 @@
 //! mainline-vs-ik_llama runtime split, and the expert-offload mode.
 
 use ananke_config::flags;
+pub use ananke_config::{placement::OffloadMode, runtime::Runtime};
 
 use crate::config::validate::{flag_variant, variant_flag};
 
@@ -94,8 +95,6 @@ pub struct IkSettings {
     /// `-rtr` runtime repacking.
     pub runtime_repack: bool,
 }
-
-pub use ananke_config::{placement::OffloadMode, runtime::Runtime};
 
 #[cfg(test)]
 mod tests {

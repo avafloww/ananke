@@ -1,5 +1,6 @@
 //! Validate a single `[[service]]` block into a [`ServiceConfig`], resolving
 //! defaults, placement, lifecycle, timeouts, and the template-specific body.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -137,10 +138,14 @@ pub(crate) fn validate_service(
     let placement_policy = match dev.placement.as_deref().unwrap_or("gpu-only") {
         "gpu-only" => PlacementPolicy::GpuOnly,
         "cpu-only" => {
-            if n_gpu_layers.unwrap_or(0) != 0 {
+            // Invariant: the guard below only enters when `n_gpu_layers` is
+            // non-zero, which implies it is `Some`.
+            if let Some(n) = n_gpu_layers
+                && n != 0
+            {
                 return Err(fail(format!(
                     "service {name}: devices.placement=cpu-only with n_gpu_layers={} is invalid",
-                    n_gpu_layers.unwrap()
+                    n
                 )));
             }
             PlacementPolicy::CpuOnly

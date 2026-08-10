@@ -35,6 +35,13 @@ pub use top_level::{
 
 use crate::errors::ExpectedError;
 
+/// Parse a TOML string into a raw config tree, rejecting unknown fields.
+///
+/// Every parse type carries `#[serde(deny_unknown_fields)]`, so a stale or
+/// mistyped key is a hard error here rather than a silently-ignored one. That
+/// is a deliberate choice over collecting unknowns via `serde_ignored`: the
+/// report-and-continue model would both duplicate these errors and let bad
+/// config through with only a warning.
 pub fn parse_toml(source: &str, origin_path: &std::path::Path) -> Result<RawConfig, ExpectedError> {
     toml_edit::de::from_str::<RawConfig>(source)
         .map_err(|e| ExpectedError::config_unparseable(origin_path.to_path_buf(), e.to_string()))

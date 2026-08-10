@@ -1,4 +1,5 @@
 //! Growth detection over a rolling sample window.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::collections::VecDeque;
 
@@ -53,7 +54,12 @@ pub fn detect_growth(window: &VecDeque<u64>, floor_bytes: u64) -> bool {
     }
 
     // The slope-projected next value must exceed the floor.
-    let last = *window.back().unwrap() as i64;
+    // Invariant: `window` is non-empty (checked above against the minimum
+    // sample count), so `back()` always yields a sample.
+    let Some(&last) = window.back() else {
+        unreachable!("window passed the non-empty guard");
+    };
+    let last = last as i64;
     let projected = last + slope;
     projected as u64 > floor_bytes
 }

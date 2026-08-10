@@ -1,4 +1,5 @@
 //! `GET /api/services/{name}/logs?since&until&run&limit&stream&before`
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use ananke_api::{
     internal::log_line::LogLine, services::logs::LogsResponse, shared::errors::ApiError,
@@ -132,7 +133,8 @@ async fn resolve_service_id(state: &AppState, name: &str) -> Option<i64> {
 }
 
 fn encode_cursor(c: &Cursor) -> String {
-    let json = serde_json::to_string(c).expect("cursor serialise");
+    // Invariant: `Cursor` is two `i64` fields, which serialise without error.
+    let json = serde_json::to_string(c).unwrap_or_else(|_| unreachable!("cursor is plain ints"));
     B64.encode(json)
 }
 

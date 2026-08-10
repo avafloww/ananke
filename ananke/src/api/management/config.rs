@@ -1,4 +1,5 @@
 //! GET/PUT /api/config + POST /api/config/validate
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use ananke_api::{
     config::{
@@ -66,7 +67,11 @@ pub async fn put_config(
         Err(ApplyError::HashMismatch { server_hash }) => {
             // ETag header has to be set on top of the standard
             // `ApiErrorCode` body, so build the response in pieces.
-            let etag = server_hash.parse().unwrap();
+            // Invariant: `ConfigHash` is base64, and every base64 character is a
+            // valid ETag header value, so the parse cannot fail.
+            let etag = server_hash
+                .parse()
+                .unwrap_or_else(|_| unreachable!("base64 hash parses as an etag header value"));
             let mut resp = ApiErrorCode::HashMismatch { server_hash }.into_response();
             resp.headers_mut().insert(axum::http::header::ETAG, etag);
             resp
@@ -111,7 +116,6 @@ pub async fn post_validate(
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
 fn _force_link() {
     let _: Vec<ananke_api::config::validate::ValidationError> = vec![];
 }

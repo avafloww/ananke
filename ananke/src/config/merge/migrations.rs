@@ -1,4 +1,5 @@
 //! Resolve `migrate_from` chains into an ordered list of service renames.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,11 +22,16 @@ pub struct Migration {
 /// database layer can reparent sequentially. Cycles are errors.
 pub fn resolve_migrations(cfg: &mut RawConfig) -> Result<Vec<Migration>, ExpectedError> {
     let mut out: Vec<Migration> = Vec::new();
-    let by_name: BTreeMap<SmolStr, &RawService> = cfg
-        .services
-        .iter()
-        .map(|s| (s.common().name.clone().unwrap(), s))
-        .collect();
+    let mut by_name: BTreeMap<SmolStr, &RawService> = BTreeMap::new();
+    for s in &cfg.services {
+        let name = s.common().name.clone().ok_or_else(|| {
+            ExpectedError::config_unparseable(
+                std::path::PathBuf::from("<config>"),
+                "service without a name during migrate_from resolution".to_string(),
+            )
+        })?;
+        by_name.insert(name, s);
+    }
 
     let mut visiting: BTreeSet<SmolStr> = BTreeSet::new();
     let mut visited: BTreeSet<SmolStr> = BTreeSet::new();

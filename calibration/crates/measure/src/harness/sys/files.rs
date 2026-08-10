@@ -14,6 +14,9 @@
 
 use std::path::Path;
 
+#[cfg(any(test, feature = "test-fakes"))]
+pub use fake::FakeFiles;
+
 pub trait Files: Send + Sync {
     /// The file's bytes, or `None` if it is not there.
     fn read(&self, path: &Path) -> Option<Vec<u8>>;
@@ -59,9 +62,6 @@ fn create_parents(path: &Path) -> std::io::Result<()> {
         _ => Ok(()),
     }
 }
-
-#[cfg(any(test, feature = "test-fakes"))]
-pub use fake::FakeFiles;
 
 #[cfg(any(test, feature = "test-fakes"))]
 mod fake {

@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
 use std::process::ExitCode;
 
 use reqwest::{StatusCode, Url};
@@ -17,6 +19,17 @@ pub enum ApiClientError {
     },
     Parse(String),
     Usage(String),
+    /// The `--endpoint` URL could not be parsed.
+    InvalidEndpoint {
+        endpoint: String,
+        cause: url::ParseError,
+    },
+    /// A request path could not be joined onto the endpoint URL.
+    InvalidPath {
+        endpoint: String,
+        path: String,
+        cause: url::ParseError,
+    },
     /// WebSocket connection failure (e.g. from `--follow`).
     WebSocket(String),
 }
@@ -29,11 +42,27 @@ impl std::fmt::Display for ApiClientError {
             Self::Parse(e) => write!(f, "parse error: {e}"),
             Self::Usage(e) => write!(f, "usage error: {e}"),
             Self::WebSocket(e) => write!(f, "WebSocket error: {e}"),
+            Self::InvalidEndpoint { endpoint, cause } => {
+                write!(f, "invalid --endpoint URL `{endpoint}`: {cause}")
+            }
+            Self::InvalidPath {
+                endpoint,
+                path,
+                cause,
+            } => write!(f, "invalid API path `{path}` on `{endpoint}`: {cause}"),
         }
     }
 }
 
-impl std::error::Error for ApiClientError {}
+impl std::error::Error for ApiClientError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Connect(e) => Some(e),
+            Self::InvalidEndpoint { cause, .. } | Self::InvalidPath { cause, .. } => Some(cause),
+            _ => None,
+        }
+    }
+}
 
 impl From<std::io::Error> for ApiClientError {
     fn from(e: std::io::Error) -> Self {
@@ -44,7 +73,9 @@ impl From<std::io::Error> for ApiClientError {
 impl ApiClientError {
     pub fn exit_code(&self) -> ExitCode {
         match self {
-            Self::Usage(_) => ExitCode::from(2),
+            Self::Usage(_) | Self::InvalidEndpoint { .. } | Self::InvalidPath { .. } => {
+                ExitCode::from(2)
+            }
             Self::Connect(_) | Self::WebSocket(_) => ExitCode::from(3),
             _ => ExitCode::from(1),
         }
@@ -52,16 +83,26 @@ impl ApiClientError {
 }
 
 impl ApiClient {
-    pub fn new(endpoint: &str) -> Self {
-        let endpoint = Url::parse(endpoint).expect("valid --endpoint URL");
-        Self {
+    pub fn new(endpoint: &str) -> Result<Self, ApiClientError> {
+        let endpoint = Url::parse(endpoint).map_err(|cause| ApiClientError::InvalidEndpoint {
+            endpoint: endpoint.to_string(),
+            cause,
+        })?;
+        Ok(Self {
             endpoint,
             http: reqwest::Client::new(),
-        }
+        })
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiClientError> {
-        let url = self.endpoint.join(path).expect("valid path");
+        let url = self
+            .endpoint
+            .join(path)
+            .map_err(|cause| ApiClientError::InvalidPath {
+                endpoint: self.endpoint.to_string(),
+                path: path.to_string(),
+                cause,
+            })?;
         let resp = self
             .http
             .get(url)
@@ -76,7 +117,14 @@ impl ApiClient {
         path: &str,
         body: &B,
     ) -> Result<T, ApiClientError> {
-        let url = self.endpoint.join(path).expect("valid path");
+        let url = self
+            .endpoint
+            .join(path)
+            .map_err(|cause| ApiClientError::InvalidPath {
+                endpoint: self.endpoint.to_string(),
+                path: path.to_string(),
+                cause,
+            })?;
         let resp = self
             .http
             .post(url)
@@ -88,7 +136,14 @@ impl ApiClient {
     }
 
     pub async fn post_empty<T: DeserializeOwned>(&self, path: &str) -> Result<T, ApiClientError> {
-        let url = self.endpoint.join(path).expect("valid path");
+        let url = self
+            .endpoint
+            .join(path)
+            .map_err(|cause| ApiClientError::InvalidPath {
+                endpoint: self.endpoint.to_string(),
+                path: path.to_string(),
+                cause,
+            })?;
         let resp = self
             .http
             .post(url)
@@ -99,7 +154,14 @@ impl ApiClient {
     }
 
     pub async fn delete(&self, path: &str) -> Result<(), ApiClientError> {
-        let url = self.endpoint.join(path).expect("valid path");
+        let url = self
+            .endpoint
+            .join(path)
+            .map_err(|cause| ApiClientError::InvalidPath {
+                endpoint: self.endpoint.to_string(),
+                path: path.to_string(),
+                cause,
+            })?;
         let resp = self
             .http
             .delete(url)
@@ -121,7 +183,14 @@ impl ApiClient {
         body: String,
         if_match: Option<&str>,
     ) -> Result<(), ApiClientError> {
-        let url = self.endpoint.join(path).expect("valid path");
+        let url = self
+            .endpoint
+            .join(path)
+            .map_err(|cause| ApiClientError::InvalidPath {
+                endpoint: self.endpoint.to_string(),
+                path: path.to_string(),
+                cause,
+            })?;
         let mut req = self.http.put(url).body(body);
         if let Some(h) = if_match {
             req = req.header(reqwest::header::IF_MATCH, format!("\"{h}\""));

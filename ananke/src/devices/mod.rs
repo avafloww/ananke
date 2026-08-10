@@ -7,6 +7,9 @@ pub mod nvml;
 pub mod probe;
 pub mod snapshotter;
 
+pub use ananke_placement::devices::{
+    Allocation, CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot,
+};
 pub use probe::{GpuInfo, GpuMemory, GpuProbe, GpuProcess};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,10 +17,6 @@ pub struct Device {
     pub id: DeviceId,
     pub total_bytes: u64,
 }
-
-pub use ananke_placement::devices::{
-    Allocation, CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot,
-};
 
 #[cfg(test)]
 mod tests {

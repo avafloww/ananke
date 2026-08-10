@@ -1,3 +1,7 @@
+<!-- contributing-templates: files=general.md,rust.md,typescript.md,react.md,tailwind.md @ 57e7c55 -->
+
+This file is a project-specific rewrite of the [contributing-templates](https://github.com/philpax/contributing-templates) conventions (`general.md`, `rust.md`, `typescript.md`, `react.md`, `tailwind.md`). The sync marker above pins the upstream commit the template-derived sections were last refreshed against; a future refresh with the `contributing-update` skill compares against it. Upstream rules this project deliberately overrides are noted where they differ; anything several projects converge on belongs back upstream.
+
 ## Project layout
 
 The repository contains two main components:
@@ -7,8 +11,7 @@ The repository contains two main components:
 
 Both components share the general conventions below. The Rust- and TypeScript-specific sections that follow apply to their respective trees.
 
-The backend's crates, leaves first. Package names keep the `ananke-` prefix; the
-directories do not.
+The backend's crates, leaves first. Package names keep the `ananke-` prefix; the directories do not.
 
 | crate | path | holds | depends on |
 |---|---|---|---|
@@ -23,8 +26,7 @@ directories do not.
 | `ananke` | `ananke` | the daemon: supervision, scheduling, HTTP surface, the NVML probe | all of the above |
 | `anankectl` | `anankectl` | the CLI | `ananke-api` |
 
-Three more live under `calibration/crates/`, because nothing shipped links them —
-see [`calibration/README.md`](calibration/README.md):
+Three more live under `calibration/crates/`, because nothing shipped links them — see [`calibration/README.md`](calibration/README.md):
 
 | crate | path | holds | depends on |
 |---|---|---|---|
@@ -32,63 +34,25 @@ see [`calibration/README.md`](calibration/README.md):
 | `ananke-measure` | `calibration/crates/measure` | the measurement harness and its log parser | `ananke-dataset`, `regex`, `nix` |
 | `ananke-calibrate` | `calibration/crates/calibrate` | the sweep generator and campaign driver, deriving the tuned constants, fitting the compute model, `validate`, `scoreboard`, `emit` | `ananke-dataset`, `ananke-measure`, `ananke-estimate`, `ananke-placement`, `ananke-gguf`, `ananke-tuning-schema` |
 
-That boundary is the useful one to hold in mind: `crates/tuning/tuning.json` is the
-entire interface between the two halves. Delete `calibration/` and the daemon still
-builds, runs, and estimates — what is lost is the ability to re-derive that file and
-the evidence for why each number in it is what it is. One exception, and it is a
-test: `ananke/tests/estimator_matches_measurements.rs` holds the shipped estimator
-against the campaign's own cells, so it takes `ananke-dataset` as a dev-dependency,
-reads `calibration/data` directly, and `cargo test --workspace` wants the directory
-present. That is the point of the test —
-a fixture copy would drift from the dataset the constants are derived from. The arrow only points inward:
-`ananke-calibrate` runs the real estimator and packer in-process, which is what makes
-`validate` and `scoreboard` mean anything, but nothing shipped links back.
+That boundary is the useful one to hold in mind: `crates/tuning/tuning.json` is the entire interface between the two halves. Delete `calibration/` and the daemon still builds, runs, and estimates — what is lost is the ability to re-derive that file and the evidence for why each number in it is what it is. One exception, and it is a test: `ananke/tests/estimator_matches_measurements.rs` holds the shipped estimator against the campaign's own cells, so it takes `ananke-dataset` as a dev-dependency, reads `calibration/data` directly, and `cargo test --workspace` wants the directory present. That is the point of the test — a fixture copy would drift from the dataset the constants are derived from. The arrow only points inward: `ananke-calibrate` runs the real estimator and packer in-process, which is what makes `validate` and `scoreboard` mean anything, but nothing shipped links back.
 
 `xtask` sits at the root beside the products it builds.
 
-The split is for compile times as much as for structure. `ananke`'s build script
-runs the frontend's `npm run build`, so anything sharing that script pays for a
-UI rebuild on every change — which is why `tuning.json` lives in its own crate:
-regenerating the estimator's constants during a calibration campaign is the
-inner loop of that work, and it now costs a few seconds instead of a UI build.
-The estimator and then the packer followed for the same reason, and with them the
-`estimate` example — so no part of the calibration loop builds the UI any more.
-No part of the calibration loop needs `ANANKE_SKIP_FRONTEND_BUILD`.
+The split is for compile times as much as for structure. `ananke`'s build script runs the frontend's `npm run build`, so anything sharing that script pays for a UI rebuild on every change — which is why `tuning.json` lives in its own crate: regenerating the estimator's constants during a calibration campaign is the inner loop of that work, and it now costs a few seconds instead of a UI build. The estimator and then the packer followed for the same reason, and with them the `estimate` example — so no part of the calibration loop builds the UI any more. No part of the calibration loop needs `ANANKE_SKIP_FRONTEND_BUILD`.
 
-`ananke-tuning-schema` is a leaf for a different reason: a build script cannot
-depend on the crate it builds, so the type of `tuning.json` — read by
-`crates/tuning`'s `build.rs`, by the derivers, by the emitter, and by the
-compute-model fitter — has to sit below all four. It is `serde` and nothing else.
+`ananke-tuning-schema` is a leaf for a different reason: a build script cannot depend on the crate it builds, so the type of `tuning.json` — read by `crates/tuning`'s `build.rs`, by the derivers, by the emitter, and by the compute-model fitter — has to sit below all four. It is `serde` and nothing else.
 
-`ananke` re-exports `gguf`, `estimator`, `allocator::placement`, `system::fs`, and
-`tracking::rolling::Corrections`, so `crate::…` paths inside the daemon are
-unchanged by the split.
+`ananke` re-exports `gguf`, `estimator`, `allocator::placement`, `system::fs`, and `tracking::rolling::Corrections`, so `crate::…` paths inside the daemon are unchanged by the split.
 
-`ananke-measure` deliberately depends on neither `ananke-estimate` nor
-`ananke-placement`: measurement and estimation stay apart so that nothing on the
-estimation side ever links a process spawner.
+`ananke-measure` deliberately depends on neither `ananke-estimate` nor `ananke-placement`: measurement and estimation stay apart so that nothing on the estimation side ever links a process spawner.
 
 ### Calibration
 
-The tuned constants in `crates/tuning/tuning.json` are derived from a measurement
-dataset, not chosen. Every one carries its evidence in its own doc comment, and CI
-regenerates the document and compares, so a value cannot drift from the data that
-justifies it without the drift showing up as a diff.
+The tuned constants in `crates/tuning/tuning.json` are derived from a measurement dataset, not chosen. Every one carries its evidence in its own doc comment, and CI regenerates the document and compares, so a value cannot drift from the data that justifies it without the drift showing up as a diff.
 
-Two documents, and neither is duplicated here.
-[`calibration/README.md`](calibration/README.md) is the workflow — how to add a
-model, run the campaign, refit, and decide whether to trust the result.
-[`calibration/docs/design.md`](calibration/docs/design.md) is why the calibration
-code is shaped the way it is: the binaries and what each is for, the fixed
-`emit`-then-`fit` order, what `validate` and `crossval` do and do not tell you,
-and the rule that a derivation's key must pin every factor that could differ.
+Two documents, and neither is duplicated here. [`calibration/README.md`](calibration/README.md) is the workflow — how to add a model, run the campaign, refit, and decide whether to trust the result. [`calibration/docs/design.md`](calibration/docs/design.md) is why the calibration code is shaped the way it is: the binaries and what each is for, the fixed `emit`-then-`fit` order, what `validate` and `crossval` do and do not tell you, and the rule that a derivation's key must pin every factor that could differ.
 
-Getting the estimator and the packer out took a real decoupling rather than a file
-move. Both had taken a whole `ServiceConfig`; both now take a distilled input
-struct — `EstimatorInputs` and `PlacementInputs` — built by free functions in
-`ananke::config::service_inputs`. Reading a service config is the daemon's
-business; estimating and packing are pure functions over the fields they actually
-need. Prefer that shape for anything else that wants to come out.
+Getting the estimator and the packer out took a real decoupling rather than a file move. Both had taken a whole `ServiceConfig`; both now take a distilled input struct — `EstimatorInputs` and `PlacementInputs` — built by free functions in `ananke::config::service_inputs`. Reading a service config is the daemon's business; estimating and packing are pure functions over the fields they actually need. Prefer that shape for anything else that wants to come out.
 
 ### Platform scope
 
@@ -98,15 +62,9 @@ The one thing that does sit behind a trait is **every outside-world capability t
 
 ### Dev shell
 
-A `shell.nix` at the repo root wires up the toolchain (rustc, cargo,
-clippy, rustfmt, rust-analyzer, uv, Python 3.12) and — importantly —
-exports `LD_LIBRARY_PATH=/run/opengl-driver/lib` so `nvml-wrapper` can
-`dlopen` the driver. Enter with `nix-shell`. Without the shell (or an
-equivalent env export) on NixOS, the daemon logs "NVML init failed",
-falls back to CPU-only, and every GPU-bound service fails placement.
+A `shell.nix` at the repo root wires up the toolchain (rustc, cargo, clippy, rustfmt, rust-analyzer, uv, Python 3.12) and — importantly — exports `LD_LIBRARY_PATH=/run/opengl-driver/lib` so `nvml-wrapper` can `dlopen` the driver. Enter with `nix-shell`. Without the shell (or an equivalent env export) on NixOS, the daemon logs "NVML init failed", falls back to CPU-only, and every GPU-bound service fails placement.
 
-This shell is for local development only. Packaging + a systemd unit
-live in a separate NixOS module.
+This shell is for local development only. Packaging + a systemd unit live in a separate NixOS module.
 
 ### Task automation
 
@@ -148,6 +106,8 @@ All types that cross the wire between the Rust backend and the TypeScript fronte
 
 Today the shared DTOs live in the `ananke-api` crate (hand-written, consumed by the Rust daemon directly). Handlers are annotated with `utoipa` and the daemon serves the live schema at `/api/openapi.json`. `frontend/src/api/types.ts` is generated by `openapi-typescript` — run `npm run gen-types` in `frontend/` after any change to a wire type, and never hand-edit that file (the next generator run silently reverts you). The `orval` half, which would produce typed React Query hooks in `frontend/src/api/client.ts`, is not yet wired; `client.ts` is hand-written today and re-exports the generated schemas. CI does not yet enforce that the generated output is up to date. The frontend should never declare an inline TypeScript type to describe an API payload — always import from the generated module.
 
+Regenerating makes new fields *typed*; it doesn't make them *visible*. When a backend change adds or restructures state that the frontend displays, update the display code in the same change — a field that arrives typed but unrendered is a gap, where the UI shows stale behaviour while the backend has moved on.
+
 ## General conventions
 
 ### Correctness over convenience
@@ -175,6 +135,10 @@ Today the shared DTOs live in the `ananke-api` crate (hand-written, consumed by 
 - Use message passing or the actor model to avoid data races in concurrent code.
 - Test comprehensively, including edge cases, race conditions, and stress tests.
 - Pay attention to what facilities already exist for testing, and aim to reuse them.
+- Prefer a **functional core, imperative shell**: keep decision logic in pure functions that take data in and return data out, and keep I/O, concurrency primitives, and orchestration in a thin shell at the edges.
+- The shape is gather, then process, then persist: the shell collects the inputs, the core decides, the shell writes the result. A core function that reaches out to read something mid-decision is the thing this is meant to prevent.
+- Isolate coupling to the outside world — filesystem, clock, network, subprocesses, devices — behind a small seam: a trait, an interface, a dependency struct, with a production implementation and a test fake. Tests are deterministic because they substitute the fake, not because they clean up after the real thing.
+- The payoff is testability. A pure core needs no fakes at all, and a thin shell has little logic left worth mocking. When a test needs elaborate setup to reach the behaviour it's checking, that's usually the code's shape talking, not the test's.
 - Getting the details right is really important!
 
 ### Documentation
@@ -188,13 +152,14 @@ Today the shared DTOs live in the `ananke-api` crate (hand-written, consumed by 
 - Always use the Oxford comma.
 - Don't omit articles ("a", "an", "the"). Write "the file has a newer version" not "file has newer version".
 - Comments describe the present state. Reserve past-tense narration for the rare case where history explains a standing "why".
-- Keep the user-facing docs in sync with code changes. The source of truth for config defaults is the `DEFAULT_*` constants in `crates/config/src/docs/` and `crates/config/src/defaults.rs`; the source of truth for config struct fields is `ananke/src/config/parse/` and `ananke/src/config/validate/`. When you add, remove, rename, or change the default of a config field, update the descriptor table in `ananke_config::docs::all_sections()` and run `cargo xtask gen-config-docs` to regenerate `docs/configuration.md`. CI enforces this with `--check`. Likewise, changes to service states or the management/OpenAI API surface should be reflected in `docs/api.md` (run `cargo xtask gen-api-docs` to regenerate). Treat a code change that touches these areas as incomplete until the docs are updated.
+- Keep the user-facing docs in sync with code changes. Generate the document from the code and check it in CI, rather than relying on anyone remembering. The source of truth for config defaults is the `DEFAULT_*` constants in `crates/config/src/docs/` and `crates/config/src/defaults.rs`; the source of truth for config struct fields is `ananke/src/config/parse/` and `ananke/src/config/validate/`. When you add, remove, rename, or change the default of a config field, update the descriptor table in `ananke_config::docs::all_sections()` and run `cargo xtask gen-config-docs` to regenerate `docs/configuration.md`. CI enforces this with `--check`. Likewise, changes to service states or the management/OpenAI API surface should be reflected in `docs/api.md` (run `cargo xtask gen-api-docs` to regenerate). Treat a code change that touches these areas as incomplete until the docs are updated.
 
 ### Code organization
 
 This applies to both trees; the Rust- and TypeScript-specific sections below build on it.
 
-- **Keep files under the size threshold.** Split a file into multiple files within a folder when it exceeds 500 lines (Rust) or 400 lines (TypeScript/TSX). Use `mod.rs` (Rust) or an index/re-export pattern (frontend) to re-export public items so consumers keep seeing a stable API. Measure the whole file, inline `#[cfg(test)]` module included — a test module that has outgrown its subject is itself a signal to split by concern group, with shared helpers alongside.
+- **Keep files under the size threshold.** Split a file into multiple files within a folder when it exceeds around 1000 lines (Rust) or 400 lines (TypeScript/TSX). Use `mod.rs` (Rust) or an index/re-export pattern (frontend) to re-export public items so consumers keep seeing a stable API. Measure the whole file, inline `#[cfg(test)]` module included — a test module that has outgrown its subject is itself a signal to split by concern group, with shared helpers alongside.
+- Large inline test modules count toward the total; extracting one to a sibling file is often the whole fix. Existing oversized files are grandfathered — split one when a change touches it substantially, not in drive-by churn.
 - **Split by concern, not by size alone.** A file should be split along natural seams — distinct data types, feature groups, or functional areas — not arbitrarily at the line limit. A cohesive single-concern file that slightly exceeds the threshold is preferable to a fragmented one. When splitting a frontend file, keep one main component per file with co-located sub-components, and put non-component utilities (hooks, constants, pure functions) in separate files so HMR boundaries stay clean.
 - **Generated files are exempt.** `frontend/src/api/types.ts` and anything else produced by a generator is bound by its generator, not by this threshold.
 - **Organize wide folders into subfolders.** When a folder accumulates many direct children, group them by domain or role. A flat folder of 20+ files is a signal that subfolders are wanted.
@@ -213,6 +178,9 @@ This applies to both trees; the Rust- and TypeScript-specific sections below bui
   - `cargo test --workspace --no-default-features --lib`
 - Pass `--workspace` to every check. `default-members` deliberately excludes `xtask` so a bare `cargo build` doesn't build it, but that also drops it from any check that omits the flag — which is how it accumulated eight unlinted warnings before CI was widened.
 - Integration tests live under `ananke/tests/` and depend on the `test-fakes` feature (for `FakeSpawner` etc.). They run under `--all-features`. The no-default-features pass is scoped to `--lib` to verify the non-feature build still compiles; integration-test failures under no-default-features are expected.
+- No `unwrap()` or `expect()` in production code; tests are fine. The `unwrap_used` and `expect_used` restriction lints that would enforce this are allow-by-default and not in the check commands above — the rule is convention rather than CI-enforced.
+- Never silence a lint without a concrete reason documented in a comment above it. In almost all cases, the right move is to restructure the code.
+- When you do suppress one, prefer `#[expect(...)]` to `#[allow(...)]`: `expect` warns once the suppression is no longer needed, so stale suppressions can't quietly accumulate as the code changes around them.
 
 ### Build profile
 
@@ -233,7 +201,7 @@ This applies to both trees; the Rust- and TypeScript-specific sections below bui
 - Two-tier error model:
   - `ExpectedError`: User/external errors with semantic exit codes.
   - Internal errors: Programming errors that may panic or use internal error types.
-- Error display messages should be lowercase sentence fragments suitable for "failed to {error}".
+- Error display messages lead with a `<context>:` prefix naming the subsystem or operation they belong to, then the cause — `failed to bind {addr}: {cause}`, `failed to parse config at {path}: {cause}` — and stay lowercase sentence fragments suitable for "failed to {error}". An aggregating error prefixes its own layer's context and delegates to the inner error, so a chained error reads as nested context. Add resource context (a path, an id) at the layer that has it.
 
 ### Async patterns
 
@@ -249,6 +217,7 @@ This applies to both trees; the Rust- and TypeScript-specific sections below bui
 - Use `#[cfg(unix)]` and `#[cfg(windows)]` for conditional compilation.
 - **Always** import types or functions at the very top of the module, with the one exception being `cfg()`-gated functions. Never import types or modules within function contexts, other than this `cfg()`-gated exception.
 - It is okay to import enum variants for pattern matching, though.
+- Re-exports follow the same rule: a `pub use` belongs at the top of the module with the imports, not beside the item it re-exports. In a `mod.rs`, the `mod` declarations come first, then the `pub use` block, so the module's public surface reads as one list.
 - **Always** anchor intra-crate paths at `crate::`, never `super::`. Write `crate::estimator::compute_buffer::default_for`, not `super::compute_buffer::default_for` or `super::super::…` — this holds for `use` statements, inline paths, and intra-doc links alike. The one exception is a test module, where `use super::*;` inside the `#[cfg(test)]` block is the idiomatic form and stays.
 - When a path is used more than once in a module, import the specific items at the top of the module rather than repeating the fully-qualified path at each call site. A path used only once may stay fully-qualified — unless it is unwieldy (more than three module segments deep, like `crate::supervise::restart::history::Window`), in which case import it regardless of use count. And when the module already imports a sibling from the same parent, import the new item alongside it rather than writing it inline.
 
@@ -273,7 +242,7 @@ Within each module, organize code as follows:
 
 ### Function arguments and state
 
-- If a function takes more than ~5 arguments, that's a signal to group related ones into a struct rather than suppressing `clippy::too_many_arguments`. Suppressing that lint is almost never right.
+- If a function takes more than ~5 arguments, that's a signal to group related ones into a struct rather than suppressing `clippy::too_many_arguments`. Suppressing that lint is almost never right — the lint firing means a struct is wanted. The one exception is a signature you don't own (an FFI shim), where the `allow` is the honest annotation.
 - Never use `#[allow(clippy::...)]` to silence a lint without a concrete reason. If clippy is wrong for a case, document why in a comment above the allow. In almost all cases the right move is to restructure the code.
 - Prefer a **functional core, imperative shell**: keep decision logic in pure functions that take data in and return data out, and keep the `tokio::select!` / `tokio::spawn` / I/O at the edges. This makes the core testable without test-fakes and keeps rightward drift out of the core.
 - Avoid rightward drift. If a function is nesting three `tokio::select!` blocks or four levels of `match`/`if let`, extract each arm into a named function that takes a context struct. The control flow at the top level should read like an outline.
@@ -294,9 +263,16 @@ Within each module, organize code as follows:
 
 - Use `Arc` or borrows for shared immutable data.
 - Use `smol_str` for efficient small string storage.
+- Use `smallvec` for collections that are usually small, to avoid heap allocations in the common case. No site in the daemon or calibration harness currently meets the bar: request and config collections are built at request or reload rate, the balloon window is a `VecDeque` ring, and the proxy data plane streams via `Bytes`. Reconsider where a per-token or per-chunk `Vec` appears.
 - Careful attention to cloning referencing. Avoid cloning if code has a natural tree structure.
 - Stream data (e.g. iterators) where possible rather than buffering.
 - To borrow the value inside a lock guard, a `Box`, or an `Arc`, prefer `.as_ref()`/`.as_mut()` over a manual double-deref: write `state.config.read().as_ref()`, not `&**state.config.read()`. The named form reads as "borrow the config" rather than as deref bookkeeping. The same applies to an `Arc<dyn Trait>`: `probe.as_ref()`, not `&**probe`.
+
+### Serde
+
+- Use `#[serde(deny_unknown_fields)]` on config types, and `#[serde(default)]` on new fields so they stay backwards-compatible.
+- Avoid `#[serde(untagged)]` when deserialising — the error messages it produces are useless, and the inner type's `deny_unknown_fields` is silently dropped. Write a custom visitor instead.
+- Reserve `#[serde(flatten)]` for the case it is genuinely for: extending a shared struct with local fields, or a `toml::Table` catch-all that preserves unknown fields across a round-trip. Note that it interacts badly with `deny_unknown_fields`.
 
 ### Chosen dependencies
 
@@ -387,6 +363,7 @@ Treat these as the TypeScript analogues of the Rust patterns above. The goal is 
 - The React Compiler is enabled via `babel-plugin-react-compiler`, so manual memoization (`useMemo`, `useCallback`, `React.memo`) is generally unnecessary and should not be added preemptively. Reach for it only when the compiler demonstrably cannot handle a case.
 - Keep components small and focused. Lift state only as far as it needs to go.
 - Follow the rules of hooks strictly, and keep `eslint-plugin-react-hooks` warnings at zero.
+- That's why the hooks lint is load-bearing rather than advisory: the compiler's guarantees hold only while the code stays within the Rules of React.
 - Type component props explicitly. Do not rely on inference for the public shape of a component.
 - Prefer composition over configuration — a few focused components beat one component with a dozen boolean props.
 
@@ -396,6 +373,12 @@ Treat these as the TypeScript analogues of the Rust patterns above. The goal is 
 - **Do not write custom CSS unless it truly, genuinely cannot be expressed in Tailwind.** This is a hard rule, not a soft preference. "It would be slightly cleaner in CSS" is not sufficient justification; neither is "I'm more comfortable with CSS". If you think you need custom CSS, first check whether an arbitrary value (`[...]`), a variant, a Tailwind theme extension, or a small component abstraction solves it.
 - When custom CSS is genuinely required (e.g. a keyframe animation or a selector Tailwind cannot express), keep it minimal, colocated, and leave a comment explaining why Tailwind was not sufficient.
 - Use Tailwind's theme tokens for colours, spacing, and typography rather than hard-coded values, so design changes stay centralised.
+
+#### Linting
+
+Class order, duplicate and conflicting utilities, typo'd class names, and shorthand collapsing are all machine-checkable — let the linter own them rather than spending review on them. Use [`eslint-plugin-better-tailwindcss`](https://github.com/schoero/eslint-plugin-better-tailwindcss) with its `recommended` config, include it in the `npm run lint` check, and treat its warnings as errors so lint stays a binary signal. Point it at the theme so custom tokens aren't reported as unknown classes (`entryPoint` for a v4 CSS-based config, `tailwindConfig` for v3).
+
+Compose conditional classes with `clsx` (plus `tailwind-merge` where later classes must override earlier ones), or `cva` for a component with variants. Never build a class name by interpolating fragments into a string — it defeats both the linter and Tailwind's own class extraction.
 
 ### Module organization
 
@@ -417,52 +400,28 @@ Same principle as the Rust side: the frontend stack is chosen, and most of these
 
 ### Tests are pure; the outside world goes through `system::SystemDeps`
 
-Tests must be deterministic. They must not spawn real processes, probe real
-pids, read real `/proc`, touch disk, sleep on wall-clock, or depend on any
-state the daemon didn't hand them. The way we enforce this is that every
-capability the daemon takes from the outside world lives behind a trait in
-`crate::system`:
+Tests must be deterministic. They must not spawn real processes, probe real pids, read real `/proc`, touch disk, sleep on wall-clock, or depend on any state the daemon didn't hand them. The way we enforce this is that every capability the daemon takes from the outside world lives behind a trait in `crate::system`:
 
 - `Fs` — filesystem. `LocalFs` in production, `InMemoryFs` in tests.
-- `ProcessSpawner` + `ManagedChild` — child-process lifecycle. `LocalSpawner`
-  in production (uses `tokio::process` + `nix` for signals); `FakeSpawner`
-  in tests (virtual pids, no OS processes, state inspectable for assertions).
+- `ProcessSpawner` + `ManagedChild` — child-process lifecycle. `LocalSpawner` in production (uses `tokio::process` + `nix` for signals); `FakeSpawner` in tests (virtual pids, no OS processes, state inspectable for assertions).
 
-These are bundled into `system::SystemDeps`. Production code calls
-`SystemDeps::local()`; tests call `SystemDeps::fake()` which also returns
-the concrete fakes so assertions can inspect state (e.g. "which children
-were SIGTERM'd, which were SIGKILL'd"). The `SupervisorDeps` and `AppState`
-structs carry a `system: SystemDeps` field — they never hold `LocalFs`
-or `LocalSpawner` directly.
+These are bundled into `system::SystemDeps`. Production code calls `SystemDeps::local()`; tests call `SystemDeps::fake()` which also returns the concrete fakes so assertions can inspect state (e.g. "which children were SIGTERM'd, which were SIGKILL'd"). The `SupervisorDeps` and `AppState` structs carry a `system: SystemDeps` field — they never hold `LocalFs` or `LocalSpawner` directly.
 
-**When adding a new outside-world dependency (clock, network, `/proc`
-readers, etc.):**
+**When adding a new outside-world dependency (clock, network, `/proc` readers, etc.):**
 
-1. Define a trait in `ananke/src/system/<name>.rs` with a production impl
-   and a test fake. Gate the fake behind `#[cfg(any(test, feature = "test-fakes"))]`.
-2. Re-export from `system::mod.rs` and add it as a field on `SystemDeps`.
-   Update `SystemDeps::local()` and `SystemDeps::fake()`.
-3. Route every caller through `deps.system.<field>`; never use
-   `std::fs::*`, `tokio::process::Command`, `SystemTime::now`, etc.
-   directly outside the trait's production impl.
+1. Define a trait in `ananke/src/system/<name>.rs` with a production impl and a test fake. Gate the fake behind `#[cfg(any(test, feature = "test-fakes"))]`.
+2. Re-export from `system::mod.rs` and add it as a field on `SystemDeps`. Update `SystemDeps::local()` and `SystemDeps::fake()`.
+3. Route every caller through `deps.system.<field>`; never use `std::fs::*`, `tokio::process::Command`, `SystemTime::now`, etc. directly outside the trait's production impl.
 
-Time is the narrow exception: supervisors already run on `tokio::time` so
-`start_paused = true` gives tests virtual time without another trait.
-`tracking::now_unix_ms` (wall-clock) is used for event timestamps and DB
-rows; tests don't assert on its values.
+Time is the narrow exception: supervisors already run on `tokio::time` so `start_paused = true` gives tests virtual time without another trait. `tracking::now_unix_ms` (wall-clock) is used for event timestamps and DB rows; tests don't assert on its values.
 
 **Anti-patterns that should not appear in tests:**
 
-- `nix::sys::signal::kill(pid, 0)` to probe a real pid — use
-  `FakeSpawner::children()` and assert on `FakeProcessState`.
+- `nix::sys::signal::kill(pid, 0)` to probe a real pid — use `FakeSpawner::children()` and assert on `FakeProcessState`.
 - `tokio::process::Command` to spawn a shell sleep — use `FakeSpawner`.
-- `tokio::time::sleep(Duration::from_millis(N))` to let real wall-clock
-  time pass — use `start_paused = true` + `tokio::time::advance` or
-  `wait_for(predicate)` on explicit state.
+- `tokio::time::sleep(Duration::from_millis(N))` to let real wall-clock time pass — use `start_paused = true` + `tokio::time::advance` or `wait_for(predicate)` on explicit state.
 - `std::fs::*` or `tempfile::*` — use `InMemoryFs`.
-- Real TCP sockets to a real service — the `TestHarness` echo server is the
-  single permitted loopback listener and exists only because routing the
-  hyper proxy data-plane through a trait would obscure its semantics.
+- Real TCP sockets to a real service — the `TestHarness` echo server is the single permitted loopback listener and exists only because routing the hyper proxy data-plane through a trait would obscure its semantics.
 
 ### Testing conventions
 

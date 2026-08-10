@@ -1,8 +1,6 @@
 use ananke::{daemon::run, errors::ExpectedError};
 
-// Silence unused-import warning until `run` returns a real `ExpectedError`; keeps
-// the type in scope so future signature changes surface here first.
-#[allow(dead_code)]
+// Keeps the error type in scope so a signature change surfaces here first.
 fn _ensure_error_type_in_scope() -> Option<ExpectedError> {
     None
 }

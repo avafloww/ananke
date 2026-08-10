@@ -93,6 +93,9 @@ regex = "1"
 libc = "0.2"
 notify = "6"
 
+# URL handling
+url = "2"
+
 # Linux-only
 nvml-wrapper = "0.10"
 nix = { version = "0.29", features = ["signal", "fs", "process"] }

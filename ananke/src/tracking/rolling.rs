@@ -10,6 +10,7 @@
 
 use std::{collections::BTreeMap, sync::Arc};
 
+pub use ananke_placement::Corrections;
 use parking_lot::RwLock;
 use smol_str::SmolStr;
 use tracing::{info, warn};
@@ -127,8 +128,6 @@ impl RollingCorrection {
         }
     }
 }
-
-pub use ananke_placement::Corrections;
 
 #[derive(Clone, Default)]
 pub struct RollingTable {

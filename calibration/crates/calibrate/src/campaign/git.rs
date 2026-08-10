@@ -10,6 +10,9 @@
 
 use std::{path::PathBuf, process::Command};
 
+#[cfg(any(test, feature = "test-fakes"))]
+pub use fake::FakeGit;
+
 /// The version control the campaign commits through.
 pub trait Vcs {
     /// Stage exactly these paths.
@@ -118,9 +121,6 @@ pub enum Outcome {
     /// The data is still on disk; the campaign continues.
     Failed(String),
 }
-
-#[cfg(any(test, feature = "test-fakes"))]
-pub use fake::FakeGit;
 
 #[cfg(any(test, feature = "test-fakes"))]
 mod fake {
