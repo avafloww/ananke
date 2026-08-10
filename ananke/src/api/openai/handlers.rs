@@ -6,7 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ananke_api::shared::errors::ApiError;
+use ananke_api::{
+    openai::{
+        ChatCompletionEnvelope, CompletionEnvelope, EmbeddingEnvelope, ModelListing, ModelsResponse,
+    },
+    shared::errors::ApiError,
+};
 use ananke_tracking::{inflight::InflightGuard, progress::ProgressCell};
 use axum::{
     Json,
@@ -27,10 +32,6 @@ use crate::{
     api::openai::{
         errors, filters,
         metrics::{MetricsBody, MetricsRecorder, RequestMetricsRecorder},
-        schema::{
-            ChatCompletionEnvelope, CompletionEnvelope, EmbeddingEnvelope, ModelListing,
-            ModelsResponse,
-        },
         stall::{self, StallDisarm},
     },
     daemon::app_state::AppState,

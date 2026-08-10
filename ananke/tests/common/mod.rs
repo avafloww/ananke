@@ -28,7 +28,6 @@ use ananke::{
         parse::{DEFAULT_START_QUEUE_DEPTH, EstimationConfig, SamplingConfig},
     },
     daemon::app_state::AppState,
-    snapshotter,
     supervise::{SupervisorHandle, registry::ServiceRegistry, spawn_supervisor},
 };
 use ananke_allocator::AllocationTable;
@@ -103,7 +102,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
 
     let activity = ActivityTable::new();
     let allocations = Arc::new(Mutex::new(AllocationTable::new()));
-    let snapshot = snapshotter::new_shared();
+    let snapshot = ananke_observation::new_shared();
     // Pre-seed with ample CPU memory so the allocator does not reject services
     // that declare a CPU placement. The echo server stands in for the real
     // model binary, so actual memory is never consumed.
@@ -214,7 +213,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
 
 /// Set the llama-cpp service's model path. Tests that produce a synthetic
 /// GGUF under a specific path in `InMemoryFs` need the `ServiceConfig`'s
-/// `model` to point at that same path so `crate::config::service_inputs::estimator_inputs`
+/// `model` to point at that same path so `crate::config::estimator_inputs`
 /// resolves correctly.
 pub fn set_model_path(svc: &mut ServiceConfig, path: &std::path::Path) {
     match &mut svc.template_config {

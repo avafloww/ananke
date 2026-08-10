@@ -17,7 +17,6 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ananke::{
     config::{DaemonSettings, DeviceSlot, EffectiveConfig, Lifecycle, manager::ConfigManager},
-    snapshotter,
     supervise::{SupervisorCommand, SupervisorHandle, registry::ServiceRegistry},
 };
 use ananke_allocator::{
@@ -88,7 +87,7 @@ fn build_harness_on(
     // Empty config + snapshot — these tests exercise the pledge-reconcile
     // path only, which doesn't read either. The contention path (which
     // does) is covered by separate scenario tests.
-    let snapshot = snapshotter::new_shared();
+    let snapshot = ananke_observation::new_shared();
     let config = ConfigManager::in_memory(
         EffectiveConfig {
             daemon: DaemonSettings::default(),

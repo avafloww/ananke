@@ -5,7 +5,7 @@ use std::sync::Arc;
 use ananke_allocator::AllocationTable;
 use ananke_db::{Database, logs::BatcherHandle};
 use ananke_events::EventBus;
-use ananke_observation::ObservationTable;
+use ananke_observation::{ObservationTable, SharedSnapshot};
 use ananke_tracking::{
     activity::ActivityTable, inflight::InflightTable, progress::ProgressTable,
     rolling::RollingTable,
@@ -15,7 +15,6 @@ use parking_lot::Mutex;
 use crate::{
     config::manager::ConfigManager,
     oneshot::{OneshotRegistry, PortPool},
-    snapshotter::SharedSnapshot,
     supervise::{estimate_cache::EstimateCacheHandle, registry::SupervisorRegistry},
 };
 

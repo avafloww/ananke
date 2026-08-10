@@ -18,7 +18,6 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ananke::{
     config::{DaemonSettings, DeviceSlot, EffectiveConfig, Lifecycle, manager::ConfigManager},
-    snapshotter,
     supervise::{SupervisorCommand, SupervisorHandle, registry::ServiceRegistry},
 };
 use ananke_allocator::{
@@ -93,7 +92,7 @@ impl Harness {
                 registry,
                 allocations: allocations.clone(),
                 events: events.clone(),
-                snapshot: snapshotter::new_shared(),
+                snapshot: ananke_observation::new_shared(),
                 // Placement intent is read from the *live* config each tick,
                 // so the service has to actually be in it with the placement
                 // the test means to exercise.

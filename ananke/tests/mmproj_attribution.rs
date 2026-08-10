@@ -49,9 +49,8 @@ fn mmproj_bytes_included_in_weights_estimate() {
     let svc_without_mmproj = svc_with_mmproj(main_path.to_path_buf(), None);
     let svc_with = svc_with_mmproj(main_path.to_path_buf(), Some(mmproj_path.to_path_buf()));
 
-    let inputs_without =
-        ananke::config::service_inputs::estimator_inputs(&svc_without_mmproj).unwrap();
-    let inputs_with = ananke::config::service_inputs::estimator_inputs(&svc_with).unwrap();
+    let inputs_without = ananke::config::estimator_inputs(&svc_without_mmproj).unwrap();
+    let inputs_with = ananke::config::estimator_inputs(&svc_with).unwrap();
     let est_without = estimator::estimate_from_path(&fs, &inputs_without).unwrap();
     let est_with = estimator::estimate_from_path(&fs, &inputs_with).unwrap();
 

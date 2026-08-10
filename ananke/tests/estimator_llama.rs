@@ -27,7 +27,7 @@ fn llama_family_weights_include_layers_and_non_layer() {
 
     let mut svc = common::minimal_llama_service("demo", 0);
     common::set_model_path(&mut svc, path);
-    let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
+    let inputs = ananke::config::estimator_inputs(&svc).unwrap();
     let est = estimator::estimate_from_path(&fs, &inputs).unwrap();
     assert!(est.weights_bytes > 0, "weights_bytes must be positive");
     assert_eq!(est.architecture, Architecture::Qwen3);

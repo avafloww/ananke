@@ -36,7 +36,7 @@ The backend's crates, leaves first. Package names keep the `ananke-` prefix; the
 | `ananke-proxy` | `crates/proxy` | the hyper reverse-proxy data plane and `ApiErrorCode` | `ananke-api`, `ananke-errors`, `axum`, `hyper` |
 | `ananke-allocator` | `crates/allocator` | the feasibility check, eviction planner, and balloon resolver | `ananke-config`, `ananke-events`, `ananke-observation`, `ananke-placement` |
 | `ananke-supervise` | `crates/supervise` | the supervisor state machine, child lifecycle, health, provision + reconcile | `ananke-config`, `ananke-system`, `ananke-devices`, `ananke-tracking`, `ananke-db`, `ananke-allocator`, `ananke-templates`, `ananke-api`, `ananke-events`, `ananke-proxy` |
-| `ananke` | `ananke` | the daemon shell: HTTP surface (`api`), composition root (`daemon`), oneshot services, `config::service_inputs`, and the placeholder checker | all of the above |
+| `ananke` | `ananke` | the daemon shell: HTTP surface (`api`), composition root (`daemon`), oneshot services, the input distillers re-exported at `config`, and the placeholder checker | all of the above |
 | `anankectl` | `anankectl` | the CLI | `ananke-api` |
 
 Three more live under `calibration/crates/`, because nothing shipped links them — see [`calibration/README.md`](calibration/README.md):
@@ -55,7 +55,7 @@ The split is for compile times as much as for structure. `ananke`'s build script
 
 `ananke-tuning-schema` is a leaf for a different reason: a build script cannot depend on the crate it builds, so the type of `tuning.json` — read by `crates/tuning`'s `build.rs`, by the derivers, by the emitter, and by the compute-model fitter — has to sit below all four. It is `serde` and nothing else.
 
-`ananke` re-exports `gguf`, `estimator`, `allocator::placement`, `system::fs`, and `tracking::rolling::Corrections`, so `crate::…` paths inside the daemon are unchanged by the split.
+The daemon imports the split crates directly (`ananke_gguf`, `ananke_estimate`, `ananke_system`, `ananke_tracking`, …). The leftover path shims are gone; only the kept facade modules (`config`, `supervise`, the `api` error facade) still re-export for path stability.
 
 `ananke-measure` deliberately depends on neither `ananke-estimate` nor `ananke-placement`: measurement and estimation stay apart so that nothing on the estimation side ever links a process spawner.
 
@@ -65,7 +65,7 @@ The tuned constants in `crates/tuning/tuning.json` are derived from a measuremen
 
 Two documents, and neither is duplicated here. [`calibration/README.md`](calibration/README.md) is the workflow — how to add a model, run the campaign, refit, and decide whether to trust the result. [`calibration/docs/design.md`](calibration/docs/design.md) is why the calibration code is shaped the way it is: the binaries and what each is for, the fixed `emit`-then-`fit` order, what `validate` and `crossval` do and do not tell you, and the rule that a derivation's key must pin every factor that could differ.
 
-Getting the estimator and the packer out took a real decoupling rather than a file move. Both had taken a whole `ServiceConfig`; both now take a distilled input struct — `EstimatorInputs` and `PlacementInputs` — built by free functions in `ananke::config::service_inputs`. Reading a service config is the daemon's business; estimating and packing are pure functions over the fields they actually need. Prefer that shape for anything else that wants to come out.
+Getting the estimator and the packer out took a real decoupling rather than a file move. Both had taken a whole `ServiceConfig`; both now take a distilled input struct — `EstimatorInputs` and `PlacementInputs` — built by free functions in `ananke_estimate::service_inputs` and `ananke_placement::service_inputs`, re-exported at `ananke::config`. Reading a service config is the daemon's business; estimating and packing are pure functions over the fields they actually need. Prefer that shape for anything else that wants to come out.
 
 ### Platform scope
 

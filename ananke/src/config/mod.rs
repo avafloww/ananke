@@ -6,7 +6,6 @@
 //! are unchanged by the split, and supplies the daemon-side
 //! placeholder dry-run checker that the pipeline injects.
 
-pub mod service_inputs;
 pub mod validate;
 
 pub mod manager {
@@ -36,6 +35,10 @@ pub use ananke_config::{
 };
 use ananke_config::{load_config_from_str_with_checks, preflight_ggufs};
 use ananke_errors::ExpectedError;
+pub use ananke_estimate::service_inputs::{
+    cache_ram_from_extra_args, estimator_inputs, extra_arg_value,
+};
+pub use ananke_placement::service_inputs::placement_inputs;
 use ananke_system::{Fs, LocalFs};
 
 /// Load, parse, merge, validate, and preflight a config file from disk.

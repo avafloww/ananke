@@ -269,7 +269,7 @@ pub fn pinned_graph_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) -
     let ubatch = inputs.ubatch.unwrap_or(DEFAULT_UBATCH).max(1) as u64;
     let n_tokens = context.min(ubatch);
 
-    // `config::service_inputs::estimator_inputs` resolves `-fa auto` the way the runtime
+    // `ananke_estimate::service_inputs::estimator_inputs` resolves `-fa auto` the way the runtime
     // will, so an unset value here only arises in tests. Default to off there,
     // which is the larger mask.
     let flash_attn = inputs.flash_attn.unwrap_or(false);

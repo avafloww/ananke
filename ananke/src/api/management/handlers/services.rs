@@ -21,7 +21,7 @@ use crate::{
         errors::ApiErrorCode,
         management::handlers::{model_estimate_entry, placement_preview, read_current_allocation},
     },
-    config::{ServiceConfig, service_inputs::placement_inputs},
+    config::{ServiceConfig, placement_inputs},
     daemon::app_state::AppState,
     supervise::estimate_cache::EstimateCacheEntry,
 };

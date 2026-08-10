@@ -24,7 +24,6 @@ use crate::{
         signals::{ShutdownKind, await_shutdown},
     },
     oneshot::{OneshotRegistry, PortPool},
-    snapshotter,
     supervise::{SupervisorHandle, orphans::reconcile, registry::SupervisorRegistry},
 };
 
@@ -74,8 +73,8 @@ pub async fn run() -> Result<(), ExpectedError> {
     let observation = ananke_observation::ObservationTable::new();
     let registry = SupervisorRegistry::new();
 
-    let shared_snapshot = snapshotter::new_shared();
-    let snapshotter_join = snapshotter::spawn(
+    let shared_snapshot = ananke_observation::new_shared();
+    let snapshotter_join = ananke_devices::snapshotter::spawn(
         shared_snapshot.clone(),
         probe,
         observation.clone(),

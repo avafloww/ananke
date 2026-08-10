@@ -20,7 +20,6 @@ use ananke::{
         DaemonSettings, DeviceSlot, EffectiveConfig, Lifecycle, manager::ConfigManager,
         validate::test_fixtures::minimal_service,
     },
-    snapshotter::SharedSnapshot,
     supervise::{SupervisorHandle, registry::ServiceRegistry},
 };
 use ananke_allocator::{
@@ -28,7 +27,7 @@ use ananke_allocator::{
     balloon::{BalloonConfig, ResolverDeps, spawn_resolver},
 };
 use ananke_events::EventBus;
-use ananke_observation::ObservationTable;
+use ananke_observation::{ObservationTable, SharedSnapshot};
 use ananke_placement::devices::{DeviceSnapshot, GpuSnapshot};
 use parking_lot::Mutex;
 use smol_str::SmolStr;
@@ -45,7 +44,7 @@ fn mb(n: u64) -> u64 {
 /// pledge-based; tests pass it through anyway so the snapshots look
 /// realistic.
 fn one_24g_gpu(free_bytes: u64) -> SharedSnapshot {
-    let snap = ananke::snapshotter::new_shared();
+    let snap = ananke_observation::new_shared();
     *snap.write() = DeviceSnapshot {
         gpus: vec![GpuSnapshot {
             id: 1,

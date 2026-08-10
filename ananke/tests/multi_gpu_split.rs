@@ -75,7 +75,7 @@ fn multi_gpu_split_produces_tensor_split_and_both_gpus_allocated() {
 
     let packed = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &reserved,
     )

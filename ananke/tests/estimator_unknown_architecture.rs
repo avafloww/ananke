@@ -23,7 +23,7 @@ fn an_unrecognised_architecture_is_refused() {
 
     let mut svc = common::minimal_llama_service("demo", 0);
     common::set_model_path(&mut svc, path);
-    let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
+    let inputs = ananke::config::estimator_inputs(&svc).unwrap();
 
     match estimator::estimate_from_path(&fs, &inputs) {
         Err(EstimatorError::UnknownArchitecture { architecture }) => {
