@@ -1,23 +1,21 @@
 //! Resolve a service's `[auto_restart]` block — the guardrails, the trigger
 //! toggles, and the periodic-restart timer — into [`AutoRestartSettings`].
 
-use ananke_config::docs::{
-    DEFAULT_AUTO_RESTART_FLAP_WINDOW_MS, DEFAULT_AUTO_RESTART_MAX_RESTARTS,
-    DEFAULT_AUTO_RESTART_MIN_UPTIME_MS,
-};
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
 use crate::{
-    config::{
-        parse::{RawAutoRestart, RawPeriodicSettings, Toggle},
-        validate::{
-            AutoRestartSettings, DEFAULT_AUTO_RESTART_PERIODIC_MODE, ErrorRateTrigger,
-            GenerationStallTrigger, PeriodicMode, PeriodicTrigger, SpecCollapseTrigger, Template,
-            TtftStallTrigger, fail, parse_duration_ms, validate_error_rate,
-            validate_generation_stall, validate_spec_collapse, validate_ttft_stall,
-        },
+    docs::{
+        DEFAULT_AUTO_RESTART_FLAP_WINDOW_MS, DEFAULT_AUTO_RESTART_MAX_RESTARTS,
+        DEFAULT_AUTO_RESTART_MIN_UPTIME_MS,
     },
-    errors::ExpectedError,
+    parse::{RawAutoRestart, RawPeriodicSettings, Toggle},
+    validate::{
+        AutoRestartSettings, DEFAULT_AUTO_RESTART_PERIODIC_MODE, ErrorRateTrigger,
+        GenerationStallTrigger, PeriodicMode, PeriodicTrigger, SpecCollapseTrigger, Template,
+        TtftStallTrigger, fail, parse_duration_ms, validate_error_rate, validate_generation_stall,
+        validate_spec_collapse, validate_ttft_stall,
+    },
 };
 
 /// `has_spec_type` gates the spec-collapse watchdog: only a llama-cpp
@@ -173,16 +171,17 @@ pub(crate) fn validate_periodic(
 
 #[cfg(test)]
 mod tests {
-    use ananke_config::docs::{
-        DEFAULT_AUTO_RESTART_MIN_REQUESTS, DEFAULT_AUTO_RESTART_TTFT_STALL_MS,
-        DEFAULT_AUTO_RESTART_WINDOW_MS,
-    };
-
     use super::*;
-    use crate::config::validate::{
-        ErrorStatusClass,
-        test_fixtures::{parse_and_merge, svc_with_auto_restart},
-        validate,
+    use crate::{
+        docs::{
+            DEFAULT_AUTO_RESTART_MIN_REQUESTS, DEFAULT_AUTO_RESTART_TTFT_STALL_MS,
+            DEFAULT_AUTO_RESTART_WINDOW_MS,
+        },
+        validate::{
+            ErrorStatusClass,
+            test_fixtures::{parse_and_merge, svc_with_auto_restart},
+            validate,
+        },
     };
 
     #[test]

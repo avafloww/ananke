@@ -4,7 +4,7 @@
 //! These live beside the flag vocabulary rather than with the config validator
 //! because the estimator reasons about them without knowing what a
 //! `ServiceConfig` is: how the model is split, and which slot a tensor is pinned
-//! to, are properties of the runtime invocation. `ananke::config::validate`
+//! to, are properties of the runtime invocation. `ananke::crate::validate`
 //! re-exports both.
 
 use std::{collections::BTreeMap, fmt};
@@ -172,7 +172,7 @@ mod tests {
 /// above, so — exactly as `EstimatorInputs` does for the estimator — it takes those
 /// and nothing else rather than a whole `ServiceConfig`, which would tie it to the
 /// config validator and everything behind it. Building one from a validated config
-/// is the daemon's business; see `ananke::config::service_inputs`.
+/// is the daemon's business; see `ananke::crate::service_inputs`.
 #[derive(Debug, Clone, Default)]
 pub struct PlacementInputs {
     /// Service name. Compared against the reservation table's keys, so it is the
@@ -208,7 +208,7 @@ impl PlacementInputs {
     ///
     /// For tests in crates that cannot reach the config validator to build a
     /// real `ServiceConfig`. Production code goes through
-    /// `ananke::config::service_inputs::placement_inputs`, so the two cannot
+    /// `ananke::crate::service_inputs::placement_inputs`, so the two cannot
     /// disagree about how a config is read.
     pub fn named(name: &str) -> Self {
         Self {

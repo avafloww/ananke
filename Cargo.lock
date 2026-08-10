@@ -124,9 +124,25 @@ dependencies = [
 name = "ananke-config"
 version = "0.2.0"
 dependencies = [
+ "ananke-api",
+ "ananke-errors",
+ "ananke-events",
+ "ananke-fs",
+ "ananke-gguf",
+ "ananke-time",
+ "arc-swap",
+ "base64",
+ "notify",
+ "parking_lot",
+ "pretty_assertions",
  "serde",
  "serde_json",
+ "sha2",
  "smol_str",
+ "tokio",
+ "toml",
+ "toml_edit",
+ "tracing",
 ]
 
 [[package]]

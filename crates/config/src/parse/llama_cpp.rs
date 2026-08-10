@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
-use crate::config::parse::RawServiceCommon;
+use crate::parse::RawServiceCommon;
 
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields, default)]
@@ -30,7 +30,7 @@ pub struct RawLlamaCppService {
     /// MoE expert-offload policy: `"off"` (no expert offload — whole-layer CPU
     /// spill only), `"auto"` (the packer offloads the minimum experts to fit
     /// live VRAM), or an integer `N` (offload the experts of the N tail-most
-    /// expert layers). Validated into [`crate::config::OffloadMode`]. Requires
+    /// expert layers). Validated into [`crate::OffloadMode`]. Requires
     /// a CPU-allowing placement (`placement = "hybrid"`) when not `"off"`.
     pub expert_offload: Option<RawExpertOffload>,
     pub flash_attn: Option<bool>,
@@ -57,7 +57,7 @@ pub struct RawLlamaCppService {
     /// estimator reads this file to add the draft model's resident-weight
     /// plus compute-buffer overhead; its attention layers reuse the
     /// target's KV cache, so it adds no context-scaling KV. See
-    /// [`crate::estimator::mtp`].
+    /// `ananke_estimate::mtp`.
     pub draft_model: Option<PathBuf>,
     /// Use a single unified KV cache pool shared across all parallel
     /// slots (`-kvu` / `--kv-unified`) instead of statically partitioning
@@ -87,7 +87,7 @@ pub struct RawLlamaCppService {
     /// `--numa`: `"distribute"` (spread threads and interleave memory across
     /// all nodes), `"isolate"` (pin to one node), or `"numactl"` (defer to
     /// an external `numactl` mask). Validated into
-    /// [`crate::config::NumaStrategy`]. Unset leaves llama-server's default
+    /// [`crate::NumaStrategy`]. Unset leaves llama-server's default
     /// (no `--numa` flag).
     pub numa: Option<SmolStr>,
     pub jinja: Option<bool>,
@@ -148,7 +148,7 @@ pub struct RawIkSettings {
 
 /// Raw `expert_offload` value before validation: a mode string (`"off"` /
 /// `"auto"`) or an integer layer count. Validated into
-/// [`crate::config::OffloadMode`].
+/// [`crate::OffloadMode`].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum RawExpertOffload {
@@ -185,7 +185,7 @@ pub struct SamplingConfig {
 mod tests {
     use std::path::Path;
 
-    use crate::config::parse::{RawService, parse_toml};
+    use crate::parse::{RawService, parse_toml};
 
     #[test]
     fn parses_mtp_spec_keys() {

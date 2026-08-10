@@ -4,14 +4,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
 use crate::{
-    config::{
-        merge::field_merge::{merge_command, merge_llama_cpp},
-        parse::{RawConfig, RawService},
-    },
-    errors::ExpectedError,
+    merge::field_merge::{merge_command, merge_llama_cpp},
+    parse::{RawConfig, RawService},
 };
 
 pub fn resolve_inheritance(cfg: &mut RawConfig) -> Result<(), ExpectedError> {
@@ -121,7 +119,7 @@ fn merge_service(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::merge::test_support::{find_llama, parse};
+    use crate::merge::test_support::{find_llama, parse};
 
     #[test]
     fn transitive_extends() {

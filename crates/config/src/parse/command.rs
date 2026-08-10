@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
-use crate::config::parse::{RawAllocation, RawServiceCommon};
+use crate::parse::{RawAllocation, RawServiceCommon};
 
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields, default)]

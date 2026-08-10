@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 use serde::Deserialize;
 use smol_str::SmolStr;
 
-use crate::config::parse::{RawAutoRestart, RawService};
+use crate::parse::{RawAutoRestart, RawService};
 
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields, default)]
@@ -78,7 +78,7 @@ pub struct DaemonConfig {
 }
 
 fn default_management_listen() -> String {
-    ananke_config::defaults::MANAGEMENT_LISTEN.into()
+    crate::defaults::MANAGEMENT_LISTEN.into()
 }
 
 fn default_shutdown_timeout() -> String {

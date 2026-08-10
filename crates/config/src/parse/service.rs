@@ -4,7 +4,7 @@
 
 use serde::Deserialize;
 
-use crate::config::parse::{
+use crate::parse::{
     DEFAULT_START_QUEUE_DEPTH, RawCommandService, RawLlamaCppService, RawServiceCommon,
 };
 
@@ -19,7 +19,7 @@ pub enum RawService {
     /// llama-cpp side carries ~1 KiB of optional knobs on top. Boxing
     /// keeps `RawService` pointer-sized and the two variants uniform,
     /// mirroring the boxing on the validated
-    /// [`crate::config::validate::TemplateConfig`].
+    /// [`crate::validate::TemplateConfig`].
     LlamaCpp(Box<RawLlamaCppService>),
     Command(Box<RawCommandService>),
 }

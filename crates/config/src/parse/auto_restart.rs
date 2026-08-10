@@ -164,7 +164,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::config::parse::parse_toml;
+    use crate::parse::parse_toml;
 
     #[test]
     fn parses_auto_restart_block() {

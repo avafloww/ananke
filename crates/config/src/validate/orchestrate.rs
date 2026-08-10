@@ -7,23 +7,21 @@ use std::{
     sync::Arc,
 };
 
-use ananke_config::docs::DEFAULT_OPENAI_MAX_BODY_MB;
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
 use crate::{
-    config::{
-        parse::RawConfig,
-        validate::{
-            DaemonSettings, DaemonPlaceholderChecker, DeviceReserves, EffectiveConfig,
-            PlaceholderChecker, PrivatePortAllocator, PrivatePortRange, fail, parse_duration_ms,
-            validate_service,
-        },
+    docs::DEFAULT_OPENAI_MAX_BODY_MB,
+    parse::RawConfig,
+    validate::{
+        DaemonSettings, DeviceReserves, EffectiveConfig, NoopPlaceholderChecker,
+        PlaceholderChecker, PrivatePortAllocator, PrivatePortRange, fail, parse_duration_ms,
+        validate_service,
     },
-    errors::ExpectedError,
 };
 
 pub fn validate(cfg: &RawConfig) -> Result<EffectiveConfig, ExpectedError> {
-    validate_with_checks(cfg, &DaemonPlaceholderChecker)
+    validate_with_checks(cfg, &NoopPlaceholderChecker)
 }
 
 /// [`validate`] with an injected placeholder dry-run checker. The daemon
@@ -53,7 +51,7 @@ pub fn validate_with_checks(
         .map_err(|e| fail(format!("daemon.shutdown_timeout: {e}")))?;
 
     let management_addr = if cfg.daemon.management_listen.is_empty() {
-        ananke_config::defaults::MANAGEMENT_LISTEN.into()
+        crate::defaults::MANAGEMENT_LISTEN.into()
     } else {
         cfg.daemon.management_listen.clone()
     };
@@ -74,7 +72,7 @@ pub fn validate_with_checks(
         .openai_api
         .listen
         .clone()
-        .unwrap_or_else(|| ananke_config::defaults::OPENAI_LISTEN.into());
+        .unwrap_or_else(|| crate::defaults::OPENAI_LISTEN.into());
 
     let openai_max_body_bytes = cfg
         .openai_api
@@ -131,7 +129,7 @@ pub fn validate_with_checks(
 /// `gpu_reserved_mb` keys are GPU id strings (`"0"`); a non-numeric key is a
 /// hard config error rather than a silently ignored reservation.
 fn resolve_device_reserves(
-    dev: &crate::config::parse::DevicesConfig,
+    dev: &crate::parse::DevicesConfig,
 ) -> Result<DeviceReserves, ExpectedError> {
     let mut per_gpu_mb = BTreeMap::new();
     for (key, mb) in &dev.gpu_reserved_mb {
@@ -158,7 +156,7 @@ fn resolve_device_reserves(
 /// validation doesn't need a long arg list (and so clippy stops
 /// flagging it).
 pub(crate) struct DaemonValidationCtx<'a> {
-    pub(crate) defaults: &'a crate::config::parse::DefaultsConfig,
+    pub(crate) defaults: &'a crate::parse::DefaultsConfig,
     pub(crate) management_port: Option<u16>,
     pub(crate) daemon_llama_server: Option<&'a std::path::Path>,
     /// Global device reserves resolved from `[devices]`, shared with every
@@ -166,7 +164,7 @@ pub(crate) struct DaemonValidationCtx<'a> {
     pub(crate) reserves: &'a Arc<DeviceReserves>,
     /// Raw `[devices]` config so per-service validation can check the
     /// configured GPU count when `gpu_allow` is unset.
-    pub(crate) devices: &'a crate::config::parse::DevicesConfig,
+    pub(crate) devices: &'a crate::parse::DevicesConfig,
     /// Placeholder dry-run checker injected by the daemon.
     pub(crate) placeholder_checker: &'a dyn PlaceholderChecker,
 }
@@ -183,7 +181,7 @@ pub(crate) struct ServiceValidationState<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::validate::{DeviceSlot, TemplateConfig, test_fixtures::parse_and_merge};
+    use crate::validate::{DeviceSlot, TemplateConfig, test_fixtures::parse_and_merge};
 
     const GOOD: &str = r#"
 [[service]]

@@ -1,20 +1,18 @@
 //! Per-trigger validation for the auto-restart watchdogs: spec collapse,
 //! generation stall, TTFT stall, and error rate.
 
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
 use crate::{
-    config::{
-        parse::{
-            RawErrorRateSettings, RawGenerationStallSettings, RawSpecCollapseSettings,
-            RawTtftStallSettings,
-        },
-        validate::{
-            ErrorRateTrigger, ErrorStatusClass, GenerationStallTrigger, SpecCollapseTrigger,
-            TtftStallTrigger, fail, parse_duration_ms,
-        },
+    parse::{
+        RawErrorRateSettings, RawGenerationStallSettings, RawSpecCollapseSettings,
+        RawTtftStallSettings,
     },
-    errors::ExpectedError,
+    validate::{
+        ErrorRateTrigger, ErrorStatusClass, GenerationStallTrigger, SpecCollapseTrigger,
+        TtftStallTrigger, fail, parse_duration_ms,
+    },
 };
 
 pub(crate) fn validate_spec_collapse(
@@ -188,17 +186,20 @@ pub(crate) fn validate_error_rate(
 
 #[cfg(test)]
 mod tests {
-    use ananke_config::docs::{
-        DEFAULT_AUTO_RESTART_GENERATION_STALL_MS, DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS,
-        DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_DRAFT_TOKENS,
-        DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS, DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS,
-    };
-
     use super::*;
-    use crate::config::validate::{
-        ServiceConfig,
-        test_fixtures::{parse_and_merge, svc_with_auto_restart},
-        validate,
+    use crate::{
+        docs::{
+            DEFAULT_AUTO_RESTART_GENERATION_STALL_MS,
+            DEFAULT_AUTO_RESTART_GENERATION_STALL_POLL_MS,
+            DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_MIN_DRAFT_TOKENS,
+            DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_POLL_MS,
+            DEFAULT_AUTO_RESTART_SPEC_COLLAPSE_WINDOW_MS,
+        },
+        validate::{
+            ServiceConfig,
+            test_fixtures::{parse_and_merge, svc_with_auto_restart},
+            validate,
+        },
     };
 
     #[test]

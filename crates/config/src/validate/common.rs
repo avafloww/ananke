@@ -4,16 +4,18 @@
 
 use std::path::PathBuf;
 
-pub(crate) use ananke_config::placement::{flag_variant, variant_flag};
-pub use ananke_config::units::gib_to_mib;
+use ananke_errors::ExpectedError;
 
-use crate::errors::ExpectedError;
+pub use crate::{
+    placement::{flag_variant, variant_flag},
+    units::gib_to_mib,
+};
 
-pub(crate) fn fail(msg: String) -> ExpectedError {
+pub fn fail(msg: String) -> ExpectedError {
     ExpectedError::config_unparseable(PathBuf::from("<config>"), msg)
 }
 
-pub(crate) fn parse_duration_ms(s: &str) -> Result<u64, String> {
+pub fn parse_duration_ms(s: &str) -> Result<u64, String> {
     // Accepts "10m", "30s", "500ms", "2h". Returns milliseconds.
     let s = s.trim();
     if let Some(rest) = s.strip_suffix("ms") {

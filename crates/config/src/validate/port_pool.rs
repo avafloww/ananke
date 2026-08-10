@@ -1,12 +1,10 @@
 //! Hand out the private loopback ports supervised children bind to, from the
 //! bounded range configured by `daemon.private_port_start` / `_end`.
 
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
-use crate::{
-    config::validate::{DEFAULT_PRIVATE_PORT_END, DEFAULT_PRIVATE_PORT_START, fail},
-    errors::ExpectedError,
-};
+use crate::validate::{DEFAULT_PRIVATE_PORT_END, DEFAULT_PRIVATE_PORT_START, fail};
 
 // `DEFAULT_PRIVATE_PORT_START` / `DEFAULT_PRIVATE_PORT_END` are re-exported
 // from `ananke_config` (see the `pub use` at the top of this module).
@@ -79,7 +77,7 @@ impl PrivatePortAllocator {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::validate::{test_fixtures::parse_and_merge, validate};
+    use crate::validate::{test_fixtures::parse_and_merge, validate};
 
     #[test]
     fn private_port_range_is_configurable_and_exhausts_cleanly() {

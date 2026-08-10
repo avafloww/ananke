@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
-use crate::config::parse::RawAutoRestart;
+use crate::parse::RawAutoRestart;
 
 /// Fields shared by every template variant. Flattened into each variant so
 /// users write `name = "x"` at the top level of `[[service]]` rather than
@@ -88,7 +88,7 @@ pub struct RawServiceDevices {
     /// estimator slack) without bypassing the estimator.
     pub gpu_headroom_mb: Option<u64>,
     /// `--split-mode` for multi-GPU llama.cpp services: `"layer"` (default),
-    /// `"row"`, or `"tensor"`. Validated into [`crate::config::SplitMode`].
+    /// `"row"`, or `"tensor"`. Validated into [`crate::SplitMode`].
     pub split: Option<SmolStr>,
     /// Optional per-GPU weights for the `--tensor-split` ratio in sharded
     /// (`row`/`tensor`) modes. One positive float per allowed GPU, in ascending

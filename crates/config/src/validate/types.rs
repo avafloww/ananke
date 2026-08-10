@@ -4,11 +4,11 @@
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use ananke_api::shared::{metadata::AnankeMetadata, modality::Modality};
-#[cfg(any(test, feature = "test-fakes"))]
-use ananke_config::docs::DEFAULT_OPENAI_MAX_BODY_BYTES;
 use smol_str::SmolStr;
 
-use crate::config::{
+#[cfg(any(test, feature = "test-fakes"))]
+use crate::docs::DEFAULT_OPENAI_MAX_BODY_BYTES;
+use crate::{
     parse::{EstimationConfig, SamplingConfig},
     validate::{
         AllocationMode, AutoRestartSettings, DeviceReserves, DeviceSlot, Filters, HealthSettings,
@@ -176,12 +176,12 @@ pub struct LlamaCppConfig {
     pub mlock: Option<bool>,
     pub parallel: Option<u32>,
     /// `--spec-type` value (e.g. `"draft-mtp"`). See
-    /// [`crate::config::parse::RawLlamaCppService::spec_type`].
+    /// [`crate::parse::RawLlamaCppService::spec_type`].
     pub spec_type: Option<SmolStr>,
     /// `--spec-draft-n-max` value.
     pub spec_draft_n_max: Option<u32>,
     /// Separate draft-model GGUF (`-md` / `--model-draft`). See
-    /// [`crate::config::parse::RawLlamaCppService::draft_model`].
+    /// [`crate::parse::RawLlamaCppService::draft_model`].
     pub draft_model: Option<PathBuf>,
     /// `-kvu` / `--kv-unified` unified KV pool toggle.
     pub kv_unified: Option<bool>,

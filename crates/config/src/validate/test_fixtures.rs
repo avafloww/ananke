@@ -11,20 +11,18 @@ use std::{
 };
 
 use ananke_api::shared::modality::Modality;
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
 use crate::{
-    config::{
-        merge::resolve_inheritance,
-        parse::{EstimationConfig, RawConfig, SamplingConfig, parse_toml},
-        validate::{
-            AllocationMode, AutoRestartSettings, CommandConfig, DEFAULT_SERVICE_PRIORITY,
-            DeviceReserves, DeviceSlot, Filters, HealthSettings, Lifecycle, LlamaCppConfig,
-            OffloadMode, PlacementPolicy, ServiceConfig, SplitMode, Template, TemplateConfig,
-            TrackingSettings, validate,
-        },
+    merge::resolve_inheritance,
+    parse::{EstimationConfig, RawConfig, SamplingConfig, parse_toml},
+    validate::{
+        AllocationMode, AutoRestartSettings, CommandConfig, DEFAULT_SERVICE_PRIORITY,
+        DeviceReserves, DeviceSlot, Filters, HealthSettings, Lifecycle, LlamaCppConfig,
+        OffloadMode, PlacementPolicy, ServiceConfig, SplitMode, Template, TemplateConfig,
+        TrackingSettings, validate,
     },
-    errors::ExpectedError,
 };
 
 /// Parse a TOML fragment and resolve its `extends` inheritance, yielding the

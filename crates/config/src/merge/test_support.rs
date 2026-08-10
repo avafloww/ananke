@@ -5,16 +5,13 @@
 
 use std::path::Path;
 
-use crate::config::parse::{RawConfig, RawService, parse_toml};
+use crate::parse::{RawConfig, RawService, parse_toml};
 
 pub fn parse(src: &str) -> RawConfig {
     parse_toml(src, Path::new("/t")).unwrap()
 }
 
-pub fn find_llama<'a>(
-    cfg: &'a RawConfig,
-    name: &str,
-) -> &'a crate::config::parse::RawLlamaCppService {
+pub fn find_llama<'a>(cfg: &'a RawConfig, name: &str) -> &'a crate::parse::RawLlamaCppService {
     let svc = cfg
         .services
         .iter()

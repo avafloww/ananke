@@ -4,12 +4,10 @@
 
 use std::collections::BTreeMap;
 
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
-use crate::{
-    config::parse::{RawCommandService, RawLlamaCppService, RawServiceCommon},
-    errors::ExpectedError,
-};
+use crate::parse::{RawCommandService, RawLlamaCppService, RawServiceCommon};
 
 pub(crate) fn merge_llama_cpp(
     parent: &RawLlamaCppService,
@@ -61,7 +59,7 @@ pub(crate) fn merge_llama_cpp(
         sampling: match (parent.sampling.clone(), child.sampling.clone()) {
             (None, x) => x,
             (x, None) => x,
-            (Some(p), Some(c)) => Some(crate::config::parse::SamplingConfig {
+            (Some(p), Some(c)) => Some(crate::parse::SamplingConfig {
                 temperature: c.temperature.or(p.temperature),
                 top_p: c.top_p.or(p.top_p),
                 top_k: c.top_k.or(p.top_k),
@@ -72,7 +70,7 @@ pub(crate) fn merge_llama_cpp(
         estimation: match (parent.estimation.clone(), child.estimation.clone()) {
             (None, x) => x,
             (x, None) => x,
-            (Some(p), Some(c)) => Some(crate::config::parse::EstimationConfig {
+            (Some(p), Some(c)) => Some(crate::parse::EstimationConfig {
                 compute_buffer_mb: c.compute_buffer_mb.or(p.compute_buffer_mb),
                 safety_factor: c.safety_factor.or(p.safety_factor),
             }),
@@ -94,7 +92,7 @@ pub(crate) fn merge_command(
         allocation: match (parent.allocation.clone(), child.allocation.clone()) {
             (None, x) => x,
             (x, None) => x,
-            (Some(p), Some(c)) => Some(crate::config::parse::RawAllocation {
+            (Some(p), Some(c)) => Some(crate::parse::RawAllocation {
                 mode: c.mode.or(p.mode),
                 reserve_gb: c.reserve_gb.or(p.reserve_gb),
                 min_reserve_gb: c.min_reserve_gb.or(p.min_reserve_gb),
@@ -164,7 +162,7 @@ fn merge_common(
     merged.filters = match (parent.filters.clone(), child.filters.clone()) {
         (None, x) => x,
         (x, None) => x,
-        (Some(p), Some(c)) => Some(crate::config::parse::RawFilters {
+        (Some(p), Some(c)) => Some(crate::parse::RawFilters {
             strip_params: c.strip_params.or(p.strip_params),
             set_params: deep_merge_map(p.set_params, c.set_params),
         }),
@@ -173,7 +171,7 @@ fn merge_common(
     merged.devices = match (parent.devices.clone(), child.devices.clone()) {
         (None, x) => x,
         (x, None) => x,
-        (Some(p), Some(c)) => Some(crate::config::parse::RawServiceDevices {
+        (Some(p), Some(c)) => Some(crate::parse::RawServiceDevices {
             placement: c.placement.or(p.placement),
             gpu_allow: c.gpu_allow.or(p.gpu_allow),
             placement_override: c.placement_override.or(p.placement_override),
@@ -186,7 +184,7 @@ fn merge_common(
     merged.health = match (parent.health.clone(), child.health.clone()) {
         (None, x) => x,
         (x, None) => x,
-        (Some(p), Some(c)) => Some(crate::config::parse::RawHealth {
+        (Some(p), Some(c)) => Some(crate::parse::RawHealth {
             http: c.http.or(p.http),
             timeout: c.timeout.or(p.timeout),
             probe_interval: c.probe_interval.or(p.probe_interval),
@@ -243,7 +241,7 @@ fn deep_merge_strs(
 
 #[cfg(test)]
 mod tests {
-    use crate::config::merge::{
+    use crate::merge::{
         resolve_inheritance,
         test_support::{find_llama, parse},
     };

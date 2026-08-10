@@ -1,9 +1,10 @@
 //! Snapshotter attribution hints (`[[service]].tracking`) and their
 //! validation.
 
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
-use crate::{config::validate::fail, errors::ExpectedError};
+use crate::validate::fail;
 
 /// Snapshotter attribution hints. Empty (`Default::default()`) by default,
 /// in which case the snapshotter falls back to "registered pid +
@@ -19,7 +20,7 @@ pub struct TrackingSettings {
 
 pub(crate) fn validate_tracking(
     name: &SmolStr,
-    raw: Option<&crate::config::parse::RawTracking>,
+    raw: Option<&crate::parse::RawTracking>,
 ) -> Result<TrackingSettings, ExpectedError> {
     let Some(raw) = raw else {
         return Ok(TrackingSettings::default());
@@ -57,7 +58,7 @@ pub(crate) fn validate_tracking(
 
 #[cfg(test)]
 mod tests {
-    use crate::config::validate::{test_fixtures::parse_and_merge, validate};
+    use crate::validate::{test_fixtures::parse_and_merge, validate};
 
     #[test]
     fn tracking_cgroup_parent_accepted_when_well_formed() {

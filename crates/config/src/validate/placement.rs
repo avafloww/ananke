@@ -3,9 +3,8 @@
 
 use std::collections::BTreeMap;
 
-pub use ananke_config::placement::{DeviceReserves, DeviceSlot, PlacementPolicy};
-
-use crate::config::validate::gib_to_mib;
+pub use crate::placement::{DeviceReserves, DeviceSlot, PlacementPolicy};
+use crate::validate::gib_to_mib;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Template {
@@ -125,7 +124,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::config::{
+    use crate::{
         parse::parse_toml,
         validate::{test_fixtures::parse_and_merge, validate},
     };

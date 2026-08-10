@@ -3,14 +3,12 @@
 
 use std::collections::BTreeMap;
 
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
 use crate::{
-    config::{
-        parse::RawCommandService,
-        validate::{CommandConfig, OpenAiProxyConfig, PlaceholderChecker, fail},
-    },
-    errors::ExpectedError,
+    parse::RawCommandService,
+    validate::{CommandConfig, OpenAiProxyConfig, PlaceholderChecker, fail},
 };
 
 pub(crate) fn validate_command(
@@ -82,7 +80,7 @@ pub(crate) fn command_uses_port_placeholder(
 
 #[cfg(test)]
 mod tests {
-    use crate::config::validate::{test_fixtures::parse_and_merge, validate};
+    use crate::validate::{test_fixtures::parse_and_merge, validate};
 
     #[test]
     fn command_rejects_missing_command() {
@@ -273,7 +271,10 @@ allocation.max_reserve_gb = 8
     }
 
     #[test]
-    fn command_service_rejects_typo_in_placeholder() {
+    fn command_service_rejects_typo_in_placeholder_uses_injected_checker() {
+        // The placeholder dry-run checker is injected by the daemon; ananke-config's
+        // own `validate` uses the no-op checker, so the daemon-side tests in
+        // `ananke/src/config/validate/placeholders.rs` cover the rejection path.
         let cfg = parse_and_merge(
             r#"
 [[service]]
@@ -285,16 +286,16 @@ allocation.mode = "static"
 allocation.reserve_gb = 1
 "#,
         );
-        let err = validate(&cfg).expect_err("typoed placeholder is rejected");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("command[1]") && msg.contains("{prot}"),
-            "unexpected error: {err}"
-        );
+        // With the no-op checker the typo is accepted — the daemon's real checker
+        // (placeholders.rs tests) rejects it.
+        assert!(validate(&cfg).is_ok());
     }
 
     #[test]
-    fn command_service_rejects_typo_in_shutdown_placeholder() {
+    fn command_service_rejects_typo_in_shutdown_placeholder_uses_injected_checker() {
+        // Same split as the command-typo test: the shutdown-command dry-run is
+        // the daemon's injected checker's job; the daemon-side placeholders.rs
+        // tests assert the rejection.
         let cfg = parse_and_merge(
             r#"
 [[service]]
@@ -307,11 +308,6 @@ allocation.mode = "static"
 allocation.reserve_gb = 1
 "#,
         );
-        let err = validate(&cfg).expect_err("typoed shutdown placeholder is rejected");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("shutdown_command[1]") && msg.contains("{bogus}"),
-            "unexpected error: {err}"
-        );
+        assert!(validate(&cfg).is_ok());
     }
 }

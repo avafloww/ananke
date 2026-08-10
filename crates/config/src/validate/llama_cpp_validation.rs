@@ -3,18 +3,16 @@
 
 use std::path::PathBuf;
 
-use ananke_config::flags;
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
 use crate::{
-    config::{
-        parse::{RawExpertOffload, RawLlamaCppService, RawRuntime},
-        validate::{
-            IkSettings, LlamaCppConfig, NumaStrategy, OffloadMode, PlaceholderChecker, Runtime,
-            RuntimeConfig, fail,
-        },
+    flags,
+    parse::{RawExpertOffload, RawLlamaCppService, RawRuntime},
+    validate::{
+        IkSettings, LlamaCppConfig, NumaStrategy, OffloadMode, PlaceholderChecker, Runtime,
+        RuntimeConfig, fail,
     },
-    errors::ExpectedError,
 };
 
 pub(crate) fn validate_llama_cpp(
@@ -206,7 +204,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::config::{
+    use crate::{
         parse::parse_toml,
         validate::{test_fixtures::parse_and_merge, validate},
     };

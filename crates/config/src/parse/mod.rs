@@ -14,9 +14,7 @@ mod llama_cpp;
 mod service;
 mod top_level;
 
-/// Default concurrency cap on pending start requests waiting for the same
-/// supervisor to finish starting before they are rejected with `QueueFull`.
-pub use ananke_config::docs::DEFAULT_START_QUEUE_DEPTH;
+use ananke_errors::ExpectedError;
 pub use auto_restart::{
     RawAutoRestart, RawErrorRateSettings, RawGenerationStallSettings, RawPeriodicSettings,
     RawSpecCollapseSettings, RawTtftStallSettings, Toggle,
@@ -33,7 +31,9 @@ pub use top_level::{
     RawConfig,
 };
 
-use crate::errors::ExpectedError;
+/// Default concurrency cap on pending start requests waiting for the same
+/// supervisor to finish starting before they are rejected with `QueueFull`.
+pub use crate::docs::DEFAULT_START_QUEUE_DEPTH;
 
 /// Parse a TOML string into a raw config tree, rejecting unknown fields.
 ///

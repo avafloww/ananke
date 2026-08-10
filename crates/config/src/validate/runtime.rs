@@ -1,10 +1,11 @@
 //! Runtime-flavour vocabulary for llama-cpp services: NUMA strategy, the
 //! mainline-vs-ik_llama runtime split, and the expert-offload mode.
 
-use ananke_config::flags;
-pub use ananke_config::{placement::OffloadMode, runtime::Runtime};
-
-use crate::config::validate::{flag_variant, variant_flag};
+use crate::{
+    flags,
+    validate::{flag_variant, variant_flag},
+};
+pub use crate::{placement::OffloadMode, runtime::Runtime};
 
 /// NUMA thread-and-memory placement strategy for a llama-cpp service,
 /// emitted as llama.cpp's `--numa <strategy>`. Resolved from the `numa`
@@ -23,7 +24,7 @@ pub enum NumaStrategy {
 
 impl NumaStrategy {
     /// Variant ↔ flag binding, sourced from
-    /// [`ananke_config::flags::numa`] (see [`SplitMode::VARIANTS`]).
+    /// [`crate::flags::numa`] (see [`SplitMode::VARIANTS`]).
     const VARIANTS: &'static [(Self, &'static str)] = &[
         (Self::Distribute, flags::numa::DISTRIBUTE),
         (Self::Isolate, flags::numa::ISOLATE),
@@ -47,7 +48,7 @@ impl NumaStrategy {
 }
 
 /// Serving runtime for a llama-cpp-template service, mirroring
-/// [`crate::config::parse::RawRuntime`]: which fork serves, plus the fork's
+/// [`crate::parse::RawRuntime`]: which fork serves, plus the fork's
 /// validated knobs where it has any.
 ///
 /// Guardrail: the knobs hang off the variant rather than off a
@@ -83,7 +84,7 @@ impl RuntimeConfig {
 }
 
 /// Validated ik_llama.cpp settings. See
-/// [`crate::config::parse::RawIkSettings`] for per-field semantics.
+/// [`crate::parse::RawIkSettings`] for per-field semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct IkSettings {
     /// `-mla` kernel mode (0-3).
@@ -99,7 +100,7 @@ pub struct IkSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::validate::{test_fixtures::parse_and_merge, validate};
+    use crate::validate::{test_fixtures::parse_and_merge, validate};
 
     #[test]
     fn numa_vocab_is_single_sourced_and_complete() {
@@ -197,7 +198,7 @@ lifecycle = "persistent"
         // deny_unknown_fields must hold through the internally-tagged
         // enum's newtype variant — a typo in the runtime table is a hard
         // error, not a silent no-op.
-        let err = crate::config::parse::parse_toml(
+        let err = crate::parse::parse_toml(
             r#"
 [[service]]
 name = "demo"

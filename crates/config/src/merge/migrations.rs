@@ -3,12 +3,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
-use crate::{
-    config::parse::{RawConfig, RawService},
-    errors::ExpectedError,
-};
+use crate::parse::{RawConfig, RawService};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Migration {
@@ -84,7 +82,7 @@ pub fn resolve_migrations(cfg: &mut RawConfig) -> Result<Vec<Migration>, Expecte
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::merge::{resolve_inheritance, test_support::parse};
+    use crate::merge::{resolve_inheritance, test_support::parse};
 
     #[test]
     fn migrate_from_chain_resolved_in_order() {

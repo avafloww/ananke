@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::errors::ExpectedError;
+use ananke_errors::ExpectedError;
 
 /// Sources checked for the config file, in priority order.
 pub struct PathSources<'a> {

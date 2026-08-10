@@ -15,12 +15,12 @@
 ///   `tensor` is llama.cpp's newer, faster implementation; `row` is the
 ///   older one, kept for parity. Both require [`PlacementPolicy::GpuOnly`]
 ///   (no CPU spill) and a llama-cpp service.
-pub use ananke_config::placement::SplitMode;
+pub use crate::placement::SplitMode;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::validate::{test_fixtures::parse_and_merge, validate};
+    use crate::validate::{test_fixtures::parse_and_merge, validate};
 
     #[test]
     fn parses_tensor_split_mode() {

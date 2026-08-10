@@ -8,26 +8,24 @@ use std::{
 };
 
 use ananke_api::shared::modality::Modality;
-use ananke_config::docs::{
-    DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_EXTENDED_STREAM_DRAIN_MS, DEFAULT_HEALTH_PROBE_INTERVAL_MS,
-    DEFAULT_HEALTH_TIMEOUT_MS, DEFAULT_IDLE_TIMEOUT_MS, DEFAULT_MAX_REQUEST_DURATION_MS,
-    DEFAULT_MIN_BORROWER_RUNTIME_MS, DEFAULT_SERVICE_PRIORITY,
-};
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 use tracing::warn;
 
 use crate::{
-    config::{
-        parse::RawService,
-        validate::{
-            AllocationMode, DaemonValidationCtx, DeviceSlot, Filters, HealthSettings, Lifecycle,
-            PlacementPolicy, ServiceConfig, ServiceValidationState, SplitMode, Template,
-            TemplateConfig, build_ananke_metadata, command_uses_port_placeholder, fail,
-            parse_duration_ms, toml_value_to_json, validate_auto_restart, validate_command,
-            validate_llama_cpp, validate_tracking,
-        },
+    docs::{
+        DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_EXTENDED_STREAM_DRAIN_MS,
+        DEFAULT_HEALTH_PROBE_INTERVAL_MS, DEFAULT_HEALTH_TIMEOUT_MS, DEFAULT_IDLE_TIMEOUT_MS,
+        DEFAULT_MAX_REQUEST_DURATION_MS, DEFAULT_MIN_BORROWER_RUNTIME_MS, DEFAULT_SERVICE_PRIORITY,
     },
-    errors::ExpectedError,
+    parse::RawService,
+    validate::{
+        AllocationMode, DaemonValidationCtx, DeviceSlot, Filters, HealthSettings, Lifecycle,
+        PlacementPolicy, ServiceConfig, ServiceValidationState, SplitMode, Template,
+        TemplateConfig, build_ananke_metadata, command_uses_port_placeholder, fail,
+        parse_duration_ms, toml_value_to_json, validate_auto_restart, validate_command,
+        validate_llama_cpp, validate_tracking,
+    },
 };
 
 pub(crate) fn validate_service(
@@ -59,7 +57,12 @@ pub(crate) fn validate_service(
 
     let (allocation_mode, template_config) = match raw {
         RawService::LlamaCpp(lc) => {
-            let tc = validate_llama_cpp(&name, lc, daemon.daemon_llama_server, daemon.placeholder_checker)?;
+            let tc = validate_llama_cpp(
+                &name,
+                lc,
+                daemon.daemon_llama_server,
+                daemon.placeholder_checker,
+            )?;
             // llama-cpp never takes an allocation.mode; none of the dynamic
             // knobs apply here.
             let alloc = AllocationMode::from_parts(
@@ -400,7 +403,7 @@ pub(crate) fn validate_service(
 
     let start_queue_depth = common
         .start_queue_depth
-        .unwrap_or(crate::config::parse::DEFAULT_START_QUEUE_DEPTH);
+        .unwrap_or(crate::parse::DEFAULT_START_QUEUE_DEPTH);
 
     let extra_args = common.extra_args.clone().unwrap_or_default();
     // extra_args_append is consumed into extra_args during merge for extending

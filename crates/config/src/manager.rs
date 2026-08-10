@@ -5,17 +5,15 @@
 use std::{io, path::PathBuf, sync::Arc, time::Duration};
 
 use ananke_api::{config::validate::ValidationError, events::Event};
+use ananke_errors::ExpectedError;
+use ananke_events::EventBus;
 use arc_swap::ArcSwap;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use parking_lot::{Mutex, RwLock};
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
-use crate::{
-    config::{EffectiveConfig, Migration, load_config_with_fs},
-    daemon::events::EventBus,
-    errors::ExpectedError,
-};
+use crate::{EffectiveConfig, Migration, load_config_with_fs};
 
 /// Base64-encoded SHA-256 of the raw TOML bytes. Callers treat it as opaque.
 pub type ConfigHash = String;
@@ -28,7 +26,7 @@ pub struct ConfigManager {
     events: EventBus,
     _watcher: RwLock<Option<notify::RecommendedWatcher>>,
     boot_migrations: Mutex<Option<Vec<Migration>>>,
-    fs: Arc<dyn crate::system::Fs>,
+    fs: Arc<dyn ananke_fs::Fs>,
 }
 
 /// Failure modes from `ConfigManager::apply`.
@@ -66,10 +64,10 @@ impl std::error::Error for ApplyError {
 impl ConfigManager {
     /// Load the config from disk, construct the manager, and spawn the
     /// `notify` watcher. The returned `Arc<ConfigManager>` is thread-safe and
-    /// inexpensive to clone. Uses [`crate::system::LocalFs`] for all
+    /// inexpensive to clone. Uses [`ananke_fs::LocalFs`] for all
     /// filesystem I/O — tests with synthetic configs should use [`Self::open_with_fs`].
     pub async fn open(path: PathBuf, events: EventBus) -> Result<Arc<Self>, ExpectedError> {
-        Self::open_with_fs(path, events, Arc::new(crate::system::LocalFs)).await
+        Self::open_with_fs(path, events, Arc::new(ananke_fs::LocalFs)).await
     }
 
     /// Variant of [`Self::open`] that uses an explicit filesystem. Production
@@ -77,7 +75,7 @@ impl ConfigManager {
     pub async fn open_with_fs(
         path: PathBuf,
         events: EventBus,
-        fs: Arc<dyn crate::system::Fs>,
+        fs: Arc<dyn ananke_fs::Fs>,
     ) -> Result<Arc<Self>, ExpectedError> {
         let raw = fs
             .read_to_string(&path)
@@ -107,7 +105,7 @@ impl ConfigManager {
             events,
             _watcher: RwLock::new(None),
             boot_migrations: Mutex::new(Some(Vec::new())),
-            fs: Arc::new(crate::system::InMemoryFs::new()),
+            fs: Arc::new(ananke_fs::InMemoryFs::new()),
         })
     }
 
@@ -214,7 +212,7 @@ impl ConfigManager {
         self.effective.store(Arc::new(effective));
         info!(?changed, "config reloaded");
         self.events.publish(Event::ConfigReloaded {
-            at_ms: crate::tracking::now_unix_ms(),
+            at_ms: ananke_time::now_unix_ms(),
             changed_services: changed,
         });
     }
@@ -273,7 +271,7 @@ fn hash_of(s: &str) -> ConfigHash {
 }
 
 fn persist_atomically(
-    fs: &dyn crate::system::Fs,
+    fs: &dyn ananke_fs::Fs,
     path: &std::path::Path,
     content: &str,
 ) -> io::Result<()> {
@@ -297,7 +295,7 @@ fn persist_atomically(
 }
 
 fn validate_toml(
-    fs: &dyn crate::system::Fs,
+    fs: &dyn ananke_fs::Fs,
     path: &std::path::Path,
     content: &str,
 ) -> Result<(), Vec<ValidationError>> {
@@ -338,10 +336,10 @@ fn diff_services(old: &EffectiveConfig, new: &EffectiveConfig) -> Vec<smol_str::
 mod tests {
     use std::path::PathBuf;
 
+    use ananke_fs::{Fs, InMemoryFs};
     use ananke_gguf::keys;
 
     use super::*;
-    use crate::system::{Fs, InMemoryFs};
 
     /// Minimal but structurally valid GGUF v3 bytes so the config preflight
     /// (which calls `gguf::read`) accepts the referenced path.
