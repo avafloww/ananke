@@ -8,7 +8,7 @@ ananke decides, before starting a `llama-server`, how much GPU and host memory t
 
 The prediction is a sum of modelled terms plus tuning constants. The constants are the part with no first-principles derivation — they stand in for allocations llama.cpp makes that we can only observe. Today most of them come from one or two ad-hoc measurements against whichever model was at hand. This campaign replaces that with a dataset.
 
-A rolling correction (`ananke/src/supervise/rolling.rs`) later scales the prediction by observed reality, but only within `[0.8, 1.5]`. A constant that puts a model outside that band cannot be recovered by any amount of observation, which is why "reachability" matters more than closeness.
+A rolling correction (`crates/supervise/src/rolling.rs`) later scales the prediction by observed reality, but only within `[0.8, 1.5]`. A constant that puts a model outside that band cannot be recovered by any amount of observation, which is why "reachability" matters more than closeness.
 
 ## The constants to be derived
 

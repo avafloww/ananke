@@ -65,7 +65,7 @@ llama-server -m <model> -c <ctx> -ub <ub> -ngl 99 -fa on -lv 5 2>&1 \
 grep -E "^(RssAnon|RssShmem|RssFile|VmRSS):" /proc/<pid>/status
 ```
 
-**Read `RssAnon + RssShmem`, not `RssAnon`.** `cudaMallocHost` is accounted as *shmem*: growing the arena from 18 MiB to 72 MiB moves `RssShmem` by exactly that and leaves `RssAnon` flat. And **not `VmRSS`** — `RssFile` is the mapped GGUF, which llama.cpp maps with `MAP_POPULATE` and then unmaps only outside the host-resident tensor span, so a hybrid run leaves nearly the whole file resident as clean, reclaimable pages. That is what `ananke/src/supervise/rolling.rs` compares against a weights-excluded base.
+**Read `RssAnon + RssShmem`, not `RssAnon`.** `cudaMallocHost` is accounted as *shmem*: growing the arena from 18 MiB to 72 MiB moves `RssShmem` by exactly that and leaves `RssAnon` flat. And **not `VmRSS`** — `RssFile` is the mapped GGUF, which llama.cpp maps with `MAP_POPULATE` and then unmaps only outside the host-resident tensor span, so a hybrid run leaves nearly the whole file resident as clean, reclaimable pages. That is what `crates/supervise/src/rolling.rs` compares against a weights-excluded base.
 
 Two gotchas. `ik_llama`'s `-rtr` forces `--no-mmap`, so a repacked model's weights are anonymous and *do* appear in the owned figure. And the prompt cache allocates nothing at load — `-cram 0` and `-cram 4096` measure identically on a fresh server — so it is reserved but deliberately kept out of the rolling correction's base, or every observation would read as a large over-reservation.
 
