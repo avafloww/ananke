@@ -16,6 +16,7 @@ members = [
     "crates/placement",
     "crates/proxy",
     "crates/spawn",
+    "crates/supervise",
     "crates/system",
     "crates/templates",
     "crates/tracking",
@@ -47,6 +48,7 @@ default-members = [
     "crates/placement",
     "crates/proxy",
     "crates/spawn",
+    "crates/supervise",
     "crates/system",
     "crates/templates",
     "crates/tracking",
@@ -79,6 +81,7 @@ ananke-observation = { path = "crates/observation" }
 ananke-placement = { path = "crates/placement" }
 ananke-proxy = { path = "crates/proxy" }
 ananke-spawn = { path = "crates/spawn" }
+ananke-supervise = { path = "crates/supervise" }
 ananke-system = { path = "crates/system" }
 ananke-templates = { path = "crates/templates" }
 ananke-tracking = { path = "crates/tracking" }

@@ -27,6 +27,7 @@ ananke-placement.workspace = true
 ananke-proxy.workspace = true
 ananke-spawn.workspace = true
 ananke-system = { workspace = true, features = ["test-fakes"] }
+ananke-supervise.workspace = true
 ananke-templates.workspace = true
 ananke-time.workspace = true
 ananke-tracking.workspace = true

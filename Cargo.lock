@@ -42,6 +42,7 @@ dependencies = [
  "ananke-placement",
  "ananke-proxy",
  "ananke-spawn",
+ "ananke-supervise",
  "ananke-system",
  "ananke-templates",
  "ananke-time",
@@ -314,6 +315,43 @@ dependencies = [
 [[package]]
 name = "ananke-spawn"
 version = "0.2.0"
+
+[[package]]
+name = "ananke-supervise"
+version = "0.2.0"
+dependencies = [
+ "ananke-allocator",
+ "ananke-api",
+ "ananke-config",
+ "ananke-db",
+ "ananke-devices",
+ "ananke-errors",
+ "ananke-estimate",
+ "ananke-events",
+ "ananke-gguf",
+ "ananke-observation",
+ "ananke-placement",
+ "ananke-proxy",
+ "ananke-spawn",
+ "ananke-system",
+ "ananke-templates",
+ "ananke-time",
+ "ananke-tracking",
+ "async-trait",
+ "bytes",
+ "futures",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "parking_lot",
+ "reqwest",
+ "serde_json",
+ "smol_str",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "ananke-system"

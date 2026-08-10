@@ -7,6 +7,7 @@ use ananke_config::placement::DeviceSlot;
 
 pub mod devices;
 pub mod registry;
+pub mod service_inputs;
 
 pub use command_gpu::{check_command_placement_override, command_gpu_shortfalls, pick_command_gpu};
 pub use entry::{PackMode, pack, pack_corrected, pack_demand, pack_optimistic};

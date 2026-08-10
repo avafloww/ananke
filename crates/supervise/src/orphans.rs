@@ -1,0 +1,145 @@
+//! Linux-only: startup orphan recovery. Reads
+//! `/proc/{pid}/cmdline` (through [`ananke_system::ProcFs`] — tests can
+//! substitute [`ananke_system::InMemoryProcFs`] with preloaded cmdlines)
+//! to decide whether a previously-recorded child is still alive and
+//! still ours.
+
+use ananke_db::Database;
+use ananke_system::ProcFs;
+use tracing::{info, warn};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrphanDisposition {
+    Adopted {
+        pid: i32,
+        service_id: i64,
+        run_id: i64,
+    },
+    Cleaned {
+        pid: i32,
+        service_id: i64,
+        run_id: i64,
+    },
+    Ignored {
+        pid: i32,
+        reason: String,
+    },
+}
+
+/// Runs orphan recovery against the `running_services` table. Returns a
+/// decision list suitable for logging and test assertion. The `proc`
+/// argument is the [`ProcFs`] reader; tests pass an
+/// [`ananke_system::InMemoryProcFs`] with preloaded cmdlines rather
+/// than staging a synthetic `/proc` on disk.
+pub async fn reconcile(proc: &dyn ProcFs, db: &Database) -> Vec<OrphanDisposition> {
+    let rows = db.list_running().await.unwrap_or_default();
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let service_id = row.service_id;
+        let run_id = row.run_id;
+        let pid = row.pid as i32;
+        let recorded_cmdline = row.command_line;
+        match proc.cmdline(pid) {
+            Some(live_cmdline) => {
+                if live_cmdline == recorded_cmdline {
+                    info!(pid, service_id, run_id, "adopted orphan");
+                    out.push(OrphanDisposition::Adopted {
+                        pid,
+                        service_id,
+                        run_id,
+                    });
+                } else {
+                    warn!(
+                        pid,
+                        service_id,
+                        run_id,
+                        recorded = %recorded_cmdline,
+                        live = %live_cmdline,
+                        "unrelated process at recorded pid; cleaning row"
+                    );
+                    cleanup_row(db, service_id, run_id).await;
+                    out.push(OrphanDisposition::Cleaned {
+                        pid,
+                        service_id,
+                        run_id,
+                    });
+                }
+            }
+            None => {
+                info!(pid, service_id, run_id, "dead child; cleaning row");
+                cleanup_row(db, service_id, run_id).await;
+                out.push(OrphanDisposition::Cleaned {
+                    pid,
+                    service_id,
+                    run_id,
+                });
+            }
+        }
+    }
+    out
+}
+
+async fn cleanup_row(db: &Database, service_id: i64, run_id: i64) {
+    if let Err(e) = db.delete_running(service_id, run_id).await {
+        warn!(error = %e, "delete running_services row failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ananke_db::models::RunningService;
+    use ananke_system::InMemoryProcFs;
+
+    use super::*;
+
+    async fn insert_row(db: &Database, service_id: i64, run_id: i64, pid: i32, cmdline: &str) {
+        db.insert_running(&RunningService {
+            service_id,
+            run_id,
+            pid: pid as i64,
+            spawned_at: 0,
+            command_line: cmdline.to_string(),
+            allocation: "{}".to_string(),
+            state: "running".to_string(),
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn adopts_matching_cmdline() {
+        let db = Database::open_in_memory().await.unwrap();
+        let svc = db.upsert_service("demo", 0).await.unwrap();
+        let proc = InMemoryProcFs::new();
+        insert_row(&db, svc, 1, 1234, "llama-server -m x").await;
+        proc.set_cmdline(1234, "llama-server -m x");
+        let out = reconcile(&proc, &db).await;
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], OrphanDisposition::Adopted { .. }));
+    }
+
+    #[tokio::test]
+    async fn cleans_missing_pid() {
+        let db = Database::open_in_memory().await.unwrap();
+        let svc = db.upsert_service("demo", 0).await.unwrap();
+        let proc = InMemoryProcFs::new();
+        insert_row(&db, svc, 1, 9999, "llama-server -m x").await;
+        let out = reconcile(&proc, &db).await;
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], OrphanDisposition::Cleaned { .. }));
+        assert!(db.list_running().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cleans_mismatched_cmdline() {
+        let db = Database::open_in_memory().await.unwrap();
+        let svc = db.upsert_service("demo", 0).await.unwrap();
+        let proc = InMemoryProcFs::new();
+        insert_row(&db, svc, 1, 4242, "llama-server -m x").await;
+        proc.set_cmdline(4242, "firefox");
+        let out = reconcile(&proc, &db).await;
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], OrphanDisposition::Cleaned { .. }));
+    }
+}
