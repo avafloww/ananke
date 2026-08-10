@@ -15,13 +15,7 @@ use hyper::{
 use hyper_util::rt::TokioIo;
 use tracing::{debug, warn};
 
-use crate::{
-    api::{
-        errors::ApiErrorCode,
-        proxy::{ProxyBody, WebSocketLifecycle, error_response},
-    },
-    tracking::inflight::InflightGuard,
-};
+use crate::{ApiErrorCode, InflightGuard, ProxyBody, WebSocketLifecycle, error_response};
 
 /// How often to bump the per-service activity stamp while a WebSocket
 /// session is open. Without this, the supervisor's idle-eviction loop

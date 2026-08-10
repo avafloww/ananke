@@ -17,10 +17,9 @@ use hyper::{
 use hyper_util::client::legacy::Client;
 use tracing::warn;
 
-use crate::api::{
-    errors::ApiErrorCode,
-    openai::metrics::{MetricsBody, MetricsRecorder},
-    proxy::{ProxyBody, ProxyError, ProxyMetrics, WebSocketLifecycle, handle_upgrade},
+use crate::{
+    ApiErrorCode, MetricsBody, ProxyBody, ProxyError, ProxyMetrics, WebSocketLifecycle,
+    handle_upgrade,
 };
 
 /// Map a request path to the token-generating endpoint whose responses carry
@@ -161,7 +160,7 @@ async fn try_handle(
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v.starts_with("text/event-stream"))
                 .unwrap_or(false);
-            let recorder = MetricsRecorder::new(
+            let recorder = (metrics.recorder_factory)(
                 request_start,
                 metrics.service_id,
                 (metrics.run_id)(),
@@ -169,7 +168,7 @@ async fn try_handle(
                 endpoint,
                 is_streaming,
             );
-            MetricsBody::new(boxed, recorder, metrics.db.clone(), status_code).boxed()
+            MetricsBody::new(boxed, recorder, status_code).boxed()
         }
         _ => boxed,
     };

@@ -73,6 +73,7 @@ impl AppState {
         &self,
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) -> crate::supervise::provision::ProvisioningDeps {
+        let metrics_db = self.db.clone();
         crate::supervise::provision::ProvisioningDeps {
             db: self.db.clone(),
             activity: self.activity.clone(),
@@ -81,6 +82,21 @@ impl AppState {
             allocations: self.allocations.clone(),
             supervisor_deps: self.supervisor_deps(),
             shutdown_rx,
+            metrics_factory: std::sync::Arc::new(
+                move |start, service_id, run_id, model, endpoint, is_streaming| {
+                    Box::new(crate::api::openai::metrics::RequestMetricsRecorder {
+                        recorder: crate::api::openai::metrics::MetricsRecorder::new(
+                            start,
+                            service_id,
+                            run_id,
+                            model,
+                            endpoint,
+                            is_streaming,
+                        ),
+                        db: metrics_db.clone(),
+                    })
+                },
+            ),
         }
     }
 }

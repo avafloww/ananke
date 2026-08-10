@@ -13,6 +13,7 @@ members = [
     "crates/gguf",
     "crates/observation",
     "crates/placement",
+    "crates/proxy",
     "crates/spawn",
     "crates/system",
     "crates/templates",
@@ -42,6 +43,7 @@ default-members = [
     "crates/gguf",
     "crates/observation",
     "crates/placement",
+    "crates/proxy",
     "crates/spawn",
     "crates/system",
     "crates/templates",
@@ -72,6 +74,7 @@ ananke-fs = { path = "crates/fs" }
 ananke-gguf = { path = "crates/gguf" }
 ananke-observation = { path = "crates/observation" }
 ananke-placement = { path = "crates/placement" }
+ananke-proxy = { path = "crates/proxy" }
 ananke-spawn = { path = "crates/spawn" }
 ananke-system = { path = "crates/system" }
 ananke-templates = { path = "crates/templates" }

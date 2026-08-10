@@ -39,6 +39,7 @@ dependencies = [
  "ananke-gguf",
  "ananke-observation",
  "ananke-placement",
+ "ananke-proxy",
  "ananke-spawn",
  "ananke-system",
  "ananke-templates",
@@ -253,6 +254,26 @@ dependencies = [
  "serde",
  "serde_json",
  "smol_str",
+ "tracing",
+]
+
+[[package]]
+name = "ananke-proxy"
+version = "0.2.0"
+dependencies = [
+ "ananke-api",
+ "ananke-errors",
+ "axum 0.7.9",
+ "bytes",
+ "futures",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "smol_str",
+ "tokio",
  "tracing",
 ]
 

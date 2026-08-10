@@ -23,6 +23,7 @@ ananke-fs.workspace = true
 ananke-gguf.workspace = true
 ananke-observation.workspace = true
 ananke-placement.workspace = true
+ananke-proxy.workspace = true
 ananke-spawn.workspace = true
 ananke-system = { workspace = true, features = ["test-fakes"] }
 ananke-templates.workspace = true

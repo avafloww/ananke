@@ -25,7 +25,7 @@ use tracing::{info, warn};
 use crate::{
     api::openai::{
         errors, filters,
-        metrics::{MetricsBody, MetricsRecorder},
+        metrics::{MetricsBody, MetricsRecorder, RequestMetricsRecorder},
         schema::{
             ChatCompletionEnvelope, CompletionEnvelope, EmbeddingEnvelope, ModelListing,
             ModelsResponse,
@@ -424,7 +424,14 @@ async fn forward_json_post(
             path,
             is_streaming,
         );
-        let metrics_body = MetricsBody::new(guarded, recorder, state.db.clone(), status_code);
+        let metrics_body = MetricsBody::new(
+            guarded,
+            Box::new(RequestMetricsRecorder {
+                recorder,
+                db: state.db.clone(),
+            }),
+            status_code,
+        );
         Body::new(metrics_body)
     } else {
         Body::new(guarded)

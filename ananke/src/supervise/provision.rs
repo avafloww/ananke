@@ -35,6 +35,10 @@ pub struct ProvisioningDeps {
     pub allocations: Arc<Mutex<AllocationTable>>,
     pub supervisor_deps: SupervisorDeps,
     pub shutdown_rx: watch::Receiver<bool>,
+    /// Mints per-request proxy token-usage recorders. The daemon supplies
+    /// the concrete recorder (OpenAI metrics + db handle); supervise only
+    /// threads it into the per-service proxy.
+    pub metrics_factory: ananke_proxy::RecorderFactory,
 }
 
 /// Tasks owned by a provisioned service. The daemon keeps these in a pool
@@ -124,11 +128,12 @@ pub async fn provision_service(
     // port, matching what the OpenAI multiplexer records for its own traffic.
     // `service_id` is stable (resolved once above via `upsert_service`); the
     // run_id changes on each (re)load, so it is read from the supervisor's
-    // mirror cell at request time via the closure.
+    // mirror cell at request time via the closure. The factory captures the
+    // db handle (daemon-side) so the proxy's erased recorder can write it.
     let metrics = {
         let run_handle = handle.clone();
         proxy::ProxyMetrics::new(
-            deps.db.clone(),
+            deps.metrics_factory.clone(),
             service_id,
             svc.name.clone(),
             Arc::new(move || run_handle.peek().run_id),

@@ -45,8 +45,27 @@ async fn per_service_proxy_records_token_endpoints_only() {
         .await
         .unwrap();
 
-    let metrics =
-        proxy::ProxyMetrics::new(db.clone(), service_id, "demo".into(), Arc::new(|| Some(7)));
+    let metrics_db = db.clone();
+    let metrics = proxy::ProxyMetrics::new(
+        Arc::new(
+            move |start, service_id, run_id, model, endpoint, is_streaming| {
+                Box::new(ananke::api::openai::metrics::RequestMetricsRecorder {
+                    recorder: ananke::api::openai::metrics::MetricsRecorder::new(
+                        start,
+                        service_id,
+                        run_id,
+                        model,
+                        endpoint,
+                        is_streaming,
+                    ),
+                    db: metrics_db.clone(),
+                })
+            },
+        ),
+        service_id,
+        "demo".into(),
+        Arc::new(|| Some(7)),
+    );
 
     let proxy_port = common::free_port();
     let proxy_addr: SocketAddr = format!("127.0.0.1:{proxy_port}").parse().unwrap();

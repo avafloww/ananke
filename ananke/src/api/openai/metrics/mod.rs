@@ -9,4 +9,4 @@ mod body;
 mod recorder;
 
 pub use body::MetricsBody;
-pub use recorder::MetricsRecorder;
+pub use recorder::{MetricsRecorder, RequestMetricsRecorder};

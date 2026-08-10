@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
+use ananke_errors::ExpectedError;
 use futures::future::BoxFuture;
 use hyper::{Request, body::Incoming, service::service_fn};
 use hyper_util::{
@@ -18,12 +19,7 @@ use hyper_util::{
 use tokio::{net::TcpListener, sync::watch};
 use tracing::{info, warn};
 
-use crate::{
-    api::proxy::{ProxyBody, ProxyError, handle},
-    db::Database,
-    errors::ExpectedError,
-    tracking::inflight::InflightGuard,
-};
+use crate::{InflightGuard, ProxyBody, ProxyError, handle, metrics::RecorderFactory};
 
 /// Per-upgrade-session bookkeeping handed down from `serve_with_activity`
 /// to `handle_upgrade`. A WebSocket session lives well beyond the HTTP
@@ -58,13 +54,15 @@ impl WebSocketLifecycle {
 /// multiplexer records its own metrics); when `None` the proxy is a pure
 /// byte-forwarder.
 ///
-/// Cloned per connection, so every field is cheap to clone: `Database` is an
-/// `Arc`-backed handle, `model` is a `SmolStr`, and `run_id` is a closure
+/// Cloned per connection, so every field is cheap to clone: the factory
+/// is an `Arc<dyn Fn>`, `model` is a `SmolStr`, and `run_id` is a closure
 /// that reads the supervisor's mirror cell at request time (the run_id
 /// changes on every reload, so it cannot be captured eagerly).
 #[derive(Clone)]
 pub struct ProxyMetrics {
-    pub(crate) db: Database,
+    /// Mints one recorder per token-generating request, capturing the db
+    /// handle (and anything else the recorder needs) at construction.
+    pub(crate) recorder_factory: RecorderFactory,
     /// Stable service row id, resolved once at provision time.
     pub(crate) service_id: i64,
     /// The service/model name recorded on each `RequestMetric`.
@@ -76,13 +74,13 @@ pub struct ProxyMetrics {
 
 impl ProxyMetrics {
     pub fn new(
-        db: Database,
+        recorder_factory: RecorderFactory,
         service_id: i64,
         model: smol_str::SmolStr,
         run_id: Arc<dyn Fn() -> Option<i64> + Send + Sync>,
     ) -> Self {
         Self {
-            db,
+            recorder_factory,
             service_id,
             model,
             run_id,
