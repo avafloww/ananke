@@ -18,9 +18,9 @@ use std::{sync::Arc, time::Duration};
 use ananke::{
     config::{EffectiveConfig, ServiceConfig, TemplateConfig},
     supervise::SupervisorHandle,
-    system::FakeProcessState,
 };
 use ananke_api::events::Event;
+use ananke_system::FakeProcessState;
 use common::{build_harness, minimal_llama_service};
 use smol_str::SmolStr;
 

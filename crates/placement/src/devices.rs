@@ -2,7 +2,7 @@
 //!
 //! These are the placement crate's vocabulary rather than the daemon's: the
 //! packer is a pure function over a snapshot, and the NVML probe that fills one
-//! in lives in `ananke::devices`, which re-exports them.
+//! in lives in `ananke_devices`, which re-exports them.
 
 use std::collections::BTreeMap;
 

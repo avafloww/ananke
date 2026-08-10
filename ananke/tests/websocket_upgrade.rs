@@ -21,7 +21,7 @@ use std::{
     time::Duration,
 };
 
-use ananke::api::proxy;
+use ananke_proxy as proxy;
 use futures::future;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

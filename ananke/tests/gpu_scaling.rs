@@ -22,16 +22,16 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use ananke::{
-    allocator::{
-        AllocationTable,
-        placement::{self, PackError, pick_command_gpu},
-    },
-    config::{PlacementPolicy, ServiceConfig},
-    devices::{Allocation, CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot, cuda_env},
-    estimator::{Estimate, Layout},
-};
+use ananke::config::{PlacementPolicy, ServiceConfig};
+use ananke_allocator::AllocationTable;
+use ananke_devices::cuda_env;
+use ananke_estimate::{Estimate, Layout};
 use ananke_gguf::Architecture;
+use ananke_placement::{
+    self as placement, PackError,
+    devices::{Allocation, CpuSnapshot, DeviceId, DeviceSnapshot, GpuSnapshot},
+    pick_command_gpu,
+};
 use smol_str::SmolStr;
 
 /// Build a `DeviceSnapshot` from a list of `(gpu_id, total_gb, free_gb)`
@@ -93,7 +93,7 @@ fn single_gpu_packs_without_tensor_split() {
     let est = flat_estimate(10, 600);
     let packed = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
     )
@@ -128,7 +128,7 @@ fn single_gpu_with_nonzero_id_renders_cuda_env() {
     let est = flat_estimate(8, 600);
     let packed = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
     )
@@ -154,7 +154,7 @@ fn single_gpu_overflow_spills_to_cpu_under_hybrid() {
     let est = flat_estimate(30, 600);
     let packed = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
     )
@@ -182,7 +182,7 @@ fn single_gpu_overflow_under_gpu_only_returns_pack_error() {
     let est = flat_estimate(30, 600);
     let err = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
     )
@@ -205,7 +205,7 @@ fn three_gpus_split_layers_across_all_three() {
     let est = flat_estimate(30, 600);
     let packed = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
     )
@@ -251,7 +251,7 @@ fn four_gpus_emit_tensor_split_with_one_entry_per_allowed_gpu() {
     let est = flat_estimate(60, 600);
     let packed = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
     )
@@ -293,7 +293,7 @@ fn four_gpus_with_gpu_allow_restricts_candidates() {
     let est = flat_estimate(40, 600);
     let packed = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
     )
@@ -338,7 +338,7 @@ fn three_gpus_heterogeneous_pack_small_model_on_largest_headroom() {
     let est = flat_estimate(8, 600); // ≈ 4.7 GB, fits on a single large GPU.
     let packed = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &reserved,
     )
@@ -374,7 +374,7 @@ fn pick_command_gpu_scales_to_four_gpus() {
     // Free bytes: 4, 12, 8, 18 GB. GPU 3 is the clear winner.
     let snap = snapshot(&[(0, 24, 4), (1, 24, 12), (2, 24, 8), (3, 24, 18)]);
     let pick = pick_command_gpu(
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
         2 * 1024,
@@ -403,7 +403,7 @@ fn zero_gpus_cpu_only_packs_to_cpu() {
     let est = flat_estimate(12, 200);
     let packed = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
     )
@@ -441,7 +441,7 @@ fn zero_gpus_gpu_only_returns_pack_error() {
     let est = flat_estimate(12, 200);
     let err = placement::pack(
         &est,
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
     )
@@ -460,7 +460,7 @@ fn pick_command_gpu_returns_none_with_zero_gpus() {
     let svc = svc_for_policy("comfy", PlacementPolicy::GpuOnly);
     let snap = snapshot(&[]);
     let pick = pick_command_gpu(
-        &ananke::config::service_inputs::placement_inputs(&svc),
+        &ananke::config::placement_inputs(&svc),
         &snap,
         &AllocationTable::new(),
         1024,

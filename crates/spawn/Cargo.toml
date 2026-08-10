@@ -1,0 +1,11 @@
+[package]
+name = "ananke-spawn"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "ananke_spawn"
+path = "src/lib.rs"
+
+[dependencies]

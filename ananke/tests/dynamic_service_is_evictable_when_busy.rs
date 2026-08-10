@@ -20,9 +20,9 @@ use std::{sync::atomic::Ordering, time::Duration};
 use ananke::{
     api::openai,
     config::{AllocationMode, DeviceSlot},
-    devices::{CpuSnapshot, DeviceSnapshot},
     supervise::state::ServiceState,
 };
+use ananke_placement::devices::{CpuSnapshot, DeviceSnapshot};
 use axum::{
     body::Body,
     http::{Request, StatusCode},

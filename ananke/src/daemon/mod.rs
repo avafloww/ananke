@@ -4,29 +4,27 @@
 //! Linux-coupled via `/proc` orphan reconciliation and the `signals` submodule.
 
 pub mod app_state;
-pub mod estimate_cache;
-pub mod events;
 pub mod signals;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
+use ananke_allocator::AllocationTable;
+use ananke_db::{Database, logs::spawn as spawn_batcher, retention};
+use ananke_devices::{GpuProbe, cpu, nvml::NvmlProbe};
+use ananke_errors::ExpectedError;
+use ananke_tracking::{activity::ActivityTable, inflight::InflightTable, progress::ProgressTable};
 use parking_lot::Mutex;
 use tokio::{net::TcpListener, sync::watch};
 use tracing::{info, warn};
 
 use crate::{
-    allocator::AllocationTable,
     config::{Migration, manager::ConfigManager},
     daemon::{
         app_state::AppState,
         signals::{ShutdownKind, await_shutdown},
     },
-    db::{Database, logs::spawn as spawn_batcher, retention},
-    devices::{GpuProbe, cpu, nvml::NvmlProbe, snapshotter},
-    errors::ExpectedError,
     oneshot::{OneshotRegistry, PortPool},
-    supervise::{SupervisorHandle, orphans::reconcile, registry::ServiceRegistry},
-    tracking::{activity::ActivityTable, inflight::InflightTable, progress::ProgressTable},
+    supervise::{SupervisorHandle, orphans::reconcile, registry::SupervisorRegistry},
 };
 
 pub async fn run() -> Result<(), ExpectedError> {
@@ -36,7 +34,7 @@ pub async fn run() -> Result<(), ExpectedError> {
     let config_path = crate::config::resolve_from_env(cli_config.as_deref())?;
     info!(config_path = %config_path.display(), "resolved config path");
 
-    let events = crate::daemon::events::EventBus::new();
+    let events = ananke_events::EventBus::new();
     let config = ConfigManager::open(config_path.clone(), events.clone()).await?;
     let migrations = config.take_boot_migrations();
     let effective = config.effective().clone();
@@ -55,7 +53,7 @@ pub async fn run() -> Result<(), ExpectedError> {
             None
         }
     };
-    let system = crate::system::SystemDeps::local();
+    let system = ananke_system::SystemDeps::local();
     if let Ok(m) = cpu::read(system.proc.as_ref()) {
         info!(
             total = m.total_bytes,
@@ -71,12 +69,12 @@ pub async fn run() -> Result<(), ExpectedError> {
     let batcher = spawn_batcher(db.clone());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    let rolling = crate::tracking::rolling::RollingTable::with_events(events.clone());
-    let observation = crate::tracking::observation::ObservationTable::new();
-    let registry = ServiceRegistry::new();
+    let rolling = ananke_tracking::rolling::RollingTable::with_events(events.clone());
+    let observation = ananke_observation::ObservationTable::new();
+    let registry = SupervisorRegistry::new();
 
-    let shared_snapshot = snapshotter::new_shared();
-    let snapshotter_join = snapshotter::spawn(
+    let shared_snapshot = ananke_observation::new_shared();
+    let snapshotter_join = ananke_devices::snapshotter::spawn(
         shared_snapshot.clone(),
         probe,
         observation.clone(),
@@ -123,11 +121,10 @@ pub async fn run() -> Result<(), ExpectedError> {
         batcher: batcher.clone(),
         events: events.clone(),
         system: system.clone(),
-        estimate_cache: crate::daemon::estimate_cache::EstimateCache::new(),
+        estimate_cache: crate::supervise::estimate_cache::EstimateCacheHandle::new(),
     };
 
-    let provisioning_deps =
-        crate::supervise::provision::ProvisioningDeps::from_state(&app_state, shutdown_rx.clone());
+    let provisioning_deps = app_state.provisioning_deps(shutdown_rx.clone());
 
     let mut supervisors: Vec<Arc<SupervisorHandle>> = Vec::new();
     let mut proxy_tasks = Vec::new();
@@ -225,9 +222,12 @@ pub async fn run() -> Result<(), ExpectedError> {
 
     let retention_task = tokio::spawn(retention::run_loop(db.clone(), shutdown_rx.clone()));
     let sampler_task =
-        crate::tracking::sampler::spawn(db.clone(), shared_snapshot.clone(), shutdown_rx.clone());
+        ananke_tracking::sampler::spawn(db.clone(), shared_snapshot.clone(), shutdown_rx.clone());
     let persistent_watcher_task = tokio::spawn(crate::supervise::persistent_watcher::run_loop(
-        app_state.clone(),
+        crate::supervise::PersistentWatchDeps {
+            config: app_state.config.clone(),
+            registry: app_state.registry.clone(),
+        },
         shutdown_rx.clone(),
     ));
 
@@ -295,7 +295,7 @@ fn parse_cli_config_arg() -> Option<PathBuf> {
 }
 
 async fn apply_migrations(db: &Database, migs: &[Migration]) {
-    let now = crate::tracking::now_unix_ms();
+    let now = ananke_time::now_unix_ms();
     for m in migs {
         if let Err(e) = db.reparent(&m.old_name, &m.new_name, now).await {
             warn!(old = %m.old_name, new = %m.new_name, error = %e, "migrate_from failed");

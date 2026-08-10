@@ -1,9 +1,23 @@
 //! Dry-run every `{placeholder}` a service's argv can contain at validate
 //! time, so a typo fails `config validate` rather than a runtime spawn.
 
+use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
-use crate::{config::validate::fail, errors::ExpectedError};
+use crate::config::validate::{PlaceholderChecker, fail};
+
+/// The daemon's placeholder dry-run checker: validates `command`,
+/// `shutdown_command`, and llama-cpp `launcher` argv at config time.
+pub struct DaemonPlaceholderChecker;
+
+impl PlaceholderChecker for DaemonPlaceholderChecker {
+    fn check(&self, name: &SmolStr, field: &str, argv: &[String]) -> Result<(), ExpectedError> {
+        match field {
+            "launcher" => check_launcher_placeholders(name, argv),
+            _ => check_placeholders(name, field, argv),
+        }
+    }
+}
 
 /// Resolve every `{placeholder}` in `argv` against a synthetic context
 /// covering every substitution the supervisor can produce. Propagates
@@ -15,10 +29,8 @@ pub(crate) fn check_placeholders(
     field: &str,
     argv: &[String],
 ) -> Result<(), ExpectedError> {
-    use crate::{
-        devices::{Allocation, DeviceId},
-        templates::{PlaceholderContext, substitute},
-    };
+    use ananke_placement::devices::{Allocation, DeviceId};
+    use ananke_templates::{PlaceholderContext, substitute};
     let mut alloc_bytes = std::collections::BTreeMap::new();
     alloc_bytes.insert(DeviceId::Gpu(0), 1);
     let alloc = Allocation { bytes: alloc_bytes };
@@ -49,10 +61,8 @@ pub(crate) fn check_launcher_placeholders(
     name: &SmolStr,
     argv: &[String],
 ) -> Result<(), ExpectedError> {
-    use crate::{
-        devices::{Allocation, DeviceId},
-        templates::{PlaceholderContext, substitute_launcher_argv},
-    };
+    use ananke_placement::devices::{Allocation, DeviceId};
+    use ananke_templates::{PlaceholderContext, substitute_launcher_argv};
     let mut alloc_bytes = std::collections::BTreeMap::new();
     alloc_bytes.insert(DeviceId::Gpu(0), 1);
     let alloc = Allocation { bytes: alloc_bytes };
@@ -70,7 +80,15 @@ pub(crate) fn check_launcher_placeholders(
 
 #[cfg(test)]
 mod tests {
-    use crate::config::validate::{test_fixtures::parse_and_merge, validate};
+    use crate::config::validate::{
+        DaemonPlaceholderChecker, test_fixtures::parse_and_merge, validate_with_checks,
+    };
+
+    fn validate(
+        cfg: &ananke_config::parse::RawConfig,
+    ) -> Result<ananke_config::validate::EffectiveConfig, ananke_errors::ExpectedError> {
+        validate_with_checks(cfg, &DaemonPlaceholderChecker)
+    }
 
     #[test]
     fn launcher_accepts_well_formed_template() {
@@ -152,5 +170,48 @@ devices.placement_override = { "gpu:0" = 1000 }
         );
         let err = validate(&cfg).unwrap_err();
         assert!(format!("{err}").contains("launcher"));
+    }
+
+    #[test]
+    fn command_service_rejects_typo_in_placeholder() {
+        let cfg = parse_and_merge(
+            r#"
+[[service]]
+name = "ext"
+template = "command"
+command = ["run", "--port={prot}"]
+port = 8500
+allocation.mode = "static"
+allocation.reserve_gb = 1
+"#,
+        );
+        let err = validate(&cfg).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("command[1]") && msg.contains("{prot}"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn command_service_rejects_typo_in_shutdown_placeholder() {
+        let cfg = parse_and_merge(
+            r#"
+[[service]]
+name = "ext"
+template = "command"
+command = ["run", "--port={port}"]
+shutdown_command = ["stop", "{bogus}"]
+port = 8500
+allocation.mode = "static"
+allocation.reserve_gb = 1
+"#,
+        );
+        let err = validate(&cfg).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("shutdown_command[1]") && msg.contains("{bogus}"),
+            "unexpected error: {err}"
+        );
     }
 }

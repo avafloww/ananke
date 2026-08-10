@@ -2,7 +2,7 @@
 //! next spawn attempt reserves more memory.
 #![cfg(feature = "test-fakes")]
 
-use ananke::tracking::rolling::RollingTable;
+use ananke_tracking::rolling::RollingTable;
 use smol_str::SmolStr;
 
 /// An OOM kill nudges both pools. The trigger is a SIGKILL shortly after spawn

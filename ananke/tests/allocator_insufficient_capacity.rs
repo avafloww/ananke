@@ -3,10 +3,8 @@
 
 mod common;
 
-use ananke::{
-    config::DeviceSlot,
-    devices::{CpuSnapshot, DeviceSnapshot},
-};
+use ananke::config::DeviceSlot;
+use ananke_placement::devices::{CpuSnapshot, DeviceSnapshot};
 use axum::{body::to_bytes, http::StatusCode};
 use common::{build_harness, minimal_llama_service};
 use tower::util::ServiceExt;

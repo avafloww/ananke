@@ -22,11 +22,11 @@ use std::{
 use ananke::{
     api::openai,
     config::{PlacementPolicy, ServiceConfig, TemplateConfig},
-    devices::{CpuSnapshot, DeviceSnapshot},
     supervise::drain::DrainReason,
-    system::Fs,
 };
 use ananke_config::units::GIB;
+use ananke_placement::devices::{CpuSnapshot, DeviceSnapshot};
+use ananke_system::Fs;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -125,7 +125,7 @@ async fn draining_records_the_host_pool_against_the_placement_that_ran() {
     h.state.observation.record_sample(
         &svc,
         0,
-        ananke::system::Rss {
+        ananke_system::Rss {
             total: reserved,
             owned: 16 * 1024 * 1024,
             // The mapped weights, which is what tells the daemon this run's

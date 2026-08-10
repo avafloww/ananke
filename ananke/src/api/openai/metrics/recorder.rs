@@ -4,10 +4,9 @@
 use std::time::Instant;
 
 use ananke_api::openai::response::{ChatCompletionChunk, Timings};
+use ananke_db::{Database, models::RequestMetric};
 use bytes::Bytes;
 use tracing::warn;
-
-use crate::db::{Database, models::RequestMetric};
 
 /// Collects metrics from a proxied response body. For streaming responses,
 /// parses SSE `data:` lines incrementally. For non-streaming, buffers the
@@ -184,7 +183,7 @@ impl MetricsRecorder {
         let ttft_ms = rec
             .first_token_at
             .map(|t| t.duration_since(rec.start).as_millis() as i64);
-        let timestamp_ms = crate::tracking::now_unix_ms() - duration_ms;
+        let timestamp_ms = ananke_time::now_unix_ms() - duration_ms;
 
         let metric = RequestMetric {
             metric_id: 0,
@@ -210,6 +209,23 @@ impl MetricsRecorder {
                 warn!(error = %e, "failed to record request metric");
             }
         });
+    }
+}
+
+/// Erased recorder for the proxy data plane: pairs the token-usage
+/// recorder with the db handle it writes to at finish time.
+pub struct RequestMetricsRecorder {
+    pub recorder: MetricsRecorder,
+    pub db: Database,
+}
+
+impl ananke_proxy::ErasedRecorder for RequestMetricsRecorder {
+    fn ingest(&mut self, data: &Bytes) {
+        self.recorder.ingest(data);
+    }
+
+    fn finish(self: Box<Self>, status_code: u16) {
+        self.recorder.finish(self.db, status_code);
     }
 }
 

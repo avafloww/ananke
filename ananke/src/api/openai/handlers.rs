@@ -6,7 +6,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ananke_api::shared::errors::ApiError;
+use ananke_api::{
+    openai::{
+        ChatCompletionEnvelope, CompletionEnvelope, EmbeddingEnvelope, ModelListing, ModelsResponse,
+    },
+    shared::errors::ApiError,
+};
+use ananke_tracking::{inflight::InflightGuard, progress::ProgressCell};
 use axum::{
     Json,
     body::Body,
@@ -25,16 +31,11 @@ use tracing::{info, warn};
 use crate::{
     api::openai::{
         errors, filters,
-        metrics::{MetricsBody, MetricsRecorder},
-        schema::{
-            ChatCompletionEnvelope, CompletionEnvelope, EmbeddingEnvelope, ModelListing,
-            ModelsResponse,
-        },
+        metrics::{MetricsBody, MetricsRecorder, RequestMetricsRecorder},
         stall::{self, StallDisarm},
     },
     daemon::app_state::AppState,
     supervise::{EnsureFailure, EnsureOutcome, await_ensure, state::ServiceState},
-    tracking::{inflight::InflightGuard, progress::ProgressCell},
 };
 
 pin_project_lite::pin_project! {
@@ -424,7 +425,14 @@ async fn forward_json_post(
             path,
             is_streaming,
         );
-        let metrics_body = MetricsBody::new(guarded, recorder, state.db.clone(), status_code);
+        let metrics_body = MetricsBody::new(
+            guarded,
+            Box::new(RequestMetricsRecorder {
+                recorder,
+                db: state.db.clone(),
+            }),
+            status_code,
+        );
         Body::new(metrics_body)
     } else {
         Body::new(guarded)

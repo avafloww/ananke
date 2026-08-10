@@ -6,7 +6,7 @@ mod common;
 
 use std::path::Path;
 
-use ananke::estimator;
+use ananke_estimate as estimator;
 use common::synth_gguf;
 
 #[test]
@@ -31,7 +31,7 @@ fn moe_estimator_identifies_expert_layers() {
 
     let mut svc = common::minimal_llama_service("demo", 0);
     common::set_model_path(&mut svc, path);
-    let inputs = ananke::config::service_inputs::estimator_inputs(&svc).unwrap();
+    let inputs = ananke::config::estimator_inputs(&svc).unwrap();
     let est = estimator::estimate_from_path(&fs, &inputs).unwrap();
     assert!(
         !est.layout.expert_layers.is_empty(),

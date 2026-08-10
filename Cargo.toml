@@ -2,12 +2,25 @@
 members = [
     "ananke",
     "anankectl",
+    "crates/allocator",
     "crates/api",
     "crates/config",
+    "crates/db",
+    "crates/devices",
+    "crates/errors",
     "crates/estimate",
+    "crates/events",
     "crates/fs",
     "crates/gguf",
+    "crates/observation",
     "crates/placement",
+    "crates/proxy",
+    "crates/spawn",
+    "crates/supervise",
+    "crates/system",
+    "crates/templates",
+    "crates/tracking",
+    "crates/time",
     "crates/tuning",
     "crates/tuning-schema",
     "calibration/crates/calibrate",
@@ -21,12 +34,25 @@ members = [
 default-members = [
     "ananke",
     "anankectl",
+    "crates/allocator",
     "crates/api",
     "crates/config",
+    "crates/db",
+    "crates/devices",
+    "crates/errors",
     "crates/estimate",
+    "crates/events",
     "crates/fs",
     "crates/gguf",
+    "crates/observation",
     "crates/placement",
+    "crates/proxy",
+    "crates/spawn",
+    "crates/supervise",
+    "crates/system",
+    "crates/templates",
+    "crates/tracking",
+    "crates/time",
     "crates/tuning",
     "crates/tuning-schema",
     "calibration/crates/calibrate",
@@ -41,12 +67,25 @@ version = "0.2.0"
 
 [workspace.dependencies]
 # Internal crates
+ananke-allocator = { path = "crates/allocator" }
 ananke-api = { path = "crates/api" }
 ananke-config = { path = "crates/config" }
+ananke-db = { path = "crates/db" }
+ananke-devices = { path = "crates/devices" }
+ananke-errors = { path = "crates/errors" }
 ananke-estimate = { path = "crates/estimate" }
+ananke-events = { path = "crates/events" }
 ananke-fs = { path = "crates/fs" }
 ananke-gguf = { path = "crates/gguf" }
+ananke-observation = { path = "crates/observation" }
 ananke-placement = { path = "crates/placement" }
+ananke-proxy = { path = "crates/proxy" }
+ananke-spawn = { path = "crates/spawn" }
+ananke-supervise = { path = "crates/supervise" }
+ananke-system = { path = "crates/system" }
+ananke-templates = { path = "crates/templates" }
+ananke-tracking = { path = "crates/tracking" }
+ananke-time = { path = "crates/time" }
 ananke-tuning = { path = "crates/tuning" }
 ananke-tuning-schema = { path = "crates/tuning-schema" }
 ananke-calibrate = { path = "calibration/crates/calibrate" }

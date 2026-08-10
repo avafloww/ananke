@@ -15,8 +15,8 @@ use ananke::{
     api::openai,
     config::{AutoRestartSettings, PeriodicMode, PeriodicTrigger},
     supervise::state::ServiceState,
-    system::FakeProcessState,
 };
+use ananke_system::FakeProcessState;
 use axum::{
     body::Body,
     http::{Request, StatusCode},

@@ -4,15 +4,15 @@
 
 use std::{sync::Arc, time::Duration};
 
+use ananke_db::Database;
 use parking_lot::Mutex;
 use smol_str::SmolStr;
 use tokio::sync::watch;
 use tracing::info;
 
 use crate::{
-    db::Database,
     oneshot::{OneshotRegistry, PortPool},
-    supervise::{drain::DrainReason, registry::ServiceRegistry},
+    supervise::{drain::DrainReason, registry::SupervisorRegistry},
 };
 
 /// Inputs to [`spawn_watcher`].
@@ -21,7 +21,7 @@ pub struct WatcherConfig {
     pub service_name: SmolStr,
     pub ttl: Duration,
     pub port: u16,
-    pub registry: ServiceRegistry,
+    pub registry: SupervisorRegistry,
     pub oneshots: OneshotRegistry,
     pub db: Database,
     pub port_pool: Arc<Mutex<PortPool>>,
@@ -56,7 +56,7 @@ pub fn spawn_watcher(cfg: WatcherConfig) -> tokio::task::JoinHandle<()> {
         if let Some(handle) = registry.get(&service_name) {
             handle.begin_drain(DrainReason::TtlExpired).await;
         }
-        let now_ms = crate::tracking::now_unix_ms();
+        let now_ms = ananke_time::now_unix_ms();
         let _ = db.mark_oneshot_ended(&id, now_ms).await;
         // Leave the record in place with `ended_at_ms` set so callers can
         // still observe the terminal state via `GET /api/oneshot/:id`.

@@ -8,6 +8,7 @@ use ananke_api::{
     },
     shared::errors::ApiError,
 };
+use ananke_db::MetricBucket;
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -17,7 +18,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{api::errors::ApiErrorCode, daemon::app_state::AppState, db::MetricBucket};
+use crate::{api::errors::ApiErrorCode, daemon::app_state::AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct MetricsQuery {
@@ -40,7 +41,7 @@ pub struct MetricsQuery {
     responses((status = 200, body = MetricsResponse), (status = 400, body = ApiError, description = "invalid_request_error"), (status = 500, body = ApiError, description = "query_failed"))
 )]
 pub async fn get_metrics(State(state): State<AppState>, Query(q): Query<MetricsQuery>) -> Response {
-    let now = crate::tracking::now_unix_ms();
+    let now = ananke_time::now_unix_ms();
     let until = q.until.unwrap_or(now);
     let since = q.since.unwrap_or(now - 3_600_000); // default: last 1h
 
@@ -117,7 +118,7 @@ pub async fn get_restarts(
     State(state): State<AppState>,
     Query(q): Query<RestartsQuery>,
 ) -> Response {
-    let now = crate::tracking::now_unix_ms();
+    let now = ananke_time::now_unix_ms();
     let until = q.until.unwrap_or(now);
     let since = q.since.unwrap_or(now - 3_600_000);
 
@@ -181,7 +182,7 @@ pub async fn get_device_samples(
     State(state): State<AppState>,
     Query(q): Query<DeviceSamplesQuery>,
 ) -> Response {
-    let now = crate::tracking::now_unix_ms();
+    let now = ananke_time::now_unix_ms();
     let until = q.until.unwrap_or(now);
     let since = q.since.unwrap_or(now - 3_600_000);
 

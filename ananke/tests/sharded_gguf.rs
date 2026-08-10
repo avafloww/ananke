@@ -6,7 +6,8 @@ mod common;
 
 use std::path::Path;
 
-use ananke::{gguf, system::InMemoryFs};
+use ananke_gguf as gguf;
+use ananke_system::InMemoryFs;
 use common::synth_gguf;
 
 #[test]

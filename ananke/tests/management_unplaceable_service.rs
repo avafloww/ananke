@@ -16,11 +16,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use ananke::{
-    config::{PlacementPolicy, ServiceConfig, TemplateConfig},
-    devices::{CpuSnapshot, DeviceSnapshot},
-    system::Fs,
-};
+use ananke::config::{PlacementPolicy, ServiceConfig, TemplateConfig};
+use ananke_placement::devices::{CpuSnapshot, DeviceSnapshot};
+use ananke_system::Fs;
 use axum::{body::to_bytes, http::StatusCode};
 use common::{build_harness_with_snapshot, synth_gguf};
 use tower::util::ServiceExt;

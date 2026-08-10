@@ -1,4 +1,5 @@
-use ananke::{daemon::run, errors::ExpectedError};
+use ananke::daemon::run;
+use ananke_errors::ExpectedError;
 
 // Keeps the error type in scope so a signature change surfaces here first.
 fn _ensure_error_type_in_scope() -> Option<ExpectedError> {

@@ -20,7 +20,6 @@ pub fn free_port() -> u16 {
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 use ananke::{
-    allocator::AllocationTable,
     config::{
         AllocationMode, AutoRestartSettings, DaemonSettings, DeviceReserves, DeviceSlot,
         EffectiveConfig, Filters, HealthSettings, Lifecycle, LlamaCppConfig, OffloadMode,
@@ -29,12 +28,13 @@ use ananke::{
         parse::{DEFAULT_START_QUEUE_DEPTH, EstimationConfig, SamplingConfig},
     },
     daemon::app_state::AppState,
-    db::{Database, logs::spawn as spawn_batcher},
-    devices::{Allocation, CpuSnapshot, DeviceSnapshot, snapshotter},
     supervise::{SupervisorHandle, registry::ServiceRegistry, spawn_supervisor},
-    system::InMemoryFs,
-    tracking::{activity::ActivityTable, inflight::InflightTable},
 };
+use ananke_allocator::AllocationTable;
+use ananke_db::{Database, logs::spawn as spawn_batcher};
+use ananke_placement::devices::{Allocation, CpuSnapshot, DeviceSnapshot};
+use ananke_system::InMemoryFs;
+use ananke_tracking::{activity::ActivityTable, inflight::InflightTable};
 use parking_lot::Mutex;
 use smol_str::SmolStr;
 
@@ -52,7 +52,7 @@ pub struct TestHarness {
     /// Concrete handle to the in-memory process spawner. Tests that want to
     /// assert "service X's child was terminated by the reconciler" inspect
     /// this directly rather than polling OS pids.
-    pub process_spawner: Arc<ananke::system::FakeSpawner>,
+    pub process_spawner: Arc<ananke_system::FakeSpawner>,
     /// Shutdown channel for the reload reconciler task.
     pub reconciler_shutdown: tokio::sync::watch::Sender<bool>,
     /// Join handle for the reload reconciler; awaited in `cleanup`.
@@ -70,7 +70,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
     // Nothing below this line touches the real disk.
     let db = Database::open_in_memory().await.unwrap();
     let batcher = spawn_batcher(db.clone());
-    let (system, fakes) = ananke::system::SystemDeps::fake();
+    let (system, fakes) = ananke_system::SystemDeps::fake();
     let fs_concrete = fakes.fs;
     let fake_spawner = fakes.process_spawner;
 
@@ -102,7 +102,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
 
     let activity = ActivityTable::new();
     let allocations = Arc::new(Mutex::new(AllocationTable::new()));
-    let snapshot = snapshotter::new_shared();
+    let snapshot = ananke_observation::new_shared();
     // Pre-seed with ample CPU memory so the allocator does not reject services
     // that declare a CPU placement. The echo server stands in for the real
     // model binary, so actual memory is never consumed.
@@ -115,10 +115,10 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
         taken_at_ms: 0,
     };
 
-    let rolling = ananke::tracking::rolling::RollingTable::new();
-    let observation = ananke::tracking::observation::ObservationTable::new();
+    let rolling = ananke_tracking::rolling::RollingTable::new();
+    let observation = ananke_observation::ObservationTable::new();
     let registry = ServiceRegistry::new();
-    let events = ananke::daemon::events::EventBus::new();
+    let events = ananke_events::EventBus::new();
 
     // The test harness constructs an `EffectiveConfig` directly; wrap it
     // in an in-memory `ConfigManager` so handlers that go through
@@ -135,7 +135,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
     // request.
     let inflight = InflightTable::new();
 
-    let estimate_cache = ananke::daemon::estimate_cache::EstimateCache::new();
+    let estimate_cache = ananke_events::EstimateCache::new();
     let deps = ananke::supervise::SupervisorDeps {
         db: db.clone(),
         batcher: batcher.clone(),
@@ -176,7 +176,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
         observation,
         db,
         inflight,
-        progress: ananke::tracking::progress::ProgressTable::new(),
+        progress: ananke_tracking::progress::ProgressTable::new(),
         port_pool: Arc::new(Mutex::new(ananke::oneshot::PortPool::new(18000..19000))),
         oneshots: ananke::oneshot::OneshotRegistry::new(),
         batcher,
@@ -189,8 +189,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
     // wires up, so integration tests can PUT a synthetic config that
     // drops or adds a service and observe the supervisor lifecycle.
     let (reconciler_shutdown, reconciler_rx) = tokio::sync::watch::channel(false);
-    let provisioning_deps =
-        ananke::supervise::provision::ProvisioningDeps::from_state(&state, reconciler_rx.clone());
+    let provisioning_deps = state.provisioning_deps(reconciler_rx.clone());
     let reconciler_join = ananke::supervise::reconciler::spawn(
         events,
         state.config.clone(),
@@ -214,7 +213,7 @@ pub async fn build_harness(services: Vec<ServiceConfig>) -> TestHarness {
 
 /// Set the llama-cpp service's model path. Tests that produce a synthetic
 /// GGUF under a specific path in `InMemoryFs` need the `ServiceConfig`'s
-/// `model` to point at that same path so `crate::config::service_inputs::estimator_inputs`
+/// `model` to point at that same path so `crate::config::estimator_inputs`
 /// resolves correctly.
 pub fn set_model_path(svc: &mut ServiceConfig, path: &std::path::Path) {
     match &mut svc.template_config {
@@ -320,7 +319,7 @@ pub fn service_with_queue_depth(name: &str, port: u16, depth: usize) -> ServiceC
 /// two GPUs with known free bytes) before issuing requests.
 pub async fn build_harness_with_snapshot(
     services: Vec<ServiceConfig>,
-    snapshot: ananke::devices::DeviceSnapshot,
+    snapshot: ananke_placement::devices::DeviceSnapshot,
 ) -> TestHarness {
     let h = build_harness(services).await;
     *h.state.snapshot.write() = snapshot;
@@ -372,8 +371,8 @@ pub fn management_url(addr: std::net::SocketAddr, path: &str) -> String {
 pub mod synth_gguf {
     use std::path::Path;
 
-    use ananke::system::InMemoryFs;
     use ananke_gguf::keys;
+    use ananke_system::InMemoryFs;
 
     pub struct Builder {
         /// Accumulated KV + tensor-info bytes (written after the fixed header).

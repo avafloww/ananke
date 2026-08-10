@@ -1,10 +1,8 @@
 #![cfg(feature = "test-fakes")]
 use std::collections::BTreeMap;
 
-use ananke::{
-    allocator::eviction::{EvictionCandidate, select_for_slot},
-    config::{Lifecycle, validate::DeviceSlot},
-};
+use ananke::config::{Lifecycle, validate::DeviceSlot};
+use ananke_allocator::eviction::{EvictionCandidate, select_for_slot};
 use smol_str::SmolStr;
 
 #[test]

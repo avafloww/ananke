@@ -21,9 +21,9 @@ use std::{
 use ananke::{
     api::{management, openai},
     config::{PlacementPolicy, ServiceConfig, TemplateConfig},
-    devices::{CpuSnapshot, DeviceSnapshot},
-    system::Fs,
 };
+use ananke_placement::devices::{CpuSnapshot, DeviceSnapshot};
+use ananke_system::Fs;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
@@ -151,7 +151,7 @@ async fn estimate_cache_hit_with_multi_gpu_snapshot() {
         .tensor_f16("token_embd.weight", 512 * 1024)
         .build();
 
-    let gpu = |id| ananke::devices::GpuSnapshot {
+    let gpu = |id| ananke_placement::devices::GpuSnapshot {
         id,
         name: format!("fake-{id}"),
         total_bytes: 8 * 1024 * 1024 * 1024,

@@ -2,26 +2,26 @@
 
 use std::sync::Arc;
 
+use ananke_allocator::AllocationTable;
+use ananke_db::{Database, logs::BatcherHandle};
+use ananke_events::EventBus;
+use ananke_observation::{ObservationTable, SharedSnapshot};
+use ananke_tracking::{
+    activity::ActivityTable, inflight::InflightTable, progress::ProgressTable,
+    rolling::RollingTable,
+};
 use parking_lot::Mutex;
 
 use crate::{
-    allocator::AllocationTable,
     config::manager::ConfigManager,
-    daemon::{estimate_cache::EstimateCache, events::EventBus},
-    db::{Database, logs::BatcherHandle},
-    devices::snapshotter::SharedSnapshot,
     oneshot::{OneshotRegistry, PortPool},
-    supervise::registry::ServiceRegistry,
-    tracking::{
-        activity::ActivityTable, inflight::InflightTable, observation::ObservationTable,
-        progress::ProgressTable, rolling::RollingTable,
-    },
+    supervise::{estimate_cache::EstimateCacheHandle, registry::SupervisorRegistry},
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<ConfigManager>,
-    pub registry: ServiceRegistry,
+    pub registry: SupervisorRegistry,
     pub allocations: Arc<Mutex<AllocationTable>>,
     pub snapshot: SharedSnapshot,
     pub activity: ActivityTable,
@@ -37,11 +37,11 @@ pub struct AppState {
     pub oneshots: OneshotRegistry,
     pub batcher: BatcherHandle,
     pub events: EventBus,
-    pub system: crate::system::SystemDeps,
+    pub system: ananke_system::SystemDeps,
     /// Memoised GGUF summary + estimator output, keyed by service
     /// name. Populated lazily by the management `ServiceDetail`
     /// handler so successive detail polls don't re-parse the GGUF.
-    pub estimate_cache: EstimateCache,
+    pub estimate_cache: EstimateCacheHandle,
 }
 
 impl AppState {
@@ -62,6 +62,41 @@ impl AppState {
             inflight: self.inflight.clone(),
             activity: self.activity.clone(),
             estimate_cache: self.estimate_cache.clone(),
+        }
+    }
+
+    /// Assemble a `ProvisioningDeps` from this state and the daemon-wide
+    /// shutdown channel. Every field already lives on `AppState`; this
+    /// constructor keeps the call sites in `daemon::run` and the test
+    /// harness from enumerating them by hand.
+    pub fn provisioning_deps(
+        &self,
+        shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    ) -> crate::supervise::provision::ProvisioningDeps {
+        let metrics_db = self.db.clone();
+        crate::supervise::provision::ProvisioningDeps {
+            db: self.db.clone(),
+            activity: self.activity.clone(),
+            inflight: self.inflight.clone(),
+            observation: self.observation.clone(),
+            allocations: self.allocations.clone(),
+            supervisor_deps: self.supervisor_deps(),
+            shutdown_rx,
+            metrics_factory: std::sync::Arc::new(
+                move |start, service_id, run_id, model, endpoint, is_streaming| {
+                    Box::new(crate::api::openai::metrics::RequestMetricsRecorder {
+                        recorder: crate::api::openai::metrics::MetricsRecorder::new(
+                            start,
+                            service_id,
+                            run_id,
+                            model,
+                            endpoint,
+                            is_streaming,
+                        ),
+                        db: metrics_db.clone(),
+                    })
+                },
+            ),
         }
     }
 }

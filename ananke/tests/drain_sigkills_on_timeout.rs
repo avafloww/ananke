@@ -8,13 +8,11 @@ use std::{
     time::Duration,
 };
 
-use ananke::{
-    supervise::{
-        SpawnConfig,
-        drain::{DrainConfig, DrainReason, drain_pipeline},
-    },
-    system::{FakeProcessState, FakeSpawner, ProcessSpawner},
+use ananke::supervise::{
+    SpawnConfig,
+    drain::{DrainConfig, DrainReason, drain_pipeline},
 };
+use ananke_system::{FakeProcessState, FakeSpawner, ProcessSpawner};
 
 fn spawn_cfg() -> SpawnConfig {
     SpawnConfig {

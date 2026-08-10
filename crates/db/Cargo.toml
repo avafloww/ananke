@@ -1,0 +1,21 @@
+[package]
+name = "ananke-db"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "ananke_db"
+path = "src/lib.rs"
+
+[dependencies]
+ananke-api.workspace = true
+ananke-errors.workspace = true
+ananke-time.workspace = true
+parking_lot.workspace = true
+rusqlite.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

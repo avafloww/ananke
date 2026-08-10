@@ -3,11 +3,9 @@
 
 mod common;
 
-use ananke::{
-    db::{Database, models::RunningService},
-    supervise::{OrphanDisposition, reconcile},
-    system::InMemoryProcFs,
-};
+use ananke::supervise::{OrphanDisposition, reconcile};
+use ananke_db::{Database, models::RunningService};
+use ananke_system::InMemoryProcFs;
 
 #[tokio::test]
 async fn cleans_row_for_dead_pid() {

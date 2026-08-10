@@ -16,19 +16,19 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use ananke::{
-    allocator::{
-        AllocationTable,
-        balloon::{BalloonConfig, ResolverDeps, spawn_resolver},
-    },
     config::{
         DaemonSettings, DeviceSlot, EffectiveConfig, Lifecycle, manager::ConfigManager,
         validate::test_fixtures::minimal_service,
     },
-    daemon::events::EventBus,
-    devices::{DeviceSnapshot, GpuSnapshot, snapshotter::SharedSnapshot},
     supervise::{SupervisorHandle, registry::ServiceRegistry},
-    tracking::observation::ObservationTable,
 };
+use ananke_allocator::{
+    AllocationTable,
+    balloon::{BalloonConfig, ResolverDeps, spawn_resolver},
+};
+use ananke_events::EventBus;
+use ananke_observation::{ObservationTable, SharedSnapshot};
+use ananke_placement::devices::{DeviceSnapshot, GpuSnapshot};
 use parking_lot::Mutex;
 use smol_str::SmolStr;
 use tokio::sync::watch;
@@ -44,7 +44,7 @@ fn mb(n: u64) -> u64 {
 /// pledge-based; tests pass it through anyway so the snapshots look
 /// realistic.
 fn one_24g_gpu(free_bytes: u64) -> SharedSnapshot {
-    let snap = ananke::devices::snapshotter::new_shared();
+    let snap = ananke_observation::new_shared();
     *snap.write() = DeviceSnapshot {
         gpus: vec![GpuSnapshot {
             id: 1,
@@ -196,7 +196,7 @@ async fn growth_without_overcommit_does_not_evict() {
         h.observation.record_sample(
             &h.svc,
             mb(gb * 1024),
-            ananke::system::Rss {
+            ananke_system::Rss {
                 total: 0,
                 owned: 0,
                 file: 0,
@@ -246,7 +246,7 @@ async fn overcommit_triggers_yield_at_tied_priority_with_persistent_peer() {
         h.observation.record_sample(
             &h.svc,
             mb(gb * 1024),
-            ananke::system::Rss {
+            ananke_system::Rss {
                 total: 0,
                 owned: 0,
                 file: 0,
@@ -354,7 +354,7 @@ async fn growing_balloon_evicts_lower_priority_peer_before_physical_oom() {
         observation.record_sample(
             &svc,
             mb(gb * 1024),
-            ananke::system::Rss {
+            ananke_system::Rss {
                 total: 0,
                 owned: 0,
                 file: 0,

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// `calibration/data/measurements.ndjson` and part of the payload a cell's
 /// identity is hashed over, so renaming a variant re-keys the whole campaign;
 /// `fork_wire_spelling_is_pinned` asserts them. The daemon's TOML spellings are
-/// *not* these — see `ananke::config::parse::RawRuntime`, which is tagged
+/// *not* these — see `ananke::crate::parse::RawRuntime`, which is tagged
 /// `kind = "llama-cpp" | "ik-llama"` and is a separate vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

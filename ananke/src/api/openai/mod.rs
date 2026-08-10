@@ -4,7 +4,6 @@ pub mod errors;
 pub mod filters;
 pub mod handlers;
 pub mod metrics;
-pub mod schema;
 pub mod stall;
 pub mod unimplemented;
 

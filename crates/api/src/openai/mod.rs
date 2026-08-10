@@ -1,8 +1,8 @@
 //! OpenAI-compatible API wire types.
 //!
 //! These types live in the shared wire-types crate so both the daemon
-//! and `anankectl` can use them. The daemon's `api/openai/schema.rs`
-//! re-exports from here.
+//! and `anankectl` can use them directly as `ananke_api::openai`. The
+//! daemon's OpenAI handlers import them from here.
 
 pub mod chat;
 pub mod completions;

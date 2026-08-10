@@ -12,6 +12,7 @@ pub mod mtp;
 pub mod override_tensor;
 pub mod recurrent;
 mod replicated;
+pub mod service_inputs;
 pub mod tuning;
 pub mod types;
 
