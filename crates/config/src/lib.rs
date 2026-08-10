@@ -8,6 +8,8 @@
 //! here too, with the placeholder dry-run checker injected by the daemon
 //! (it needs template + allocation types that would create a cycle).
 
+#![deny(missing_docs)]
+
 pub mod defaults;
 pub mod docs;
 pub mod file;
@@ -58,6 +60,8 @@ pub fn load_config_with_fs(
     Ok((effective, migrations))
 }
 
+/// Parse, merge, and validate a TOML config from a string, with no GGUF
+/// preflight. The daemon's full load path is [`load_config_with_fs`].
 pub fn load_config_from_str(
     source: &str,
     origin: &std::path::Path,

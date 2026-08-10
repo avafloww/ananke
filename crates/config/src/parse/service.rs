@@ -21,10 +21,12 @@ pub enum RawService {
     /// mirroring the boxing on the validated
     /// [`crate::validate::TemplateConfig`].
     LlamaCpp(Box<RawLlamaCppService>),
+    /// A plain command service: arbitrary argv under ananke's lifecycle.
     Command(Box<RawCommandService>),
 }
 
 impl RawService {
+    /// The shared fields of whichever variant this service is.
     pub fn common(&self) -> &RawServiceCommon {
         match self {
             RawService::LlamaCpp(s) => &s.common,
@@ -32,6 +34,7 @@ impl RawService {
         }
     }
 
+    /// Mutable access to the shared fields, for merge and validation passes.
     pub fn common_mut(&mut self) -> &mut RawServiceCommon {
         match self {
             RawService::LlamaCpp(s) => &mut s.common,
@@ -39,6 +42,7 @@ impl RawService {
         }
     }
 
+    /// The `template` value that selected this variant.
     pub fn template_label(&self) -> &'static str {
         match self {
             RawService::LlamaCpp(_) => "llama-cpp",

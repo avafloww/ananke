@@ -56,7 +56,9 @@ pub struct RawAutoRestart {
 /// silently drop unknown keys, which would let a typo'd threshold pass.
 #[derive(Debug, Clone)]
 pub enum Toggle<T> {
+    /// Bare boolean form: `true` enables with defaults, `false` disables.
     Enabled(bool),
+    /// Settings-table form: enables the trigger and overrides thresholds.
     Settings(Box<T>),
 }
 

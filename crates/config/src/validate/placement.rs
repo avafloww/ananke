@@ -6,13 +6,17 @@ use std::collections::BTreeMap;
 pub use crate::placement::{DeviceReserves, DeviceSlot, PlacementPolicy};
 use crate::validate::gib_to_mib;
 
+/// Which template a service uses: `llama-cpp` or `command`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Template {
+    /// A llama.cpp model served by llama-server.
     LlamaCpp,
+    /// Arbitrary external argv managed by ananke.
     Command,
 }
 
 impl Template {
+    /// The template name as it appears in config files.
     pub fn as_str(self) -> &'static str {
         match self {
             Template::LlamaCpp => "llamacpp",
@@ -21,16 +25,26 @@ impl Template {
     }
 }
 
+/// How the allocator reserves memory for a service: none (estimated by the
+/// packer), a fixed reservation, or a dynamic balloon range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AllocationMode {
     /// Llama-cpp services: placement decided by estimator/override; mode absent.
     None,
     /// A fixed reservation. Named device-neutrally because it lands on the
     /// CPU device for a cpu-only command service just as readily as on a GPU.
-    Static { reserve_mb: u64 },
+    Static {
+        /// The fixed reservation, in MiB.
+        reserve_mb: u64,
+    },
+    /// A balloon range: the reservation grows and shrinks between these
+    /// bounds as the service's observed usage dictates.
     Dynamic {
+        /// Lower bound of the balloon range, in MiB.
         min_mb: u64,
+        /// Upper bound of the balloon range, in MiB.
         max_mb: u64,
+        /// How long a borrower run must live before its memory may be reclaimed.
         min_borrower_runtime_ms: u64,
     },
 }
@@ -87,13 +101,17 @@ impl AllocationMode {
     }
 }
 
+/// When a service starts and stops relative to the daemon's own lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lifecycle {
+    /// Started at boot and restarted when it exits.
     Persistent,
+    /// Started on first request and stopped after `idle_timeout`.
     OnDemand,
 }
 
 impl Lifecycle {
+    /// The lifecycle name as it appears in config files.
     pub fn as_str(self) -> &'static str {
         match self {
             Lifecycle::Persistent => "persistent",
@@ -102,20 +120,26 @@ impl Lifecycle {
     }
 }
 
+/// Request-scrubbing rules applied before a request is forwarded to a
+/// service.
 #[derive(Debug, Clone, Default)]
 pub struct Filters {
+    /// Query parameters stripped from every proxied request.
     pub strip_params: Vec<String>,
     /// Operator-supplied values injected into the request body. Opaque
     /// to ananke — the shape is whatever the upstream engine accepts.
     pub set_params: BTreeMap<String, serde_json::Value>,
 }
 
+/// Readiness-probe settings for a service. `None` path means no probe.
 #[derive(Debug, Clone)]
 pub struct HealthSettings {
     /// HTTP path to probe for readiness. `None` means no health check —
     /// the service transitions to Running immediately after spawn.
     pub http_path: Option<String>,
+    /// How long a probe may take before it counts as failed.
     pub timeout_ms: u64,
+    /// How often the probe runs while the service is up.
     pub probe_interval_ms: u64,
 }
 

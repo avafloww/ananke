@@ -20,6 +20,8 @@ use crate::{
     },
 };
 
+/// Validate a `RawConfig` with the no-op placeholder checker. Library
+/// callers with a template-based checker should use [`validate_with_checks`].
 pub fn validate(cfg: &RawConfig) -> Result<EffectiveConfig, ExpectedError> {
     validate_with_checks(cfg, &NoopPlaceholderChecker)
 }

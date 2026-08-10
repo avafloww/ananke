@@ -60,6 +60,8 @@ pub fn minimal_service(name: &str) -> ServiceConfig {
     minimal_llama_cpp_service(name)
 }
 
+/// Minimal llama-cpp service config for tests, placed on CPU only. See
+/// [`minimal_service`].
 pub fn minimal_llama_cpp_service(name: &str) -> ServiceConfig {
     let mut placement = BTreeMap::new();
     placement.insert(DeviceSlot::Cpu, 100);
@@ -101,6 +103,8 @@ pub fn minimal_llama_cpp_service(name: &str) -> ServiceConfig {
     }
 }
 
+/// Minimal command service config for tests, built on
+/// [`minimal_llama_cpp_service`] with the template swapped.
 pub fn minimal_command_service(name: &str, argv: Vec<String>) -> ServiceConfig {
     let mut svc = minimal_llama_cpp_service(name);
     svc.template_config = TemplateConfig::Command(CommandConfig {

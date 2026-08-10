@@ -154,10 +154,15 @@ impl Default for SpecCollapseTrigger {
 /// Resolved error-rate watchdog thresholds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ErrorRateTrigger {
+    /// Rolling window over which the error rate is measured.
     pub window_ms: u64,
+    /// Fraction of requests in the window that must be errors to trigger.
     pub max_error_rate: f64,
+    /// Minimum request count in the window before the ratio is trusted.
     pub min_requests: u32,
+    /// How often the watchdog queries the metrics store.
     pub poll_interval_ms: u64,
+    /// Which statuses count as errors.
     pub statuses: ErrorStatusClass,
 }
 
@@ -206,7 +211,9 @@ impl ErrorStatusClass {
 /// Resolved periodic-restart settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PeriodicTrigger {
+    /// How long a run may live before a periodic restart is due.
     pub interval_ms: u64,
+    /// How the restart is timed once the interval elapses.
     pub mode: PeriodicMode,
 }
 

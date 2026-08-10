@@ -8,9 +8,12 @@ use smol_str::SmolStr;
 
 use crate::parse::{RawConfig, RawService};
 
+/// One service rename produced by a `migrate_from` chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Migration {
+    /// The service's previous name, as recorded in the database.
     pub old_name: SmolStr,
+    /// The name it is being migrated to.
     pub new_name: SmolStr,
 }
 

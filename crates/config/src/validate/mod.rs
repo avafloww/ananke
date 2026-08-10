@@ -56,6 +56,8 @@ pub use crate::docs::{
 // template substitution + allocation types, which would create a
 // config → templates → devices → placement → config cycle. The daemon
 // injects it through `validate_with_checks`.
+/// Dry-run checker for placeholder-substituted argv, injected by the
+/// daemon because the template engine lives outside this crate.
 pub trait PlaceholderChecker {
     /// Dry-run substitute `argv` for `field`, failing on unresolved or
     /// malformed placeholders.

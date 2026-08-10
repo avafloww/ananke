@@ -17,21 +17,34 @@ use crate::{
     },
 };
 
+/// The validated config tree: daemon settings plus one config per service.
 #[derive(Debug, Clone)]
 pub struct EffectiveConfig {
+    /// Daemon-global settings.
     pub daemon: DaemonSettings,
+    /// One fully validated config per `[[service]]` block.
     pub services: Vec<ServiceConfig>,
 }
 
+/// Daemon-global settings resolved from the `[daemon]`, `[openai_api]`,
+/// and `[devices]` blocks.
 #[derive(Debug, Clone)]
 pub struct DaemonSettings {
+    /// Address the management API listens on.
     pub management_listen: String,
+    /// Address the OpenAI-compatible multiplexed endpoint listens on.
     pub openai_listen: String,
+    /// Directory for the SQLite store and other persistent state.
     pub data_dir: PathBuf,
+    /// How long a service gets to drain before a forced shutdown.
     pub shutdown_timeout_ms: u64,
+    /// Whether the management API binds 0.0.0.0 instead of 127.0.0.1.
     pub allow_external_management: bool,
+    /// Whether per-service reverse proxies bind 0.0.0.0 instead of 127.0.0.1.
     pub allow_external_services: bool,
+    /// Whether the OpenAI endpoint answers cross-origin browser requests.
     pub openai_allow_cors: bool,
+    /// Maximum request body size for the OpenAI endpoints, in bytes.
     pub openai_max_body_bytes: usize,
 }
 
@@ -54,16 +67,27 @@ impl Default for DaemonSettings {
     }
 }
 
+/// One service's fully resolved configuration, the basis for building its
+/// supervisor.
 #[derive(Debug, Clone)]
 pub struct ServiceConfig {
+    /// Unique service name, the key used by the API and CLI.
     pub name: SmolStr,
+    /// Public port clients connect to (per-service reverse proxy).
     pub port: u16,
+    /// Port the child's private listener binds on.
     pub private_port: u16,
+    /// When and how the service starts and stops relative to the daemon.
     pub lifecycle: Lifecycle,
+    /// Start priority: lower numbers start first.
     pub priority: u8,
+    /// HTTP readiness probe for the child.
     pub health: HealthSettings,
+    /// Per-GPU overrides of the placement policy's reservation weights.
     pub placement_override: BTreeMap<DeviceSlot, u64>,
+    /// Packing policy that decides which device the service lands on.
     pub placement_policy: PlacementPolicy,
+    /// GPU indices this service may be placed on.
     pub gpu_allow: Vec<u32>,
     /// Inter-GPU split strategy for multi-GPU llama.cpp services. See
     /// [`SplitMode`]. Default [`SplitMode::Layer`] preserves the historical
@@ -81,24 +105,35 @@ pub struct ServiceConfig {
     /// every service in a config, so the `Arc` is cloned per service rather than
     /// the map.
     pub reserves: Arc<DeviceReserves>,
+    /// Query-parameter scrubbing rules applied before proxying.
     pub filters: Filters,
+    /// How long an idle service may stay up before it is stopped.
     pub idle_timeout_ms: u64,
+    /// How long a draining service gets before it is killed.
     pub drain_timeout_ms: u64,
+    /// How long drained connections keep streaming after the child exits.
     pub extended_stream_drain_ms: u64,
+    /// Maximum wall-clock time for a single proxied request.
     pub max_request_duration_ms: u64,
     /// Self-healing restart policy. Error-rate watchdog on by default;
     /// periodic restart off by default. See [`AutoRestartSettings`].
     pub auto_restart: AutoRestartSettings,
+    /// How the allocator reserves memory: static or a dynamic balloon range.
     pub allocation_mode: AllocationMode,
+    /// Whether the service is reachable through the OpenAI multiplexer.
     pub openai_compat: bool,
+    /// Free-form description surfaced in `/v1/models` and `/api/services`.
     pub description: Option<String>,
     /// What kind of model the service exposes (chat or embedding).
     /// Defaults to [`Modality::Chat`], so a config that says nothing gets a
     /// chat service. Embedding services opt in with `modality = "embedding"`
     /// in their `[[service]]` block.
     pub modality: Modality,
+    /// Capacity of the queue for requests arriving while the service is starting.
     pub start_queue_depth: usize,
+    /// Extra arguments appended to the resolved command line.
     pub extra_args: Vec<String>,
+    /// Environment variables set on the child process.
     pub env: BTreeMap<String, String>,
     /// Whether the child process inherits the daemon's environment
     /// (default `true`). When `false`, the child sees only the
@@ -112,10 +147,12 @@ pub struct ServiceConfig {
     /// and `/api/services` for clients (Discord rotation, residence
     /// flags, …).
     pub metadata: AnankeMetadata,
+    /// The template-specific half of the service config.
     pub template_config: TemplateConfig,
 }
 
 impl ServiceConfig {
+    /// The template this service was validated as: `llama-cpp` or `command`.
     pub fn template(&self) -> Template {
         self.template_config.template()
     }
@@ -140,16 +177,19 @@ impl ServiceConfig {
     }
 }
 
+/// The validated template-specific half of a service config.
 #[derive(Debug, Clone)]
 pub enum TemplateConfig {
     /// Boxed so the llama-cpp variant (~272 bytes) doesn't dominate the size of
     /// every `ServiceConfig`. Command services are ~48 bytes; boxing keeps the
     /// enum small for both.
     LlamaCpp(Box<LlamaCppConfig>),
+    /// A plain command service.
     Command(CommandConfig),
 }
 
 impl TemplateConfig {
+    /// The [`Template`] this config was validated as.
     pub fn template(&self) -> Template {
         match self {
             TemplateConfig::LlamaCpp(_) => Template::LlamaCpp,
@@ -158,22 +198,34 @@ impl TemplateConfig {
     }
 }
 
+/// Validated llama-cpp service settings, the basis for the estimator and
+/// llama-server argv rendering.
 #[derive(Debug, Clone)]
 pub struct LlamaCppConfig {
     /// Serving runtime (mainline vs ik_llama.cpp fork with its
     /// validated knobs). See [`RuntimeConfig`].
     pub runtime: RuntimeConfig,
+    /// Path to the model GGUF.
     pub model: PathBuf,
+    /// Path to the multimodal projector GGUF, for vision models.
     pub mmproj: Option<PathBuf>,
+    /// Context window size in tokens.
     pub context: Option<u32>,
+    /// Number of GPU layers (negative offloads the last layers to CPU).
     pub n_gpu_layers: Option<i32>,
     /// MoE expert-offload policy. See [`OffloadMode`].
     pub expert_offload: OffloadMode,
+    /// Whether to use flash attention.
     pub flash_attn: Option<bool>,
+    /// KV cache quantization format for the K tensors.
     pub cache_type_k: Option<SmolStr>,
+    /// KV cache quantization format for the V tensors.
     pub cache_type_v: Option<SmolStr>,
+    /// Whether to memory-map the model file.
     pub mmap: Option<bool>,
+    /// Whether to lock the model in RAM.
     pub mlock: Option<bool>,
+    /// Number of parallel decoding slots.
     pub parallel: Option<u32>,
     /// `--spec-type` value (e.g. `"draft-mtp"`). See
     /// [`crate::parse::RawLlamaCppService::spec_type`].
@@ -195,16 +247,25 @@ pub struct LlamaCppConfig {
     pub metrics: Option<bool>,
     /// `--slots` endpoint toggle.
     pub slots: Option<bool>,
+    /// Context batch size (`-b`).
     pub batch_size: Option<u32>,
+    /// Physical batch size (`-ub`).
     pub ubatch_size: Option<u32>,
+    /// CPU threads for prompt processing.
     pub threads: Option<u32>,
+    /// CPU threads for generation.
     pub threads_batch: Option<u32>,
     /// `--numa` placement strategy. See [`NumaStrategy`].
     pub numa: Option<NumaStrategy>,
+    /// Whether to use Jinja chat templating.
     pub jinja: Option<bool>,
+    /// Custom chat-template file override (`--chat-template-file`).
     pub chat_template_file: Option<PathBuf>,
+    /// Per-tensor overrides of the model's tensor layout.
     pub override_tensor: Vec<String>,
+    /// Sampling knobs forwarded as llama-server CLI flags.
     pub sampling: SamplingConfig,
+    /// Estimator overrides (compute-buffer headroom, safety factor).
     pub estimation: EstimationConfig,
     /// Resolved executable used to launch the service. Defaults to
     /// `"llama-server"` (looked up on `$PATH`); a per-service
@@ -220,9 +281,13 @@ pub struct LlamaCppConfig {
     pub launcher: Option<Vec<String>>,
 }
 
+/// A validated `command`-template service: arbitrary argv plus optional
+/// allocation and OpenAI-proxy blocks.
 #[derive(Debug, Clone)]
 pub struct CommandConfig {
+    /// argv to execute.
     pub command: Vec<String>,
+    /// Working directory the child is started in.
     pub workdir: Option<PathBuf>,
     /// Optional argv to run after the SIGTERM/SIGKILL drain pipeline
     /// exits. Used for external services that can't stop via signal
@@ -243,6 +308,7 @@ pub struct CommandConfig {
     pub openai_proxy: Option<OpenAiProxyConfig>,
 }
 
+/// OpenAI-proxy settings for a command service fronted by the multiplexer.
 #[derive(Debug, Clone)]
 pub struct OpenAiProxyConfig {
     /// Model name written into the upstream's JSON `model` field. The

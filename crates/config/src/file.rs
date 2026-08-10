@@ -6,12 +6,18 @@ use ananke_errors::ExpectedError;
 
 /// Sources checked for the config file, in priority order.
 pub struct PathSources<'a> {
+    /// Value of `ANANKE_CONFIG`, if set — checked first.
     pub env_ananke_config: Option<&'a str>,
+    /// Path passed on the CLI, if any — checked second.
     pub cli_config: Option<&'a Path>,
+    /// `$XDG_CONFIG_HOME`, if set — checked third.
     pub xdg_config_home: Option<&'a Path>,
+    /// `$HOME`, if set — checked fourth.
     pub home: Option<&'a Path>,
 }
 
+/// Resolve the config file path from explicit sources, falling back to
+/// `$XDG_CONFIG_HOME` (or `~/.config`) and finally `/etc/ananke/config.toml`.
 pub fn resolve_config_path(sources: PathSources<'_>) -> Result<PathBuf, ExpectedError> {
     if let Some(p) = sources.env_ananke_config {
         return Ok(PathBuf::from(p));

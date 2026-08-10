@@ -8,9 +8,11 @@ use smol_str::SmolStr;
 
 use crate::parse::RawServiceCommon;
 
+/// A raw `llama-cpp`-template service: model, runtime, and serving knobs.
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields, default)]
 pub struct RawLlamaCppService {
+    /// Fields shared with every template variant, flattened at top level.
     #[serde(flatten)]
     pub common: RawServiceCommon,
     /// Serving runtime, as a tagged table:
@@ -23,9 +25,13 @@ pub struct RawLlamaCppService {
     /// validator can't check that, but each runtime rejects the other's
     /// flags at spawn.
     pub runtime: Option<RawRuntime>,
+    /// Path to the model GGUF.
     pub model: Option<PathBuf>,
+    /// Path to the multimodal projector GGUF, for vision models.
     pub mmproj: Option<PathBuf>,
+    /// Context window size in tokens.
     pub context: Option<u32>,
+    /// Number of GPU layers (negative offloads the last layers to CPU).
     pub n_gpu_layers: Option<i32>,
     /// MoE expert-offload policy: `"off"` (no expert offload — whole-layer CPU
     /// spill only), `"auto"` (the packer offloads the minimum experts to fit
@@ -33,11 +39,17 @@ pub struct RawLlamaCppService {
     /// expert layers). Validated into [`crate::OffloadMode`]. Requires
     /// a CPU-allowing placement (`placement = "hybrid"`) when not `"off"`.
     pub expert_offload: Option<RawExpertOffload>,
+    /// Whether to use flash attention.
     pub flash_attn: Option<bool>,
+    /// KV cache quantization format for the K tensors.
     pub cache_type_k: Option<SmolStr>,
+    /// KV cache quantization format for the V tensors.
     pub cache_type_v: Option<SmolStr>,
+    /// Whether to memory-map the model file.
     pub mmap: Option<bool>,
+    /// Whether to lock the model in RAM.
     pub mlock: Option<bool>,
+    /// Number of parallel decoding slots.
     pub parallel: Option<u32>,
     /// Speculative-decoding type passed to llama-server's `--spec-type`
     /// (e.g. `"draft-mtp"` for multi-token prediction). When set to
@@ -79,9 +91,13 @@ pub struct RawLlamaCppService {
     pub metrics: Option<bool>,
     /// Expose the `/slots` introspection endpoint (`--slots`).
     pub slots: Option<bool>,
+    /// Context batch size (`-b`).
     pub batch_size: Option<u32>,
+    /// Physical batch size (`-ub`).
     pub ubatch_size: Option<u32>,
+    /// CPU threads for prompt processing.
     pub threads: Option<u32>,
+    /// CPU threads for generation.
     pub threads_batch: Option<u32>,
     /// NUMA thread-and-memory placement strategy passed to llama-server's
     /// `--numa`: `"distribute"` (spread threads and interleave memory across
@@ -90,10 +106,15 @@ pub struct RawLlamaCppService {
     /// [`crate::NumaStrategy`]. Unset leaves llama-server's default
     /// (no `--numa` flag).
     pub numa: Option<SmolStr>,
+    /// Whether to use Jinja chat templating.
     pub jinja: Option<bool>,
+    /// Custom chat-template file override (`--chat-template-file`).
     pub chat_template_file: Option<PathBuf>,
+    /// Per-tensor overrides of the model's tensor layout.
     pub override_tensor: Option<Vec<String>>,
+    /// Sampling knobs forwarded as llama-server CLI flags.
     pub sampling: Option<SamplingConfig>,
+    /// Estimator overrides (compute-buffer headroom, safety factor).
     pub estimation: Option<EstimationConfig>,
     /// Per-service override of the llama-server executable. Overrides
     /// the daemon-level `daemon.llama_server` default. Has no effect
@@ -163,7 +184,9 @@ pub enum RawExpertOffload {
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields, default)]
 pub struct EstimationConfig {
+    /// Extra compute-buffer headroom (MiB) added to the estimator's own.
     pub compute_buffer_mb: Option<u32>,
+    /// Multiplier applied to the estimator's VRAM prediction.
     pub safety_factor: Option<f32>,
 }
 
@@ -174,10 +197,15 @@ pub struct EstimationConfig {
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields, default)]
 pub struct SamplingConfig {
+    /// Sampling temperature.
     pub temperature: Option<f32>,
+    /// Nucleus-sampling probability mass (`--top-p`).
     pub top_p: Option<f32>,
+    /// Top-k candidate cutoff (`--top-k`).
     pub top_k: Option<u32>,
+    /// Minimum token probability (`--min-p`).
     pub min_p: Option<f32>,
+    /// Repetition penalty.
     pub repeat_penalty: Option<f32>,
 }
 

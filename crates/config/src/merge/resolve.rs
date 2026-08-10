@@ -12,6 +12,8 @@ use crate::{
     parse::{RawConfig, RawService},
 };
 
+/// Resolve every service's `extends` chain, merging inherited fields into
+/// each service and enforcing that a service only extends the same template.
 pub fn resolve_inheritance(cfg: &mut RawConfig) -> Result<(), ExpectedError> {
     // Index services by name; require names and disallow duplicates.
     let mut by_name: BTreeMap<SmolStr, RawService> = BTreeMap::new();

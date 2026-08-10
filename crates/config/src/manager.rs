@@ -33,7 +33,10 @@ pub struct ConfigManager {
 #[derive(Debug)]
 pub enum ApplyError {
     /// The caller's hash does not match the current server-side hash.
-    HashMismatch { server_hash: ConfigHash },
+    HashMismatch {
+        /// The hash the server currently holds, for the caller to diff against.
+        server_hash: ConfigHash,
+    },
     /// The new TOML failed validation.
     Invalid(Vec<ValidationError>),
     /// Writing the file to disk failed.

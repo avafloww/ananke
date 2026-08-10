@@ -11,10 +11,14 @@ pub use crate::{
     units::gib_to_mib,
 };
 
+/// Build a config error tagged with the `<config>` pseudo-path, for
+/// validation failures that don't map to a specific file location.
 pub fn fail(msg: String) -> ExpectedError {
     ExpectedError::config_unparseable(PathBuf::from("<config>"), msg)
 }
 
+/// Parse a duration string (`"10m"`, `"30s"`, `"500ms"`, `"2h"`) into
+/// milliseconds. Returns the parse error text on an unrecognized suffix.
 pub fn parse_duration_ms(s: &str) -> Result<u64, String> {
     // Accepts "10m", "30s", "500ms", "2h". Returns milliseconds.
     let s = s.trim();

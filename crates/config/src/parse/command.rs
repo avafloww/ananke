@@ -8,14 +8,19 @@ use smol_str::SmolStr;
 
 use crate::parse::{RawAllocation, RawServiceCommon};
 
+/// A raw `command`-template service: arbitrary argv plus optional
+/// allocation and OpenAI-proxy blocks.
 #[derive(Debug, Default, Deserialize, Clone)]
 #[serde(deny_unknown_fields, default)]
 pub struct RawCommandService {
+    /// Fields shared with every template variant, flattened at top level.
     #[serde(flatten)]
     pub common: RawServiceCommon,
     /// argv to execute. Required; emptiness is caught by the validator.
     pub command: Option<Vec<String>>,
+    /// Working directory the child is started in.
     pub workdir: Option<PathBuf>,
+    /// How much memory the allocator reserves for this service.
     pub allocation: Option<RawAllocation>,
     /// Upstream port ananke's reverse proxy should forward to. When
     /// absent, ananke picks one from the daemon's private-port pool and
