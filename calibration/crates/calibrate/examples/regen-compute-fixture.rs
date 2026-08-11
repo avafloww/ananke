@@ -71,5 +71,9 @@ fn main() {
         serde_json::to_string_pretty(&fixture).unwrap() + "\n",
     )
     .expect("fixture writes");
-    println!("wrote {fixture_path} from {} groups, {} pooled rows", groups.len(), pooled.len());
+    println!(
+        "wrote {fixture_path} from {} groups, {} pooled rows",
+        groups.len(),
+        pooled.len()
+    );
 }

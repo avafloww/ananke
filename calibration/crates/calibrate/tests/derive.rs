@@ -226,7 +226,10 @@ fn quantised_cache_rates_match() {
 #[test]
 fn draft_compute_slope_matches() {
     let rates = mtp::draft_compute_slope(&rows()).expect("derives");
-    assert_eq!(derived(&rates), table(RateTableName::DraftModelComputeMibPer1k));
+    assert_eq!(
+        derived(&rates),
+        table(RateTableName::DraftModelComputeMibPer1k)
+    );
 }
 
 #[test]

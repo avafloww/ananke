@@ -27,7 +27,10 @@ fn main() {
         env!("CARGO_MANIFEST_DIR")
     );
     let text = serde_json::to_string(&out).expect("serialises");
-    let mut encoder = GzEncoder::new(File::create(&path).expect("creates"), Compression::default());
+    let mut encoder = GzEncoder::new(
+        File::create(&path).expect("creates"),
+        Compression::default(),
+    );
     encoder.write_all(text.as_bytes()).expect("writes");
     encoder.finish().expect("finishes");
     println!("wrote {path}");

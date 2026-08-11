@@ -22,7 +22,9 @@ use regex::Regex;
 /// different number: 73.27 against the real 60.52 on muse-glimmer's mmproj
 /// cell.
 pub(crate) static ARENA: LazyLock<Regex> = LazyLock::new(|| {
-    build(r"(?:sched_reserve|llama_init_from_model): *(?:CUDA_Host|CPU) compute buffer size *= *([0-9.]+)")
+    build(
+        r"(?:sched_reserve|llama_init_from_model): *(?:CUDA_Host|CPU) compute buffer size *= *([0-9.]+)",
+    )
 });
 pub(crate) static OUT_BUF: LazyLock<Regex> =
     LazyLock::new(|| build(r"(?:CUDA_Host|CPU) +output buffer size *= *([0-9.]+)"));

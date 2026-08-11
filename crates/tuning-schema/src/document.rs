@@ -166,9 +166,9 @@ impl Document {
     pub fn rate_tables(&self) -> [(RateTableName, &RateTable); 12] {
         use RateTableName::{
             BaselineOffset, CheckpointHeadroomBytes, DraftModelComputeMib,
-            DraftModelComputeMibPer1k, IkMoeRates, MtpDraftComputeBaseMib,
-            MtpDraftComputeMibPer1k, NoFlashAttnRates, NoFlashAttnScoreCentibytes,
-            PerSlotHostBytes, QuantisedCacheRates, TensorSplitBaseline,
+            DraftModelComputeMibPer1k, IkMoeRates, MtpDraftComputeBaseMib, MtpDraftComputeMibPer1k,
+            NoFlashAttnRates, NoFlashAttnScoreCentibytes, PerSlotHostBytes, QuantisedCacheRates,
+            TensorSplitBaseline,
         };
         [
             (BaselineOffset, &self.baseline_offset),

@@ -168,7 +168,10 @@ pub fn draft_curve(lib: &Library) -> Vec<Factors> {
                     split: Some(SplitMode::Layer),
                     ctx,
                     spec_type: draft_on.then_some(m.draft_spec_type.to_owned()),
-                    draft: draft_on.then_some(m.draft).flatten().map(|d| lib.path_of(d)),
+                    draft: draft_on
+                        .then_some(m.draft)
+                        .flatten()
+                        .map(|d| lib.path_of(d)),
                     ..m.flags(gpus)
                 });
             }
@@ -190,7 +193,10 @@ pub fn draft_curve(lib: &Library) -> Vec<Factors> {
 /// leave the one value that matters unchecked.
 pub fn draft_slots(lib: &Library) -> Vec<Factors> {
     let mut cells = Vec::new();
-    for m in MODELS.iter().filter(|m| m.speculative && m.production_parallel > 1) {
+    for m in MODELS
+        .iter()
+        .filter(|m| m.speculative && m.production_parallel > 1)
+    {
         let gpus = m.preferred_gpus();
         let ctx = curve_points(m)[1].ctx;
         for parallel in [1, m.production_parallel] {
@@ -208,7 +214,10 @@ pub fn draft_slots(lib: &Library) -> Vec<Factors> {
                     ctx,
                     parallel,
                     spec_type: draft_on.then_some(m.draft_spec_type.to_owned()),
-                    draft: draft_on.then_some(m.draft).flatten().map(|d| lib.path_of(d)),
+                    draft: draft_on
+                        .then_some(m.draft)
+                        .flatten()
+                        .map(|d| lib.path_of(d)),
                     ..m.flags(gpus)
                 });
             }
@@ -272,7 +281,10 @@ pub fn mmproj_curve(lib: &Library) -> Vec<Factors> {
                 gpus: gpus.to_owned(),
                 split: Some(SplitMode::Layer),
                 ctx,
-                mmproj: mmproj_on.then_some(m.mmproj).flatten().map(|p| lib.path_of(p)),
+                mmproj: mmproj_on
+                    .then_some(m.mmproj)
+                    .flatten()
+                    .map(|p| lib.path_of(p)),
                 ..m.flags(gpus)
             });
         }
