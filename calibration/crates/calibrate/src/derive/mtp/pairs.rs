@@ -158,6 +158,13 @@ fn shape_of(record: &Record) -> MtpShape {
 }
 
 /// Every factor a pair must agree on, so the MTP flag is the only difference left.
+///
+/// `mmproj` belongs here like every other factor: without it, an mmproj-carrying
+/// cell pairs with a plain one at the same context, and the projector's own
+/// weights — megabytes, not the MTP overhead being measured — read as the delta.
+/// `draft_compute_slope`'s ctx-32768 muse-glimmer point paired
+/// `draft-curve-draft-muse-glimmer-c32768` against `mmproj-curve-on-muse-glimmer`
+/// this way, reading 434 MiB where every other context reads 2080.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Identity {
     model: String,
@@ -169,6 +176,7 @@ struct Identity {
     ubatch: u32,
     kv_type: KvType,
     served: bool,
+    mmproj: Option<String>,
 }
 
 impl Identity {
@@ -184,6 +192,7 @@ impl Identity {
             ubatch: f.ubatch,
             kv_type: f.kv_type,
             served: f.served,
+            mmproj: f.mmproj.clone(),
         }
     }
 }

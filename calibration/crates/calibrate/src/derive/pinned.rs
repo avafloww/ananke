@@ -130,6 +130,7 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)
             no_mmap: factors.no_mmap,
             rtr: factors.rtr,
             numa: factors.numa.clone().unwrap_or_else(|| "-".to_string()),
+            mmproj: factors.mmproj.clone(),
         };
         paired
             .entry(key)
@@ -223,7 +224,10 @@ pub fn quantised_cache_bytes(rows: &[Record]) -> Result<(Scalar, Table<ArchKey>)
 /// key carries the offload *count*, not merely whether there is one — coarsened to
 /// a boolean it pairs a `--n-cpu-moe 20` cell with a `--n-cpu-moe 40` one and reads
 /// the difference in resident weights as a cache-type effect, spreading qwen35moe's
-/// rate across 13935%.
+/// rate across 13935%. And it carries `mmproj`: without it, an mmproj-carrying cell
+/// pairs with a plain one at the same context/batch and the projector's own weights
+/// — megabytes, not bytes-per-token — read as a cache-type effect, spreading
+/// muse-glimmer's rate across 7969%.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CacheTypePairKey {
     model_key: String,
@@ -239,6 +243,7 @@ struct CacheTypePairKey {
     no_mmap: bool,
     rtr: bool,
     numa: String,
+    mmproj: Option<String>,
 }
 
 /// Extra pinned bytes per batch token when flash attention is off.
