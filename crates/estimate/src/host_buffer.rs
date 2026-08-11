@@ -63,16 +63,20 @@ pub fn host_overhead_bytes(summary: &GgufSummary, inputs: &EstimatorInputs<'_>) 
     // second model, an embedded head brings only a context. Both are flat in
     // the slot count and linear in context, so a flat constant is the wrong
     // shape and is wrong in opposite directions at the ends of the range.
-    let mtp = if inputs.speculation.is_mtp() {
+    let mtp = if inputs.speculation.is_speculative() {
         let base = if inputs.speculation.draft_model().is_some() {
             MTP_HOST_BYTES_SEPARATE_DRAFT
         } else {
             MTP_HOST_BYTES_EMBEDDED
         };
-        // Multiply before dividing: the rate is per 1024 tokens, and a context
-        // that is not a whole multiple of that still pays for the remainder.
-        let context_mib = MTP_HOST_MIB_PER_1K * u64::from(inputs.context) / 1024;
-        base + context_mib * 1024 * 1024
+        // `MTP_HOST_MIB_PER_1K` is stored per 1000 of MiB/1024 tokens, the same
+        // convention `MTP_DRAFT_COMPUTE_MIB_PER_1K` uses: the measured rate sits
+        // just above a whole MiB, and rounding a whole-MiB constant up doubled it,
+        // which over-predicted a production 360k-context service by ~340 MiB.
+        // Multiply before dividing: a context that is not a whole multiple of
+        // 1024 still pays for the remainder.
+        let context_bytes = MTP_HOST_MIB_PER_1K * u64::from(inputs.context) * 1024 / 1000;
+        base + context_bytes
     } else {
         0
     };
@@ -944,7 +948,10 @@ mod tests {
         i.speculation = Speculation::EmbeddedMtp;
         let embedded = host_overhead_bytes(&s, &i);
         let draft_path = std::path::PathBuf::from("/d.gguf");
-        i.speculation = Speculation::DraftMtp(&draft_path);
+        i.speculation = Speculation::SeparateDraft {
+            path: &draft_path,
+            spec_type: "draft-mtp",
+        };
         let separate = host_overhead_bytes(&s, &i);
 
         // Both shapes cost more than none, and they cost *different* amounts —

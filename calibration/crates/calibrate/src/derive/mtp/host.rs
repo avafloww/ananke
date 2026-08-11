@@ -14,6 +14,7 @@ use crate::{
         error::{DeriveError, Result},
         mtp::pairs::{MtpShape, mtp_pairs},
         ordered::OrderedMap,
+        stats::round_half_even,
     },
     record::Record,
 };
@@ -23,6 +24,14 @@ use crate::{
 /// 287 MiB against 287 measured — and an exact fit under-reserves on any variation
 /// at all.
 const HOST_BASE_MARGIN: f64 = 1.10;
+
+/// The slope ships as an integer in thousandths of a MiB per 1024 tokens, the
+/// same unit `MTP_DRAFT_COMPUTE_MIB_PER_1K` uses and for the same reason: the
+/// measured rate is a shade above a whole MiB (1.01-1.02), and rounding a whole
+/// unit up to the next one doubles it. That is invisible at the contexts this
+/// was fitted against but not at qwen3.6-27B's production 360k, where the
+/// doubled slope alone over-predicts host memory by ~340 MiB.
+const SLOPE_MILLI: f64 = 1000.0;
 
 /// One MTP shape's *host* cost, fitted as `base + slope x (ctx / 1024)`.
 ///
@@ -63,32 +72,38 @@ pub fn mtp_host_fit(rows: &[Record], shape: MtpShape) -> Result<HostFit> {
         return Err(DeriveError::no_data("no MTP pairs with a host delta"));
     }
     let worst_slope = slopes.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let slope = if slopes.is_empty() {
+    // Nearest, not up: at whole-MiB granularity `ceil` doubled a measured 1.02,
+    // and `base`'s own margin below already covers whatever a nearest-rounded
+    // slope misses at the contexts actually measured.
+    let slope_milli = if slopes.is_empty() {
         0
     } else {
-        worst_slope.ceil() as i64
+        round_half_even(worst_slope * SLOPE_MILLI)
     };
     let residual = points
         .iter()
-        .map(|(ctx, value)| *value as f64 - slope as f64 * (f64::from(*ctx) / 1024.0))
+        .map(|(ctx, value)| {
+            *value as f64 - slope_milli as f64 / SLOPE_MILLI * (f64::from(*ctx) / 1024.0)
+        })
         .fold(f64::NEG_INFINITY, f64::max);
     let base = (residual * HOST_BASE_MARGIN).ceil() as i64;
     Ok(HostFit {
         base,
-        slope,
-        // The slope reported is the one charged, not the one measured: `slope`
-        // is `worst_slope` rounded up, and a measured 1.04 printed as "1.0"
-        // beside a charged 2 makes this document contradict itself — which is
-        // the failure the evidence field exists to prevent. The measured figure
-        // rides alongside so the rounding is visible rather than hidden.
+        slope_milli,
+        // The slope reported is the one charged, not the one measured: a
+        // measured 1.04 printed as "1.0" beside a charged 1040 makes this
+        // document contradict itself — which is the failure the evidence field
+        // exists to prevent. The measured figure rides alongside so the
+        // rounding is visible rather than hidden.
         evidence: format!(
             "{} paired with/without cells across {} model(s), host owned memory rather \
-             than driver VRAM. Flat in the slot count and linear in context at {} MiB \
-             per 1024 (worst measured {:.2}, rounded up), so the flat constant this \
-             replaces was wrong in shape. Base covers the worst residual over every cell.",
+             than driver VRAM. Flat in the slot count and linear in context at {:.3} MiB \
+             per 1024 (worst measured {:.2}, stored per 1000 of ctx/1024), so the flat \
+             constant this replaces was wrong in shape. Base covers the worst residual \
+             over every cell.",
             points.len(),
             by_model.len(),
-            slope,
+            slope_milli as f64 / SLOPE_MILLI,
             if slopes.is_empty() { 0.0 } else { worst_slope },
         ),
     })
@@ -98,7 +113,8 @@ pub fn mtp_host_fit(rows: &[Record], shape: MtpShape) -> Result<HostFit> {
 #[derive(Debug, Clone)]
 pub struct HostFit {
     pub base: i64,
-    pub slope: i64,
+    /// The slope, in thousandths of a MiB per 1024 context tokens.
+    pub slope_milli: i64,
     pub evidence: String,
 }
 
@@ -120,17 +136,21 @@ pub fn mtp_host_separate(rows: &[Record]) -> Result<Scalar> {
     })
 }
 
-/// The context slope both MTP shapes share, in MiB per 1024 tokens.
+/// The context slope both MTP shapes share, in thousandths of a MiB per 1024
+/// tokens.
 pub fn mtp_host_slope(rows: &[Record]) -> Result<Scalar> {
-    let embedded = mtp_host_fit(rows, MtpShape::Embedded)?.slope;
-    let separate = mtp_host_fit(rows, MtpShape::SeparateDraft)?.slope;
+    let embedded = mtp_host_fit(rows, MtpShape::Embedded)?.slope_milli;
+    let separate = mtp_host_fit(rows, MtpShape::SeparateDraft)?.slope_milli;
     Ok(Scalar {
         value: embedded.max(separate),
         evidence: format!(
             "the larger of the two MTP shapes' host context slopes — embedded \
-             {embedded}, separate draft {separate} MiB per 1024 tokens. One value for \
-             both, since they measure within a megabyte of each other and a second \
-             constant would claim a distinction the data does not show."
+             {:.3}, separate draft {:.3} MiB per 1024 tokens (stored per 1000 of \
+             ctx/1024). One value for both, since they measure within a fraction of a \
+             MiB of each other and a second constant would claim a distinction the data \
+             does not show.",
+            embedded as f64 / SLOPE_MILLI,
+            separate as f64 / SLOPE_MILLI,
         ),
     })
 }

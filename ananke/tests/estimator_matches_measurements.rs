@@ -267,6 +267,11 @@ struct Case {
     devices: u32,
     hybrid: bool,
     mtp: bool,
+    /// `factors.spec_type`, and whether the cell named a separate draft file —
+    /// what [`Speculation`] needs to tell an embedded head from a separate
+    /// draft and, within a separate draft, which mechanism.
+    spec_type: Option<String>,
+    has_draft_file: bool,
     /// Whether the cell loaded a vision projector.
     vision: bool,
     kv_type: KvType,
@@ -392,6 +397,8 @@ impl Case {
             // masks are not replicated across devices.
             hybrid: factors.n_cpu_moe.is_some(),
             mtp: factors.spec_type.is_some(),
+            spec_type: factors.spec_type.clone(),
+            has_draft_file: factors.draft.is_some(),
             vision: factors.mmproj.is_some(),
             // Passed through, because a quantised cache costs pinned memory
             // the arena model charges for. Leaving it unset made that term
@@ -427,7 +434,14 @@ impl Case {
             cache_type_v: GgufType::from_name(self.kv_type.name()),
             override_tensor: &[],
             compute_buffer_mb: None,
-            speculation: Speculation::None,
+            speculation: match (self.spec_type.as_deref(), self.has_draft_file) {
+                (Some(spec_type), true) => Speculation::SeparateDraft {
+                    path: Path::new("/measured-draft"),
+                    spec_type,
+                },
+                (Some("draft-mtp"), false) => Speculation::EmbeddedMtp,
+                _ => Speculation::None,
+            },
             fork: if self.ik_llama {
                 Fork::Ik { dsa: self.ik_dsa }
             } else {
