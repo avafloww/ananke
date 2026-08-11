@@ -88,6 +88,24 @@ impl VariantEnvironmentKey {
     }
 }
 
+/// A separate draft's `--spec-type`: `draft-mtp`, `draft-dflash`.
+///
+/// A separate-draft GGUF's structural shape (weights plus a small compute
+/// buffer, no context-scaling KV of its own) is one thing every mechanism
+/// shares, but how that compute buffer scales with context is a property of
+/// the mechanism, not of the shape — MTP's separate-draft compute measurably
+/// grows with context, dflash's does not. Pooling both under one key would
+/// let one mechanism's slope drift the other's.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MechanismKey(String);
+
+impl MechanismKey {
+    /// The `spec_type` a paired cell's "on" half was measured under.
+    pub fn of(record: &Record) -> Option<Self> {
+        record.factors.spec_type.clone().map(Self)
+    }
+}
+
 /// The architecture and the number of cards it ran on: `glm-dsa@2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ArchCardsKey(String);
@@ -170,4 +188,5 @@ macro_rules! rendered_key {
 rendered_key!(ArchKey);
 rendered_key!(VariantKey);
 rendered_key!(VariantEnvironmentKey);
+rendered_key!(MechanismKey);
 rendered_key!(ArchCardsKey);

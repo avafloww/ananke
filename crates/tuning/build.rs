@@ -287,6 +287,22 @@ fn rate_tables(document: &Document) -> Vec<Generated<'_>> {
             default_doc: UNMEASURED,
         },
         Generated {
+            name: RateTableName::DraftModelComputeMib,
+            table: &document.draft_model_compute_mib,
+            slice: "DRAFT_MODEL_COMPUTE_MIB_RATES",
+            default: "DRAFT_MODEL_COMPUTE_MIB_DEFAULT",
+            doc: "A separate draft's own compute buffer at zero context, in MiB, by --spec-type mechanism.",
+            default_doc: UNMEASURED,
+        },
+        Generated {
+            name: RateTableName::DraftModelComputeMibPer1k,
+            table: &document.draft_model_compute_mib_per_1k,
+            slice: "DRAFT_MODEL_COMPUTE_MIB_PER_1K_RATES",
+            default: "DRAFT_MODEL_COMPUTE_MIB_PER_1K_DEFAULT",
+            doc: "Slope of a separate draft's own compute buffer, MiB per 1024 context tokens, by --spec-type mechanism.",
+            default_doc: UNMEASURED,
+        },
+        Generated {
             name: RateTableName::NoFlashAttnScoreCentibytes,
             table: &document.no_flash_attn_score_centibytes,
             slice: "NO_FLASH_ATTN_SCORE_CENTIBYTES",

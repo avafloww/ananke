@@ -13,8 +13,9 @@ use ananke_dataset::BufferRole;
 
 use crate::{
     derive::{
-        Scalar,
+        Scalar, Table,
         error::{DeriveError, Result},
+        keys::MechanismKey,
         mtp::pairs::{MtpShape, mtp_pairs},
         shape::device_context_sums,
         stats::round_half_even,
@@ -22,48 +23,70 @@ use crate::{
     record::Record,
 };
 
-/// How a separate MTP draft's compute grows with context, MiB per 1024.
+/// How a separate draft's compute grows with context, MiB per 1024, by
+/// `--spec-type` mechanism.
 ///
 /// The draft shares the target's KV cache — the load log shows `layer 3: sharing with
 /// layer 59` — so it has no context-scaling *cache* term, which makes a flat
-/// constant tempting. Its compute buffer scales anyway: gemma-4-31B-QAT measures a driver
-/// delta of 724, 788, and 920 MiB at ctx 32768, 65536, and 131072, against a modelled
-/// 407 at every one.
+/// constant tempting. MTP's compute buffer scales anyway: gemma-4-31B-QAT measures a
+/// driver delta of 724, 788, and 920 MiB at ctx 32768, 65536, and 131072, against a
+/// modelled 407 at every one. dflash is a different mechanism, not a second data
+/// point for the same line: pooling the two by context alone (rather than by
+/// mechanism first) let a flat dflash series flatten MTP's real slope, and a scaling
+/// claim measured on one mechanism is not evidence about another's — hence a table
+/// here, not a scalar, even though a given mechanism's own row may itself come out
+/// flat once it has data.
 ///
 /// Taken from differences between contexts, which cancel the draft's weight term
 /// exactly and so need no figure for it. Flat in the slot count — 724, 724, and 728
-/// MiB at one, two, and four slots — which is the control that confirms the embedded
-/// head's slot scaling is its own per-slot cache.
-pub fn draft_compute_slope(rows: &[Record]) -> Result<Scalar> {
-    let mut by_ctx: BTreeMap<u32, i64> = BTreeMap::new();
+/// MiB at one, two, and four slots for MTP — which is the control that confirms the
+/// embedded head's slot scaling is its own per-slot cache.
+pub fn draft_compute_slope(rows: &[Record]) -> Result<Table<MechanismKey>> {
+    let mut by_mechanism: BTreeMap<MechanismKey, BTreeMap<u32, i64>> = BTreeMap::new();
     for pair in mtp_pairs(rows, MtpShape::SeparateDraft) {
-        by_ctx
+        let Some(mechanism) = MechanismKey::of(pair.on) else {
+            continue;
+        };
+        by_mechanism
+            .entry(mechanism)
+            .or_default()
             .entry(pair.ctx)
             .and_modify(|held| *held = (*held).max(pair.delta))
             .or_insert(pair.delta);
     }
-    if by_ctx.len() < 2 {
+    let mut slopes = BTreeMap::new();
+    let mut detail = Vec::new();
+    for (mechanism, by_ctx) in &by_mechanism {
+        if by_ctx.len() < 2 {
+            continue;
+        }
+        let lo = *by_ctx.keys().next().expect("non-empty");
+        let hi = *by_ctx.keys().next_back().expect("non-empty");
+        let slope = (by_ctx[&hi] - by_ctx[&lo]) as f64 / (f64::from(hi - lo) / 1024.0);
+        let series = by_ctx
+            .iter()
+            .map(|(ctx, value)| format!("{ctx} -> {value} MiB"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        // Rounded up, since the term is charged against an under-reservation that
+        // can OOM.
+        slopes.insert(mechanism.clone(), slope.ceil() as i64);
+        detail.push(format!("{mechanism} ctx {lo}-{hi}: {series}"));
+    }
+    if slopes.is_empty() {
         return Err(DeriveError::no_data(
-            "fewer than two contexts for a separate draft",
+            "fewer than two contexts for any separate-draft mechanism",
         ));
     }
-    let lo = *by_ctx.keys().next().expect("non-empty");
-    let hi = *by_ctx.keys().next_back().expect("non-empty");
-    let slope = (by_ctx[&hi] - by_ctx[&lo]) as f64 / (f64::from(hi - lo) / 1024.0);
-    let series = by_ctx
-        .iter()
-        .map(|(ctx, value)| format!("{ctx} -> {value} MiB"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    // Rounded up, since the term is charged against an under-reservation that OOMs
-    // and the whole range it spans here is 196 MiB.
-    Ok(Scalar {
-        value: slope.ceil() as i64,
+    Ok(Table {
+        by_key: slopes,
         evidence: format!(
-            "driver delta across ctx {lo}-{hi} on the one model with a separate draft: \
-             {series}. Taken from differences between contexts, which cancel the \
-             draft's weight term. Flat in the slot count, which is the control \
-             confirming the embedded head's slot scaling is its own per-slot cache."
+            "driver delta across context, kept separate by mechanism so one's \
+             slope cannot flatten another's: {}. Taken from differences between \
+             contexts, which cancel the draft's weight term. MTP's is flat in the \
+             slot count, which is the control confirming the embedded head's slot \
+             scaling is its own per-slot cache.",
+            detail.join("; "),
         ),
     })
 }

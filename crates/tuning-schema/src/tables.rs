@@ -34,6 +34,8 @@ impl RateTable {
 pub enum RateTableName {
     BaselineOffset,
     CheckpointHeadroomBytes,
+    DraftModelComputeMib,
+    DraftModelComputeMibPer1k,
     IkMoeRates,
     MtpDraftComputeBaseMib,
     MtpDraftComputeMibPer1k,
@@ -50,6 +52,8 @@ impl RateTableName {
         match self {
             RateTableName::BaselineOffset => "baseline_offset",
             RateTableName::CheckpointHeadroomBytes => "checkpoint_headroom_bytes",
+            RateTableName::DraftModelComputeMib => "draft_model_compute_mib",
+            RateTableName::DraftModelComputeMibPer1k => "draft_model_compute_mib_per_1k",
             RateTableName::IkMoeRates => "ik_moe_rates",
             RateTableName::MtpDraftComputeBaseMib => "mtp_draft_compute_base_mib",
             RateTableName::MtpDraftComputeMibPer1k => "mtp_draft_compute_mib_per_1k",

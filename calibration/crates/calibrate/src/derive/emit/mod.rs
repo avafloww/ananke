@@ -31,7 +31,7 @@ use crate::{
         emit::tables::{Tables, write_tables},
         error::Result,
         graph,
-        keys::{ArchCardsKey, ArchKey, VariantEnvironmentKey, VariantKey},
+        keys::{ArchCardsKey, ArchKey, MechanismKey, VariantEnvironmentKey, VariantKey},
         mtp, pinned, recurrent,
         tuning::Tuning,
         vram,
@@ -66,9 +66,6 @@ pub const KINDS: &[(&str, Kind)] = &[
         Kind::Reachable,
     ),
     ("QUANTISED_KV_COMPUTE_BYTES_PER_CTX_TOKEN", Kind::Derived),
-    ("DRAFT_MODEL_COMPUTE_MIB_PER_1K", Kind::Derived),
-    // Has data, but the fit is contested and the value is held.
-    ("DRAFT_MODEL_COMPUTE_MIB", Kind::Reachable),
     ("MTP_HOST_BYTES_EMBEDDED", Kind::Derived),
     ("MTP_HOST_BYTES_SEPARATE_DRAFT", Kind::Derived),
     ("MTP_HOST_MIB_PER_1K", Kind::Derived),
@@ -257,6 +254,14 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
         Err(error) => failed.push(format!("quantised-cache rates: cannot derive — {error}")),
     }
 
+    let mut separate_draft_slope: Option<Table<MechanismKey>> = None;
+    match mtp::draft_compute_slope(&rows) {
+        Ok(table) => separate_draft_slope = Some(table),
+        Err(error) => failed.push(format!(
+            "separate-draft compute slope: cannot derive — {error}"
+        )),
+    }
+
     for (name, deriver) in derivers() {
         let Some(entry) = document.constants.get_mut(name) else {
             failed.push(format!("{name}: in DERIVERS but not in tuning.json"));
@@ -315,6 +320,7 @@ pub fn emit(rows: &[Record], tuning_text: &str) -> Result<Emitted> {
             no_fa: no_fa.as_ref(),
             quantised: quantised.as_ref(),
             ik_moe: ik_moe.as_ref(),
+            separate_draft_slope: separate_draft_slope.as_ref(),
         },
     );
 
@@ -426,9 +432,6 @@ pub fn derivers() -> Vec<(&'static str, ScalarDeriver)> {
         }),
         ("IK_OP_OFFLOAD_MIN_BATCH", |rows, tuning| {
             graph::offload_min_batch(rows, tuning)
-        }),
-        ("DRAFT_MODEL_COMPUTE_MIB_PER_1K", |rows, _| {
-            mtp::draft_compute_slope(rows)
         }),
         ("MTP_HOST_BYTES_EMBEDDED", |rows, _| {
             mtp::mtp_host_embedded(rows)

@@ -26,6 +26,8 @@ pub struct Document {
     pub constants: BTreeMap<String, Constant>,
     /// The measurement dataset the document was derived from.
     pub dataset: String,
+    pub draft_model_compute_mib: RateTable,
+    pub draft_model_compute_mib_per_1k: RateTable,
     /// The binary that wrote it.
     pub generator: String,
     /// The machine every measurement behind it was taken on.
@@ -161,15 +163,21 @@ impl Document {
     ///
     /// The name travels with the table so a reader that has to say which one it
     /// is — the sign check, the generator — does not spell it again.
-    pub fn rate_tables(&self) -> [(RateTableName, &RateTable); 10] {
+    pub fn rate_tables(&self) -> [(RateTableName, &RateTable); 12] {
         use RateTableName::{
-            BaselineOffset, CheckpointHeadroomBytes, IkMoeRates, MtpDraftComputeBaseMib,
+            BaselineOffset, CheckpointHeadroomBytes, DraftModelComputeMib,
+            DraftModelComputeMibPer1k, IkMoeRates, MtpDraftComputeBaseMib,
             MtpDraftComputeMibPer1k, NoFlashAttnRates, NoFlashAttnScoreCentibytes,
             PerSlotHostBytes, QuantisedCacheRates, TensorSplitBaseline,
         };
         [
             (BaselineOffset, &self.baseline_offset),
             (CheckpointHeadroomBytes, &self.checkpoint_headroom_bytes),
+            (DraftModelComputeMib, &self.draft_model_compute_mib),
+            (
+                DraftModelComputeMibPer1k,
+                &self.draft_model_compute_mib_per_1k,
+            ),
             (IkMoeRates, &self.ik_moe_rates),
             (MtpDraftComputeBaseMib, &self.mtp_draft_compute_base_mib),
             (MtpDraftComputeMibPer1k, &self.mtp_draft_compute_mib_per_1k),

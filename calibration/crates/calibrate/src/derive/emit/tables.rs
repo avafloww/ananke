@@ -8,7 +8,7 @@ use ananke_tuning_schema::{Document, RateTable, SlotScaling, TableLessObservatio
 use crate::derive::{
     NestedTable, Table,
     error::Result,
-    keys::{ArchCardsKey, ArchKey, VariantEnvironmentKey, VariantKey},
+    keys::{ArchCardsKey, ArchKey, MechanismKey, VariantEnvironmentKey, VariantKey},
     mtp,
 };
 
@@ -25,6 +25,7 @@ pub(super) struct Tables<'a> {
     pub(super) no_fa: Option<&'a Table<VariantKey>>,
     pub(super) quantised: Option<&'a Table<ArchKey>>,
     pub(super) ik_moe: Option<&'a Table<ArchCardsKey>>,
+    pub(super) separate_draft_slope: Option<&'a Table<MechanismKey>>,
 }
 
 pub(super) fn write_tables(document: &mut Document, tables: Tables<'_>) {
@@ -153,6 +154,17 @@ pub(super) fn write_tables(document: &mut Document, tables: Tables<'_>) {
     }
     if let Some(table) = tables.ik_moe {
         document.ik_moe_rates = ik_moe_rates(table);
+    }
+    if let Some(table) = tables.separate_draft_slope {
+        document.draft_model_compute_mib_per_1k = rates(
+            "Slope of a separate draft's own compute buffer, MiB per 1024 \
+             context tokens, by `--spec-type` mechanism — not pooled across \
+             mechanisms, since a scaling claim measured on one is not \
+             evidence about another's. `default` applies to a mechanism not \
+             listed.",
+            table.worst(),
+            &table.by_key,
+        );
     }
 }
 

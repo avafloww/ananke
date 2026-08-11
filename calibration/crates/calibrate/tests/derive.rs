@@ -176,13 +176,6 @@ fn offload_min_batch_matches() {
 }
 
 #[test]
-fn draft_compute_slope_matches() {
-    let derived = mtp::draft_compute_slope(&rows()).expect("derives");
-    assert_eq!(derived.value, constant("DRAFT_MODEL_COMPUTE_MIB_PER_1K"));
-    assert_eq!(derived.evidence, evidence("DRAFT_MODEL_COMPUTE_MIB_PER_1K"));
-}
-
-#[test]
 fn mtp_host_costs_match() {
     let embedded = mtp::mtp_host_embedded(&rows()).expect("derives");
     assert_eq!(embedded.value, constant("MTP_HOST_BYTES_EMBEDDED"));
@@ -228,6 +221,12 @@ fn ik_moe_rates_match() {
 fn quantised_cache_rates_match() {
     let (_scalar, rates) = pinned::quantised_cache_bytes(&rows()).expect("derives");
     assert_eq!(derived(&rates), table(RateTableName::QuantisedCacheRates));
+}
+
+#[test]
+fn draft_compute_slope_matches() {
+    let rates = mtp::draft_compute_slope(&rows()).expect("derives");
+    assert_eq!(derived(&rates), table(RateTableName::DraftModelComputeMibPer1k));
 }
 
 #[test]
