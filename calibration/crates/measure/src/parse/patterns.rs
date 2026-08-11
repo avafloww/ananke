@@ -13,8 +13,17 @@ use regex::Regex;
 ///
 /// The last occurrence wins because the loader logs a reserve pass first and
 /// then the real graph, with the same figure.
-pub(crate) static ARENA: LazyLock<Regex> =
-    LazyLock::new(|| build(r"(?:CUDA_Host|CPU) compute buffer size *= *([0-9.]+)"));
+///
+/// Anchored to `sched_reserve:` (mainline) or `llama_init_from_model:` (ik):
+/// a `--mmproj` cell also prints `reserve_compute_meta: CPU compute buffer
+/// size = …`, the CLIP encoder's own graph reservation, in the same shape and
+/// later in the log. An unanchored pattern reads that as the last — and
+/// therefore chosen — occurrence of the *language model's* arena, which is a
+/// different number: 73.27 against the real 60.52 on muse-glimmer's mmproj
+/// cell.
+pub(crate) static ARENA: LazyLock<Regex> = LazyLock::new(|| {
+    build(r"(?:sched_reserve|llama_init_from_model): *(?:CUDA_Host|CPU) compute buffer size *= *([0-9.]+)")
+});
 pub(crate) static OUT_BUF: LazyLock<Regex> =
     LazyLock::new(|| build(r"(?:CUDA_Host|CPU) +output buffer size *= *([0-9.]+)"));
 pub(crate) static CPU_KV: LazyLock<Regex> =
