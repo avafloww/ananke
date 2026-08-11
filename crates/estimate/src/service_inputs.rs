@@ -46,13 +46,19 @@ pub fn estimator_inputs(svc: &ServiceConfig) -> Option<EstimatorInputs<'_>> {
         // Mainline's spelling only. ik's `mtp:n_max=…` reads as no speculation,
         // so an ik draft context costs nothing in the estimate. See
         // `ananke_estimate::mtp`.
-        speculation: match (
-            lc.spec_type.as_deref() == Some("draft-mtp"),
-            lc.draft_model.as_deref(),
-        ) {
-            (true, Some(draft)) => Speculation::DraftMtp(draft),
-            (true, None) => Speculation::EmbeddedMtp,
-            (false, _) => Speculation::None,
+        //
+        // A separate draft GGUF costs something under any `--spec-type` —
+        // `draft-mtp`, `draft-dflash`, whatever comes next — so it is not
+        // gated on which mechanism, only on being set at all; only an
+        // *embedded* head (no `-md`) is mtp-specific, since every other
+        // mechanism seen so far requires a separate draft context.
+        speculation: match (lc.spec_type.as_deref(), lc.draft_model.as_deref()) {
+            (Some(spec_type), Some(draft)) => Speculation::SeparateDraft {
+                path: draft,
+                spec_type,
+            },
+            (Some("draft-mtp"), None) => Speculation::EmbeddedMtp,
+            _ => Speculation::None,
         },
         fork: match lc.runtime.ik() {
             Some(ik) => Fork::Ik { dsa: ik.dsa },

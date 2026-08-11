@@ -71,9 +71,14 @@ struct Args {
     /// `--draft-model`.
     #[arg(long)]
     mtp: bool,
-    /// The MTP head as a separate GGUF (`-md`).
+    /// The draft head as a separate GGUF (`-md`).
     #[arg(long)]
     draft_model: Option<PathBuf>,
+    /// The draft's `--spec-type`, when it isn't `draft-mtp` — `draft-dflash`,
+    /// for instance. Only meaningful alongside `--draft-model`; an embedded
+    /// head is always mtp.
+    #[arg(long, default_value = "draft-mtp")]
+    spec_type: String,
     /// Parallel slots (`-np`).
     #[arg(long)]
     parallel: Option<u32>,
@@ -138,7 +143,10 @@ impl Args {
 
     fn speculation(&self) -> Speculation<'_> {
         match (self.mtp, self.draft_model.as_deref()) {
-            (_, Some(draft)) => Speculation::DraftMtp(draft),
+            (_, Some(draft)) => Speculation::SeparateDraft {
+                path: draft,
+                spec_type: &self.spec_type,
+            },
             (true, None) => Speculation::EmbeddedMtp,
             (false, None) => Speculation::None,
         }

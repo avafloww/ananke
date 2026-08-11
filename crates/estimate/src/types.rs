@@ -201,29 +201,42 @@ impl Fork {
 
 /// Where a service's speculative-decoding draft head comes from.
 ///
-/// A draft GGUF without `--spec-type draft-mtp` is meaningless, so the two are
-/// one value rather than a flag and an `Option` that can disagree.
+/// A draft GGUF without a `--spec-type` is meaningless, so the two are one
+/// value rather than a flag and an `Option` that can disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Speculation<'a> {
     #[default]
     None,
     /// `--spec-type draft-mtp` against the target model's own head, present
-    /// when it declares `nextn_predict_layers > 0`.
+    /// when it declares `nextn_predict_layers > 0`. MTP-specific: there is
+    /// no other mechanism llama.cpp runs without a separate draft GGUF.
     EmbeddedMtp,
-    /// The same, with the head shipped as a separate GGUF passed as `-md`.
-    DraftMtp(&'a Path),
+    /// A head shipped as a separate GGUF passed as `-md`, under whichever
+    /// `--spec-type` it needs — `draft-mtp`, `draft-dflash`, or whatever comes
+    /// next. Carried alongside the path rather than assumed: see
+    /// `mtp::separate_draft_overhead_bytes` for why the mechanism, not just
+    /// the shape, has to reach the estimate.
+    SeparateDraft { path: &'a Path, spec_type: &'a str },
 }
 
 impl<'a> Speculation<'a> {
-    /// Whether the child runs `--spec-type draft-mtp` at all.
-    pub fn is_mtp(self) -> bool {
+    /// Whether the child runs any speculative decoding at all.
+    pub fn is_speculative(self) -> bool {
         !matches!(self, Self::None)
     }
 
     /// The separate draft GGUF, if the head is not the target model's own.
     pub fn draft_model(self) -> Option<&'a Path> {
         match self {
-            Self::DraftMtp(path) => Some(path),
+            Self::SeparateDraft { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+
+    /// The `--spec-type` a separate draft was measured/served under, if any.
+    pub fn spec_type(self) -> Option<&'a str> {
+        match self {
+            Self::SeparateDraft { spec_type, .. } => Some(spec_type),
             _ => None,
         }
     }

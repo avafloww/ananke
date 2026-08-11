@@ -30,9 +30,11 @@ use ananke_gguf::{Architecture, GgufSummary, GgufType, keys};
 
 use crate::{
     tuning::{
-        DRAFT_MODEL_COMPUTE_MIB, DRAFT_MODEL_COMPUTE_MIB_PER_1K, MTP_DRAFT_COMPUTE_BASE_MIB,
-        MTP_DRAFT_COMPUTE_BASE_MIB_DEFAULT, MTP_DRAFT_COMPUTE_MIB_PER_1K,
-        MTP_DRAFT_COMPUTE_MIB_PER_1K_DEFAULT, MTP_UNACCOUNTED_MIB_PER_DEVICE,
+        DRAFT_MODEL_COMPUTE_MIB_DEFAULT, DRAFT_MODEL_COMPUTE_MIB_PER_1K_DEFAULT,
+        DRAFT_MODEL_COMPUTE_MIB_PER_1K_RATES, DRAFT_MODEL_COMPUTE_MIB_RATES,
+        MTP_DRAFT_COMPUTE_BASE_MIB, MTP_DRAFT_COMPUTE_BASE_MIB_DEFAULT,
+        MTP_DRAFT_COMPUTE_MIB_PER_1K, MTP_DRAFT_COMPUTE_MIB_PER_1K_DEFAULT,
+        MTP_UNACCOUNTED_MIB_PER_DEVICE,
     },
     types::EstimatorInputs,
 };
@@ -50,19 +52,45 @@ fn draft_model_gpu_weight_bytes(draft: &GgufSummary) -> u64 {
 }
 
 /// Extra VRAM (bytes) a separate draft model (`-md`) adds: its GPU-resident
-/// weights plus a fixed draft compute buffer. The draft's attention layers
-/// reuse the target's KV cache, so there is no context-scaling KV term.
-fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32) -> u64 {
+/// weights plus a draft compute buffer. The draft's attention layers reuse
+/// the target's KV cache, so there is no context-scaling KV term.
+fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32, spec_type: &str) -> u64 {
     // The draft shares the target's KV cache, so there is no context-scaling
     // cache term. Its *compute* scales anyway, so this term has to as well; a
-    // flat constant under-reserves badly at long contexts.
+    // flat constant under-reserves badly at long contexts. The slope is by
+    // mechanism (`draft-mtp`, `draft-dflash`, …): they measurably differ in
+    // whether — and how much — this buffer grows with context, so treating
+    // every separate draft as one curve either over- or under-reserves
+    // whichever mechanism it wasn't fitted on.
     //
     // Flat in the slot count, unlike an embedded head. That is the control
     // confirming the embedded head's slot scaling comes from keeping its own
     // cache per slot.
-    let compute =
-        DRAFT_MODEL_COMPUTE_MIB + DRAFT_MODEL_COMPUTE_MIB_PER_1K * u64::from(context) / 1024;
+    //
+    // The base is by mechanism too: it is what the compute buffer costs beyond
+    // the draft's own weights, and that split needs the weight figure isolated
+    // per mechanism rather than fitted from a pooled residual — see
+    // `DRAFT_MODEL_COMPUTE_MIB`'s evidence in `tuning.json`.
+    let base = lookup(
+        DRAFT_MODEL_COMPUTE_MIB_RATES,
+        spec_type,
+        DRAFT_MODEL_COMPUTE_MIB_DEFAULT,
+    );
+    let slope = lookup(
+        DRAFT_MODEL_COMPUTE_MIB_PER_1K_RATES,
+        spec_type,
+        DRAFT_MODEL_COMPUTE_MIB_PER_1K_DEFAULT,
+    );
+    let compute = base + slope * u64::from(context) / 1024;
     draft_model_gpu_weight_bytes(draft) + compute * 1024 * 1024
+}
+
+/// A rate table lookup, by exact key, falling back to the table's default.
+fn lookup(table: &[(&str, u64)], key: &str, fallback: u64) -> u64 {
+    table
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map_or(fallback, |(_, value)| *value)
 }
 
 /// The share of [`mtp_overhead_bytes`] that is model tensors read from a GGUF
@@ -79,7 +107,7 @@ fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32) -> u64 {
 /// allocation — the distinction the `Charge` split exists to make. Left as runtime, the draft's weights
 /// would inflate every host sample of an MTP service.
 pub fn mtp_weight_bytes(draft: Option<&GgufSummary>, inputs: &EstimatorInputs<'_>) -> u64 {
-    if !inputs.speculation.is_mtp() {
+    if !inputs.speculation.is_speculative() {
         return 0;
     }
     draft.map(draft_model_gpu_weight_bytes).unwrap_or(0)
@@ -103,11 +131,12 @@ pub fn mtp_overhead_bytes(
     draft: Option<&GgufSummary>,
     inputs: &EstimatorInputs<'_>,
 ) -> u64 {
-    if !inputs.speculation.is_mtp() {
+    if !inputs.speculation.is_speculative() {
         return 0;
     }
     if let Some(draft) = draft {
-        return separate_draft_overhead_bytes(draft, inputs.context);
+        let spec_type = inputs.speculation.spec_type().unwrap_or_default();
+        return separate_draft_overhead_bytes(draft, inputs.context, spec_type);
     }
     let arch = &summary.architecture;
     let nextn = summary
@@ -392,16 +421,32 @@ mod tests {
         // draft it is the draft's GPU-resident weights plus a compute term.
         let target = qwen35_summary(&Architecture::Gemma4, 0, 4);
         let draft = draft_summary(144, 108);
+        let spec_type = "draft-mtp";
         let at = |context: u32| {
             mtp_overhead_bytes(
                 &target,
                 Some(&draft),
-                &inputs(context, Speculation::EmbeddedMtp),
+                &inputs(
+                    context,
+                    Speculation::SeparateDraft {
+                        path: Path::new("/fake-draft"),
+                        spec_type,
+                    },
+                ),
             ) / (1024 * 1024)
         };
-        let expected = |context: u64| {
-            108 + DRAFT_MODEL_COMPUTE_MIB + DRAFT_MODEL_COMPUTE_MIB_PER_1K * context / 1024
+        let rate = |table: &[(&str, u64)], default: u64| {
+            table
+                .iter()
+                .find(|(name, _)| *name == spec_type)
+                .map_or(default, |(_, v)| *v)
         };
+        let base = rate(DRAFT_MODEL_COMPUTE_MIB_RATES, DRAFT_MODEL_COMPUTE_MIB_DEFAULT);
+        let slope = rate(
+            DRAFT_MODEL_COMPUTE_MIB_PER_1K_RATES,
+            DRAFT_MODEL_COMPUTE_MIB_PER_1K_DEFAULT,
+        );
+        let expected = |context: u64| 108 + base + slope * context / 1024;
         assert_eq!(at(204800), expected(204800));
 
         // It grows with context — the compute buffer does, even though the KV
@@ -409,11 +454,8 @@ mod tests {
         // single-digit MiB per 1024 tokens where its own cache would add
         // hundreds of MiB over this range.
         let growth = at(409600) - at(204800);
-        assert_eq!(growth, DRAFT_MODEL_COMPUTE_MIB_PER_1K * 200);
-        assert!(
-            growth < 108 + DRAFT_MODEL_COMPUTE_MIB,
-            "grew like a KV cache"
-        );
+        assert_eq!(growth, slope * 200);
+        assert!(growth < 108 + base, "grew like a KV cache");
     }
 
     #[test]

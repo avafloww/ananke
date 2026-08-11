@@ -79,9 +79,14 @@ pub struct ModelConfig {
     pub ik_llama: bool,
     #[serde(default)]
     pub ik_dsa: bool,
-    /// Whether the service runs `--spec-type draft-mtp`.
+    /// Whether the service runs with speculative decoding at all.
     #[serde(default)]
     pub mtp: bool,
+    /// The `--spec-type` value, when it is not `draft-mtp` — dflash and any
+    /// future mechanism. Absent means `draft-mtp`, so every existing
+    /// `mtp = true` entry keeps meaning what it always has.
+    #[serde(default)]
+    pub spec_type: Option<String>,
     #[serde(default)]
     pub gpus: Option<Vec<u32>>,
 }
@@ -163,7 +168,10 @@ impl ModelConfig {
             override_tensor: &[],
             compute_buffer_mb: None,
             speculation: match (self.mtp, draft) {
-                (true, Some(path)) => Speculation::DraftMtp(path),
+                (true, Some(path)) => Speculation::SeparateDraft {
+                    path,
+                    spec_type: self.spec_type.as_deref().unwrap_or("draft-mtp"),
+                },
                 (true, None) => Speculation::EmbeddedMtp,
                 (false, _) => Speculation::None,
             },

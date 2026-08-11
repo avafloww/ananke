@@ -46,7 +46,7 @@ pub(crate) fn state_bytes(
         return 0;
     }
     // A rollback depth is only allocated when something can roll back.
-    let rollback = if inputs.speculation.is_mtp() {
+    let rollback = if inputs.speculation.is_speculative() {
         SPEC_RECURRENT_ROLLBACK_DEPTH
     } else {
         0

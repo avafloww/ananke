@@ -88,10 +88,13 @@ pub fn estimator_inputs<'a>(record: &'a Record, model: &'a std::path::Path) -> E
         cache_type_v: GgufType::from_name(f.kv_type.name()),
         override_tensor: &[],
         compute_buffer_mb: None,
-        speculation: match (f.spec_type.is_some(), f.draft.as_deref()) {
-            (true, Some(draft)) => Speculation::DraftMtp(std::path::Path::new(draft)),
-            (true, None) => Speculation::EmbeddedMtp,
-            (false, _) => Speculation::None,
+        speculation: match (f.spec_type.as_deref(), f.draft.as_deref()) {
+            (Some(spec_type), Some(draft)) => Speculation::SeparateDraft {
+                path: std::path::Path::new(draft),
+                spec_type,
+            },
+            (Some("draft-mtp"), None) => Speculation::EmbeddedMtp,
+            _ => Speculation::None,
         },
         fork: if f.runtime_is_ik() {
             // The fork's sparse-attention path is a separate flag, and the
