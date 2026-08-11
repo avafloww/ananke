@@ -3,7 +3,7 @@
 //! A fit that agrees on the design columns but disagrees on the coefficients would
 //! be silently wrong in the only way that matters, so this pins every group's
 //! coefficients — and the pooled default's — against a fixture captured over the
-//! same 582-record file.
+//! same measurement file `derive.rs`'s own row-count assertion pins.
 //!
 //! A disagreement here means the fitter or the fixture is wrong. It is not a
 //! tolerance to be loosened.

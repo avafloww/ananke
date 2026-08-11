@@ -19,6 +19,8 @@
       "llama@ik": 36909072,
       "llama@ik@nofa": 121380368,
       "llama@nofa": 5246992,
+      "muse-glimmer": 32805704,
+      "muse-glimmer@nofa": 234336072,
       "qwen3": 22231464,
       "qwen35": 328361600,
       "qwen35@ik": 345153562,
@@ -60,13 +62,13 @@
     ],
     "default": {
       "coefficients": {
-        "flat": 295.783833,
-        "hidden": 72.83931,
-        "mask": 2.433157,
-        "offload_head": 611.27802,
-        "quant": 4.60611
+        "flat": 297.581492,
+        "hidden": 74.594344,
+        "mask": 2.37691,
+        "offload_head": 607.861734,
+        "quant": 4.601938
       },
-      "evidence": "pooled over 415 mainline layer-split observations across every measured architecture; worst residual 66.7%"
+      "evidence": "pooled over 426 mainline layer-split observations across every measured architecture; worst residual 69.7%"
     },
     "entries": [
       {
@@ -309,6 +311,32 @@
       },
       {
         "archs": [
+          "muse-glimmer"
+        ],
+        "coefficients": {
+          "flat": 578.333962,
+          "hidden": 45.543048,
+          "mask": 2.009475
+        },
+        "evidence": "non-negative weighted least squares over 11 per-device observation(s); worst residual 0.9%, 0 outside +/-5%",
+        "runtime": null,
+        "split": "layer",
+        "variant": null
+      },
+      {
+        "archs": [
+          "muse-glimmer"
+        ],
+        "coefficients": {
+          "flat": 762.478688
+        },
+        "evidence": "non-negative weighted least squares over 4 per-device observation(s); worst residual 0.6%, 0 outside +/-5%",
+        "runtime": null,
+        "split": "tensor",
+        "variant": null
+      },
+      {
+        "archs": [
           "qwen3"
         ],
         "coefficients": {
@@ -498,20 +526,6 @@
       "type": "u32",
       "value": 512
     },
-    "DRAFT_MODEL_COMPUTE_MIB": {
-      "doc": "GPU compute buffer for a separate draft model, in MiB.",
-      "evidence": "gemma-4-31B-QAT, the one model with a separate draft, measures a driver delta of 724, 788, and 920 MiB at ctx 32768, 65536, and 131072, and flat 724/724/728 across one, two, and four slots. Against its 107 MiB of GPU-resident draft weights and the 2 MiB per 1024 context slope, covering the worst needs 557; 620 carries roughly 8% over every measured point. Replaces 300, which modelled a flat 407 MiB total against those measurements and so under-reserved by 317 to 513 MiB at every context — the direction that OOMs, on a model the operator serves. Reachable rather than derived: one model cannot separate a per-draft weight term from a constant, so the split is asserted and only the slope is fitted.",
-      "kind": "reachable",
-      "type": "u64",
-      "value": 620
-    },
-    "DRAFT_MODEL_COMPUTE_MIB_PER_1K": {
-      "doc": "Extra GPU compute a separate MTP draft takes per 1024 tokens of context, in MiB.",
-      "evidence": "driver delta across ctx 32768-131072 on the one model with a separate draft: 32768 -> 728 MiB, 65536 -> 788 MiB, 131072 -> 920 MiB. Taken from differences between contexts, which cancel the draft's weight term. Flat in the slot count, which is the control confirming the embedded head's slot scaling is its own per-slot cache.",
-      "kind": "derived",
-      "type": "u64",
-      "value": 2
-    },
     "GEMMA_E_VARIANT_BYTES_PER_LAYER_TOKEN": {
       "doc": "The Gemma 4 E-variant's per-layer embedding input, charged per layer per batch token.",
       "evidence": "16 E-variant cells at 1028 B/layer/token, against 35 same-architecture control cells at 1. 1028 is 257 f32 elements.",
@@ -542,7 +556,7 @@
     },
     "MAINLINE_LAYER_SPLIT_MASK_COPIES": {
       "doc": "How many times mainline replicates the graph's attention masks when layers are split across more than one device.",
-      "evidence": "109 mainline layer-split cells at 4.00, against 147 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
+      "evidence": "109 mainline layer-split cells at 4.00, against 169 single-card and tensor-split cells at 1.00. Flat across context, batch, slot count and cache mode; ik is 1.00 at either card count.",
       "kind": "derived",
       "type": "u64",
       "value": 4
@@ -556,31 +570,31 @@
     },
     "MMPROJ_GRAPH_BYTES": {
       "doc": "The vision projector's CLIP graph buffer, beyond its weights. Charged to\n/// the one device llama.cpp names for it.",
-      "evidence": "llama.cpp's own `adding N MiB to fit_params_target` figure net of the summed clip tensor sizes, across 4 cells and 2 vision configurations: image 768/merge 3 takes 140 MiB, image 1472/merge 2 takes 248 MiB. Charged flat at the worst rather than as a rate: two configurations cannot distinguish a scaling in image size from one in the merge factor, since either has a single degree of freedom against two points. Identical across two language models sharing a vision configuration, so it is a property of the projector.",
+      "evidence": "llama.cpp's own `adding N MiB to fit_params_target` figure net of the summed clip tensor sizes, across 6 cells and 3 vision configurations: image 768/merge 3 takes 140 MiB, image 896/merge 2 takes 309 MiB, image 1472/merge 2 takes 248 MiB. Charged flat at the worst rather than as a rate: two configurations cannot distinguish a scaling in image size from one in the merge factor, since either has a single degree of freedom against two points. Identical across two language models sharing a vision configuration, so it is a property of the projector.",
       "kind": "derived",
       "type": "u64",
-      "value": 260147059
+      "value": 324288840
     },
     "MTP_HOST_BYTES_EMBEDDED": {
       "doc": "Host cost of an embedded multi-token-prediction head.",
-      "evidence": "3 paired with/without cells across 2 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 2 MiB per 1024 (worst measured 1.02, rounded up), so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
+      "evidence": "3 paired with/without cells across 2 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 1.021 MiB per 1024 (worst measured 1.02, stored per 1000 of ctx/1024), so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
       "kind": "derived",
       "type": "u64",
-      "value": 288358400
+      "value": 325058560
     },
     "MTP_HOST_BYTES_SEPARATE_DRAFT": {
       "doc": "Host cost of a separate draft GGUF for multi-token prediction.",
-      "evidence": "3 paired with/without cells across 1 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 2 MiB per 1024 (worst measured 1.01, rounded up), so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
+      "evidence": "7 paired with/without cells across 2 model(s), host owned memory rather than driver VRAM. Flat in the slot count and linear in context at 1.010 MiB per 1024 (worst measured 1.01, stored per 1000 of ctx/1024), so the flat constant this replaces was wrong in shape. Base covers the worst residual over every cell.",
       "kind": "derived",
       "type": "u64",
-      "value": 257949696
+      "value": 499122176
     },
     "MTP_HOST_MIB_PER_1K": {
       "doc": "Host memory an MTP context costs per 1024 tokens of context, in MiB.",
-      "evidence": "the larger of the two MTP shapes' host context slopes — embedded 2, separate draft 2 MiB per 1024 tokens. One value for both, since they measure within a megabyte of each other and a second constant would claim a distinction the data does not show.",
+      "evidence": "the larger of the two MTP shapes' host context slopes — embedded 1.021, separate draft 1.010 MiB per 1024 tokens (stored per 1000 of ctx/1024). One value for both, since they measure within a fraction of a MiB of each other and a second constant would claim a distinction the data does not show.",
       "kind": "derived",
       "type": "u64",
-      "value": 2
+      "value": 1021
     },
     "MTP_UNACCOUNTED_MIB_PER_DEVICE": {
       "doc": "What an embedded-MTP process takes per device beyond every buffer\n/// llama.cpp names in its load log. Standing up a second context costs this\n/// much VRAM that the runtime's own books do not carry.",
@@ -633,6 +647,22 @@
     }
   },
   "dataset": "scripts/calibration/data/measurements.ndjson",
+  "draft_model_compute_mib": {
+    "$comment": "A separate draft's own compute buffer at zero context, in MiB, by `--spec-type` mechanism — held by hand rather than fitted every run, since isolating it from the draft's GPU-resident weights needs the weight figure read separately for each mechanism (see the evidence below), not something every emit run recomputes from the dataset. draft-mtp: gemma-4-31B-QAT, the one model measured with a separate MTP draft, shows a driver delta of 724, 788, and 920 MiB at ctx 32768, 65536, and 131072, flat at 724/724/728 across one, two, and four slots. Against its 107 MiB of GPU-resident draft weights and the 2 MiB/1024 slope, covering the worst needs 557; 620 carries roughly 8% over every measured point. draft-dflash: muse-glimmer's dflash draft (dflash-kquant.gguf) logs its own `load_tensors: CUDA0 model buffer size = 1543.17 MiB`, against driver deltas of 2080, 2076, 2080, and 2080 MiB at ctx 8192, 32768, 65536, and 262144 (one slot) and 2130 at ctx 32768, two slots — flat in both context and slot count, matching the 0 slope this mechanism already carries. Beyond-weights residual is 536.83 to 586.83 MiB, worst at the two-slot cell; 646 carries ~10% over that worst. `default` is the larger of the two, so an unlisted mechanism over-reserves rather than OOMs.",
+    "by_arch": {
+      "draft-dflash": 646,
+      "draft-mtp": 620
+    },
+    "default": 646
+  },
+  "draft_model_compute_mib_per_1k": {
+    "$comment": "Slope of a separate draft's own compute buffer, MiB per 1024 context tokens, by `--spec-type` mechanism — not pooled across mechanisms, since a scaling claim measured on one is not evidence about another's. `default` applies to a mechanism not listed.",
+    "by_arch": {
+      "draft-dflash": 0,
+      "draft-mtp": 2
+    },
+    "default": 2
+  },
   "generator": "ananke-calibrate (bin emit)",
   "hardware": "2x NVIDIA RTX 3090 (24 GiB), AMD Ryzen Threadripper 3960X (24 cores), 251 GiB RAM",
   "ik_moe_rates": {
@@ -646,7 +676,7 @@
     },
     "default": 54
   },
-  "measurements": 582,
+  "measurements": 608,
   "mtp_draft_compute_base_mib": {
     "$comment": "The MTP draft context's own per-device compute buffer at zero context, by architecture. read from the runtime's own draft-context buffers, cross-checked against its [spec] line: qwen35 4 context(s) 150+0.361/1k; qwen35moe 3 context(s) 76+0.445/1k. The slope is stored per 1000 of `ctx / 1024`. Flat in the slot count, the draft cache spanning every cell rather than one stream's share.",
     "by_arch": {
@@ -665,7 +695,7 @@
   },
   "mtp_slot_scaling": {
     "$comment": "Reported, not fitted. The MTP overhead measured at a fixed context across slot counts, which is what separates a genuine slot term from the longer context the first campaign confounded it with.",
-    "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB, np4 2376 MiB; Qwen3.6-35B-A3B-UD-Q5_K_ ctx 32768: np1 384 MiB, np2 812 MiB, np4 986 MiB; gemma-4-31B-it-qat-UD-Q4 ctx 32768: np1 724 MiB, np2 724 MiB, np4 728 MiB"
+    "observed": "Qwen3.6-27B-UD-Q5_K_XL.g ctx 32768: np1 992 MiB, np2 1444 MiB, np4 2376 MiB; Qwen3.6-35B-A3B-UD-Q5_K_ ctx 32768: np1 384 MiB, np2 812 MiB, np4 986 MiB; gemma-4-31B-it-qat-UD-Q4 ctx 32768: np1 724 MiB, np2 724 MiB, np4 728 MiB; muse-glimmer-30B-kquant- ctx 32768: np1 2076 MiB, np2 2130 MiB"
   },
   "no_flash_attn_rates": {
     "$comment": "Extra pinned bytes per batch token when flash attention is off, by architecture. The residual is flat in context and proportional to batch, and the rates differ fourfold between sliding-window models and the rest. `default` applies to an architecture not listed.",
@@ -677,6 +707,7 @@
       "gemma4+moe": 32794,
       "lfm2": 4116,
       "llama": 8209,
+      "muse-glimmer": 4122,
       "qwen3": 8209,
       "qwen35": 8220,
       "qwen35moe+moe": 4116,
@@ -693,6 +724,7 @@
       "laguna": 1201,
       "lfm2": 409,
       "llama": 393,
+      "muse-glimmer": 390,
       "qwen3": 419,
       "qwen35": 421,
       "qwen35moe": 367,
@@ -705,6 +737,7 @@
     "by_arch": {
       "gemma3": 93220864,
       "llama": 3807915,
+      "muse-glimmer": 29941760,
       "qwen35": 170778624
     },
     "default": 170778624
@@ -718,6 +751,7 @@
       "laguna": 328,
       "lfm2": 61,
       "llama": 164,
+      "muse-glimmer": 328,
       "qwen3": 164,
       "qwen35": 543,
       "qwen35moe": 532,

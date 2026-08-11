@@ -99,7 +99,7 @@ fn rendered<K: Display>(by_key: &BTreeMap<K, i64>) -> BTreeMap<String, i64> {
 fn the_committed_document_matches_the_dataset() {
     let emitted = emit::emit_check(&rows(), tuning_text()).expect("emit --check passes");
     assert_eq!(
-        emitted.measurements, 582,
+        emitted.measurements, 608,
         "the dataset lost or gained cells"
     );
     assert!(emitted.failed.is_empty(), "{:?}", emitted.failed);
