@@ -69,6 +69,18 @@ pub const LLAMA_FAMILY: &[Architecture] = &[
     // fallback below derives `embedding_length / head_count` (64 for the
     // 350M embedder) the same way llama.cpp does.
     Architecture::Lfm2,
+    // Muse Glimmer: dense `blk.N.*` GQA transformer, scalar
+    // `attention.head_count_kv` (unlike gemma4's per-layer array), a
+    // per-layer bool `attention.sliding_window_pattern` mask (like gemma4),
+    // and no `_swa`-suffixed head dims — SWA and full-attention layers share
+    // the same `key_length`/`value_length`. Same metadata shape gemma3n
+    // already exercises via the scalar/mask branches in
+    // `compute_kv_per_token`, so no new estimator code, just registration.
+    // Each layer also carries an `attn_gate` tensor with no estimator-side
+    // meaning; `collect_per_layer` sums it in by byte size like any other
+    // per-layer weight. No compute-buffer calibration data exists for this
+    // architecture yet, so it falls back to the pooled default rate.
+    Architecture::MuseGlimmer,
 ];
 
 pub fn is_llama_family(arch: &Architecture) -> bool {
@@ -107,5 +119,13 @@ mod tests {
         // schema. The estimator needs to recognise it so that the service
         // doesn't flip to `Disabled { ConfigError }` on first-Ensure.
         assert!(is_llama_family(&Architecture::Gemma3n));
+    }
+
+    #[test]
+    fn muse_glimmer_is_llama_family() {
+        // Muse Glimmer shares gemma3n's scalar-head_count_kv + bool-mask
+        // metadata shape. Must recognise it or the estimator refuses the
+        // service outright.
+        assert!(is_llama_family(&Architecture::MuseGlimmer));
     }
 }

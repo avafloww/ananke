@@ -39,6 +39,7 @@ pub enum Architecture {
     Gemma3,
     Gemma3n,
     Gemma4,
+    MuseGlimmer,
     Phi3,
     Glm4,
     Glm4Moe,
@@ -83,6 +84,7 @@ impl Architecture {
             Self::Gemma3 => "gemma3",
             Self::Gemma3n => "gemma3n",
             Self::Gemma4 => "gemma4",
+            Self::MuseGlimmer => "muse-glimmer",
             Self::Phi3 => "phi3",
             Self::Glm4 => "glm4",
             Self::Glm4Moe => "glm4moe",
@@ -113,8 +115,8 @@ impl Architecture {
         use Architecture::*;
         &[
             Llama, Llama4, Qwen2, Qwen3, Qwen3Moe, Qwen3VlMoe, Qwen35, Qwen35Moe, Mistral, Mixtral,
-            Gemma, Gemma2, Gemma3, Gemma3n, Gemma4, Phi3, Glm4, Glm4Moe, GlmDsa, DeepSeek2,
-            DeepSeek4, GptOss, Deci, Talkie, Lfm2, Laguna, Mamba, Jamba, Clip,
+            Gemma, Gemma2, Gemma3, Gemma3n, Gemma4, MuseGlimmer, Phi3, Glm4, Glm4Moe, GlmDsa,
+            DeepSeek2, DeepSeek4, GptOss, Deci, Talkie, Lfm2, Laguna, Mamba, Jamba, Clip,
         ]
     }
 }

@@ -332,6 +332,77 @@ mod tests {
         assert_eq!(e.kv_per_token, 8192);
     }
 
+    #[test]
+    fn muse_glimmer_scalar_kv_with_bool_mask_and_stray_tensor() {
+        // Shape taken from the real muse-glimmer-30B GGUF: scalar
+        // head_count_kv (not per-layer, unlike gemma4), a per-layer bool
+        // sliding_window_pattern mask (like gemma4), and no `_swa`-suffixed
+        // head dims — SWA and full-attention layers share key/value_length.
+        // Each layer also carries an `attn_gate` tensor, which has no
+        // estimator-side meaning and must be summed into weights_bytes like
+        // any other per-layer tensor rather than breaking the walk.
+        let mask = [true, true, true, false]; // 3 SWA + 1 full, matching the
+        // real model's mostly-SWA-with-periodic-full pattern.
+        let n_layers = mask.len() as u32;
+        let mut tensors = std::collections::BTreeMap::new();
+        for (layer, _) in mask.iter().enumerate() {
+            for kind in ["attn_q", "attn_k", "attn_v", "attn_gate", "ffn_down"] {
+                let name = format!("blk.{layer}.{kind}.weight");
+                tensors.insert(SmolStr::new(&name), tensor(&name, 1024 * 1024));
+            }
+        }
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert(
+            SmolStr::new(keys::ARCHITECTURE),
+            GgufValue::String("muse-glimmer".into()),
+        );
+        metadata.insert(
+            SmolStr::new("muse-glimmer.block_count"),
+            GgufValue::U32(n_layers),
+        );
+        metadata.insert(
+            SmolStr::new("muse-glimmer.attention.head_count_kv"),
+            GgufValue::U32(2),
+        );
+        metadata.insert(
+            SmolStr::new("muse-glimmer.attention.key_length"),
+            GgufValue::U32(128),
+        );
+        metadata.insert(
+            SmolStr::new("muse-glimmer.attention.value_length"),
+            GgufValue::U32(128),
+        );
+        metadata.insert(
+            SmolStr::new("muse-glimmer.attention.sliding_window"),
+            GgufValue::U32(2048),
+        );
+        metadata.insert(
+            SmolStr::new("muse-glimmer.attention.sliding_window_pattern"),
+            GgufValue::Array(mask.iter().map(|b| GgufValue::Bool(*b)).collect()),
+        );
+        let s = GgufSummary {
+            path: "/fake".into(),
+            total_tensor_bytes: n_layers as u64 * 5 * 1024 * 1024,
+            tensors,
+            metadata,
+            block_count: Some(n_layers),
+            architecture: Architecture::MuseGlimmer,
+            shards: vec!["/fake".into()],
+        };
+        assert!(crate::llama::is_llama_family(&Architecture::MuseGlimmer));
+        let e = estimate(&s, &inputs(GgufType::F16, GgufType::F16, 8192));
+        // Per-head bytes: f16 (2B) × (128+128) = 512, same for SWA and full
+        // (no _swa keys). window=2048 < ctx=8192, so SWA layers cap there.
+        //   SWA layer:  2 kv_heads × 512 × 2048 = 2_097_152 bytes
+        //   Full layer: 2 kv_heads × 512 × 8192 = 8_388_608 bytes
+        // Total: 3 × 2_097_152 + 1 × 8_388_608 = 14_680_064 bytes.
+        let total_kv = e.kv_per_token * e.context as u64;
+        assert_eq!(total_kv, 14_680_064);
+        // 5 tensors/layer × 4 layers × 1 MiB, including the meaningless
+        // attn_gate tensor — it must not be dropped or double-counted.
+        assert_eq!(e.weights_bytes, n_layers as u64 * 5 * 1024 * 1024);
+    }
+
     /// Build a gemma4-shaped summary with a given per-layer SWA mask and
     /// head-count-KV array so the KV computation can be exercised end-to-end.
     fn gemma4_summary(is_swa: &[bool], kv_heads: &[u32], sliding_window: u32) -> GgufSummary {
