@@ -55,6 +55,13 @@ fn draft_model_gpu_weight_bytes(draft: &GgufSummary) -> u64 {
 /// weights plus a draft compute buffer. The draft's attention layers reuse
 /// the target's KV cache, so there is no context-scaling KV term.
 fn separate_draft_overhead_bytes(draft: &GgufSummary, context: u32, spec_type: &str) -> u64 {
+    if spec_type.is_empty() {
+        // An empty mechanism is malformed configuration, not an unknown
+        // forward-compatible mechanism. Keep the measurable resident weights,
+        // but do not turn the missing mechanism into the default compute rate.
+        return draft_model_gpu_weight_bytes(draft);
+    }
+
     // The draft shares the target's KV cache, so there is no context-scaling
     // cache term. Its *compute* scales anyway, so this term has to as well; a
     // flat constant under-reserves badly at long contexts. The slope is by
@@ -107,19 +114,24 @@ fn lookup(table: &[(&str, u64)], key: &str, fallback: u64) -> u64 {
 /// allocation — the distinction the `Charge` split exists to make. Left as runtime, the draft's weights
 /// would inflate every host sample of an MTP service.
 pub fn mtp_weight_bytes(draft: Option<&GgufSummary>, inputs: &EstimatorInputs<'_>) -> u64 {
-    if !inputs.speculation.is_speculative() {
-        return 0;
+    match inputs.speculation {
+        // The optional summary is supplied independently so this helper can be
+        // tested in isolation, but the configured speculation mode is the
+        // source of truth for whether it represents a separate draft.
+        crate::Speculation::SeparateDraft { .. } => {
+            draft.map(draft_model_gpu_weight_bytes).unwrap_or(0)
+        }
+        crate::Speculation::None | crate::Speculation::EmbeddedMtp => 0,
     }
-    draft.map(draft_model_gpu_weight_bytes).unwrap_or(0)
 }
 
 /// Extra VRAM (bytes) the MTP draft context adds, or 0 when MTP is off or the
 /// model carries no MTP head (`{arch}.nextn_predict_layers` absent or zero and
 /// no separate draft model).
 ///
-/// When `draft` is `Some`, the service runs with a separate draft GGUF (`-md`)
-/// and the overhead is read from that file. Otherwise the target model's
-/// embedded MTP head is modelled.
+/// `inputs.speculation` selects the mechanism. A separate draft contributes
+/// overhead only when its independently supplied summary is `Some`; an
+/// unavailable summary never falls back to the target model's embedded head.
 ///
 /// `inputs.context` is the configured total context. The embedded-head KV
 /// scales with it linearly the same way the main KV does — total KV tokens
@@ -131,13 +143,27 @@ pub fn mtp_overhead_bytes(
     draft: Option<&GgufSummary>,
     inputs: &EstimatorInputs<'_>,
 ) -> u64 {
-    if !inputs.speculation.is_speculative() {
+    let spec_type = match inputs.speculation {
+        crate::Speculation::None => return 0,
+        crate::Speculation::EmbeddedMtp => None,
+        crate::Speculation::SeparateDraft { spec_type, .. } => Some(spec_type),
+    };
+
+    if let Some(draft) = draft {
+        // The optional summary is supplied independently so this helper can be
+        // tested in isolation, but Speculation remains the source of truth for
+        // whether the summary is an embedded head or a separate draft.
+        if let Some(spec_type) = spec_type {
+            return separate_draft_overhead_bytes(draft, inputs.context, spec_type);
+        }
+    }
+
+    // A separate draft whose GGUF could not be read has no computable MTP term;
+    // do not reinterpret it as an embedded head from the target summary.
+    if matches!(inputs.speculation, crate::Speculation::SeparateDraft { .. }) {
         return 0;
     }
-    if let Some(draft) = draft {
-        let spec_type = inputs.speculation.spec_type().unwrap_or_default();
-        return separate_draft_overhead_bytes(draft, inputs.context, spec_type);
-    }
+
     let arch = &summary.architecture;
     let nextn = summary
         .meta_u32(&keys::nextn_predict_layers(arch))
@@ -441,13 +467,29 @@ mod tests {
                 .find(|(name, _)| *name == spec_type)
                 .map_or(default, |(_, v)| *v)
         };
-        let base = rate(DRAFT_MODEL_COMPUTE_MIB_RATES, DRAFT_MODEL_COMPUTE_MIB_DEFAULT);
+        let base = rate(
+            DRAFT_MODEL_COMPUTE_MIB_RATES,
+            DRAFT_MODEL_COMPUTE_MIB_DEFAULT,
+        );
         let slope = rate(
             DRAFT_MODEL_COMPUTE_MIB_PER_1K_RATES,
             DRAFT_MODEL_COMPUTE_MIB_PER_1K_DEFAULT,
         );
         let expected = |context: u64| 108 + base + slope * context / 1024;
         assert_eq!(at(204800), expected(204800));
+        assert_eq!(
+            mtp_weight_bytes(
+                Some(&draft),
+                &inputs(
+                    204800,
+                    Speculation::SeparateDraft {
+                        path: Path::new("/fake-draft"),
+                        spec_type,
+                    },
+                )
+            ),
+            108 * 1024 * 1024
+        );
 
         // It grows with context — the compute buffer does, even though the KV
         // does not — but far too slowly to be a cache. A shared-KV draft adds
@@ -466,11 +508,81 @@ mod tests {
         let target = qwen35_summary(&Architecture::Gemma4, 0, 4);
         let draft = draft_summary(144, 108);
         let at = |slots: u32| {
-            let mut i = inputs(32768, Speculation::EmbeddedMtp);
+            let mut i = inputs(
+                32768,
+                Speculation::SeparateDraft {
+                    path: Path::new("/fake-draft"),
+                    spec_type: "draft-mtp",
+                },
+            );
             i.parallel = Some(slots);
             mtp_overhead_bytes(&target, Some(&draft), &i)
         };
         assert_eq!(at(1), at(4));
+    }
+
+    #[test]
+    fn separate_draft_uses_known_rate_and_defaults_unknown_rate() {
+        let target = qwen35_summary(&Architecture::Gemma4, 0, 4);
+        let draft = draft_summary(144, 108);
+        let separate = |spec_type: &str, context| {
+            mtp_overhead_bytes(
+                &target,
+                Some(&draft),
+                &inputs(
+                    context,
+                    Speculation::SeparateDraft {
+                        path: Path::new("/fake-draft"),
+                        spec_type,
+                    },
+                ),
+            ) / (1024 * 1024)
+        };
+
+        assert_eq!(separate("draft-mtp", 0), 108 + 620);
+        assert_eq!(
+            separate("unlisted-mechanism", 0),
+            108 + DRAFT_MODEL_COMPUTE_MIB_DEFAULT
+        );
+        assert_eq!(separate("", 204800), 108);
+        assert_eq!(
+            separate("unlisted-mechanism", 204800),
+            108 + DRAFT_MODEL_COMPUTE_MIB_DEFAULT + DRAFT_MODEL_COMPUTE_MIB_PER_1K_DEFAULT * 200
+        );
+    }
+
+    #[test]
+    fn separate_draft_missing_summary_does_not_use_embedded_head() {
+        let target = qwen35_summary(&Architecture::Qwen35, 1, 4);
+        let inputs = inputs(
+            262144,
+            Speculation::SeparateDraft {
+                path: Path::new("/missing-draft"),
+                spec_type: "draft-mtp",
+            },
+        );
+
+        assert_eq!(mtp_overhead_bytes(&target, None, &inputs), 0);
+        assert_eq!(mtp_weight_bytes(None, &inputs), 0);
+    }
+
+    #[test]
+    fn speculation_mode_controls_mtp_overhead_and_weights() {
+        let target = qwen35_summary(&Architecture::Qwen35, 1, 4);
+        let draft = draft_summary(144, 108);
+        let none = inputs(262144, Speculation::None);
+        let embedded = inputs(262144, Speculation::EmbeddedMtp);
+
+        assert_eq!(mtp_overhead_bytes(&target, Some(&draft), &none), 0);
+        assert_eq!(mtp_weight_bytes(Some(&draft), &none), 0);
+
+        let expected_embedded = mtp_overhead_bytes(&target, None, &embedded);
+        assert!(expected_embedded > 0);
+        assert_eq!(
+            mtp_overhead_bytes(&target, Some(&draft), &embedded),
+            expected_embedded
+        );
+        assert_eq!(mtp_weight_bytes(Some(&draft), &embedded), 0);
     }
 
     #[test]
