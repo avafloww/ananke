@@ -64,6 +64,41 @@ pub struct Model {
     pub runtimes: &'static [Runtime],
     pub mmproj: Option<&'static str>,
     pub draft: Option<&'static str>,
+    /// The `--spec-type` value this model's `draft` was measured under.
+    /// Meaningless when `draft` is `None`. Kept on the model rather than
+    /// passed separately at each call site, so a cell built from `draft`
+    /// can't drift out of sync with the mechanism it actually needs
+    /// (`draft-mtp` and `draft-dflash` are not interchangeable — a dflash
+    /// draft GGUF loaded under `draft-mtp` fails to load, not silently
+    /// measures the wrong thing).
+    pub draft_spec_type: &'static str,
+    /// Whether this model's speculative-decoding cost (see
+    /// `phases::draft_curve`) is worth measuring across context. `false`
+    /// for a model that isn't served with speculative decoding at all, and
+    /// for one whose cost has already been established as context-independent
+    /// elsewhere and doesn't need re-checking. Independent of `draft`:
+    /// `true` with `draft: None` measures an embedded head.
+    pub speculative: bool,
+    /// The context this model is actually served at, when it exceeds the
+    /// standard curve range (`phases::curve_points`'s default ceiling is
+    /// 65536). `None` means the model's production context already falls
+    /// inside that range. Extends the curve with one point there, so the
+    /// fitted curve is checked at the context it's actually extrapolated
+    /// to rather than trusted past its fitted range.
+    pub production_ctx: Option<u32>,
+    /// The `-np` this model is actually served at. `1` (the default) means
+    /// every curve/baseline cell already covers it. A value above `1` adds
+    /// this model to `phases::draft_slots` (if `speculative`) and
+    /// `phases::concurrency_curve`, since neither the draft's cost nor the
+    /// per-slot cost under real concurrent load can be assumed to hold at
+    /// a slot count nothing has measured.
+    pub production_parallel: u32,
+    /// Whether the no-flash-attention host-memory term — charged per
+    /// architecture, not a shared constant — is worth measuring for this
+    /// model specifically (see `phases::flash_attn_curve`). `false` for an
+    /// architecture close enough to an already-measured shape that the
+    /// existing constant is trusted to transfer.
+    pub verify_flash_attn_term: bool,
     /// Split modes the runtime can actually serve this architecture with.
     ///
     /// Not every architecture supports every mode. mainline's
@@ -87,6 +122,12 @@ pub struct Model {
     pub kv_types: &'static [KvType],
     /// Card counts worth measuring. A 350M embedding model does not need two, and
     /// spreading it changes the very baseline the cell exists to isolate.
+    /// `model_baseline` measures every entry; `preferred_gpus()` picks the
+    /// widest one as what the rest of the campaign defaults to — so this
+    /// must only list configs actually worth measuring, not merely
+    /// hypothetical ones: `CUDA_VISIBLE_DEVICES` naming more cards than
+    /// exist doesn't fail, it silently runs on however many really are
+    /// there, under a label that claims otherwise.
     pub gpus: &'static [&'static str],
     /// Native context, where it is below the sweep's range.
     ///
@@ -194,14 +235,16 @@ pub const MODELS: &[Model] = &[
         "unsloth/Qwen3.6-27B-GGUF/Qwen3.6-27B-UD-Q5_K_XL.gguf",
     )
     .runtimes(&[Runtime::Mainline, Runtime::Ik])
-    .mmproj("unsloth/Qwen3.6-27B-GGUF/mmproj-F16.gguf"),
+    .mmproj("unsloth/Qwen3.6-27B-GGUF/mmproj-F16.gguf")
+    .speculative(),
     // Dense + SWA 1024, separate draft GGUF.
     Model::new(
         "gemma4-31b-qat",
         "unsloth/gemma-4-31B-it-qat-GGUF/gemma-4-31B-it-qat-UD-Q4_K_XL.gguf",
     )
     .mmproj("unsloth/gemma-4-31B-it-qat-GGUF/mmproj-F16.gguf")
-    .draft("unsloth/gemma-4-31B-it-qat-GGUF/mtp-gemma-4-31B-it.gguf"),
+    .draft("unsloth/gemma-4-31B-it-qat-GGUF/mtp-gemma-4-31B-it.gguf")
+    .speculative(),
     // Dense + SWA, no MoE — isolates SWA from experts.
     Model::new(
         "gemma3-27b",
@@ -282,6 +325,23 @@ pub const MODELS: &[Model] = &[
     .embeddings()
     .gpus(&["0"])
     .splits(&[SplitMode::Layer]),
+    // Dense, 52L, single GPU. `gpus` is deliberately just `["0"]`, not the
+    // default dual-card list: CUDA_VISIBLE_DEVICES=0,1 on a box with one
+    // real card doesn't fail, it silently runs on the one card that
+    // exists, so a "prepared" two-card cell doesn't stay unmeasured until
+    // a second card shows up — it measures the wrong thing under the
+    // wrong label. There's no hardware-count guard to make that safe, so
+    // don't ask for a card count this box doesn't have.
+    Model::new("muse-glimmer", "muse-glimmer-30B-kquant-dynamic.gguf")
+        .mmproj("mmproj-kquant.gguf")
+        .draft("dflash-kquant.gguf")
+        .draft_spec_type("draft-dflash")
+        .speculative()
+        .production_ctx(262144)
+        .production_parallel(2)
+        .verify_flash_attn_term()
+        .gpus(&["0"])
+        .splits(&[SplitMode::Layer]),
 ];
 
 /// ik_llama's `--split-mode` takes none/graph/layer — there is no `tensor`, and
@@ -307,6 +367,11 @@ impl Model {
             runtimes: &[Runtime::Mainline],
             mmproj: None,
             draft: None,
+            draft_spec_type: "draft-mtp",
+            speculative: false,
+            production_ctx: None,
+            production_parallel: 1,
+            verify_flash_attn_term: false,
             splits: &[SplitMode::Layer, SplitMode::Tensor],
             extra: &[],
             kv_types: &[KvType::F16, KvType::Q80],
@@ -330,8 +395,35 @@ impl Model {
         self
     }
 
+    /// Overrides the default `draft-mtp`; call alongside `.draft(...)` when
+    /// the draft GGUF needs a different `--spec-type` (e.g. `draft-dflash`).
+    const fn draft_spec_type(mut self, spec_type: &'static str) -> Self {
+        self.draft_spec_type = spec_type;
+        self
+    }
+
     const fn draft(mut self, path: &'static str) -> Self {
         self.draft = Some(path);
+        self
+    }
+
+    const fn speculative(mut self) -> Self {
+        self.speculative = true;
+        self
+    }
+
+    const fn production_ctx(mut self, ctx: u32) -> Self {
+        self.production_ctx = Some(ctx);
+        self
+    }
+
+    const fn production_parallel(mut self, parallel: u32) -> Self {
+        self.production_parallel = parallel;
+        self
+    }
+
+    const fn verify_flash_attn_term(mut self) -> Self {
+        self.verify_flash_attn_term = true;
         self
     }
 

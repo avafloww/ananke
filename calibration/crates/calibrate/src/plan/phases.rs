@@ -134,76 +134,199 @@ pub fn curves(lib: &Library) -> Vec<Factors> {
     cells
 }
 
-/// Terms with their own switch rather than a continuous factor.
+/// Whether a model's speculative-decoding draft adds a cost that scales with
+/// context, for every model with `Model::speculative` set.
 ///
-/// Each of these is a constant in the estimator justified by one measurement or
-/// none: the two MTP shapes, the vision projector, the offload regimes, ik's
-/// repacking and mapping paths, the embedding modality, and what actually
-/// accumulates once a server is doing an agent's work.
-pub fn switches(lib: &Library) -> Vec<Factors> {
+/// The estimator's separate-draft accounting assumes the draft's attention
+/// layers share the target's KV cache and so add no context-scaling KV of
+/// their own — a claim about the mechanism, not about any one model, so it
+/// needs checking wherever a model uses a mechanism it hasn't been checked
+/// against. Reuses `curve_points`'s context axis (holding batch size and
+/// flash-attention at their defaults, since those are `curves`'s question,
+/// not this one) rather than picking new points, so the same contexts this
+/// model's compute-buffer curve is fitted on are also where its draft is
+/// checked.
+pub fn draft_curve(lib: &Library) -> Vec<Factors> {
     let mut cells = Vec::new();
-    let g4 = model("gemma4-31b-qat");
-    let q27 = model("qwen36-27b");
-    // MTP: none, embedded head, separate draft GGUF. The estimator charges a
-    // different constant for each and has one measurement apiece. Two contexts
-    // and a production-shaped slot configuration, not one point: the constants
-    // these cells justify were calibrated at ctx 240000 with `-np 4 --kv-unified`
-    // (the separate-draft shape) and at ctx 32768 with `-np 2` (the embedded
-    // shape), and a single small-context point can neither reproduce those nor
-    // test the claim that the separate draft's cost does not scale with context.
-    let shapes = [
-        MtpCell {
-            label: "mtp-none-g4",
-            model: g4,
-            spec_type: None,
-            draft: None,
-        },
-        MtpCell {
-            label: "mtp-draft-g4",
-            model: g4,
-            spec_type: Some("draft-mtp"),
-            draft: g4.draft,
-        },
-        MtpCell {
-            label: "mtp-none-q27",
-            model: q27,
-            spec_type: None,
-            draft: None,
-        },
-        MtpCell {
-            label: "mtp-embedded-q27",
-            model: q27,
-            spec_type: Some("draft-mtp"),
-            draft: None,
-        },
-    ];
-    for shape in shapes {
-        for slots in MTP_SLOT_SHAPES {
+    for m in MODELS.iter().filter(|m| m.speculative) {
+        let gpus = m.preferred_gpus();
+        let contexts = curve_points(m)
+            .into_iter()
+            .filter(|p| p.ubatch == DEFAULT_UBATCH && p.fa == FlashAttn::On)
+            .map(|p| p.ctx);
+        for ctx in contexts {
+            for draft_on in [false, true] {
+                let shape = match (draft_on, m.draft) {
+                    (false, _) => "none",
+                    (true, Some(_)) => "draft",
+                    (true, None) => "embedded",
+                };
+                cells.push(Factors {
+                    label: format!("draft-curve-{shape}-{}-c{ctx}", m.key),
+                    model: lib.path_of(m.path),
+                    gpus: gpus.to_owned(),
+                    split: Some(SplitMode::Layer),
+                    ctx,
+                    spec_type: draft_on.then_some(m.draft_spec_type.to_owned()),
+                    draft: draft_on.then_some(m.draft).flatten().map(|d| lib.path_of(d)),
+                    ..m.flags(gpus)
+                });
+            }
+        }
+    }
+    cells
+}
+
+/// Whether a model's speculative-decoding draft adds a cost that scales with
+/// slot count, for every model with `Model::speculative` set — separately
+/// from `draft_curve`'s context axis, so a slot dependence and a context
+/// dependence can't be mistaken for each other by only ever varying them
+/// together. Context is held fixed at the curve's middle point.
+///
+/// `1` as the control against `production_parallel`, the slot count the
+/// model is actually served at — not a fixed reference set like `[1, 2, 4]`,
+/// since a slot count nothing serves isn't a question this model needs
+/// answered, and one that skips the model's own `production_parallel` would
+/// leave the one value that matters unchecked.
+pub fn draft_slots(lib: &Library) -> Vec<Factors> {
+    let mut cells = Vec::new();
+    for m in MODELS.iter().filter(|m| m.speculative && m.production_parallel > 1) {
+        let gpus = m.preferred_gpus();
+        let ctx = curve_points(m)[1].ctx;
+        for parallel in [1, m.production_parallel] {
+            for draft_on in [false, true] {
+                let shape = match (draft_on, m.draft) {
+                    (false, _) => "none",
+                    (true, Some(_)) => "draft",
+                    (true, None) => "embedded",
+                };
+                cells.push(Factors {
+                    label: format!("draft-slots-{shape}-{}-np{parallel}", m.key),
+                    model: lib.path_of(m.path),
+                    gpus: gpus.to_owned(),
+                    split: Some(SplitMode::Layer),
+                    ctx,
+                    parallel,
+                    spec_type: draft_on.then_some(m.draft_spec_type.to_owned()),
+                    draft: draft_on.then_some(m.draft).flatten().map(|d| lib.path_of(d)),
+                    ..m.flags(gpus)
+                });
+            }
+        }
+    }
+    cells
+}
+
+/// Whether a model's per-slot host cost under real concurrent load — not
+/// merely idle slots — holds at the slot count it's actually served with,
+/// for every model with `Model::production_parallel` above `1`.
+///
+/// A sequential probe only ever touches the first slot; every other slot
+/// stays unallocated until a request actually reaches it concurrently, so a
+/// reservation sized from sequential cells alone can miss what active
+/// slots beyond the first really cost. `1` establishes the single-slot
+/// reading as a control, `production_parallel` is the shape actually
+/// served. Context is held fixed at the curve's middle point.
+pub fn concurrency_curve(lib: &Library) -> Vec<Factors> {
+    let mut cells = Vec::new();
+    for m in MODELS.iter().filter(|m| m.production_parallel > 1) {
+        let gpus = m.preferred_gpus();
+        let ctx = curve_points(m)[1].ctx;
+        for concurrency in [1, m.production_parallel] {
             cells.push(Factors {
-                label: format!("{}-c{}-np{}", shape.label, slots.ctx, slots.parallel),
-                model: lib.path_of(shape.model.path),
-                gpus: "0,1".to_owned(),
-                split: Some(SplitMode::Tensor),
-                ctx: slots.ctx,
-                parallel: slots.parallel,
-                kv_unified: slots.kv_unified,
-                spec_type: shape.spec_type.map(str::to_owned),
-                draft: lib.path_opt(shape.draft),
-                ..Factors::default()
+                label: format!("concurrency-{}-c{concurrency}", m.key),
+                model: lib.path_of(m.path),
+                gpus: gpus.to_owned(),
+                split: Some(SplitMode::Layer),
+                ctx,
+                parallel: m.production_parallel,
+                soak: 6,
+                concurrency,
+                ..m.flags(gpus)
             });
         }
     }
-    // The vision projector, worth ~3 MiB in the single observation of it.
-    for (label, mmproj) in [("mmproj-off", None), ("mmproj-on", g4.mmproj)] {
-        cells.push(Factors {
-            label: format!("{label}-g4"),
-            model: lib.path_of(g4.path),
-            gpus: "0,1".to_owned(),
-            split: Some(SplitMode::Tensor),
-            mmproj: lib.path_opt(mmproj),
-            ..Factors::default()
-        });
+    cells
+}
+
+/// The vision projector's cost, isolated from everything else, for every
+/// model with `Model::mmproj` set.
+///
+/// mmproj adds its own weight bytes (measured exactly, since they come
+/// straight from the projector's GGUF) plus a fixed graph-buffer constant —
+/// on its own this needs only one on/off pair to check, at the curve's
+/// middle context, since nothing about it is claimed to scale.
+pub fn mmproj_curve(lib: &Library) -> Vec<Factors> {
+    let mut cells = Vec::new();
+    for m in MODELS.iter().filter(|m| m.mmproj.is_some()) {
+        let gpus = m.preferred_gpus();
+        let ctx = curve_points(m)[1].ctx;
+        for mmproj_on in [false, true] {
+            cells.push(Factors {
+                label: format!(
+                    "mmproj-curve-{}-{}",
+                    if mmproj_on { "on" } else { "off" },
+                    m.key
+                ),
+                model: lib.path_of(m.path),
+                gpus: gpus.to_owned(),
+                split: Some(SplitMode::Layer),
+                ctx,
+                mmproj: mmproj_on.then_some(m.mmproj).flatten().map(|p| lib.path_of(p)),
+                ..m.flags(gpus)
+            });
+        }
     }
+    cells
+}
+
+/// The no-flash-attention host-memory term, for every model with
+/// `Model::verify_flash_attn_term` set.
+///
+/// Charged per architecture rather than modelled as a shared constant — it's
+/// been measured to vary from 30 to 254 MiB depending on the shape — so an
+/// architecture nothing has checked yet is running on whichever other
+/// shape's number happens to apply, which is not a claim anything has
+/// tested. Both axes the underlying KQ mask depends on are swept (context
+/// and batch), since the term should be linear in both.
+pub fn flash_attn_curve(lib: &Library) -> Vec<Factors> {
+    let mut cells = Vec::new();
+    for m in MODELS.iter().filter(|m| m.verify_flash_attn_term) {
+        let gpus = m.preferred_gpus();
+        let split = m.splits_for(Runtime::Mainline)[0];
+        for (ctx, ubatch) in [
+            (8192, 512),
+            (32768, 512),
+            (131072, 512),
+            (32768, 2048),
+            (8192, 2048),
+        ] {
+            if m.max_ctx.is_some_and(|top| ctx > top) {
+                continue;
+            }
+            cells.push(Factors {
+                label: format!("flash-attn-curve-{}-c{ctx}-ub{ubatch}", m.key),
+                model: lib.path_of(m.path),
+                gpus: gpus.to_owned(),
+                split: Some(split),
+                ctx,
+                ubatch,
+                flash_attn: FlashAttn::Off,
+                ..m.flags(gpus)
+            });
+        }
+    }
+    cells
+}
+
+/// Terms with their own switch rather than a continuous factor.
+///
+/// Each of these is a constant in the estimator justified by one measurement or
+/// none: the vision projector, the offload regimes, ik's repacking and mapping
+/// paths, the embedding modality, and what actually accumulates once a server
+/// is doing an agent's work.
+pub fn switches(lib: &Library) -> Vec<Factors> {
+    let mut cells = Vec::new();
     // Offload regimes: the arena measures invariant across them, and a host
     // baseline with no GPU visible is a different shape entirely.
     let q4 = model("qwen3-4b");
@@ -343,6 +466,7 @@ pub fn holdout(lib: &Library) -> Vec<Factors> {
     let lag = model("laguna");
     let glm = model("glm52");
     let ds = model("dsv4f");
+    let mg = model("muse-glimmer");
     vec![
         Factors {
             label: "prod-gemma4-31b-qat".to_owned(),
@@ -426,6 +550,18 @@ pub fn holdout(lib: &Library) -> Vec<Factors> {
             ctx: 2048,
             ..Factors::default()
         },
+        Factors {
+            label: "prod-muse-glimmer".to_owned(),
+            model: lib.path_of(mg.path),
+            mmproj: lib.path_opt(mg.mmproj),
+            draft: lib.path_opt(mg.draft),
+            spec_type: Some(mg.draft_spec_type.to_owned()),
+            gpus: "0".to_owned(),
+            split: Some(SplitMode::Layer),
+            ctx: mg.production_ctx.expect("muse-glimmer sets production_ctx"),
+            parallel: mg.production_parallel,
+            ..Factors::default()
+        },
     ]
 }
 
@@ -487,6 +623,15 @@ fn significant(lib: &Library, m: &Model, runtime: Runtime) -> Vec<Factors> {
 /// larger batch for the terms that scale with it, and one flash-attention-off
 /// point. A model whose native context is below the standard sweep gets the same
 /// shape scaled into its own range instead of being pushed past it.
+///
+/// A model's `production_ctx`, when set, adds one further point there: fitting
+/// a line from points inside a range says nothing about whether it still holds
+/// where the model is actually extrapolated to, and that's exactly the point
+/// nothing else here checks.
+///
+/// The first three elements of the returned points are always the base
+/// contexts in ascending order — callers that want just those (not the
+/// large-batch, flash-attn-off, or production-context points) can rely on it.
 fn curve_points(m: &Model) -> Vec<CurvePoint> {
     let contexts = match m.max_ctx {
         Some(top) if top < 65536 => [(top / 4).max(512), (top / 2).max(1024), top],
@@ -511,6 +656,15 @@ fn curve_points(m: &Model) -> Vec<CurvePoint> {
         ubatch: DEFAULT_UBATCH,
         fa: FlashAttn::Off,
     });
+    if let Some(production_ctx) = m.production_ctx
+        && production_ctx > *contexts.iter().max().expect("three contexts")
+    {
+        points.push(CurvePoint {
+            ctx: production_ctx,
+            ubatch: DEFAULT_UBATCH,
+            fa: FlashAttn::On,
+        });
+    }
     points
 }
 
@@ -526,37 +680,6 @@ struct CurvePoint {
     ctx: u32,
     ubatch: u32,
     fa: FlashAttn,
-}
-
-/// One of the three MTP shapes, as the cell that exercises it.
-#[derive(Debug, Clone, Copy)]
-struct MtpCell {
-    label: &'static str,
-    model: &'static Model,
-    spec_type: Option<&'static str>,
-    draft: Option<&'static str>,
-}
-
-/// The two slot configurations every MTP shape is measured at.
-const MTP_SLOT_SHAPES: [MtpSlots; 2] = [
-    MtpSlots {
-        ctx: 32768,
-        parallel: 1,
-        kv_unified: false,
-    },
-    MtpSlots {
-        ctx: 131072,
-        parallel: 4,
-        kv_unified: true,
-    },
-];
-
-/// A context and the slot configuration it is served under.
-#[derive(Debug, Clone, Copy)]
-struct MtpSlots {
-    ctx: u32,
-    parallel: u32,
-    kv_unified: bool,
 }
 
 /// How much of the model is on a GPU, and how many GPUs are visible at all.
