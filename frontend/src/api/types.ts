@@ -637,7 +637,13 @@ export interface components {
        */
       total_bytes: number;
     };
-    /** @description `POST /api/services/{name}/disable` response body. */
+    /**
+     * @description `POST /api/services/{name}/disable` response body.
+     *
+     *     The `status` tag tells the caller the outcome of the disable request. All
+     *     variants are success states; a request that fails validation or targets a
+     *     missing service comes back as an error response instead.
+     */
     DisableResponse:
       | {
           /** @enum {string} */
@@ -659,7 +665,11 @@ export interface components {
       /** @description Model name (maps to an ananke service name). */
       model: string;
     };
-    /** @description `POST /api/services/{name}/enable` response body. */
+    /**
+     * @description `POST /api/services/{name}/enable` response body.
+     *
+     *     The `status` tag tells the caller the outcome of the enable request.
+     */
     EnableResponse:
       | {
           /** @enum {string} */
@@ -716,56 +726,94 @@ export interface components {
     };
     /**
      * @description One event delivered over `/api/events`. The `type` tag discriminates the
-     *     variant; `at_ms` is present on every variant except `overflow`.
+     *     variant; `at_ms` is present on every variant except `overflow`. The same
+     *     `Event` is used as a broadcast bus message internally, so it must stay
+     *     serializable and stable — anything published here is part of the wire
+     *     contract the frontend and other clients read.
      */
     Event:
       | {
-          /** Format: int64 */
+          /**
+           * Format: int64
+           * @description When the transition happened, in unix milliseconds.
+           */
           at_ms: number;
+          /** @description The state it left, e.g. `"starting"` or `"running"`. */
           from: string;
+          /** @description The service that changed state. */
           service: string;
+          /** @description The state it entered. */
           to: string;
           /** @enum {string} */
           type: "state_changed";
         }
       | {
-          /** Format: int64 */
+          /**
+           * Format: int64
+           * @description When the allocation changed, in unix milliseconds.
+           */
           at_ms: number;
+          /**
+           * @description The per-device reserved byte counts after the change. Keys are
+           *     device ids (`"cpu"` or `"gpu:N"`).
+           */
           reservations: {
             [key: string]: number;
           };
+          /** @description The service whose allocation changed. */
           service: string;
           /** @enum {string} */
           type: "allocation_changed";
         }
       | {
-          /** Format: int64 */
+          /**
+           * Format: int64
+           * @description When the reload happened, in unix milliseconds.
+           */
           at_ms: number;
+          /** @description The services whose effective config changed as a result. */
           changed_services: string[];
           /** @enum {string} */
           type: "config_reloaded";
         }
       | {
-          /** Format: int64 */
+          /**
+           * Format: int64
+           * @description When the drift was recorded, in unix milliseconds.
+           */
           at_ms: number;
+          /** @description The memory pool: `"vram"` or `"host"`. */
           class: string;
-          /** Format: float */
+          /**
+           * Format: float
+           * @description The new rolling-mean correction factor.
+           */
           rolling_mean: number;
+          /** @description The service whose correction drifted. */
           service: string;
           /** @enum {string} */
           type: "estimator_drift";
         }
       | {
-          /** Format: int64 */
+          /**
+           * Format: int64
+           * @description When the restart was recorded, in unix milliseconds.
+           */
           at_ms: number;
+          /** @description A human-readable reason for the restart. */
           detail: string;
+          /** @description The service that was restarted. */
           service: string;
+          /** @description The auto-restart trigger that fired. */
           trigger: string;
           /** @enum {string} */
           type: "auto_restarted";
         }
       | {
-          /** Format: int64 */
+          /**
+           * Format: int64
+           * @description How many events were dropped for the slow subscriber.
+           */
           dropped: number;
           /** @enum {string} */
           type: "overflow";
@@ -1578,14 +1626,21 @@ export interface components {
        */
       ubatch_size?: number | null;
     };
-    /** @description `POST /api/services/{name}/start` response body. */
+    /**
+     * @description `POST /api/services/{name}/start` response body.
+     *
+     *     The `status` tag tells the caller the outcome of the start request.
+     */
     StartResponse:
       | {
           /** @enum {string} */
           status: "already_running";
         }
       | {
-          /** Format: int64 */
+          /**
+           * Format: int64
+           * @description The id of the run that was spawned.
+           */
           run_id: number;
           /** @enum {string} */
           status: "started";
@@ -1595,11 +1650,19 @@ export interface components {
           status: "queue_full";
         }
       | {
+          /**
+           * @description The typed error the supervisor produced, matching what a 503
+           *     `ApiError` response would carry.
+           */
           error: components["schemas"]["ApiErrorBody"];
           /** @enum {string} */
           status: "unavailable";
         };
-    /** @description `POST /api/services/{name}/stop` response body. */
+    /**
+     * @description `POST /api/services/{name}/stop` response body.
+     *
+     *     The `status` tag tells the caller the outcome of the stop request.
+     */
     StopResponse:
       | {
           /** @enum {string} */
