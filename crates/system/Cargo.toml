@@ -16,6 +16,7 @@ async-trait.workspace = true
 nix.workspace = true
 parking_lot.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [features]
 test-fakes = []

@@ -9,3 +9,4 @@ name = "ananke_spawn"
 path = "src/lib.rs"
 
 [dependencies]
+serde.workspace = true
