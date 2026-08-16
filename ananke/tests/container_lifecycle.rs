@@ -42,7 +42,7 @@ fn container_service() -> (ServiceConfig, Allocation) {
             "ninfer-serve".into(),
             "/artifacts/model.ninfer".into(),
             "--port".into(),
-            "{port}".into(),
+            "${port}".into(),
         ],
     );
     svc.port = 8205;

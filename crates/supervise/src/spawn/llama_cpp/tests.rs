@@ -399,8 +399,8 @@ fn launcher_template_splats_args_and_substitutes_model() {
         let lc = expect_llama_cpp(&mut svc);
         lc.launcher = Some(vec![
             "/opt/podman-wrap.sh".into(),
-            "{model}".into(),
-            "{args}".into(),
+            "${model}".into(),
+            "${args}".into(),
         ]);
     }
     let alloc = Allocation::from_override(&svc.placement_override);
@@ -423,7 +423,7 @@ fn launcher_template_splats_args_and_substitutes_model() {
 #[test]
 fn launcher_splat_inside_arg_is_rejected() {
     let mut svc = base_service();
-    expect_llama_cpp(&mut svc).launcher = Some(vec!["wrap.sh".into(), "--foo={args}".into()]);
+    expect_llama_cpp(&mut svc).launcher = Some(vec!["wrap.sh".into(), "--foo=${args}".into()]);
     let alloc = Allocation::from_override(&svc.placement_override);
     let err = match render_argv(&svc, &alloc, None) {
         Ok(_) => panic!("expected splat-misuse error"),

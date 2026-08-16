@@ -68,7 +68,7 @@ fn comfy_like_service(name: &str, port: u16) -> ServiceConfig {
         tracking: ananke::config::TrackingSettings::default(),
         metadata: ananke_api::shared::AnankeMetadata::new(),
         template_config: TemplateConfig::Command(CommandConfig {
-            command: vec!["comfyui-start".into(), "--port".into(), "{port}".into()],
+            command: vec!["comfyui-start".into(), "--port".into(), "${port}".into()],
             workdir: None,
             shutdown_command: None,
             private_port_override: None,

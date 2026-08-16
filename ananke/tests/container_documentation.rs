@@ -105,7 +105,7 @@ fn container_documentation_covers_operational_contract() {
         ("loopback-only publication", "127.0.0.1:<private_port>"),
         ("mount path translation", "chat_template_file"),
         ("opaque paths", "extra_args"),
-        ("CDI GPU injection", "nvidia.com/gpu={id}"),
+        ("CDI GPU injection", "nvidia.com/gpu=${id}"),
         ("cgroup attribution", "cgroup"),
         ("detached lifecycle", "logs --follow"),
         ("explicit cleanup", "`--rm` is deliberately not used"),

@@ -71,11 +71,10 @@ pub(crate) fn command_uses_port_placeholder(
     cmd: &CommandConfig,
     env: Option<&BTreeMap<String, String>>,
 ) -> bool {
-    const PLACEHOLDER: &str = "{port}";
-    cmd.command.iter().any(|a| a.contains(PLACEHOLDER))
-        || env
-            .map(|m| m.values().any(|v| v.contains(PLACEHOLDER)))
-            .unwrap_or(false)
+    // `${listen_port}` is the name to write; `${port}` is its alias.
+    const PLACEHOLDERS: [&str; 2] = ["${port}", "${listen_port}"];
+    let hit = |s: &String| PLACEHOLDERS.iter().any(|p| s.contains(p));
+    cmd.command.iter().any(hit) || env.map(|m| m.values().any(hit)).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -183,7 +182,7 @@ allocation.reserve_gb = 1
 [[service]]
 name = "qwen3.6-27b-vllm"
 template = "command"
-command = ["/run/vllm.sh", "{port}"]
+command = ["/run/vllm.sh", "${port}"]
 port = 8500
 allocation.mode = "static"
 allocation.reserve_gb = 1
@@ -301,7 +300,7 @@ allocation.reserve_gb = 1
 [[service]]
 name = "ext"
 template = "command"
-command = ["run", "--port={port}"]
+command = ["run", "--port=${port}"]
 shutdown_command = ["stop", "{bogus}"]
 port = 8500
 allocation.mode = "static"

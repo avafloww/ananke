@@ -40,7 +40,7 @@ pub struct RawContainerConfig {
     /// IPC namespace: `"private"` (default) or `"host"`. Host IPC shares
     /// the host's `/dev/shm`, which some GPU workloads require.
     pub ipc: Option<SmolStr>,
-    /// Optional CDI GPU device template. A value like `nvidia.com/gpu={id}`
+    /// Optional CDI GPU device template. A value like `nvidia.com/gpu=${id}`
     /// expands once per GPU selected by ananke placement. Unset means no
     /// GPU injection.
     pub gpu_device: Option<String>,

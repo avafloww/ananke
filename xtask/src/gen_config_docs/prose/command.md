@@ -5,7 +5,7 @@ Used for arbitrary binaries. Only `name`, `template`, `port`, and `command` are 
 name = "comfyui"            # required
 template = "command"        # required
 port = 8188                 # required
-command = ["/bin/bash", "start_comfy.sh", "--port", "{port}"] # required
+command = ["/bin/bash", "start_comfy.sh", "--port", "${port}"] # required
 lifecycle = "on_demand"
 
 [service.allocation]
@@ -24,15 +24,19 @@ timeout = "30s"
 
 The following placeholders are substituted in `command` and `shutdown_command` argv entries (and in `env` values):
 
-- `{port}` - the private loopback port assigned by ananke.
-- `{gpu_ids}` - comma-separated NVML index list ananke picked for this service.
-- `{reserve_mb}` - the reservation in MiB, on whichever device the service was placed. Still accepted under its former name `{vram_mb}`.
-- `{model}` - model path (llama-cpp only; empty for command services).
-- `{name}` - service name.
-- `{listen_host}` / `{listen_port}` - the interface and port the workload should bind. For a host process these are `127.0.0.1` and the private port, so `{listen_port}` and `{port}` agree; they differ only for a bridge-networked container (see [Container Workloads](#container-workloads)).
-- `{host_port}` - the host-side private port, for the rare command that needs both sides of a bridge publication.
+- `${port}` - the private loopback port assigned by ananke.
+- `${gpu_ids}` - comma-separated NVML index list ananke picked for this service.
+- `${reserve_mb}` - the reservation in MiB, on whichever device the service was placed. Still accepted under its former name `${vram_mb}`.
+- `${model}` - model path (llama-cpp only; empty for command services).
+- `${name}` - service name.
+- `${listen_host}` / `${listen_port}` - the interface and port the workload should bind. For a host process these are `127.0.0.1` and the private port, so `${listen_port}` and `${port}` agree; they differ only for a bridge-networked container (see [Container Workloads](#container-workloads)).
+- `${host_port}` - the host-side private port, for the rare command that needs both sides of a bridge publication.
 
-Only an identifier between braces is a placeholder, so brace-delimited content that could never be one passes through untouched — vLLM's `--diffusion-config '{"canvas_length": 256}'` is an argument, not a typo. A misspelling is still an error, because a misspelling is identifier-shaped: `{prot}` is rejected. Write `{{` and `}}` for a literal `{` / `}` where you need to write something that *would* otherwise resolve.
+A placeholder is `${name}`, and only `${` and `$$` mean anything to the substituter. A bare `{` never does, so an argument carrying JSON, a Jinja template, or a Python format string passes through exactly as written — vLLM's `--diffusion-config '{"canvas_length": 256}'` needs no escaping at all. `$$` is a literal `$`, which is how a literal `${port}` is written (`$${port}`); a `$` before anything else is itself, since arguments carry bare dollars far more often than they carry `${`.
+
+An unknown name is an error, so a typo surfaces at config load rather than reaching the argv. So does `${` with no closing brace.
+
+> **Changed in 0.3.0.** Placeholders were previously written `{name}`. That form could not be told apart from an argument's own braces without guessing, which made JSON arguments fail and silently rewrote Jinja templates. Rename each placeholder to `${name}`; nothing else needs escaping. A config still using `{name}` will not error — the text is now literal — so check that a service's rendered command still contains the value you expect, via `GET /api/services/{name}/command` or the launch-command panel.
 
 The child also inherits `CUDA_VISIBLE_DEVICES` set to the picked GPU id(s). A containerized service does not need to forward it by hand: set `container.gpu_device` and ananke injects exactly the GPUs it picked.
 
@@ -47,7 +51,7 @@ A `command`-template service that already speaks the OpenAI API (vLLM, TGI, SGLa
 name = "qwen3.6-27b-vllm"
 template = "command"
 port = 8210
-command = ["/srv/vllm/qwen36_27b.sh", "{port}"]
+command = ["/srv/vllm/qwen36_27b.sh", "${port}"]
 lifecycle = "on_demand"
 idle_timeout = "10m"
 
@@ -91,7 +95,7 @@ name = "jina-embeddings-v5-text-small-retrieval-vllm"
 template = "command"
 port = 8211
 modality = "embedding"
-command = ["/srv/vllm/jina_embed_v5_small.sh", "{port}"]
+command = ["/srv/vllm/jina_embed_v5_small.sh", "${port}"]
 lifecycle = "on_demand"
 idle_timeout = "30m"
 

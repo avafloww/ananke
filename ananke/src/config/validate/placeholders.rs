@@ -22,7 +22,7 @@ impl PlaceholderChecker for DaemonPlaceholderChecker {
 /// Resolve every `{placeholder}` in `argv` against a synthetic context
 /// covering every substitution the supervisor can produce. Propagates
 /// the first [`SubstituteError`] as a config error with `field` + `name`
-/// context, so a typo like `{prot}` fails `config validate` rather than
+/// context, so a typo like `${prot}` fails `config validate` rather than
 /// slipping through to a runtime `StartFailure`.
 pub(crate) fn check_placeholders(
     name: &SmolStr,
@@ -57,7 +57,7 @@ pub(crate) fn check_placeholders(
 /// Dry-run a llama-cpp `launcher` argv at validate time. Identical
 /// purpose to [`check_placeholders`] but tolerates the `{args}` splat
 /// (which would otherwise be rejected by [`substitute`]). Surfaces
-/// typos like `{prot}` and misuses like `--foo={args}` as config errors
+/// typos like `${prot}` and misuses like `--foo={args}` as config errors
 /// rather than runtime `StartFailure`s.
 pub(crate) fn check_launcher_placeholders(
     name: &SmolStr,
@@ -103,7 +103,7 @@ name = "demo"
 template = "llama-cpp"
 model = "/m/x.gguf"
 port = 11000
-launcher = ["/opt/podman-wrap.sh", "{model}", "{args}"]
+launcher = ["/opt/podman-wrap.sh", "${model}", "${args}"]
 devices.placement_override = { "gpu:0" = 1000 }
 "#,
         );
@@ -114,8 +114,8 @@ devices.placement_override = { "gpu:0" = 1000 }
             Some(
                 &[
                     "/opt/podman-wrap.sh".to_string(),
-                    "{model}".into(),
-                    "{args}".into()
+                    "${model}".into(),
+                    "${args}".into()
                 ][..]
             )
         );
@@ -130,14 +130,14 @@ name = "demo"
 template = "llama-cpp"
 model = "/m/x.gguf"
 port = 11000
-launcher = ["wrap.sh", "{model}", "{bogus}", "{args}"]
+launcher = ["wrap.sh", "${model}", "${bogus}", "${args}"]
 devices.placement_override = { "gpu:0" = 1000 }
 "#,
         );
         let err = validate(&cfg).unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("{bogus}") && msg.contains("launcher"),
+            msg.contains("${bogus}") && msg.contains("launcher"),
             "unexpected error: {err}"
         );
     }
@@ -151,7 +151,7 @@ name = "demo"
 template = "llama-cpp"
 model = "/m/x.gguf"
 port = 11000
-launcher = ["wrap.sh", "{model}", "--foo={args}"]
+launcher = ["wrap.sh", "${model}", "--foo=${args}"]
 devices.placement_override = { "gpu:0" = 1000 }
 "#,
         );
@@ -183,7 +183,7 @@ devices.placement_override = { "gpu:0" = 1000 }
 [[service]]
 name = "ext"
 template = "command"
-command = ["run", "--port={prot}"]
+command = ["run", "--port=${prot}"]
 port = 8500
 allocation.mode = "static"
 allocation.reserve_gb = 1
@@ -192,7 +192,7 @@ allocation.reserve_gb = 1
         let err = validate(&cfg).unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("command[1]") && msg.contains("{prot}"),
+            msg.contains("command[1]") && msg.contains("${prot}"),
             "unexpected error: {err}"
         );
     }
@@ -204,8 +204,8 @@ allocation.reserve_gb = 1
 [[service]]
 name = "ext"
 template = "command"
-command = ["run", "--port={port}"]
-shutdown_command = ["stop", "{bogus}"]
+command = ["run", "--port=${port}"]
+shutdown_command = ["stop", "${bogus}"]
 port = 8500
 allocation.mode = "static"
 allocation.reserve_gb = 1
@@ -214,7 +214,7 @@ allocation.reserve_gb = 1
         let err = validate(&cfg).unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("shutdown_command[1]") && msg.contains("{bogus}"),
+            msg.contains("shutdown_command[1]") && msg.contains("${bogus}"),
             "unexpected error: {err}"
         );
     }

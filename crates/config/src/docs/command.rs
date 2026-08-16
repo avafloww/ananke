@@ -32,7 +32,7 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "private_port",
                     "u16",
                     "auto-assigned",
-                    "Upstream port ananke's reverse proxy should forward to. When absent, ananke picks one from the daemon's private-port pool and substitutes it into `command`/`env` via the `{port}` placeholder. Set explicitly when the external service binds a fixed port (e.g. a docker container exposing 18188 on the host).",
+                    "Upstream port ananke's reverse proxy should forward to. When absent, ananke picks one from the daemon's private-port pool and substitutes it into `command`/`env` via the `${port}` placeholder. Set explicitly when the external service binds a fixed port (e.g. a docker container exposing 18188 on the host).",
                 ),
                 field(
                     "shutdown_command",

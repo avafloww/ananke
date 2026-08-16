@@ -9,8 +9,8 @@ template = "command"
 port = 8205
 command = [
   "ninfer-serve", "/artifacts/qwen3_6_35b_a3b.ninfer",
-  "--host", "{listen_host}",
-  "--port", "{listen_port}",
+  "--host", "${listen_host}",
+  "--port", "${listen_port}",
 ]
 allocation = { mode = "static", reserve_gb = 26 }
 health = { http = "/health", timeout = "10m" }
@@ -19,7 +19,7 @@ health = { http = "/health", timeout = "10m" }
 runtime = "docker"
 image = "ninfer:local"
 network = "host"
-gpu_device = "nvidia.com/gpu={id}"
+gpu_device = "nvidia.com/gpu=${id}"
 mounts = [
   { source = "/home/philpax/ai/ninfer", target = "/artifacts", read_only = true },
 ]
@@ -51,11 +51,11 @@ Two existing fields are rejected outright alongside `container`, because each re
 
 The service endpoint has two sides, and the placeholders resolve to the side the workload should bind — never the side ananke connects to.
 
-Under `network = "bridge"`, ananke publishes `127.0.0.1:<private_port>` onto `<container_port>` and nothing else. Inside the container, `{listen_host}` resolves to `0.0.0.0` and `{listen_port}` to `<container_port>`: a workload that bound loopback inside its own network namespace would be unreachable from the host side of the publication. Because ananke can only guarantee reachability it was told about, a bridge-networked `command` service **must** consume both `{listen_host}` and `{listen_port}` in its argv or environment; one that hardcodes its own address is rejected at config load. Use host networking for a command whose listener you can't parameterise.
+Under `network = "bridge"`, ananke publishes `127.0.0.1:<private_port>` onto `<container_port>` and nothing else. Inside the container, `${listen_host}` resolves to `0.0.0.0` and `${listen_port}` to `<container_port>`: a workload that bound loopback inside its own network namespace would be unreachable from the host side of the publication. Because ananke can only guarantee reachability it was told about, a bridge-networked `command` service **must** consume both `${listen_host}` and `${listen_port}` in its argv or environment; one that hardcodes its own address is rejected at config load. Use host networking for a command whose listener you can't parameterise.
 
-Under `network = "host"`, there is no publication and no translation. `{listen_host}` resolves to `127.0.0.1` and `{listen_port}` to the private port, exactly as for a host process.
+Under `network = "host"`, there is no publication and no translation. `${listen_host}` resolves to `127.0.0.1` and `${listen_port}` to the private port, exactly as for a host process.
 
-`{port}` remains accepted everywhere as an alias for `{listen_port}`, so pre-container command templates keep working. `{host_port}` is always the host-side private port, for the rare command that genuinely needs both numbers.
+`${port}` remains accepted everywhere as an alias for `${listen_port}`, so pre-container command templates keep working. `${host_port}` is always the host-side private port, for the rare command that genuinely needs both numbers.
 
 llama.cpp takes the same resolved endpoint, but as a typed renderer input rather than a placeholder: ananke emits `--host`/`--port` itself, so a containerized llama.cpp service needs no configuration for this at all.
 
@@ -76,7 +76,7 @@ For `llama-cpp`, ananke generates the argv, so it also translates the four path 
 
 #### GPUs
 
-`gpu_device` is a CDI template expanded once per GPU that ananke's placement actually selected, so the container sees the same devices the allocator reserved for it. `nvidia.com/gpu={id}` with GPUs 0 and 2 selected yields `--device nvidia.com/gpu=0 --device nvidia.com/gpu=2`.
+`gpu_device` is a CDI template expanded once per GPU that ananke's placement actually selected, so the container sees the same devices the allocator reserved for it. `nvidia.com/gpu=${id}` with GPUs 0 and 2 selected yields `--device nvidia.com/gpu=0 --device nvidia.com/gpu=2`.
 
 Leaving it unset injects nothing. If the runtime cannot satisfy the requested CDI device, the start fails with that error — ananke does not fall back to bind-mounting `/dev/nvidia*`, which would hand the container every GPU on the machine.
 
@@ -137,7 +137,7 @@ health = { http = "/health", timeout = "5m" }
 runtime = "docker"
 image = "ghcr.io/ggml-org/llama.cpp:server-cuda"
 network = "host"
-gpu_device = "nvidia.com/gpu={id}"
+gpu_device = "nvidia.com/gpu=${id}"
 mounts = [
   { source = "/home/philpax/ai/muse-glimmer/models", target = "/models", read_only = true },
 ]
@@ -160,8 +160,8 @@ command = [
   "--model", "nvidia/diffusiongemma-26B-A4B-it-NVFP4",
   "--max-model-len", "131072",
   "--gpu-memory-utilization", "0.715",
-  "--host", "{listen_host}",
-  "--port", "{listen_port}",
+  "--host", "${listen_host}",
+  "--port", "${listen_port}",
 ]
 env = { VLLM_NO_USAGE_STATS = "1" }
 allocation = { mode = "static", reserve_gb = 23 }
@@ -175,7 +175,7 @@ network = "bridge"
 container_port = 8000
 ipc = "host"
 env_passthrough = ["HF_TOKEN"]
-gpu_device = "nvidia.com/gpu={id}"
+gpu_device = "nvidia.com/gpu=${id}"
 mounts = [
   { source = "/home/philpax/.cache/huggingface", target = "/root/.cache/huggingface" },
 ]

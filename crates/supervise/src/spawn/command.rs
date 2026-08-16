@@ -1,6 +1,6 @@
 //! Render argv for `Command`-template services: the main `command` and its
 //! optional `shutdown_command` sibling, both substituted through the same
-//! `{port}` / `{gpu_ids}` / `{reserve_mb}` / `{model}` / `{name}` placeholder
+//! `${port}` / `${gpu_ids}` / `${reserve_mb}` / `${model}` / `${name}` placeholder
 //! rules.
 
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ use crate::spawn::SpawnConfig;
 
 /// Assemble the [`PlaceholderContext`] a command-template argv renders
 /// against. Shared by spawn-time and shutdown-time so both paths resolve
-/// `{port}` / `{gpu_ids}` / `{reserve_mb}` / `{name}` identically.
+/// `${port}` / `${gpu_ids}` / `${reserve_mb}` / `${name}` identically.
 fn placeholder_context<'a>(
     svc: &'a ServiceConfig,
     alloc: &'a Allocation,
@@ -25,7 +25,7 @@ fn placeholder_context<'a>(
     ananke_templates::PlaceholderContext {
         name: &svc.name,
         port: svc.private_port,
-        // Command template has no model path; {model} resolves to empty.
+        // Command template has no model path; ${model} resolves to empty.
         model: None,
         allocation: alloc,
         static_reserve_mb,
@@ -84,8 +84,8 @@ pub fn render_shutdown_argv(
     Some(render_command_like(argv, svc, alloc))
 }
 
-/// Render argv for a `Command`-template service. Substitutes `{port}`,
-/// `{gpu_ids}`, `{reserve_mb}`, `{model}`, `{name}`.
+/// Render argv for a `Command`-template service. Substitutes `${port}`,
+/// `${gpu_ids}`, `${reserve_mb}`, `${model}`, `${name}`.
 pub(super) fn render_command_argv(
     svc: &ServiceConfig,
     alloc: &Allocation,
@@ -113,7 +113,7 @@ mod tests {
             "python".into(),
             "main.py".into(),
             "--port".into(),
-            "{port}".into(),
+            "${port}".into(),
         ];
         let mut placement = BTreeMap::new();
         placement.insert(DeviceSlot::Gpu(0), 6144);
@@ -132,7 +132,7 @@ mod tests {
             cfg.args
         );
         assert!(
-            cfg.args.iter().all(|a| a != "{port}"),
+            cfg.args.iter().all(|a| a != "${port}"),
             "raw placeholder leaked into args: {:?}",
             cfg.args
         );

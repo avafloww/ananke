@@ -46,7 +46,7 @@ impl std::fmt::Display for ContainerRenderError {
             ContainerRenderError::BadCdiTemplate(t) => {
                 write!(
                     f,
-                    "malformed CDI device template {t:?} (must contain {{id}} exactly once)"
+                    "malformed CDI device template {t:?} (must contain ${{id}} exactly once)"
                 )
             }
             ContainerRenderError::AmbiguousMount(msg) => write!(f, "{msg}"),
@@ -93,18 +93,18 @@ pub fn container_name_pattern(service_name: &str) -> String {
     format!("ananke-{}-<run-id>", sanitize_name(service_name))
 }
 
-/// Expand a CDI device template (`nvidia.com/gpu={id}`) once per selected
+/// Expand a CDI device template (`nvidia.com/gpu=${id}`) once per selected
 /// GPU id.
 pub fn expand_cdi_devices(
     template: &str,
     gpu_ids: &[u32],
 ) -> Result<Vec<String>, ContainerRenderError> {
-    if template.matches("{id}").count() != 1 {
+    if template.matches("${id}").count() != 1 {
         return Err(ContainerRenderError::BadCdiTemplate(template.to_string()));
     }
     Ok(gpu_ids
         .iter()
-        .map(|id| template.replace("{id}", &id.to_string()))
+        .map(|id| template.replace("${id}", &id.to_string()))
         .collect())
 }
 
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn cdi_expansion_repeats_per_gpu() {
-        let out = expand_cdi_devices("nvidia.com/gpu={id}", &[0, 1]).unwrap();
+        let out = expand_cdi_devices("nvidia.com/gpu=${id}", &[0, 1]).unwrap();
         assert_eq!(out, ["nvidia.com/gpu=0", "nvidia.com/gpu=1"]);
     }
 
@@ -535,9 +535,9 @@ mod tests {
                 "--model".into(),
                 "some/model".into(),
                 "--host".into(),
-                "{listen_host}".into(),
+                "${listen_host}".into(),
                 "--port".into(),
-                "{listen_port}".into(),
+                "${listen_port}".into(),
             ],
         );
         svc.port = 8200;
@@ -714,7 +714,7 @@ mod tests {
     #[test]
     fn container_cdi_uses_allocated_gpus() {
         let (mut svc, _) = host_llama_service();
-        svc.container.as_mut().unwrap().gpu_device = Some("nvidia.com/gpu={id}".into());
+        svc.container.as_mut().unwrap().gpu_device = Some("nvidia.com/gpu=${id}".into());
         let mut placement = BTreeMap::new();
         placement.insert(DeviceSlot::Gpu(0), 10_000);
         placement.insert(DeviceSlot::Gpu(2), 10_000);
@@ -789,9 +789,9 @@ mod tests {
         expect_command(&mut command).command = vec![
             "serve".into(),
             "--host".into(),
-            "{listen_host}".into(),
+            "${listen_host}".into(),
             "--port".into(),
-            "{port}".into(),
+            "${port}".into(),
         ];
         let cfg = crate::spawn::render_argv(&command, &alloc, None).unwrap();
         assert_eq!(cfg.binary, "serve");
@@ -830,7 +830,7 @@ mod tests {
                 ("SHADOWED".to_string(), "from-container".to_string()),
                 (
                     "BIND".to_string(),
-                    "{listen_host}:{listen_port}".to_string(),
+                    "${listen_host}:${listen_port}".to_string(),
                 ),
             ]);
         }
@@ -867,9 +867,9 @@ mod tests {
             "--limit-mm-per-prompt".into(),
             r#"{"image": 7}"#.into(),
             "--host".into(),
-            "{listen_host}".into(),
+            "${listen_host}".into(),
             "--port".into(),
-            "{listen_port}".into(),
+            "${listen_port}".into(),
         ];
         let spec = render_container_spec(&svc, &alloc, None, 1, "owner").unwrap();
         assert!(

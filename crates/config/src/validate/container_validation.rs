@@ -170,15 +170,15 @@ pub(crate) fn validate_container(
         None => None,
         Some(tmpl) => {
             // Must contain {id} exactly once.
-            let count = tmpl.matches("{id}").count();
+            let count = tmpl.matches("${id}").count();
             if count == 0 {
                 return Err(fail(format!(
-                    "service {name}: container.gpu_device must contain `{{id}}` placeholder (got `{tmpl}`)"
+                    "service {name}: container.gpu_device must contain `${{id}}` placeholder (got `{tmpl}`)"
                 )));
             }
             if count > 1 {
                 return Err(fail(format!(
-                    "service {name}: container.gpu_device must contain exactly one `{{id}}` placeholder (got {count} in `{tmpl}`)"
+                    "service {name}: container.gpu_device must contain exactly one `${{id}}` placeholder (got {count} in `{tmpl}`)"
                 )));
             }
             Some(tmpl.clone())
@@ -273,14 +273,14 @@ pub(crate) fn validate_bridge_command_endpoint(
         command.iter().any(hit) || service_env.values().any(hit) || container.env.values().any(hit)
     };
 
-    if !consumes(&["{listen_host}"]) {
+    if !consumes(&["${listen_host}"]) {
         return Err(fail(format!(
-            "service {name}: bridge-networked container command must consume `{{listen_host}}` in its command or env, so it binds the interface the published port maps onto (use `network = \"host\"` for a command that binds its own address)"
+            "service {name}: bridge-networked container command must consume `${{listen_host}}` in its command or env, so it binds the interface the published port maps onto (use `network = \"host\"` for a command that binds its own address)"
         )));
     }
-    if !consumes(&["{listen_port}", "{port}"]) {
+    if !consumes(&["${listen_port}", "${port}"]) {
         return Err(fail(format!(
-            "service {name}: bridge-networked container command must consume `{{listen_port}}` in its command or env, so it binds the container port `container_port` publishes to"
+            "service {name}: bridge-networked container command must consume `${{listen_port}}` in its command or env, so it binds the container port `container_port` publishes to"
         )));
     }
     Ok(())
@@ -299,7 +299,7 @@ mod tests {
 name = "cmd-docker"
 template = "command"
 port = 8500
-command = ["run", "--host", "{listen_host}", "--port", "{listen_port}"]
+command = ["run", "--host", "${listen_host}", "--port", "${listen_port}"]
 allocation.mode = "static"
 allocation.reserve_gb = 1
 
@@ -418,7 +418,7 @@ gpu_device = "nvidia.com/gpu"
 "#,
         );
         let err = validate(&cfg).unwrap_err();
-        assert!(format!("{err}").contains("{id}"));
+        assert!(format!("{err}").contains("${id}"));
     }
 
     #[test]
@@ -499,7 +499,7 @@ name = "lc"
 template = "llama-cpp"
 model = "/m/x.gguf"
 port = 11435
-launcher = ["/wrap.sh", "{model}", "{args}"]
+launcher = ["/wrap.sh", "${model}", "${args}"]
 
 [service.container]
 image = "llama:latest"
@@ -553,7 +553,7 @@ container_port = 8000
 "#,
         );
         let err = validate(&cfg).unwrap_err();
-        assert!(format!("{err}").contains("must consume `{listen_host}`"));
+        assert!(format!("{err}").contains("must consume `${listen_host}`"));
 
         // Interface consumed, port hardcoded.
         let cfg = parse_and_merge(
@@ -562,7 +562,7 @@ container_port = 8000
 name = "half"
 template = "command"
 port = 8500
-command = ["serve", "--host", "{listen_host}", "--port", "8000"]
+command = ["serve", "--host", "${listen_host}", "--port", "8000"]
 allocation.mode = "static"
 allocation.reserve_gb = 1
 
@@ -573,7 +573,7 @@ container_port = 8000
 "#,
         );
         let err = validate(&cfg).unwrap_err();
-        assert!(format!("{err}").contains("must consume `{listen_port}`"));
+        assert!(format!("{err}").contains("must consume `${listen_port}`"));
     }
 
     #[test]
@@ -587,7 +587,7 @@ name = "via-env"
 template = "command"
 port = 8500
 command = ["serve"]
-env = { BIND_HOST = "{listen_host}", BIND_PORT = "{port}" }
+env = { BIND_HOST = "${listen_host}", BIND_PORT = "${port}" }
 allocation.mode = "static"
 allocation.reserve_gb = 1
 
@@ -615,7 +615,7 @@ allocation.reserve_gb = 1
 image = "test:latest"
 network = "bridge"
 container_port = 8000
-env = { BIND_HOST = "{listen_host}", BIND_PORT = "{listen_port}" }
+env = { BIND_HOST = "${listen_host}", BIND_PORT = "${listen_port}" }
 "#,
         );
         assert!(validate(&cfg).unwrap().services[0].container.is_some());
@@ -631,7 +631,7 @@ env = { BIND_HOST = "{listen_host}", BIND_PORT = "{listen_port}" }
 name = "host-opaque"
 template = "command"
 port = 8500
-command = ["serve", "--port", "{port}"]
+command = ["serve", "--port", "${port}"]
 allocation.mode = "static"
 allocation.reserve_gb = 1
 

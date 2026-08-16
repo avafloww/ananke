@@ -24,7 +24,7 @@ pub struct RawCommandService {
     pub allocation: Option<RawAllocation>,
     /// Upstream port ananke's reverse proxy should forward to. When
     /// absent, ananke picks one from the daemon's private-port pool and
-    /// substitutes it into `command` / `env` via the `{port}`
+    /// substitutes it into `command` / `env` via the `${port}`
     /// placeholder. Set it explicitly when the external service binds a
     /// fixed port (e.g. a docker container exposing 18188 on the host).
     pub private_port: Option<u16>,

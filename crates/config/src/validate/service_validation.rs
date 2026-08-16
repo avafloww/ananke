@@ -462,7 +462,7 @@ pub(crate) fn validate_service(
             warn!(
                 service = %name,
                 private_port = p,
-                "auto-assigned private_port is never referenced via {{port}} in the command or env — the child likely binds a different port and ananke's proxy will fail to forward. Either substitute {{port}} or set `private_port` to match the child's actual port"
+                "auto-assigned private_port is never referenced via `${{port}}` in the command or env — the child likely binds a different port and ananke's proxy will fail to forward. Either substitute `${{port}}` or set `private_port` to match the child's actual port"
             );
         }
         p

@@ -24,7 +24,7 @@ fn command_argv_substitutes_port() {
         "python".into(),
         "main.py".into(),
         "--port".into(),
-        "{port}".into(),
+        "${port}".into(),
     ];
 
     let svc = ServiceConfig {

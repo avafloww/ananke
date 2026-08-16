@@ -119,7 +119,7 @@ These fields appear at the top level of every `[[service]]` block, regardless of
 | `modality` | string | `"chat"` | `"chat"` or `"embedding"` (see [Embedding Services](#embedding-services)). On `llama-cpp` services, `"embedding"` also passes `--embeddings` to llama-server. Any other string is a hard config error. |
 | `extra_args` | array of string | none | Extra argv appended to the service's launch command. |
 | `extra_args_append` | array of string | none | Extra argv appended to the inherited list (use with `extends`; concatenated with parent's list). |
-| `env` | map string → string | none | Environment variables set on the spawned process. Accepts `{port}`, `{gpu_ids}`, `{reserve_mb}`, `{model}`, `{name}` placeholders. |
+| `env` | map string → string | none | Environment variables set on the spawned process. Accepts `${port}`, `${gpu_ids}`, `${reserve_mb}`, `${model}`, `${name}` placeholders. |
 | `env_inherit` | bool | `true` | Whether the child process inherits the daemon's environment (`$PATH`, `$HOME`, locale, …). Per-service `env` entries override individual inherited keys. Set `false` to start with a clean environment containing only the variables in `env` plus `CUDA_VISIBLE_DEVICES`. |
 | `drain_timeout` | duration string | `30s` | Drain timeout before the supervisor escalates to SIGKILL. |
 | `extended_stream_drain` | duration string | `30s` | Extra grace granted to in-flight streaming requests during drain. |
@@ -229,7 +229,7 @@ ananke oversubscribes GPU memory by dynamically managing which models are active
   - `static`: Reserves a fixed amount of memory (`reserve_gb`) — host RAM for a cpu-only service, VRAM otherwise. The pre-rename `vram_gb` spelling is still accepted.
   - `dynamic`: Operates within a range (`min_reserve_gb` to `max_reserve_gb`).
 
-For a GPU-placed service the daemon picks, in both modes, the GPU with the most available headroom (subject to `gpu_allow`), preferring one whose free capacity satisfies the upper bound (`reserve_gb` for `static`, `max_reserve_gb` for `dynamic`) so dynamic services have room to grow. The picked GPU id is exported to the spawned child as `CUDA_VISIBLE_DEVICES`, and is also available as the `{gpu_ids}` placeholder in `command` argv. A containerized service instead sets `container.gpu_device`, and ananke injects a CDI device per picked GPU so those are the only ones the container sees. A `placement = "cpu-only"` service skips the pick entirely — its reservation is host RAM, and `{gpu_ids}` substitutes to the empty string.
+For a GPU-placed service the daemon picks, in both modes, the GPU with the most available headroom (subject to `gpu_allow`), preferring one whose free capacity satisfies the upper bound (`reserve_gb` for `static`, `max_reserve_gb` for `dynamic`) so dynamic services have room to grow. The picked GPU id is exported to the spawned child as `CUDA_VISIBLE_DEVICES`, and is also available as the `${gpu_ids}` placeholder in `command` argv. A containerized service instead sets `container.gpu_device`, and ananke injects a CDI device per picked GPU so those are the only ones the container sees. A `placement = "cpu-only"` service skips the pick entirely — its reservation is host RAM, and `${gpu_ids}` substitutes to the empty string.
 
 ```toml
 [service.allocation]
@@ -444,11 +444,11 @@ By default, ananke spawns `llama-server` from `PATH`. Two knobs change that:
 
 Placeholders in `launcher` entries:
 
-- `{model}` - the model path. Held back from `{args}` so the wrapper can position it freely.
-- `{name}` - service name.
-- `{port}` - the private loopback port ananke assigned.
-- `{gpu_ids}` - comma-separated NVML index list ananke picked for this service.
-- `{args}` - splat: expands to every llama-server flag ananke would otherwise have emitted (everything except `-m <model>` - `--mmproj`, `-c`, placement-derived `-ngl`/`--tensor-split`/`-ot`, sampling, `--host`, `--port`, `extra_args`, …). Must occupy a launcher entry on its own; `"--foo={args}"` is rejected at config validation.
+- `${model}` - the model path. Held back from `${args}` so the wrapper can position it freely.
+- `${name}` - service name.
+- `${port}` - the private loopback port ananke assigned.
+- `${gpu_ids}` - comma-separated NVML index list ananke picked for this service.
+- `${args}` - splat: expands to every llama-server flag ananke would otherwise have emitted (everything except `-m <model>` - `--mmproj`, `-c`, placement-derived `-ngl`/`--tensor-split`/`-ot`, sampling, `--host`, `--port`, `extra_args`, …). Must occupy a launcher entry on its own; `"--foo=${args}"` is rejected at config validation.
 
 Example: wrap llama-server in a podman container that needs a volume mount for the model.
 
@@ -460,7 +460,7 @@ port = 11436
 model = "/srv/models/qwen3-30b.gguf"
 context = 32768
 flash_attn = true
-launcher = ["/opt/podman-llama.sh", "{model}", "{args}"]
+launcher = ["/opt/podman-llama.sh", "${model}", "${args}"]
 ```
 
 The wrapper script receives `/srv/models/qwen3-30b.gguf` as `$1` (for the volume mount) and `$@` after `shift` contains the rest of the llama-server argv - `-c 32768 -fa on -ngl 999 ... --host 127.0.0.1 --port 41000`. With `--network host` the container's llama-server is reachable on that port without further plumbing.
@@ -555,7 +555,7 @@ Used for arbitrary binaries. Only `name`, `template`, `port`, and `command` are 
 name = "comfyui"            # required
 template = "command"        # required
 port = 8188                 # required
-command = ["/bin/bash", "start_comfy.sh", "--port", "{port}"] # required
+command = ["/bin/bash", "start_comfy.sh", "--port", "${port}"] # required
 lifecycle = "on_demand"
 
 [service.allocation]
@@ -574,15 +574,19 @@ timeout = "30s"
 
 The following placeholders are substituted in `command` and `shutdown_command` argv entries (and in `env` values):
 
-- `{port}` - the private loopback port assigned by ananke.
-- `{gpu_ids}` - comma-separated NVML index list ananke picked for this service.
-- `{reserve_mb}` - the reservation in MiB, on whichever device the service was placed. Still accepted under its former name `{vram_mb}`.
-- `{model}` - model path (llama-cpp only; empty for command services).
-- `{name}` - service name.
-- `{listen_host}` / `{listen_port}` - the interface and port the workload should bind. For a host process these are `127.0.0.1` and the private port, so `{listen_port}` and `{port}` agree; they differ only for a bridge-networked container (see [Container Workloads](#container-workloads)).
-- `{host_port}` - the host-side private port, for the rare command that needs both sides of a bridge publication.
+- `${port}` - the private loopback port assigned by ananke.
+- `${gpu_ids}` - comma-separated NVML index list ananke picked for this service.
+- `${reserve_mb}` - the reservation in MiB, on whichever device the service was placed. Still accepted under its former name `${vram_mb}`.
+- `${model}` - model path (llama-cpp only; empty for command services).
+- `${name}` - service name.
+- `${listen_host}` / `${listen_port}` - the interface and port the workload should bind. For a host process these are `127.0.0.1` and the private port, so `${listen_port}` and `${port}` agree; they differ only for a bridge-networked container (see [Container Workloads](#container-workloads)).
+- `${host_port}` - the host-side private port, for the rare command that needs both sides of a bridge publication.
 
-Only an identifier between braces is a placeholder, so brace-delimited content that could never be one passes through untouched — vLLM's `--diffusion-config '{"canvas_length": 256}'` is an argument, not a typo. A misspelling is still an error, because a misspelling is identifier-shaped: `{prot}` is rejected. Write `{{` and `}}` for a literal `{` / `}` where you need to write something that *would* otherwise resolve.
+A placeholder is `${name}`, and only `${` and `$$` mean anything to the substituter. A bare `{` never does, so an argument carrying JSON, a Jinja template, or a Python format string passes through exactly as written — vLLM's `--diffusion-config '{"canvas_length": 256}'` needs no escaping at all. `$$` is a literal `$`, which is how a literal `${port}` is written (`$${port}`); a `$` before anything else is itself, since arguments carry bare dollars far more often than they carry `${`.
+
+An unknown name is an error, so a typo surfaces at config load rather than reaching the argv. So does `${` with no closing brace.
+
+> **Changed in 0.3.0.** Placeholders were previously written `{name}`. That form could not be told apart from an argument's own braces without guessing, which made JSON arguments fail and silently rewrote Jinja templates. Rename each placeholder to `${name}`; nothing else needs escaping. A config still using `{name}` will not error — the text is now literal — so check that a service's rendered command still contains the value you expect, via `GET /api/services/{name}/command` or the launch-command panel.
 
 The child also inherits `CUDA_VISIBLE_DEVICES` set to the picked GPU id(s). A containerized service does not need to forward it by hand: set `container.gpu_device` and ananke injects exactly the GPUs it picked.
 
@@ -597,7 +601,7 @@ A `command`-template service that already speaks the OpenAI API (vLLM, TGI, SGLa
 name = "qwen3.6-27b-vllm"
 template = "command"
 port = 8210
-command = ["/srv/vllm/qwen36_27b.sh", "{port}"]
+command = ["/srv/vllm/qwen36_27b.sh", "${port}"]
 lifecycle = "on_demand"
 idle_timeout = "10m"
 
@@ -641,7 +645,7 @@ name = "jina-embeddings-v5-text-small-retrieval-vllm"
 template = "command"
 port = 8211
 modality = "embedding"
-command = ["/srv/vllm/jina_embed_v5_small.sh", "{port}"]
+command = ["/srv/vllm/jina_embed_v5_small.sh", "${port}"]
 lifecycle = "on_demand"
 idle_timeout = "30m"
 
@@ -680,7 +684,7 @@ ananke ensures the upstream container is started (cold-starting it on first requ
 | `command` | array of string | *required* | argv to execute. Accepts placeholders (see below). |
 | `workdir` | path | none | Working directory for the spawned process. |
 | `allocation` | table | none | Memory reservation (see [Resource Allocation](#resource-allocation)). Required for command services. |
-| `private_port` | u16 | auto-assigned | Upstream port ananke's reverse proxy should forward to. When absent, ananke picks one from the daemon's private-port pool and substitutes it into `command`/`env` via the `{port}` placeholder. Set explicitly when the external service binds a fixed port (e.g. a docker container exposing 18188 on the host). |
+| `private_port` | u16 | auto-assigned | Upstream port ananke's reverse proxy should forward to. When absent, ananke picks one from the daemon's private-port pool and substitutes it into `command`/`env` via the `${port}` placeholder. Set explicitly when the external service binds a fixed port (e.g. a docker container exposing 18188 on the host). |
 | `shutdown_command` | array of string | none | Optional argv run at drain time after SIGTERM-then-SIGKILL completes. Useful for external services that don't stop via signal - e.g. a docker-run wrapper where SIGTERM reaches the host shell but the container needs an explicit `docker stop`. Accepts the same placeholder substitutions as `command`. |
 | `openai_proxy` | table | none | Opt the service into the OpenAI-compatible multiplexer (see [OpenAI Proxy](#openai-proxy)). |
 
@@ -704,8 +708,8 @@ template = "command"
 port = 8205
 command = [
   "ninfer-serve", "/artifacts/qwen3_6_35b_a3b.ninfer",
-  "--host", "{listen_host}",
-  "--port", "{listen_port}",
+  "--host", "${listen_host}",
+  "--port", "${listen_port}",
 ]
 allocation = { mode = "static", reserve_gb = 26 }
 health = { http = "/health", timeout = "10m" }
@@ -714,7 +718,7 @@ health = { http = "/health", timeout = "10m" }
 runtime = "docker"
 image = "ninfer:local"
 network = "host"
-gpu_device = "nvidia.com/gpu={id}"
+gpu_device = "nvidia.com/gpu=${id}"
 mounts = [
   { source = "/home/philpax/ai/ninfer", target = "/artifacts", read_only = true },
 ]
@@ -746,11 +750,11 @@ Two existing fields are rejected outright alongside `container`, because each re
 
 The service endpoint has two sides, and the placeholders resolve to the side the workload should bind — never the side ananke connects to.
 
-Under `network = "bridge"`, ananke publishes `127.0.0.1:<private_port>` onto `<container_port>` and nothing else. Inside the container, `{listen_host}` resolves to `0.0.0.0` and `{listen_port}` to `<container_port>`: a workload that bound loopback inside its own network namespace would be unreachable from the host side of the publication. Because ananke can only guarantee reachability it was told about, a bridge-networked `command` service **must** consume both `{listen_host}` and `{listen_port}` in its argv or environment; one that hardcodes its own address is rejected at config load. Use host networking for a command whose listener you can't parameterise.
+Under `network = "bridge"`, ananke publishes `127.0.0.1:<private_port>` onto `<container_port>` and nothing else. Inside the container, `${listen_host}` resolves to `0.0.0.0` and `${listen_port}` to `<container_port>`: a workload that bound loopback inside its own network namespace would be unreachable from the host side of the publication. Because ananke can only guarantee reachability it was told about, a bridge-networked `command` service **must** consume both `${listen_host}` and `${listen_port}` in its argv or environment; one that hardcodes its own address is rejected at config load. Use host networking for a command whose listener you can't parameterise.
 
-Under `network = "host"`, there is no publication and no translation. `{listen_host}` resolves to `127.0.0.1` and `{listen_port}` to the private port, exactly as for a host process.
+Under `network = "host"`, there is no publication and no translation. `${listen_host}` resolves to `127.0.0.1` and `${listen_port}` to the private port, exactly as for a host process.
 
-`{port}` remains accepted everywhere as an alias for `{listen_port}`, so pre-container command templates keep working. `{host_port}` is always the host-side private port, for the rare command that genuinely needs both numbers.
+`${port}` remains accepted everywhere as an alias for `${listen_port}`, so pre-container command templates keep working. `${host_port}` is always the host-side private port, for the rare command that genuinely needs both numbers.
 
 llama.cpp takes the same resolved endpoint, but as a typed renderer input rather than a placeholder: ananke emits `--host`/`--port` itself, so a containerized llama.cpp service needs no configuration for this at all.
 
@@ -771,7 +775,7 @@ For `llama-cpp`, ananke generates the argv, so it also translates the four path 
 
 #### GPUs
 
-`gpu_device` is a CDI template expanded once per GPU that ananke's placement actually selected, so the container sees the same devices the allocator reserved for it. `nvidia.com/gpu={id}` with GPUs 0 and 2 selected yields `--device nvidia.com/gpu=0 --device nvidia.com/gpu=2`.
+`gpu_device` is a CDI template expanded once per GPU that ananke's placement actually selected, so the container sees the same devices the allocator reserved for it. `nvidia.com/gpu=${id}` with GPUs 0 and 2 selected yields `--device nvidia.com/gpu=0 --device nvidia.com/gpu=2`.
 
 Leaving it unset injects nothing. If the runtime cannot satisfy the requested CDI device, the start fails with that error — ananke does not fall back to bind-mounting `/dev/nvidia*`, which would hand the container every GPU on the machine.
 
@@ -832,7 +836,7 @@ health = { http = "/health", timeout = "5m" }
 runtime = "docker"
 image = "ghcr.io/ggml-org/llama.cpp:server-cuda"
 network = "host"
-gpu_device = "nvidia.com/gpu={id}"
+gpu_device = "nvidia.com/gpu=${id}"
 mounts = [
   { source = "/home/philpax/ai/muse-glimmer/models", target = "/models", read_only = true },
 ]
@@ -855,8 +859,8 @@ command = [
   "--model", "nvidia/diffusiongemma-26B-A4B-it-NVFP4",
   "--max-model-len", "131072",
   "--gpu-memory-utilization", "0.715",
-  "--host", "{listen_host}",
-  "--port", "{listen_port}",
+  "--host", "${listen_host}",
+  "--port", "${listen_port}",
 ]
 env = { VLLM_NO_USAGE_STATS = "1" }
 allocation = { mode = "static", reserve_gb = 23 }
@@ -870,7 +874,7 @@ network = "bridge"
 container_port = 8000
 ipc = "host"
 env_passthrough = ["HF_TOKEN"]
-gpu_device = "nvidia.com/gpu={id}"
+gpu_device = "nvidia.com/gpu=${id}"
 mounts = [
   { source = "/home/philpax/.cache/huggingface", target = "/root/.cache/huggingface" },
 ]
@@ -890,7 +894,7 @@ An image whose CMD you want to replace instead takes the executable as its first
 | `network` | string | `bridge` | Network mode, one of `"bridge"`, `"host"`. See [Networking](#networking) for what each resolves the service endpoint to. |
 | `container_port` | u16 | *required in bridge mode* | Port the workload binds inside the container. ananke publishes `127.0.0.1:<private_port>:<container_port>`. Rejected as meaningless under host networking. |
 | `ipc` | string | `private` | IPC namespace, one of `"private"`, `"host"`. `host` shares the host `/dev/shm`, which vLLM and other multi-worker runtimes need. |
-| `gpu_device` | string | none | CDI device template expanded once per GPU ananke's placement picked, e.g. `nvidia.com/gpu={id}`. Must contain `{id}` exactly once. Unset means no GPU is injected — there is no `/dev/nvidia*` fallback. |
+| `gpu_device` | string | none | CDI device template expanded once per GPU ananke's placement picked, e.g. `nvidia.com/gpu=${id}`. Must contain `${id}` exactly once. Unset means no GPU is injected — there is no `/dev/nvidia*` fallback. |
 | `env` | table | none | Explicit environment for the container, merged over the service's own `env`. Container services never inherit the daemon's environment: `env_inherit` governs host processes only. |
 | `env_passthrough` | array of string | none | Names of host environment variables forwarded into the container by name, e.g. `["HF_TOKEN"]`. Values are read from the daemon's environment at launch and never rendered into the API, previews, or logs. |
 | `labels` | table | none | User labels applied to the container. The whole `io.ananke.*` namespace is reserved for ananke's ownership labels and rejected here. |

@@ -413,7 +413,7 @@ pub struct ContainerConfig {
     pub container_port: Option<u16>,
     /// IPC namespace.
     pub ipc: ContainerIpc,
-    /// CDI GPU device template (e.g., `"nvidia.com/gpu={id}"`). Expanded
+    /// CDI GPU device template (e.g., `"nvidia.com/gpu=${id}"`). Expanded
     /// once per allocated GPU at launch time.
     pub gpu_device: Option<String>,
     /// Bind mounts.

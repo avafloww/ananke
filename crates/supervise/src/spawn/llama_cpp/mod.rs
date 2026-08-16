@@ -1,5 +1,5 @@
 //! Render llama-server argv: the model path, the launcher-template split
-//! (which holds `-m` back so `{model}` can be positioned freely), and every
+//! (which holds `-m` back so `${model}` can be positioned freely), and every
 //! flag `render_llama_server_flags` derives from the service config and the
 //! placement-derived `CommandArgs`.
 
@@ -29,11 +29,11 @@ pub(super) fn render_llama_cpp_argv(
     let standard_args = render_llama_server_flags(svc, lc, cmd_args);
 
     if let Some(launcher) = &lc.launcher {
-        // Launcher template: `{model}` is exposed as a standalone
+        // Launcher template: `${model}` is exposed as a standalone
         // placeholder so wrappers can position it (e.g. for a container
         // volume mount). Every other flag — `--mmproj`, `-c`, port,
         // placement-derived `-ngl`/`--tensor-split`/`-ot`, sampling,
-        // `extra_args` — flows through the `{args}` splat. The launcher
+        // `extra_args` — flows through the `${args}` splat. The launcher
         // owns its own argv shape from there.
         let model_str = lc.model.to_string_lossy().into_owned();
         let ctx = PlaceholderContext {
@@ -74,11 +74,11 @@ pub(super) fn render_llama_cpp_argv(
 }
 
 /// Render every llama-server flag *except* `-m <model>`. The model
-/// path is held back so the `launcher` template's `{model}` placeholder
+/// path is held back so the `launcher` template's `${model}` placeholder
 /// can position it freely (e.g. for a container volume mount); every
 /// other flag — including `--mmproj <path>`, placement-derived
 /// `-ngl`/`--tensor-split`/`-ot`, sampling, host/port, and `extra_args`
-/// — is emitted here and reaches the launcher via the `{args}` splat.
+/// — is emitted here and reaches the launcher via the `${args}` splat.
 /// Shared by the default and launcher rendering paths so both emit
 /// identical flag sets.
 ///
@@ -321,7 +321,7 @@ fn render_llama_server_flags(
     }
     args.extend(svc.extra_args.iter().cloned());
     // llama.cpp takes the resolved endpoint as a typed renderer input rather
-    // than through `{listen_host}`/`{listen_port}`: a bridge-networked
+    // than through `${listen_host}`/`${listen_port}`: a bridge-networked
     // container must bind all interfaces on its container port, everything
     // else binds the private port on loopback.
     let (listen_host, listen_port) = crate::spawn::container::listen_endpoint(svc);

@@ -75,7 +75,7 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "gpu_device",
                     "string",
                     "none",
-                    "CDI device template expanded once per GPU ananke's placement picked, e.g. `nvidia.com/gpu={id}`. Must contain `{id}` exactly once. Unset means no GPU is injected — there is no `/dev/nvidia*` fallback.",
+                    "CDI device template expanded once per GPU ananke's placement picked, e.g. `nvidia.com/gpu=${id}`. Must contain `${id}` exactly once. Unset means no GPU is injected — there is no `/dev/nvidia*` fallback.",
                 ),
                 field(
                     "env",
