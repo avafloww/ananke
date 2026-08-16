@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
-use crate::parse::RawServiceCommon;
+use crate::parse::{RawContainerConfig, RawServiceCommon};
 
 /// A raw `llama-cpp`-template service: model, runtime, and serving knobs.
 #[derive(Debug, Default, Deserialize, Clone)]
@@ -130,8 +130,12 @@ pub struct RawLlamaCppService {
     /// otherwise have emitted (excluding `-m <model>` — that lives in
     /// `{model}` so wrappers can position it freely). Lets operators
     /// front llama-server with a docker/podman wrapper that has its own
-    /// argv shape.
+    /// argv shape. Rejected when `[service.container]` is present because
+    /// both replace the host execution boundary.
     pub launcher: Option<Vec<String>>,
+    /// Container configuration for Docker/Podman workloads. When present,
+    /// the service runs inside a container rather than as a native process.
+    pub container: Option<RawContainerConfig>,
 }
 
 /// The `runtime` table of a llama-cpp-template service, tagged by

@@ -1,4 +1,4 @@
-Used for arbitrary binaries or Docker wrappers. Only `name`, `template`, `port`, and `command` are required.
+Used for arbitrary binaries. Only `name`, `template`, `port`, and `command` are required. To run the command inside Docker or Podman, add a `[service.container]` block rather than wrapping it in a script — see [Container Workloads](#container-workloads).
 
 ```toml
 [[service]]
@@ -29,10 +29,14 @@ The following placeholders are substituted in `command` and `shutdown_command` a
 - `{reserve_mb}` - the reservation in MiB, on whichever device the service was placed. Still accepted under its former name `{vram_mb}`.
 - `{model}` - model path (llama-cpp only; empty for command services).
 - `{name}` - service name.
+- `{listen_host}` / `{listen_port}` - the interface and port the workload should bind. For a host process these are `127.0.0.1` and the private port, so `{listen_port}` and `{port}` agree; they differ only for a bridge-networked container (see [Container Workloads](#container-workloads)).
+- `{host_port}` - the host-side private port, for the rare command that needs both sides of a bridge publication.
 
-The child also inherits `CUDA_VISIBLE_DEVICES` set to the picked GPU id(s). Wrapper scripts that launch a container should forward this so the container only sees the picked GPU - for example, `docker run --device "nvidia.com/gpu=${CUDA_VISIBLE_DEVICES:-all}" ...`.
+Only an identifier between braces is a placeholder, so brace-delimited content that could never be one passes through untouched — vLLM's `--diffusion-config '{"canvas_length": 256}'` is an argument, not a typo. A misspelling is still an error, because a misspelling is identifier-shaped: `{prot}` is rejected. Write `{{` and `}}` for a literal `{` / `}` where you need to write something that *would* otherwise resolve.
 
-The `shutdown_command` field is particularly useful for external processes (like Docker containers) that cannot stop via signal alone. ananke runs this command after the drain pipeline completes, ensuring clean exits for services that don't respond to SIGTERM.
+The child also inherits `CUDA_VISIBLE_DEVICES` set to the picked GPU id(s). A containerized service does not need to forward it by hand: set `container.gpu_device` and ananke injects exactly the GPUs it picked.
+
+The `shutdown_command` field is for external processes that cannot stop via signal alone. ananke runs it after the drain pipeline completes, ensuring a clean exit for a service that doesn't respond to SIGTERM. A container service has no use for it — native runtime cleanup replaces it, and the two are rejected together.
 
 #### OpenAI Proxy
 

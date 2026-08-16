@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
-use crate::parse::{RawAllocation, RawServiceCommon};
+use crate::parse::{RawAllocation, RawContainerConfig, RawServiceCommon};
 
 /// A raw `command`-template service: arbitrary argv plus optional
 /// allocation and OpenAI-proxy blocks.
@@ -33,6 +33,8 @@ pub struct RawCommandService {
     /// signal — e.g. a docker-run wrapper where SIGTERM reaches the
     /// host shell but the container needs an explicit `docker stop`.
     /// Accepts the same placeholder substitutions as `command`.
+    /// Rejected when `[service.container]` is present because native
+    /// runtime cleanup replaces it.
     pub shutdown_command: Option<Vec<String>>,
     /// Opt the command service into the OpenAI-compatible multiplexer.
     /// When present, the service shows up in `/v1/models` and accepts
@@ -40,6 +42,9 @@ pub struct RawCommandService {
     /// JSON `model` field to `upstream_model` before forwarding to the
     /// service's private port.
     pub openai_proxy: Option<RawOpenAiProxy>,
+    /// Container configuration for Docker/Podman workloads. When present,
+    /// the service runs inside a container rather than as a native process.
+    pub container: Option<RawContainerConfig>,
 }
 
 /// `[service.openai_proxy]` block. Marks a `command` service as fronting

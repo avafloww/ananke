@@ -23,8 +23,9 @@ use crate::{
         AllocationMode, DaemonValidationCtx, DeviceSlot, Filters, HealthSettings, Lifecycle,
         PlacementPolicy, ServiceConfig, ServiceValidationState, SplitMode, Template,
         TemplateConfig, build_ananke_metadata, command_uses_port_placeholder, fail,
-        parse_duration_ms, toml_value_to_json, validate_auto_restart, validate_command,
-        validate_llama_cpp, validate_tracking,
+        parse_duration_ms, toml_value_to_json, validate_auto_restart,
+        validate_bridge_command_endpoint, validate_command, validate_container, validate_llama_cpp,
+        validate_tracking,
     },
 };
 
@@ -55,8 +56,14 @@ pub(crate) fn validate_service(
         )));
     }
 
-    let (allocation_mode, template_config) = match raw {
+    let (allocation_mode, template_config, raw_container) = match raw {
         RawService::LlamaCpp(lc) => {
+            // Reject launcher + container: both replace the host execution boundary.
+            if lc.launcher.is_some() && lc.container.is_some() {
+                return Err(fail(format!(
+                    "service {name}: launcher and [service.container] are mutually exclusive (both replace the host execution boundary)"
+                )));
+            }
             let tc = validate_llama_cpp(
                 &name,
                 lc,
@@ -74,9 +81,19 @@ pub(crate) fn validate_service(
                 DEFAULT_MIN_BORROWER_RUNTIME_MS,
             )
             .map_err(|e| fail(format!("service {name}: {e}")))?;
-            (alloc, TemplateConfig::LlamaCpp(Box::new(tc)))
+            (
+                alloc,
+                TemplateConfig::LlamaCpp(Box::new(tc)),
+                lc.container.clone(),
+            )
         }
         RawService::Command(cmd) => {
+            // Reject shutdown_command + container: native runtime cleanup replaces it.
+            if cmd.shutdown_command.is_some() && cmd.container.is_some() {
+                return Err(fail(format!(
+                    "service {name}: shutdown_command is not allowed with [service.container] (native runtime cleanup replaces it)"
+                )));
+            }
             let raw_alloc = cmd.allocation.clone().unwrap_or_default();
             let runtime_ms = raw_alloc
                 .min_borrower_runtime
@@ -95,7 +112,7 @@ pub(crate) fn validate_service(
             )
             .map_err(|e| fail(format!("service {name}: {e}")))?;
             let tc = validate_command(&name, cmd, daemon.placeholder_checker)?;
-            (alloc, TemplateConfig::Command(tc))
+            (alloc, TemplateConfig::Command(tc), cmd.container.clone())
         }
     };
 
@@ -470,6 +487,22 @@ pub(crate) fn validate_service(
         common.auto_restart.is_some(),
     )?;
 
+    // Validate container configuration (if present).
+    let container = match raw_container {
+        None => None,
+        Some(raw_ct) => {
+            let ct = validate_container(&name, &raw_ct)?;
+            // A bridge-networked command service publishes a loopback host
+            // port onto a container port; ananke can only guarantee the
+            // published endpoint is reachable if the command actually binds
+            // the resolved interface and port it was given.
+            if let TemplateConfig::Command(cmd) = &template_config {
+                validate_bridge_command_endpoint(&name, &ct, &cmd.command, &env)?;
+            }
+            Some(ct)
+        }
+    };
+
     Ok(ServiceConfig {
         name,
         port,
@@ -501,5 +534,6 @@ pub(crate) fn validate_service(
         tracking,
         metadata,
         template_config,
+        container,
     })
 }

@@ -35,6 +35,7 @@ pub struct ProseFragments {
     pub sampling: &'static str,
     pub command: &'static str,
     pub openai_proxy: &'static str,
+    pub container: &'static str,
     pub inheritance: &'static str,
 }
 
@@ -56,6 +57,7 @@ pub fn render_markdown(sections: &[SectionDoc], prose: &ProseFragments) -> Strin
     render_tracking(&mut out, sections, prose);
     render_auto_restart(&mut out, sections, prose);
     render_templates(&mut out, sections, prose);
+    render_container(&mut out, sections, prose);
     render_inheritance(&mut out, prose);
 
     // Collapse any triple+ newlines to double.
@@ -215,6 +217,23 @@ fn render_command(out: &mut String, sections: &[SectionDoc], prose: &ProseFragme
         "openai_proxy",
         "OpenAI Proxy",
         prose.openai_proxy,
+    );
+}
+
+fn render_container(out: &mut String, sections: &[SectionDoc], prose: &ProseFragments) {
+    writeln!(out, "## Container Workloads").unwrap();
+    write_prose(out, prose.container);
+    // The container prose ends with "#### Field Reference"; the main table
+    // lands there, and the nested tables follow as their own subsections.
+    emit_table(out, find_section(sections, "container"));
+    writeln!(out).unwrap();
+    emit_subsection(out, sections, "container_mounts", "Mounts", "");
+    emit_subsection(
+        out,
+        sections,
+        "container_extra_publications",
+        "Extra publications",
+        "",
     );
 }
 

@@ -8,6 +8,7 @@ mod auto_restart_types;
 mod auto_restart_validation;
 mod command_validation;
 mod common;
+mod container_validation;
 mod llama_cpp_validation;
 mod metadata;
 mod orchestrate;
@@ -34,6 +35,7 @@ pub use auto_restart_types::{
 pub(crate) use auto_restart_validation::validate_auto_restart;
 pub(crate) use command_validation::{command_uses_port_placeholder, validate_command};
 pub use common::{fail, flag_variant, gib_to_mib, parse_duration_ms, variant_flag};
+pub(crate) use container_validation::{validate_bridge_command_endpoint, validate_container};
 pub(crate) use llama_cpp_validation::validate_llama_cpp;
 pub(crate) use metadata::{build_ananke_metadata, toml_value_to_json};
 pub(crate) use orchestrate::{DaemonValidationCtx, ServiceValidationState};
@@ -88,6 +90,7 @@ pub use split_mode::SplitMode;
 pub use tracking::TrackingSettings;
 pub(crate) use tracking::validate_tracking;
 pub use types::{
-    CommandConfig, DaemonSettings, EffectiveConfig, LlamaCppConfig, OpenAiProxyConfig,
-    ServiceConfig, TemplateConfig,
+    CommandConfig, ContainerConfig, ContainerIpc, ContainerMount, ContainerNetwork,
+    ContainerPortPublication, ContainerRuntime, DaemonSettings, EffectiveConfig, LlamaCppConfig,
+    OpenAiProxyConfig, ServiceConfig, TemplateConfig,
 };

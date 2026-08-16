@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use ananke_errors::ExpectedError;
 use smol_str::SmolStr;
 
-use crate::parse::{RawCommandService, RawLlamaCppService, RawServiceCommon};
+use crate::parse::{RawCommandService, RawContainerConfig, RawLlamaCppService, RawServiceCommon};
 
 pub(crate) fn merge_llama_cpp(
     parent: &RawLlamaCppService,
@@ -75,6 +75,7 @@ pub(crate) fn merge_llama_cpp(
                 safety_factor: c.safety_factor.or(p.safety_factor),
             }),
         },
+        container: merge_container(parent.container.clone(), child.container.clone()),
     })
 }
 
@@ -109,7 +110,41 @@ pub(crate) fn merge_command(
             .openai_proxy
             .clone()
             .or_else(|| parent.openai_proxy.clone()),
+        container: merge_container(parent.container.clone(), child.container.clone()),
     })
+}
+
+/// Merge two container configs. Scalar fields inherit from parent when
+/// child is absent; maps merge with child precedence; arrays replace.
+fn merge_container(
+    parent: Option<RawContainerConfig>,
+    child: Option<RawContainerConfig>,
+) -> Option<RawContainerConfig> {
+    match (parent, child) {
+        (None, x) => x,
+        (x, None) => x,
+        (Some(p), Some(c)) => Some(RawContainerConfig {
+            runtime: c.runtime.or(p.runtime),
+            runtime_executable: c.runtime_executable.or(p.runtime_executable),
+            image: c.image.or(p.image),
+            entrypoint: c.entrypoint.or(p.entrypoint),
+            workdir: c.workdir.or(p.workdir),
+            network: c.network.or(p.network),
+            container_port: c.container_port.or(p.container_port),
+            ipc: c.ipc.or(p.ipc),
+            gpu_device: c.gpu_device.or(p.gpu_device),
+            // Mounts replace: child's list is authoritative.
+            mounts: c.mounts.or(p.mounts),
+            // Extra publications replace.
+            extra_publications: c.extra_publications.or(p.extra_publications),
+            // Container env merges with child precedence.
+            env: deep_merge_map(p.env, c.env),
+            // Passthrough replaces: child's allowlist is authoritative.
+            env_passthrough: c.env_passthrough.or(p.env_passthrough),
+            // Labels merge with child precedence.
+            labels: deep_merge_map(p.labels, c.labels),
+        }),
+    }
 }
 
 fn merge_common(

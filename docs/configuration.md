@@ -101,7 +101,7 @@ reserved_gb = 8
 | `cpu.reserved_gb` | u64 | `0` | Host RAM (GiB) the daemon keeps free. Bounds how much expert weight a hybrid MoE service may offload to the CPU; a placement that would exceed it is rejected. |
 
 ## Service Configuration
-Services are defined as an array of `[[service]]` blocks. Each service uses one of two templates: `llama-cpp` (for GGUF models via llama.cpp) or `command` (for arbitrary binaries or Docker wrappers).
+Services are defined as an array of `[[service]]` blocks. Each service uses one of two templates: `llama-cpp` (for GGUF models via llama.cpp) or `command` (for arbitrary binaries). Either template can run its workload in a container — see [Container Workloads](#container-workloads).
 
 ### Common Fields
 
@@ -229,7 +229,7 @@ ananke oversubscribes GPU memory by dynamically managing which models are active
   - `static`: Reserves a fixed amount of memory (`reserve_gb`) — host RAM for a cpu-only service, VRAM otherwise. The pre-rename `vram_gb` spelling is still accepted.
   - `dynamic`: Operates within a range (`min_reserve_gb` to `max_reserve_gb`).
 
-For a GPU-placed service the daemon picks, in both modes, the GPU with the most available headroom (subject to `gpu_allow`), preferring one whose free capacity satisfies the upper bound (`reserve_gb` for `static`, `max_reserve_gb` for `dynamic`) so dynamic services have room to grow. The picked GPU id is exported to the spawned child as `CUDA_VISIBLE_DEVICES`, and is also available as the `{gpu_ids}` placeholder in `command` argv. Wrappers that launch containers should forward this env (e.g. `docker run --device "nvidia.com/gpu=$CUDA_VISIBLE_DEVICES"`) so the picked GPU is the only one the container sees. A `placement = "cpu-only"` service skips the pick entirely — its reservation is host RAM, and `{gpu_ids}` substitutes to the empty string.
+For a GPU-placed service the daemon picks, in both modes, the GPU with the most available headroom (subject to `gpu_allow`), preferring one whose free capacity satisfies the upper bound (`reserve_gb` for `static`, `max_reserve_gb` for `dynamic`) so dynamic services have room to grow. The picked GPU id is exported to the spawned child as `CUDA_VISIBLE_DEVICES`, and is also available as the `{gpu_ids}` placeholder in `command` argv. A containerized service instead sets `container.gpu_device`, and ananke injects a CDI device per picked GPU so those are the only ones the container sees. A `placement = "cpu-only"` service skips the pick entirely — its reservation is host RAM, and `{gpu_ids}` substitutes to the empty string.
 
 ```toml
 [service.allocation]
@@ -548,7 +548,7 @@ repeat_penalty = 1.1
 | `repeat_penalty` | f32 | none | Repeat penalty applied to generated tokens. |
 
 ### command
-Used for arbitrary binaries or Docker wrappers. Only `name`, `template`, `port`, and `command` are required.
+Used for arbitrary binaries. Only `name`, `template`, `port`, and `command` are required. To run the command inside Docker or Podman, add a `[service.container]` block rather than wrapping it in a script — see [Container Workloads](#container-workloads).
 
 ```toml
 [[service]]
@@ -579,10 +579,14 @@ The following placeholders are substituted in `command` and `shutdown_command` a
 - `{reserve_mb}` - the reservation in MiB, on whichever device the service was placed. Still accepted under its former name `{vram_mb}`.
 - `{model}` - model path (llama-cpp only; empty for command services).
 - `{name}` - service name.
+- `{listen_host}` / `{listen_port}` - the interface and port the workload should bind. For a host process these are `127.0.0.1` and the private port, so `{listen_port}` and `{port}` agree; they differ only for a bridge-networked container (see [Container Workloads](#container-workloads)).
+- `{host_port}` - the host-side private port, for the rare command that needs both sides of a bridge publication.
 
-The child also inherits `CUDA_VISIBLE_DEVICES` set to the picked GPU id(s). Wrapper scripts that launch a container should forward this so the container only sees the picked GPU - for example, `docker run --device "nvidia.com/gpu=${CUDA_VISIBLE_DEVICES:-all}" ...`.
+Only an identifier between braces is a placeholder, so brace-delimited content that could never be one passes through untouched — vLLM's `--diffusion-config '{"canvas_length": 256}'` is an argument, not a typo. A misspelling is still an error, because a misspelling is identifier-shaped: `{prot}` is rejected. Write `{{` and `}}` for a literal `{` / `}` where you need to write something that *would* otherwise resolve.
 
-The `shutdown_command` field is particularly useful for external processes (like Docker containers) that cannot stop via signal alone. ananke runs this command after the drain pipeline completes, ensuring clean exits for services that don't respond to SIGTERM.
+The child also inherits `CUDA_VISIBLE_DEVICES` set to the picked GPU id(s). A containerized service does not need to forward it by hand: set `container.gpu_device` and ananke injects exactly the GPUs it picked.
+
+The `shutdown_command` field is for external processes that cannot stop via signal alone. ananke runs it after the drain pipeline completes, ensuring a clean exit for a service that doesn't respond to SIGTERM. A container service has no use for it — native runtime cleanup replaces it, and the two are rejected together.
 
 #### OpenAI Proxy
 
@@ -687,6 +691,229 @@ A `command`-template service that already speaks the OpenAI API (vLLM, TGI, SGLa
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `upstream_model` | string | none | Model name the upstream server was started with (e.g. via `--served-model-name`). ananke rewrites the JSON `model` field to this value before forwarding. |
+
+## Container Workloads
+Any service — either template — can run inside a Docker or Podman container by adding a `[service.container]` block. Without the block the service is an ordinary host process and nothing about it changes.
+
+The block does not replace the template; it relocates it. A `llama-cpp` service still gets its placement-derived llama-server argv, and a `command` service still supplies its own. What changes is where that argv runs: as the container's command rather than as a child of the daemon.
+
+```toml
+[[service]]
+name = "qwen3.6-35b-ninfer"
+template = "command"
+port = 8205
+command = [
+  "ninfer-serve", "/artifacts/qwen3_6_35b_a3b.ninfer",
+  "--host", "{listen_host}",
+  "--port", "{listen_port}",
+]
+allocation = { mode = "static", reserve_gb = 26 }
+health = { http = "/health", timeout = "10m" }
+
+[service.container]
+runtime = "docker"
+image = "ninfer:local"
+network = "host"
+gpu_device = "nvidia.com/gpu={id}"
+mounts = [
+  { source = "/home/philpax/ai/ninfer", target = "/artifacts", read_only = true },
+]
+```
+
+#### Prerequisites
+
+ananke drives the runtime's CLI — it never talks to the Engine or Libpod socket, and it neither pulls nor builds images. Its business is starting and stopping what you point it at; where the image came from is yours. Have it in the local store before the service starts:
+
+```sh
+docker pull vllm/vllm-openai:v0.26.0
+podman build -t ninfer:local ~/src/ninfer
+```
+
+A missing image surfaces as a start failure carrying the runtime's own message, which distinguishes an unknown tag from a registry that needs credentials from an image that was never built.
+
+The daemon needs the selected runtime binary on its `$PATH` (or an explicit `runtime_executable`) and permission to use it.
+
+Selecting Podman changes the `runtime` field and nothing else about the service. It does not make the two runtimes interchangeable in general: ananke owns the lifecycle-flag differences, but CDI support, rootless cgroup layouts, and SELinux relabelling all vary by runtime and version, and a capability the runtime lacks fails loudly rather than silently degrading.
+
+#### Conflicting fields
+
+Two existing fields are rejected outright alongside `container`, because each replaces the same boundary the container does:
+
+- `launcher` (llama-cpp) wraps the host execution boundary, which is what the container now is.
+- `shutdown_command` (command) exists so a wrapper script can stop something signals can't reach. Native runtime cleanup replaces it.
+
+#### Networking
+
+The service endpoint has two sides, and the placeholders resolve to the side the workload should bind — never the side ananke connects to.
+
+Under `network = "bridge"`, ananke publishes `127.0.0.1:<private_port>` onto `<container_port>` and nothing else. Inside the container, `{listen_host}` resolves to `0.0.0.0` and `{listen_port}` to `<container_port>`: a workload that bound loopback inside its own network namespace would be unreachable from the host side of the publication. Because ananke can only guarantee reachability it was told about, a bridge-networked `command` service **must** consume both `{listen_host}` and `{listen_port}` in its argv or environment; one that hardcodes its own address is rejected at config load. Use host networking for a command whose listener you can't parameterise.
+
+Under `network = "host"`, there is no publication and no translation. `{listen_host}` resolves to `127.0.0.1` and `{listen_port}` to the private port, exactly as for a host process.
+
+`{port}` remains accepted everywhere as an alias for `{listen_port}`, so pre-container command templates keep working. `{host_port}` is always the host-side private port, for the rare command that genuinely needs both numbers.
+
+llama.cpp takes the same resolved endpoint, but as a typed renderer input rather than a placeholder: ananke emits `--host`/`--port` itself, so a containerized llama.cpp service needs no configuration for this at all.
+
+#### Environment and secrets
+
+`env_inherit` copies the daemon's whole environment into a host process. That is reasonable for a child process and wrong for a container, so it governs host processes only. A container's environment is exactly what you declare:
+
+- `env` on the service, and `container.env` layered over it, for explicit values.
+- `container.env_passthrough` for names forwarded from the daemon's own environment, e.g. `["HF_TOKEN"]`.
+
+Passthrough values are read at launch and never leave the runtime invocation: the management API and launch previews show the variable's name only, and nothing expands a secret into a persisted command line or a log line.
+
+#### Mounts and path translation
+
+Nothing inside the container can see a host path that wasn't mounted. For `command` services this is entirely yours to arrange: write container paths in the argv, and mount whatever backs them. Paths are not guessed.
+
+For `llama-cpp`, ananke generates the argv, so it also translates the four path fields it owns — `model`, `mmproj`, `draft_model`, and `chat_template_file` — through the configured mounts. Matching is lexical and component-aware, longest source prefix wins, and there is no symlink resolution. A typed path no mount covers is a start failure naming the exact path and field, rather than a container that comes up and can't find its weights. Paths embedded in `extra_args` stay opaque and must already be container paths.
+
+#### GPUs
+
+`gpu_device` is a CDI template expanded once per GPU that ananke's placement actually selected, so the container sees the same devices the allocator reserved for it. `nvidia.com/gpu={id}` with GPUs 0 and 2 selected yields `--device nvidia.com/gpu=0 --device nvidia.com/gpu=2`.
+
+Leaving it unset injects nothing. If the runtime cannot satisfy the requested CDI device, the start fails with that error — ananke does not fall back to bind-mounting `/dev/nvidia*`, which would hand the container every GPU on the machine.
+
+#### Memory attribution
+
+ananke reads the container's cgroup back from its host PID after start and attributes every process in that cgroup to the service. This needs no configuration and holds regardless of runtime, cgroup driver, or rootless layout, because it is the path the container actually landed in rather than one predicted from a slice name. The host PID's process descendants are attributed too, so the two sources cover each other.
+
+#### Lifecycle and recovery
+
+Containers can outlive both ananke and the CLI process that started them, so the lifecycle is deliberately conservative and every step is recoverable:
+
+1. A durable launch intent is written **before** anything is created, carrying the owner, the service and run identity, the exact runtime executable, and the generated name and labels.
+2. The container is created — never started — and its ID is attached to the intent.
+3. The ownership row is committed. Only then is the container started: a container is never running without a persisted row that says so.
+4. Logs are followed by a separate `logs --follow` process, and the exit status comes from an independent `wait`.
+5. On drain, `kill --signal TERM`, escalating to `KILL` on the existing `drain_timeout`. Final logs are drained before the container is removed.
+
+Each run gets its own container named `ananke-<service>-<run-id>`, removed along with any anonymous volumes the runtime created for it. A stable per-service name would be friendlier to type, but a single failed cleanup would then wedge the service permanently — the next `create` would fail on the name already being in use. A per-run name makes a stray container inert rather than blocking, and the startup sweep bounds how long one can persist.
+
+`--rm` is deliberately not used. Auto-removal races the log follower and the exit-status read, and it destroys the evidence a crashed daemon needs, so removal is always an explicit final step and is idempotent.
+
+At startup ananke reconciles what it finds against those records. Every container it creates is labelled with a stable per-installation owner UUID as well as its service and run, and cleanup requires *both* a persisted identity and a matching owner label — never a name prefix alone. That is what keeps a second ananke, or an unrelated container that happens to share a name, safe. A container whose ownership can't be resolved blocks only its own service from reprovisioning, preserving the evidence, while every other service starts normally.
+
+#### What happens when ananke stops
+
+A native child dies with the daemon: the spawner sets `PR_SET_PDEATHSIG`, and the kernel honours it however the daemon died. A container has no equivalent — it belongs to the runtime, not to ananke's process tree — so its survival has to be handled rather than assumed.
+
+**On a signal ananke can catch** (`SIGTERM`, `SIGINT`, `SIGQUIT` — `systemctl stop`, a restart, a reboot, Ctrl-C) every service drains: TERM, then KILL after `drain_timeout`, then removal. Containers do not outlive it.
+
+**If that drain overruns `shutdown_timeout`**, the daemon exits anyway rather than hanging. Before it does, it removes every container still carrying this installation's owner label. This is the case the sweep exists for; after a drain that finished, it finds nothing.
+
+**On `SIGKILL`, the OOM killer, or a power loss**, nothing in a userspace process runs — that is what those mean. Containers keep running and keep the VRAM they reserved. Two things bound the damage:
+
+- Startup reconciliation removes them when ananke comes back, so the exposure lasts as long as the daemon is down. Running under a supervisor that restarts it keeps that to seconds.
+- The allocator reads *real* free VRAM from NVML, not just its own pledge book, so a surviving container makes ananke conservative rather than wrong: it declines to place, or evicts, instead of over-committing onto memory something else is holding.
+
+An orphan is therefore a capacity problem until reconciliation clears it, not a correctness one. If you need containers to die with the daemon under `SIGKILL` too, that guarantee has to come from outside ananke — a cgroup the supervisor tears down, for instance — because no process can clean up after a signal it cannot receive.
+
+#### Logs
+
+Neither `docker logs` nor `podman logs` documents a stream framing that survives the CLI boundary, so container output is stored and served as a single `combined` stream rather than being mislabelled as stdout. Host processes are unaffected and keep their split `stdout`/`stderr`. Filtering for `both` includes combined lines; asking for `stdout` or `stderr` will not match a container's output.
+
+#### A containerized llama.cpp service
+
+```toml
+[[service]]
+name = "muse-glimmer"
+template = "llama-cpp"
+port = 8202
+model = "/home/philpax/ai/muse-glimmer/models/muse-glimmer-30B-kquant-dynamic.gguf"
+mmproj = "/home/philpax/ai/muse-glimmer/models/mmproj-kquant.gguf"
+draft_model = "/home/philpax/ai/muse-glimmer/models/dflash-kquant.gguf"
+spec_type = "draft-dflash"
+context = 262144
+health = { http = "/health", timeout = "5m" }
+
+[service.container]
+runtime = "docker"
+image = "ghcr.io/ggml-org/llama.cpp:server-cuda"
+network = "host"
+gpu_device = "nvidia.com/gpu={id}"
+mounts = [
+  { source = "/home/philpax/ai/muse-glimmer/models", target = "/models", read_only = true },
+]
+```
+
+Only the generated flags follow the image; the image's own ENTRYPOINT runs them. `llama_server` is not consulted here — it answers where llama-server lives *on the host*, and its `llama-server` default is a `$PATH` lookup that means nothing inside an image. The official llama.cpp image, for instance, ships `/app/llama-server` with `/app` off `$PATH`, so an entrypoint derived from that default would fail to resolve. An image that needs something other than its declared ENTRYPOINT says so with `container.entrypoint`.
+
+The three model paths are translated through the mount before creation, becoming `-m /models/muse-glimmer-30B-kquant-dynamic.gguf` and so on.
+
+#### A containerized OpenAI-compatible server
+
+vLLM's image declares its own entrypoint, so the command supplies arguments only:
+
+```toml
+[[service]]
+name = "diffusiongemma-26b-a4b"
+template = "command"
+port = 8200
+command = [
+  "--model", "nvidia/diffusiongemma-26B-A4B-it-NVFP4",
+  "--max-model-len", "131072",
+  "--gpu-memory-utilization", "0.715",
+  "--host", "{listen_host}",
+  "--port", "{listen_port}",
+]
+env = { VLLM_NO_USAGE_STATS = "1" }
+allocation = { mode = "static", reserve_gb = 23 }
+health = { http = "/health", timeout = "10m" }
+openai_proxy = { upstream_model = "nvidia/diffusiongemma-26B-A4B-it-NVFP4" }
+
+[service.container]
+runtime = "docker"
+image = "vllm/vllm-openai:v0.26.0"
+network = "bridge"
+container_port = 8000
+ipc = "host"
+env_passthrough = ["HF_TOKEN"]
+gpu_device = "nvidia.com/gpu={id}"
+mounts = [
+  { source = "/home/philpax/.cache/huggingface", target = "/root/.cache/huggingface" },
+]
+```
+
+An image whose CMD you want to replace instead takes the executable as its first argument — `command = ["ninfer-serve", "/artifacts/model.ninfer", ...]` — and the same block otherwise. The only field that differs between the Docker and Podman versions of either example is `runtime`.
+
+#### Field Reference
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `runtime` | string | `docker` | Container runtime to drive. One of `"docker"`, `"podman"`. |
+| `runtime_executable` | path | the runtime name | Absolute path to the runtime binary. Set this when the binary isn't on the daemon's `$PATH` (e.g. a Nix store path). The value is recorded in the launch intent, so a container stays reconcilable across a runtime change. |
+| `image` | string | *required* | Image reference to run, e.g. `vllm/vllm-openai:v0.26.0`. Must already be in the runtime's local store: ananke neither pulls nor builds, and a missing image fails the start with the runtime's own error. |
+| `entrypoint` | string | the image's own | Replaces the image ENTRYPOINT. Unset, the image's own applies — including for `llama-cpp` services, whose `llama_server` is a host-side path and is not used inside the container. |
+| `workdir` | path | the image's own | Working directory inside the container. |
+| `network` | string | `bridge` | Network mode, one of `"bridge"`, `"host"`. See [Networking](#networking) for what each resolves the service endpoint to. |
+| `container_port` | u16 | *required in bridge mode* | Port the workload binds inside the container. ananke publishes `127.0.0.1:<private_port>:<container_port>`. Rejected as meaningless under host networking. |
+| `ipc` | string | `private` | IPC namespace, one of `"private"`, `"host"`. `host` shares the host `/dev/shm`, which vLLM and other multi-worker runtimes need. |
+| `gpu_device` | string | none | CDI device template expanded once per GPU ananke's placement picked, e.g. `nvidia.com/gpu={id}`. Must contain `{id}` exactly once. Unset means no GPU is injected — there is no `/dev/nvidia*` fallback. |
+| `env` | table | none | Explicit environment for the container, merged over the service's own `env`. Container services never inherit the daemon's environment: `env_inherit` governs host processes only. |
+| `env_passthrough` | array of string | none | Names of host environment variables forwarded into the container by name, e.g. `["HF_TOKEN"]`. Values are read from the daemon's environment at launch and never rendered into the API, previews, or logs. |
+| `labels` | table | none | User labels applied to the container. The whole `io.ananke.*` namespace is reserved for ananke's ownership labels and rejected here. |
+| `mounts` | array of table | none | Bind mounts (see [Mounts](#mounts)). |
+| `extra_publications` | array of table | none | Port publications beyond the service endpoint (see [Extra publications](#extra-publications)). Bridge mode only. |
+
+### Mounts
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `source` | path | *required* | Absolute host path. Must exist when the container is created. |
+| `target` | path | *required* | Absolute container path. Two mounts may not share a target. |
+| `read_only` | bool | `false` | Mount read-only. |
+| `selinux` | string | none | SELinux relabel policy, one of `"z"`, `"Z"` (`z` is shared, `Z` is private). Omit on systems without SELinux. |
+
+### Extra publications
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `host_ip` | string | `127.0.0.1` | Host address to bind. The default keeps the port off the network, matching the service endpoint's own publication. |
+| `host_port` | u16 | *required* | Host-side port. |
+| `container_port` | u16 | *required* | Container-side port. |
+| `protocol` | string | `tcp` | One of `"tcp"`, `"udp"`. |
 
 ## Service Inheritance
 Services can inherit configuration from other services using `extends`. This is useful for sharing common settings across related models:

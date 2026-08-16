@@ -10,6 +10,7 @@
 mod auto_restart;
 mod command;
 mod common;
+mod container;
 mod llama_cpp;
 mod service;
 mod top_level;
@@ -21,6 +22,7 @@ pub use auto_restart::{
 };
 pub use command::{RawCommandService, RawOpenAiProxy};
 pub use common::{RawFilters, RawHealth, RawServiceCommon, RawServiceDevices, RawTracking};
+pub use container::{RawContainerConfig, RawContainerMount, RawPortPublication};
 pub use llama_cpp::{
     EstimationConfig, RawExpertOffload, RawIkSettings, RawLlamaCppService, RawRuntime,
     SamplingConfig,
