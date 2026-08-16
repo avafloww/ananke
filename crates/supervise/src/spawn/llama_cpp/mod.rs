@@ -320,10 +320,15 @@ fn render_llama_server_flags(
         args.push(r.to_string());
     }
     args.extend(svc.extra_args.iter().cloned());
+    // llama.cpp takes the resolved endpoint as a typed renderer input rather
+    // than through `{listen_host}`/`{listen_port}`: a bridge-networked
+    // container must bind all interfaces on its container port, everything
+    // else binds the private port on loopback.
+    let (listen_host, listen_port) = crate::spawn::container::listen_endpoint(svc);
     args.push("--host".into());
-    args.push("127.0.0.1".into());
+    args.push(listen_host.into());
     args.push("--port".into());
-    args.push(svc.private_port.to_string());
+    args.push(listen_port.to_string());
 
     args
 }

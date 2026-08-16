@@ -11,6 +11,7 @@ use std::{
 use ananke::supervise::{
     SpawnConfig,
     drain::{DrainConfig, DrainReason, drain_pipeline},
+    workload::ManagedWorkload,
 };
 use ananke_system::{FakeProcessState, FakeSpawner, ProcessSpawner};
 
@@ -26,7 +27,8 @@ fn spawn_cfg() -> SpawnConfig {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn sigkill_after_sigterm_grace() {
     let spawner = Arc::new(FakeSpawner::ignoring_sigterm());
-    let mut child = spawner.spawn(&spawn_cfg()).await.unwrap();
+    let child = spawner.spawn(&spawn_cfg()).await.unwrap();
+    let mut workload = ManagedWorkload::Process(child);
 
     let counter = Arc::new(AtomicU64::new(0));
     let cfg = DrainConfig {
@@ -36,7 +38,7 @@ async fn sigkill_after_sigterm_grace() {
         sigterm_grace: Duration::from_millis(500),
     };
 
-    drain_pipeline(&mut *child, &cfg, counter, DrainReason::Shutdown).await;
+    drain_pipeline(&mut workload, &cfg, counter, DrainReason::Shutdown).await;
 
     let snap = spawner.children();
     assert_eq!(snap.len(), 1);

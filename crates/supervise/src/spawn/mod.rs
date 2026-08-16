@@ -11,6 +11,7 @@ use ananke_config::validate::{ServiceConfig, TemplateConfig};
 use ananke_devices::Allocation;
 pub use ananke_spawn::SpawnConfig;
 pub use command::render_shutdown_argv;
+pub mod container;
 
 /// Render the child command line plus env from a validated `ServiceConfig`,
 /// its `Allocation`, and optional placement `CommandArgs`.

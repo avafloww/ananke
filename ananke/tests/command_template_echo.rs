@@ -68,6 +68,7 @@ fn command_argv_substitutes_port() {
             private_port_override: None,
             openai_proxy: None,
         }),
+        container: None,
     };
 
     let alloc = Allocation::from_override(&placement);

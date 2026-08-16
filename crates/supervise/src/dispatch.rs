@@ -2,7 +2,6 @@
 //! translating each [`SupervisorCommand`] into the right drain/kill/state
 //! transition for the phase currently in progress.
 
-use ananke_system::ManagedChild;
 use tracing::info;
 
 use crate::{
@@ -14,6 +13,7 @@ use crate::{
         SupervisorCommand,
     },
     state::{DisableReason, Event as StateEvent, ServiceState, transition},
+    workload::ManagedWorkload,
 };
 
 impl RunLoop {
@@ -21,7 +21,7 @@ impl RunLoop {
     pub(crate) async fn on_running_command(
         &mut self,
         cmd: Option<SupervisorCommand>,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
     ) -> RunningOutcome {
         match cmd {
@@ -30,7 +30,7 @@ impl RunLoop {
                 let next = transition(&self.read_state(), StateEvent::DrainRequested);
                 self.set_state(next);
                 let _ = self.cancel_tx.send(true);
-                drain::sigterm_then_sigkill(child, RUNNING_SIGTERM_GRACE).await;
+                drain::sigterm_then_sigkill(workload, RUNNING_SIGTERM_GRACE).await;
                 self.run_shutdown_command().await;
                 self.end_run(run_id).await;
                 self.record_drain_complete();
@@ -56,7 +56,7 @@ impl RunLoop {
                         run_id,
                     )
                     .await;
-                    self.drain_now(child, run_id, drain::DrainReason::AutoRestart)
+                    self.drain_now(workload, run_id, drain::DrainReason::AutoRestart)
                         .await;
                     self.set_state(ServiceState::Idle);
                     return RunningOutcome::Break;
@@ -70,7 +70,7 @@ impl RunLoop {
             }
             Some(SupervisorCommand::BeginDrain { reason, ack }) => {
                 info!(service = %self.init.identity.name, ?reason, "BeginDrain received; draining");
-                self.drain_now(child, run_id, reason).await;
+                self.drain_now(workload, run_id, reason).await;
                 let _ = ack.send(());
                 self.set_state(ServiceState::Idle);
                 RunningOutcome::Break
@@ -79,7 +79,7 @@ impl RunLoop {
                 info!(service = %self.init.identity.name, ?reason, "FastKill received");
                 self.set_state(ServiceState::Draining);
 
-                fast_kill(child, reason).await;
+                fast_kill(workload, reason).await;
                 self.run_shutdown_command().await;
 
                 self.end_run(run_id).await;
@@ -100,7 +100,7 @@ impl RunLoop {
             }
             Some(SupervisorCommand::Disable { ack }) => {
                 info!(service = %self.init.identity.name, "Disable received; draining then disabling");
-                self.drain_now(child, run_id, drain::DrainReason::UserKilled)
+                self.drain_now(workload, run_id, drain::DrainReason::UserKilled)
                     .await;
                 self.set_state(ServiceState::Disabled {
                     reason: DisableReason::UserDisabled,
@@ -127,7 +127,7 @@ impl RunLoop {
                     timeout_ms as f64 / 1000.0
                 );
                 match self
-                    .perform_auto_restart(child, run_id, "ttft_stall", detail)
+                    .perform_auto_restart(workload, run_id, "ttft_stall", detail)
                     .await
                 {
                     AutoRestartOutcome::Restarted | AutoRestartOutcome::Disabled => {
@@ -144,13 +144,13 @@ impl RunLoop {
     pub(crate) async fn on_starting_command(
         &mut self,
         cmd: Option<SupervisorCommand>,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
     ) -> StartingOutcome {
         match cmd {
             Some(SupervisorCommand::Shutdown { ack }) => {
                 let _ = self.cancel_tx.send(true);
-                drain::sigterm_then_sigkill(child, STARTING_SIGTERM_GRACE).await;
+                drain::sigterm_then_sigkill(workload, STARTING_SIGTERM_GRACE).await;
                 self.run_shutdown_command().await;
                 self.deps
                     .allocations
@@ -190,7 +190,7 @@ impl RunLoop {
                     "BeginDrain while starting; aborting in-progress spawn"
                 );
                 let _ = self.cancel_tx.send(true);
-                drain::sigterm_then_sigkill(child, STARTING_SIGTERM_GRACE).await;
+                drain::sigterm_then_sigkill(workload, STARTING_SIGTERM_GRACE).await;
                 self.run_shutdown_command().await;
                 self.end_run(run_id).await;
                 self.deps
@@ -216,7 +216,7 @@ impl RunLoop {
                     "FastKill while starting; aborting in-progress spawn"
                 );
                 let _ = self.cancel_tx.send(true);
-                drain::sigterm_then_sigkill(child, STARTING_SIGTERM_GRACE).await;
+                drain::sigterm_then_sigkill(workload, STARTING_SIGTERM_GRACE).await;
                 self.run_shutdown_command().await;
                 self.end_run(run_id).await;
                 self.deps
@@ -244,7 +244,7 @@ impl RunLoop {
                 // Disable during starting: drain the child, clean up, and
                 // transition to Disabled.
                 let _ = self.cancel_tx.send(true);
-                drain::sigterm_then_sigkill(child, STARTING_SIGTERM_GRACE).await;
+                drain::sigterm_then_sigkill(workload, STARTING_SIGTERM_GRACE).await;
                 self.run_shutdown_command().await;
                 self.end_run(run_id).await;
                 self.deps

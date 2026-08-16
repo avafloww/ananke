@@ -2,32 +2,23 @@
 //! race the health probe against an early exit or an incoming command, and
 //! hand off to [`RunLoop::run_running_loop`] once it passes.
 
-use std::{
-    os::unix::process::ExitStatusExt,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use ananke_db::Database;
-use ananke_system::ManagedChild;
 use tracing::{error, info, warn};
 
 use crate::{
     RunLoop, STARTING_SIGTERM_GRACE, StartingOutcome, Step, drain,
     handle::{StartFailure, StartFailureKind, StartOutcome},
     health::{HealthConfig, HealthOutcome, wait_healthy},
-    logs::{spawn_pump_stderr, spawn_pump_stdout},
-    render_argv,
+    launch::launch_workload,
+    logs::{spawn_pump_combined, spawn_pump_stderr, spawn_pump_stdout},
     state::{DisableReason, Event as StateEvent, ServiceState, transition},
+    workload::ManagedWorkload,
 };
 
 /// If a child dies with SIGKILL within this window from spawn, we treat it
 /// as an OOM kill and bump the rolling safety factor for the next attempt.
 const OOM_KILL_WINDOW: Duration = Duration::from_secs(30);
-
-/// 31-bit mask for `run_id`. `run_id` is derived from wall-clock millis; we
-/// clip to a positive `i64` so it round-trips through SQLite's `INTEGER`
-/// without sign surprises.
-const RUN_ID_MASK: i64 = 0x7FFF_FFFF;
 
 impl RunLoop {
     /// The whole Starting → Running → (Draining|Idle|Failed|Disabled)
@@ -35,55 +26,36 @@ impl RunLoop {
     /// outer dispatcher; we only return when the child has been cleaned up and
     /// the next outer-loop state is either a terminal variant or Idle.
     pub(crate) async fn handle_active_lifecycle(&mut self) -> Step {
-        // Pull the latest ServiceConfig for this spawn. `render_argv`,
-        // `HealthConfig`, and the per-command branches below all read
-        // fields that a reload may have changed (context, override_tensor,
-        // cache_type_k/v, sampling, health probe settings, etc.).
+        // Pull the latest ServiceConfig for this spawn. The launch helper,
+        // `HealthConfig`, and the per-command branches below all read fields
+        // that a reload may have changed.
         let current = self.current_svc();
         // When the placement engine has run (`packed_for_spawn = Some`), use
-        // its computed Allocation for CUDA_VISIBLE_DEVICES rendering —
-        // `self.init.allocation` is built from `placement_override` at
-        // registry-init time and is empty for any estimator-driven service,
-        // which would otherwise leave the child with `CUDA_VISIBLE_DEVICES=`
-        // and silently fall back to CPU.
+        // its computed Allocation for rendering; `self.init.allocation` is
+        // otherwise the placement-override source.
         let spawn_alloc = self
             .packed_for_spawn
             .as_ref()
             .map(|p| &p.allocation)
             .unwrap_or(&self.init.allocation);
-        let spawn_cfg = match render_argv(
+
+        let launched = match launch_workload(
             &current,
             spawn_alloc,
             self.packed_for_spawn.as_ref().map(|p| &p.args),
-        ) {
-            Ok(c) => c,
+            self.init.service_id,
+            &self.deps.system,
+            &self.deps.db,
+        )
+        .await
+        {
+            Ok(l) => l,
             Err(e) => {
-                error!(error = %e, "placeholder substitution failed; aborting spawn");
+                error!(error = %e, "launch failed; aborting spawn");
                 if let Some(bus) = self.start_bus_carry.take() {
                     let _ = bus.send(StartOutcome::Err(StartFailure {
                         kind: StartFailureKind::LaunchFailed,
-                        message: format!("placeholder substitution failed: {e}"),
-                    }));
-                }
-                self.deps
-                    .allocations
-                    .lock()
-                    .remove(&self.init.identity.name);
-                self.emit_allocation_changed();
-                self.set_state(ServiceState::Failed { retry_count: 0 });
-                return Step::Continue;
-            }
-        };
-        let cmdline = format!("{} {}", spawn_cfg.binary, spawn_cfg.args.join(" "));
-        info!(service = %self.init.identity.name, binary = %spawn_cfg.binary, "spawning child");
-        let mut child = match self.deps.system.process_spawner.spawn(&spawn_cfg).await {
-            Ok(c) => c,
-            Err(e) => {
-                error!(error = %e, "spawn failed");
-                if let Some(bus) = self.start_bus_carry.take() {
-                    let _ = bus.send(StartOutcome::Err(StartFailure {
-                        kind: StartFailureKind::LaunchFailed,
-                        message: format!("{e}"),
+                        message: e.to_string(),
                     }));
                 }
                 self.deps
@@ -96,38 +68,57 @@ impl RunLoop {
             }
         };
 
-        let pid = child.id().unwrap_or(0) as i32;
+        let run_id = launched.run_id;
+        let pid = launched.host_pid.unwrap_or(0);
+        // Attribution walks a registered pid's descendants, and pid 0 is the
+        // parent of init: registering it would sum the whole machine into
+        // this service. A container whose host pid the runtime didn't report
+        // is attributed by cgroup or not at all.
+        if pid > 0 {
+            self.deps
+                .observation
+                .register(&self.init.identity.name, pid as u32);
+        }
+        // A container's own cgroup, read back from its host pid. This is the
+        // observed path rather than one derived from the runtime's
+        // `--cgroup-parent` argument, so it is correct for any runtime,
+        // cgroup driver, or rootless layout without being configured.
+        // Attribution matches the subtree, so workers the runtime places
+        // beside the main process are covered even when they are not its
+        // descendants.
+        let cgroup_parent = if current.container.is_some() {
+            (pid > 0)
+                .then(|| self.deps.system.proc.cgroup_path(pid as u32))
+                .flatten()
+                .map(Into::into)
+        } else {
+            current.tracking.cgroup_parent.clone()
+        };
+        if current.container.is_some() && cgroup_parent.is_none() {
+            warn!(
+                service = %self.init.identity.name,
+                "container reported no readable cgroup; attribution falls back to the host pid's descendants"
+            );
+        }
         self.deps
             .observation
-            .register(&self.init.identity.name, pid as u32);
-        self.deps.observation.set_cgroup_parent(
-            &self.init.identity.name,
-            current.tracking.cgroup_parent.clone(),
-        );
+            .set_cgroup_parent(&self.init.identity.name, cgroup_parent);
+        if launched.workload_kind == "container" {
+            info!(
+                service = %self.init.identity.name,
+                container_id = %launched.container_id.as_deref().unwrap_or("<unknown>"),
+                container_name = %launched.container_name.as_deref().unwrap_or("<unknown>"),
+                command_line = %launched.command_line,
+                "container workload launched"
+            );
+        }
+
         let spawn_time = Instant::now();
-        let run_id = ananke_tracking::now_unix_ms() & RUN_ID_MASK;
-        let allocation_json = serde_json::to_string(
-            &self
-                .init
-                .allocation
-                .bytes
-                .iter()
-                .map(|(k, v)| (k.as_display(), *v))
-                .collect::<std::collections::BTreeMap<_, _>>(),
-        )
-        .unwrap_or_default();
-        insert_running_row(
-            &self.deps.db,
-            self.init.service_id,
-            run_id,
-            pid as i64,
-            cmdline.clone(),
-            allocation_json,
-        )
-        .await;
+        let mut workload = launched.workload;
+
         self.set_running_ids(run_id, pid);
 
-        if let Some(stdout) = child.take_stdout() {
+        if let Some(stdout) = workload.take_stdout() {
             spawn_pump_stdout(
                 stdout,
                 self.init.service_id,
@@ -135,7 +126,7 @@ impl RunLoop {
                 self.deps.batcher.clone(),
             );
         }
-        if let Some(stderr) = child.take_stderr() {
+        if let Some(stderr) = workload.take_stderr() {
             spawn_pump_stderr(
                 stderr,
                 self.init.service_id,
@@ -143,11 +134,17 @@ impl RunLoop {
                 self.deps.batcher.clone(),
             );
         }
+        for combined in workload.take_combined() {
+            spawn_pump_combined(
+                combined,
+                self.init.service_id,
+                run_id,
+                self.deps.batcher.clone(),
+            );
+        }
 
         // When no health check path is configured, transition to Running
-        // immediately after spawn. The service is assumed ready as soon as
-        // the child process exists. Used by oneshots that don't expose an
-        // HTTP health endpoint.
+        // immediately after spawn.
         if let Some(http_path) = &current.health.http_path {
             let health_cfg = HealthConfig {
                 url: format!(
@@ -164,18 +161,28 @@ impl RunLoop {
 
             loop {
                 tokio::select! {
-                    exit = child.wait() => {
+                    exit = workload.wait() => {
+                        // A workload that exits on its own never reaches the
+                        // drain path, so nothing else would remove its
+                        // container. Only on a confirmed exit, though: an
+                        // `Err` is the runtime failing to answer, and
+                        // removing on that would destroy a live container.
+                        if exit.is_ok()
+                            && let Err(e) = workload.cleanup().await
+                        {
+                            warn!(service = %self.init.identity.name, error = %e, "cleanup after early exit failed");
+                        }
                         return self.on_child_exit_during_start(exit, spawn_time);
                     }
                     outcome = &mut health_task => {
-                        match self.on_health_outcome(outcome, &mut *child, run_id).await {
+                        match self.on_health_outcome(outcome, &mut workload, run_id).await {
                             StartingOutcome::Continue => {}
                             StartingOutcome::Break => break,
                             StartingOutcome::Exit => return Step::Exit,
                         }
                     }
                     cmd = self.rx.recv() => {
-                        match self.on_starting_command(cmd, &mut *child, run_id).await {
+                        match self.on_starting_command(cmd, &mut workload, run_id).await {
                             StartingOutcome::Continue => {}
                             StartingOutcome::Break => break,
                             StartingOutcome::Exit => return Step::Exit,
@@ -186,7 +193,7 @@ impl RunLoop {
         } else {
             // No health check: transition to Running immediately.
             match self
-                .on_health_outcome(Ok(HealthOutcome::Healthy), &mut *child, run_id)
+                .on_health_outcome(Ok(HealthOutcome::Healthy), &mut workload, run_id)
                 .await
             {
                 StartingOutcome::Continue => {}
@@ -197,14 +204,14 @@ impl RunLoop {
         Step::Continue
     }
 
-    /// Child exited while we were still in Starting (before the health
+    /// Workload exited while we were still in Starting (before the health
     /// probe passed). Detects OOM, updates state, and notifies waiters.
     pub(crate) fn on_child_exit_during_start(
         &mut self,
-        exit: std::io::Result<std::process::ExitStatus>,
+        exit: std::io::Result<crate::workload::WorkloadExit>,
         spawn_time: Instant,
     ) -> Step {
-        warn!(?exit, "child exited during starting");
+        warn!(?exit, "workload exited during starting");
         self.deps
             .allocations
             .lock()
@@ -212,15 +219,12 @@ impl RunLoop {
         self.deps.observation.clear(&self.init.identity.name);
         self.emit_allocation_changed();
 
-        // Detect OOM kill: process died within 30 s and was killed by
-        // SIGKILL (kernel OOM killer or cgroup limit).
+        // Detect OOM kill: workload died within 30 s from a SIGKILL (native
+        // process only — containers report a numeric code, and runtime OOM is
+        // surfaced via the exit code, not a signal).
         let runtime = spawn_time.elapsed();
-        let was_sigkill = exit
-            .as_ref()
-            .ok()
-            .and_then(|s| s.signal())
-            .map(|sig| sig == libc::SIGKILL)
-            .unwrap_or(false);
+        let was_sigkill =
+            matches!(exit, Ok(crate::workload::WorkloadExit::Signal(sig)) if sig == libc::SIGKILL);
         if runtime < OOM_KILL_WINDOW && was_sigkill {
             self.oom_attempts += 1;
             if self.oom_attempts >= 2 {
@@ -268,7 +272,7 @@ impl RunLoop {
     pub(crate) async fn on_health_outcome(
         &mut self,
         outcome: Result<HealthOutcome, tokio::task::JoinError>,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
     ) -> StartingOutcome {
         match outcome {
@@ -297,7 +301,7 @@ impl RunLoop {
                     let _ = bus.send(StartOutcome::Ok);
                 }
 
-                self.run_running_loop(child, run_id).await
+                self.run_running_loop(workload, run_id).await
             }
             Ok(HealthOutcome::TimedOut) => {
                 warn!(service = %self.init.identity.name, "health timed out; disabling");
@@ -315,7 +319,7 @@ impl RunLoop {
                 self.set_state(ServiceState::Disabled {
                     reason: DisableReason::HealthTimeout,
                 });
-                drain::sigterm_then_sigkill(child, STARTING_SIGTERM_GRACE).await;
+                drain::sigterm_then_sigkill(workload, STARTING_SIGTERM_GRACE).await;
                 self.run_shutdown_command().await;
                 StartingOutcome::Break
             }
@@ -325,35 +329,10 @@ impl RunLoop {
                     .lock()
                     .remove(&self.init.identity.name);
                 self.emit_allocation_changed();
-                drain::sigterm_then_sigkill(child, STARTING_SIGTERM_GRACE).await;
+                drain::sigterm_then_sigkill(workload, STARTING_SIGTERM_GRACE).await;
                 self.run_shutdown_command().await;
                 StartingOutcome::Exit
             }
         }
-    }
-}
-
-/// Insert a `running_services` row.
-async fn insert_running_row(
-    db: &Database,
-    service_id: i64,
-    run_id: i64,
-    pid: i64,
-    command_line: String,
-    allocation: String,
-) {
-    use ananke_db::models::RunningService;
-
-    let row = RunningService {
-        service_id,
-        run_id,
-        pid,
-        spawned_at: ananke_tracking::now_unix_ms(),
-        command_line,
-        allocation,
-        state: "starting".to_string(),
-    };
-    if let Err(e) = db.insert_running(&row).await {
-        warn!(error = %e, "running_services insert failed");
     }
 }

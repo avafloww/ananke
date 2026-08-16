@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use ananke_api::events::Event;
 use ananke_config::validate::PeriodicMode;
-use ananke_system::ManagedChild;
 use tracing::{info, warn};
 
 use crate::{
     AutoRestartOutcome, PeriodicOutcome, RunLoop, drain,
     state::{DisableReason, ServiceState},
+    workload::ManagedWorkload,
 };
 
 /// In-flight drain grace for a stall-triggered restart. Short by design: the
@@ -27,11 +27,11 @@ impl RunLoop {
     /// [`Self::perform_auto_restart`] that labels the trigger.
     pub(crate) async fn perform_error_rate_restart(
         &mut self,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
         detail: String,
     ) -> AutoRestartOutcome {
-        self.perform_auto_restart(child, run_id, "error_rate", detail)
+        self.perform_auto_restart(workload, run_id, "error_rate", detail)
             .await
     }
 
@@ -42,7 +42,7 @@ impl RunLoop {
     /// generation-stall watchdogs — all count toward the same flap cap.
     pub(crate) async fn perform_auto_restart(
         &mut self,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
         trigger: &'static str,
         detail: String,
@@ -78,7 +78,7 @@ impl RunLoop {
             )
             .await;
             self.drain_now_bounded(
-                child,
+                workload,
                 run_id,
                 drain::DrainReason::AutoRestart,
                 inflight_wait,
@@ -93,7 +93,7 @@ impl RunLoop {
         warn!(service = %self.init.identity.name, trigger, detail = %detail, "auto-restart: watchdog firing");
         self.emit_auto_restarted(trigger, detail, run_id).await;
         self.drain_now_bounded(
-            child,
+            workload,
             run_id,
             drain::DrainReason::AutoRestart,
             inflight_wait,
@@ -110,7 +110,7 @@ impl RunLoop {
     pub(crate) async fn on_periodic_tick(
         &mut self,
         deadline: &mut Option<tokio::time::Instant>,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
     ) -> PeriodicOutcome {
         let ar = self.current_svc().auto_restart;
@@ -120,8 +120,12 @@ impl RunLoop {
         };
         match periodic.mode {
             PeriodicMode::Immediate => {
-                self.perform_periodic_restart(child, run_id, "interval elapsed (immediate)".into())
-                    .await;
+                self.perform_periodic_restart(
+                    workload,
+                    run_id,
+                    "interval elapsed (immediate)".into(),
+                )
+                .await;
                 PeriodicOutcome::Restarted
             }
             PeriodicMode::OnRequest => {
@@ -143,7 +147,7 @@ impl RunLoop {
                     == 0
                 {
                     self.perform_periodic_restart(
-                        child,
+                        workload,
                         run_id,
                         "interval elapsed (idle window)".into(),
                     )
@@ -163,13 +167,13 @@ impl RunLoop {
     /// not count toward the flap cap.
     async fn perform_periodic_restart(
         &mut self,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
         detail: String,
     ) {
         info!(service = %self.init.identity.name, detail = %detail, "auto-restart: periodic timer firing");
         self.emit_auto_restarted("periodic", detail, run_id).await;
-        self.drain_now(child, run_id, drain::DrainReason::AutoRestart)
+        self.drain_now(workload, run_id, drain::DrainReason::AutoRestart)
             .await;
         self.set_state(ServiceState::Idle);
     }

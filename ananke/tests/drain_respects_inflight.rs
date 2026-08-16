@@ -14,6 +14,7 @@ use std::{
 use ananke::supervise::{
     SpawnConfig,
     drain::{DrainConfig, DrainReason, drain_pipeline},
+    workload::ManagedWorkload,
 };
 use ananke_system::{FakeProcessState, FakeSpawner, ProcessSpawner};
 
@@ -29,7 +30,8 @@ fn spawn_cfg() -> SpawnConfig {
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn waits_for_inflight_zero() {
     let spawner = Arc::new(FakeSpawner::new());
-    let mut child = spawner.spawn(&spawn_cfg()).await.unwrap();
+    let child = spawner.spawn(&spawn_cfg()).await.unwrap();
+    let mut workload = ManagedWorkload::Process(child);
 
     let counter = Arc::new(AtomicU64::new(2));
     let cfg = DrainConfig {
@@ -45,7 +47,7 @@ async fn waits_for_inflight_zero() {
         c.store(0, Ordering::Relaxed);
     });
 
-    drain_pipeline(&mut *child, &cfg, counter.clone(), DrainReason::Eviction).await;
+    drain_pipeline(&mut workload, &cfg, counter.clone(), DrainReason::Eviction).await;
 
     let snap = spawner.children();
     assert_eq!(snap.len(), 1);
