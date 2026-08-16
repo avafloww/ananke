@@ -348,3 +348,145 @@ fn parse_inspect_output(raw: &str) -> Option<ContainerInspect> {
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Most of this module is untestable through the fake: the fake exists to
+    // stand in *for* the adapter, so it cannot catch a defect in the adapter
+    // itself. Three have hidden here — unchecked exit statuses, a `ps`
+    // template that no runtime accepts, and a log follower killed before its
+    // first line — and all three were found by reading or in production.
+    //
+    // The parsing and classification below are pure. The rest drive the real
+    // adapter with `echo` and `false` standing in for the runtime binary:
+    // deterministic, sub-millisecond, and no container in sight. That is a
+    // narrow exception to the no-real-processes rule, taken because this is
+    // precisely the process-spawning seam that rule leaves uncovered.
+
+    #[test]
+    fn inspect_parsing_survives_both_runtimes() {
+        // Docker prefixes the name with `/`; Podman does not. Both must
+        // yield the name ananke generated.
+        let docker =
+            parse_inspect_output("abc123|/ananke-svc-7|running|0|4242|owner-uuid").unwrap();
+        assert_eq!(docker.id, "abc123");
+        assert_eq!(docker.name, "ananke-svc-7");
+        assert_eq!(docker.state, "running");
+        assert_eq!(docker.host_pid, Some(4242));
+        assert_eq!(docker.owner.as_deref(), Some("owner-uuid"));
+
+        let podman = parse_inspect_output("abc123|ananke-svc-7|running|0|4242|owner-uuid").unwrap();
+        assert_eq!(podman.name, "ananke-svc-7");
+    }
+
+    #[test]
+    fn inspect_parsing_reports_an_absent_owner_label() {
+        // Go's templater prints `<no value>` for a missing key, and nothing
+        // at all when the container carries no labels. Neither is an owner.
+        for tail in ["<no value>", ""] {
+            let i = parse_inspect_output(&format!("abc|/n|exited|3|0|{tail}")).unwrap();
+            assert_eq!(i.owner, None, "tail: {tail:?}");
+            assert_eq!(i.exit_code, Some(3));
+            // pid 0 is not a pid: it parents init, and attributing its
+            // descendants would sum the whole machine into one service.
+            assert_eq!(i.host_pid, None);
+        }
+    }
+
+    #[test]
+    fn a_pipe_in_a_label_value_does_not_shift_the_fields() {
+        // The owner label is last and taken whole, so an operator's label
+        // containing the separator cannot displace the scalars before it.
+        let i = parse_inspect_output("abc|/n|running|0|9|weird|value").unwrap();
+        assert_eq!(i.state, "running");
+        assert_eq!(i.host_pid, Some(9));
+        assert_eq!(i.owner.as_deref(), Some("weird|value"));
+    }
+
+    #[test]
+    fn inspect_parsing_rejects_output_it_cannot_trust() {
+        assert!(parse_inspect_output("").is_none());
+        assert!(parse_inspect_output("not-enough|fields").is_none());
+        // An empty id is what a failed template renders; it must not become
+        // a container identity.
+        assert!(parse_inspect_output("|/n|running|0|1|owner").is_none());
+    }
+
+    #[test]
+    fn absent_is_distinguished_from_unavailable() {
+        // The whole recovery design rests on telling these apart: "gone" is
+        // success for a removal, "I could not ask" must never be.
+        assert!(is_absent("docker rm x: Error: No such container: x"));
+        assert!(is_absent("podman rm x: no such container x"));
+        assert!(is_absent("Error response from daemon: No such object: x"));
+        assert!(!is_absent(
+            "Cannot connect to the Docker daemon. Is the docker daemon running?"
+        ));
+        assert!(!is_absent("permission denied while trying to connect"));
+    }
+
+    #[test]
+    fn diagnosis_takes_the_runtime_s_last_word() {
+        assert_eq!(
+            diagnosis(b"warming up\nError: no such image\n"),
+            "Error: no such image"
+        );
+        assert_eq!(diagnosis(b""), "no output");
+        assert_eq!(diagnosis(b"   \n  \n"), "no output");
+    }
+
+    #[tokio::test]
+    async fn a_nonzero_exit_is_an_error_carrying_the_runtime_s_words() {
+        // `false` exits 1 silently; the point is that a non-zero status is
+        // an error at all, rather than being read as a successful teardown.
+        let argv = vec!["false".to_string(), "create".to_string()];
+        let err = run_checked("false", "create", &argv).await.unwrap_err();
+        assert!(format!("{err}").contains("false create"), "{err}");
+
+        // A binary that is not there is also a failure, not an absence.
+        let argv = vec!["definitely-not-a-runtime".to_string()];
+        let err = run_checked("definitely-not-a-runtime", "ps", &argv)
+            .await
+            .unwrap_err();
+        assert!(!is_absent(&err.to_string()), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_zero_exit_returns_trimmed_stdout() {
+        let argv = vec!["echo".to_string(), "  deadbeef  ".to_string()];
+        assert_eq!(
+            run_checked("echo", "create", &argv).await.unwrap(),
+            "deadbeef"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_log_follower_outlives_the_call_that_spawned_it() {
+        use tokio::io::AsyncReadExt;
+
+        // The regression: the follower has `kill_on_drop`, so letting its
+        // handle fall out of `spawn_logs` killed it and handed back pipes
+        // already at EOF. `echo` stands in for the runtime, so the argv
+        // `echo logs --follow <id>` prints its own arguments.
+        let c = CliRunningContainer {
+            id: "abc".into(),
+            name: "ananke-svc-1".into(),
+            executable: "echo".into(),
+            host_pid: None,
+            follower: parking_lot::Mutex::new(None),
+        };
+
+        let mut readers = c.logs();
+        assert!(!readers.is_empty(), "a follower must expose its output");
+        assert!(
+            c.follower.lock().is_some(),
+            "the child must be retained; dropping it here kills the follower"
+        );
+
+        let mut out = String::new();
+        readers[0].read_to_string(&mut out).await.unwrap();
+        assert!(out.contains("logs --follow abc"), "got {out:?}");
+    }
+}
