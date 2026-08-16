@@ -90,6 +90,7 @@ fn running_row(service_id: i64, run_id: i64, name: &str, id: Option<&str>) -> Ru
         runtime: Some("docker".to_string()),
         container_name: Some(name.to_string()),
         container_id: id.map(str::to_string),
+        runtime_executable: None,
     }
 }
 
@@ -188,6 +189,35 @@ async fn intent_with_id_before_start_reconciles() {
         ["create", "remove"],
         "a container created but never started is removed, not started"
     );
+}
+
+#[tokio::test]
+async fn running_row_reconciles_through_its_recorded_binary() {
+    // `runtime` alone reconstructs a bare name. A service naming an explicit
+    // binary — a Nix store path, a wrapper — would otherwise be reconciled
+    // by shelling something that resolves to nothing, and the row cleaned as
+    // absent while the container ran on.
+    let db = Database::open_in_memory().await.unwrap();
+    let svc = db.upsert_service("ninfer", 0).await.unwrap();
+    let engine = FakeContainerEngine::new();
+    let prepared = engine
+        .create(&spec("ananke-ninfer-7", OWNER, "ninfer", 7))
+        .await
+        .unwrap();
+
+    let mut row = running_row(svc, 7, "ananke-ninfer-7", Some(&prepared.id));
+    row.runtime = Some("podman".to_string());
+    row.runtime_executable = Some("/nix/store/x/bin/podman".to_string());
+    db.insert_running(&row).await.unwrap();
+
+    let out = reconcile(&InMemoryProcFs::new(), &engine, Some(OWNER), &db).await;
+
+    assert_eq!(sole_container_action(&out), "removed");
+    assert_eq!(
+        engine.find(&prepared.id).unwrap().state,
+        FakeContainerState::Removed
+    );
+    assert!(db.list_running().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -646,6 +676,7 @@ async fn reconcile_block_does_not_prevent_unrelated_native_provision() {
         runtime: None,
         container_name: None,
         container_id: None,
+        runtime_executable: None,
     })
     .await
     .unwrap();

@@ -162,6 +162,7 @@ async fn launch_process(
         runtime: None,
         container_name: None,
         container_id: None,
+        runtime_executable: None,
     };
     // Native-process row insert is best-effort, matching the existing path,
     // but we still surface persistence failures for parity with containers.
@@ -265,6 +266,7 @@ async fn launch_container(
         runtime: Some(spec.runtime.as_str().to_string()),
         container_name: Some(prepared.name.clone()),
         container_id: Some(prepared.id.clone()),
+        runtime_executable: Some(prepared.runtime_executable.clone()),
     };
     if let Err(e) = db.insert_running(&row).await {
         // Compensating removal: remove the prepared container, then surface.

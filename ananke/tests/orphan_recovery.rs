@@ -32,6 +32,7 @@ async fn cleans_row_for_dead_pid() {
         runtime: None,
         container_name: None,
         container_id: None,
+        runtime_executable: None,
     })
     .await
     .expect("insert row");

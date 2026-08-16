@@ -41,6 +41,10 @@ pub struct RunningService {
     pub runtime: Option<String>,
     pub container_name: Option<String>,
     pub container_id: Option<String>,
+    /// The binary this container was launched with. `None` for a native
+    /// process, and for container rows predating the column — those fall
+    /// back to the runtime's default name.
+    pub runtime_executable: Option<String>,
 }
 
 impl RunningService {
@@ -57,11 +61,13 @@ impl RunningService {
             runtime: row.get(8)?,
             container_name: row.get(9)?,
             container_id: row.get(10)?,
+            runtime_executable: row.get(11)?,
         })
     }
 
     pub const COLUMNS: &'static str = "service_id, run_id, pid, spawned_at, command_line, \
-         allocation, state, workload_kind, runtime, container_name, container_id";
+         allocation, state, workload_kind, runtime, container_name, container_id, \
+         runtime_executable";
 }
 
 /// A durable container launch intent recorded before any runtime invocation.

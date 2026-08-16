@@ -324,13 +324,18 @@ async fn reconcile_intents(
     }
 }
 
-/// An engine driving the binary for `runtime` (`"docker"` / `"podman"`),
-/// falling back to the caller's own when the row predates the column or
-/// names something unrecognised.
+/// An engine driving `executable` when the row recorded one, else the
+/// binary named by `runtime`. A row predating the column, or naming a
+/// runtime this build does not know, falls back to Docker's default name —
+/// which is what such a row was launched with.
 fn engine_for_runtime(
     engine: &dyn ananke_system::container::ContainerEngine,
+    executable: Option<&str>,
     runtime: Option<&str>,
 ) -> std::sync::Arc<dyn ananke_system::container::ContainerEngine> {
+    if let Some(exe) = executable.filter(|e| !e.trim().is_empty()) {
+        return engine.for_executable(exe);
+    }
     match runtime {
         Some(name @ ("docker" | "podman")) => engine.for_executable(name),
         _ => engine.for_executable(ananke_spawn::ContainerRuntime::Docker.executable()),
@@ -435,7 +440,13 @@ async fn reconcile_container_row(
     // The row records which runtime created this container, and a config
     // that has since switched runtimes must not send `docker` after a
     // Podman container.
-    let engine = engine_for_runtime(ctx.engine, row.runtime.as_deref());
+    // The recorded binary first: `runtime` alone reconstructs a bare name,
+    // which is only the same thing when it is on the daemon's PATH.
+    let engine = engine_for_runtime(
+        ctx.engine,
+        row.runtime_executable.as_deref(),
+        row.runtime.as_deref(),
+    );
     let engine = engine.as_ref();
 
     // Resolve the container identity: inspect by ID first, then fall back to
@@ -533,6 +544,7 @@ mod tests {
             runtime: None,
             container_name: None,
             container_id: None,
+            runtime_executable: None,
         })
         .await
         .unwrap();

@@ -15,8 +15,8 @@ impl Database {
         conn.execute(
             "INSERT OR REPLACE INTO running_services
                  (service_id, run_id, pid, spawned_at, command_line, allocation, state,
-                  workload_kind, runtime, container_name, container_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                  workload_kind, runtime, container_name, container_id, runtime_executable)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 row.service_id,
                 row.run_id,
@@ -28,7 +28,8 @@ impl Database {
                 row.workload_kind,
                 row.runtime,
                 row.container_name,
-                row.container_id
+                row.container_id,
+                row.runtime_executable
             ],
         )
         .map_err(|e| self.db_err(e))?;
