@@ -7,7 +7,7 @@ use std::process::Stdio;
 use ananke_errors::ExpectedError;
 use ananke_spawn::ContainerSpec;
 use async_trait::async_trait;
-use tokio::process::Command;
+use tokio::process::{Child, Command};
 use tracing::warn;
 
 use crate::container::types::{
@@ -132,6 +132,7 @@ impl ContainerEngine for CliContainerEngine {
             name: prepared.name.clone(),
             executable: prepared.runtime_executable.clone(),
             host_pid,
+            follower: parking_lot::Mutex::new(None),
         }))
     }
 
@@ -148,6 +149,14 @@ pub struct CliRunningContainer {
     pub(crate) name: String,
     pub(crate) executable: String,
     pub(crate) host_pid: Option<u32>,
+    /// The `logs --follow` child, held for as long as this handle is.
+    ///
+    /// It has `kill_on_drop` set, so *where* it is dropped decides whether
+    /// the follower streams or dies: dropped at the end of the function
+    /// that spawned it, the pipes reach the caller already at EOF. Owning
+    /// it here ties the follower's life to the container's, which is what
+    /// closes the leak without severing the stream.
+    pub(crate) follower: parking_lot::Mutex<Option<Child>>,
 }
 
 #[async_trait]
@@ -237,6 +246,9 @@ impl CliRunningContainer {
         if readers.is_empty() {
             return Err(cli_err(format!("{exe} logs {}: no output pipes", self.id)));
         }
+        // Hand the child to the container handle. Letting it fall out of
+        // scope here would kill the follower before a single line was read.
+        *self.follower.lock() = Some(child);
         Ok(readers)
     }
 }
