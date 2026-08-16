@@ -44,6 +44,8 @@ pub(crate) fn check_placeholders(
         // later. Static allocations re-validate at spawn time against
         // the real static_reserve_mb.
         static_reserve_mb: None,
+        listen_host: None,
+        host_port: 0,
     };
     for (i, arg) in argv.iter().enumerate() {
         substitute(arg, &ctx)
@@ -72,6 +74,8 @@ pub(crate) fn check_launcher_placeholders(
         model: Some("/m/x.gguf"),
         allocation: &alloc,
         static_reserve_mb: None,
+        listen_host: None,
+        host_port: 0,
     };
     substitute_launcher_argv(argv, &[], &ctx)
         .map_err(|e| fail(format!("service {name}: launcher: {e}")))?;

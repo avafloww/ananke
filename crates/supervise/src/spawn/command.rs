@@ -29,6 +29,8 @@ fn placeholder_context<'a>(
         model: None,
         allocation: alloc,
         static_reserve_mb,
+        listen_host: None,
+        host_port: svc.private_port,
     }
 }
 
