@@ -26,9 +26,12 @@ use ananke_api::{
         ChatCompletionEnvelope, CompletionEnvelope, EmbeddingEnvelope, ModelListing, ModelsResponse,
     },
     services::{
-        command::{LaunchCommand, LaunchCommandResponse, LaunchCommandSource},
+        command::{
+            LaunchCommand, LaunchCommandResponse, LaunchCommandSource, LaunchContainer, LaunchMount,
+        },
         detail::{
-            DevicePlacement, IkParams, PlacementPreview, RuntimeInfo, ServiceDetail, ServingConfig,
+            ContainerDetail, DevicePlacement, IkParams, PlacementPreview, RuntimeInfo,
+            ServiceDetail, ServingConfig,
         },
         disable::DisableResponse,
         enable::EnableResponse,
@@ -104,6 +107,7 @@ use crate::{
         ServiceSummary,
         ServicesResponse,
         ServiceDetail,
+        ContainerDetail,
         PlacementPreview,
         RuntimeInfo,
         ServingConfig,
@@ -113,6 +117,8 @@ use crate::{
         LaunchCommand,
         LaunchCommandResponse,
         LaunchCommandSource,
+        LaunchContainer,
+        LaunchMount,
         LogLine,
         LogsResponse,
         LogStreamMessage,

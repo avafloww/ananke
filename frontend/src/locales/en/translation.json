@@ -256,6 +256,10 @@
     "total": "Total",
     "peak": "(peak {{bytes}})",
     "preview": "Preview",
+    "containerRuntime": "Container runtime",
+    "containerNetwork": "Container network",
+    "containerId": "Container ID",
+    "containerName": "Container name",
     "noPlacementFits": "No placement is possible under current conditions.",
     "shortfall": "{{device}}: needs {{requested}}, has {{available}}",
     "expertOffload": "Expert offload: {{layers}} layer · {{bytes}} to CPU",
@@ -301,6 +305,7 @@
     "both": "both",
     "stdout": "stdout",
     "stderr": "stderr",
+    "combined": "combined",
     "err": "err",
     "out": "out"
   }

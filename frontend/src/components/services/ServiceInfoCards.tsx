@@ -96,6 +96,43 @@ export function ConfigGrid({ detail }: { detail: ServiceDetail }) {
     <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
       <dt className="text-tertiary">{t("serviceDetail.template")}</dt>
       <dd className="font-mono text-primary">{detail.template}</dd>
+      {detail.container && (
+        <>
+          <dt className="text-tertiary">
+            {t("serviceDetail.containerRuntime")}
+          </dt>
+          <dd className="font-mono text-primary">
+            {detail.container.runtime} · {detail.container.image}
+          </dd>
+          <dt className="text-tertiary">
+            {t("serviceDetail.containerNetwork")}
+          </dt>
+          <dd className="font-mono text-primary">{detail.container.network}</dd>
+          {detail.container.container_id && (
+            <>
+              <dt className="text-tertiary">
+                {t("serviceDetail.containerId")}
+              </dt>
+              <dd className="flex items-center gap-1">
+                <span className="font-mono text-xs text-primary">
+                  {detail.container.container_id.slice(0, 12)}
+                </span>
+                <CopyButton value={detail.container.container_id} />
+              </dd>
+            </>
+          )}
+          {detail.container.container_name && (
+            <>
+              <dt className="text-tertiary">
+                {t("serviceDetail.containerName")}
+              </dt>
+              <dd className="font-mono text-xs text-primary">
+                {detail.container.container_name}
+              </dd>
+            </>
+          )}
+        </>
+      )}
       <dt className="text-tertiary">{t("serviceDetail.context")}</dt>
       <dd className="font-mono text-primary">
         {detail.estimate

@@ -45,7 +45,7 @@ export function LaunchCommandSection({ name }: { name: string }) {
   );
 }
 
-function CommandPanel({
+export function CommandPanel({
   label,
   command,
 }: {
@@ -59,22 +59,28 @@ function CommandPanel({
         <span className="text-xs text-tertiary">{label}</span>
         {command && (
           <>
-            <span
-              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                command.env_inherit
-                  ? "bg-emerald-500/15 text-emerald-400"
-                  : "bg-amber-500/15 text-amber-400"
-              }`}
-              title={
-                command.env_inherit
-                  ? t("serviceDetail.envInheritOnHint")
-                  : t("serviceDetail.envInheritOffHint")
-              }
-            >
-              {command.env_inherit
-                ? t("serviceDetail.envInheritOn")
-                : t("serviceDetail.envInheritOff")}
-            </span>
+            {command.container ? (
+              <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-sky-500/15 text-sky-400">
+                {command.container.runtime} · {command.container.image}
+              </span>
+            ) : (
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                  command.env_inherit
+                    ? "bg-emerald-500/15 text-emerald-400"
+                    : "bg-amber-500/15 text-amber-400"
+                }`}
+                title={
+                  command.env_inherit
+                    ? t("serviceDetail.envInheritOnHint")
+                    : t("serviceDetail.envInheritOffHint")
+                }
+              >
+                {command.env_inherit
+                  ? t("serviceDetail.envInheritOn")
+                  : t("serviceDetail.envInheritOff")}
+              </span>
+            )}
             <CopyButton value={renderCommand(command)} />
           </>
         )}

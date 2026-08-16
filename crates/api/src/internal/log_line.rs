@@ -1,4 +1,4 @@
-//! One captured stdout/stderr line.
+//! One captured stdout/stderr/combined line.
 //!
 //! `LogLine` is both a wire type (returned by `GET /api/services/:name/logs`
 //! and streamed over `WS /api/services/:name/logs/stream`) and a database
@@ -9,12 +9,12 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-/// One captured stdout/stderr line.
+/// One captured stdout/stderr/combined line.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
 pub struct LogLine {
     /// Millisecond UNIX timestamp the line was received.
     pub timestamp_ms: i64,
-    /// `"stdout"` or `"stderr"`.
+    /// `"stdout"`, `"stderr"`, or `"combined"` (container merged output).
     pub stream: String,
     /// The line content (sans trailing newline).
     pub line: String,

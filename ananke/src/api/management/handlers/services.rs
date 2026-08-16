@@ -3,7 +3,10 @@
 use ananke_api::{
     internal::{fit_verdict::FitVerdict, log_line::LogLine},
     services::{
-        command::{EnvVar, LaunchCommand, LaunchCommandResponse, LaunchCommandSource},
+        command::{
+            EnvVar, LaunchCommand, LaunchCommandResponse, LaunchCommandSource, LaunchContainer,
+            LaunchMount,
+        },
         detail::{PlacementPreview, RestartEvent, ServiceDetail},
         list::{DeviceFootprint, ServiceSummary, ServicesResponse},
     },
@@ -241,6 +244,7 @@ pub async fn service_detail(State(state): State<AppState>, Path(name): Path<Stri
         recent_restarts,
         runtime: runtime_info(svc_cfg),
         serving: serving_config(svc_cfg),
+        container: container_detail(&state, svc_cfg, &name).await,
     };
     (StatusCode::OK, Json(detail)).into_response()
 }
@@ -265,11 +269,14 @@ pub async fn service_command(State(state): State<AppState>, Path(name): Path<Str
         .into_response();
     };
 
+    // A run is identified by its `run_id`, not by a host PID: a container
+    // workload often has no host PID at all, and keying off one would label
+    // a live container's command as a not-yet-started preview.
     let running = state
         .registry
         .get(&svc_cfg.name)
         .map(|h| h.peek())
-        .and_then(|s| s.pid)
+        .and_then(|s| s.run_id)
         .is_some();
     let source = if running {
         LaunchCommandSource::Running
@@ -284,15 +291,17 @@ pub async fn service_command(State(state): State<AppState>, Path(name): Path<Str
 
     // On-empty: what the command would be if no other services held
     // pledges. This should succeed whenever the model fits on the
-    // hardware at all.
-    let on_empty = match crate::supervise::preview_command(
+    // hardware at all. A containerized service renders a container preview
+    // instead of a process SpawnConfig.
+    let on_empty = match render_preview(
         svc_cfg,
         &snapshot,
         &ananke_allocator::AllocationTable::new(),
         fs,
         corrections,
+        source,
     ) {
-        Ok(cfg) => render_launch_command(cfg, source),
+        Ok(cmd) => cmd,
         Err(e) => {
             return ApiErrorCode::PreviewFailed {
                 name: svc_cfg.name.clone(),
@@ -305,12 +314,55 @@ pub async fn service_command(State(state): State<AppState>, Path(name): Path<Str
     // Active: what the command would be under the current device state
     // and pledge book. Gracefully `None` when the service can't fit
     // alongside currently running services.
-    let active = crate::supervise::preview_command(svc_cfg, &snapshot, &table, fs, corrections)
-        .ok()
-        .map(|cfg| render_launch_command(cfg, source));
+    let active = render_preview(svc_cfg, &snapshot, &table, fs, corrections, source).ok();
 
     let response = LaunchCommandResponse { on_empty, active };
     (StatusCode::OK, Json(response)).into_response()
+}
+
+/// Render either a process or container launch preview for a service.
+fn render_preview(
+    svc_cfg: &ananke_config::validate::ServiceConfig,
+    snapshot: &ananke_devices::DeviceSnapshot,
+    table: &ananke_allocator::AllocationTable,
+    fs: &dyn ananke_system::Fs,
+    corrections: ananke_tracking::rolling::Corrections,
+    source: LaunchCommandSource,
+) -> Result<LaunchCommand, ananke_supervise::PreviewError> {
+    if svc_cfg.container.is_some() {
+        // A preview is illustrative, so it is built against a placeholder
+        // owner rather than this installation's. Stamping the real one
+        // would make a copy-pasted `create_argv` produce a container the
+        // owner-scoped sweep then deletes as an unrecorded leak.
+        let spec = crate::supervise::preview_container_command(
+            svc_cfg,
+            snapshot,
+            table,
+            fs,
+            corrections,
+            PREVIEW_OWNER_UUID,
+            0,
+        )?
+        .ok_or(ananke_supervise::PreviewError::NoModelPath)?;
+        Ok(LaunchCommand {
+            source,
+            argv: spec.command.clone(),
+            env: spec
+                .env
+                .iter()
+                .map(|(k, v)| EnvVar {
+                    key: k.clone(),
+                    value: v.clone(),
+                })
+                .collect(),
+            env_inherit: false,
+            container: Some(render_launch_container(&spec, &svc_cfg.name)),
+        })
+    } else {
+        let spawn_cfg =
+            crate::supervise::preview_command(svc_cfg, snapshot, table, fs, corrections)?;
+        Ok(render_launch_command(spawn_cfg, source))
+    }
 }
 
 fn render_launch_command(
@@ -331,15 +383,101 @@ fn render_launch_command(
         argv,
         env,
         env_inherit,
+        container: None,
     }
 }
 
-/// Snapshot the service's current per-device pledge from the
-/// allocation table. Empty when the service isn't running.
-/// Serving-runtime block for the detail view: the runtime kind plus,
-/// for ik-llama services, the configured knobs and the fit margins
-/// ananke would emit per visible device (computed, so the dashboard is
-/// the one place an operator can read them without a spawn).
+/// Owner label used in launch previews. Deliberately not a real
+/// installation identity: a preview is for reading and for copy-pasting,
+/// and neither should produce something ananke will later reap.
+const PREVIEW_OWNER_UUID: &str = "00000000-0000-0000-0000-000000000000";
+
+/// Convert a resolved [`ContainerSpec`] into the wire `LaunchContainer`
+/// shape, exposing the runtime create command and in-container argv without
+/// resolving passthrough secret values.
+fn render_launch_container(
+    spec: &ananke_spawn::ContainerSpec,
+    service_name: &str,
+) -> LaunchContainer {
+    let publication = match (spec.host_port, spec.container_port) {
+        (Some(hp), Some(cp)) => Some(format!("127.0.0.1:{hp}:{cp}")),
+        _ => None,
+    };
+    let create_argv = ananke_system::container::render_create_argv(
+        spec.runtime_executable
+            .as_deref()
+            .unwrap_or_else(|| spec.runtime.executable()),
+        spec,
+    );
+    LaunchContainer {
+        runtime: spec.runtime.as_str().to_string(),
+        image: spec.image.clone(),
+        name_pattern: ananke_supervise::spawn::container::container_name_pattern(service_name),
+        argv: spec.command.clone(),
+        env: spec
+            .env
+            .iter()
+            .map(|(k, v)| EnvVar {
+                key: k.clone(),
+                value: v.clone(),
+            })
+            .collect(),
+        env_passthrough: spec.env_passthrough.clone(),
+        mounts: spec
+            .mounts
+            .iter()
+            .map(|m| LaunchMount {
+                source: m.source.clone(),
+                target: m.target.clone(),
+                read_only: m.read_only,
+            })
+            .collect(),
+        network: match spec.network {
+            ananke_spawn::ContainerNetwork::Bridge => "bridge".to_string(),
+            ananke_spawn::ContainerNetwork::Host => "host".to_string(),
+        },
+        publication,
+        ipc: match spec.ipc {
+            ananke_spawn::ContainerIpc::Private => "private".to_string(),
+            ananke_spawn::ContainerIpc::Host => "host".to_string(),
+        },
+        gpu_devices: spec.gpu_devices.clone(),
+        create_argv,
+    }
+}
+
+/// Container identity for the detail view: runtime, image, network mode,
+/// and the live name/ID pulled from the running row when present.
+async fn container_detail(
+    state: &AppState,
+    svc_cfg: &ServiceConfig,
+    name: &str,
+) -> Option<ananke_api::services::detail::ContainerDetail> {
+    let container = svc_cfg.container.as_ref().cloned()?;
+    let service_id = state.db.resolve_service_id(name).await.ok().flatten();
+    let live = match service_id {
+        Some(sid) => state.db.latest_running(sid).await.ok().flatten(),
+        None => None,
+    };
+    let (container_id, container_name) = match live {
+        Some(r) => (r.container_id, r.container_name),
+        None => (None, None),
+    };
+    Some(ananke_api::services::detail::ContainerDetail {
+        runtime: container.runtime.executable().to_string(),
+        image: container.image,
+        network: match container.network {
+            ananke_config::validate::ContainerNetwork::Bridge => "bridge".to_string(),
+            ananke_config::validate::ContainerNetwork::Host => "host".to_string(),
+        },
+        container_id,
+        container_name,
+    })
+}
+
+/// Which llama-server implementation serves a llama-cpp service, plus
+/// the fork-specific parameters when it is not mainline. Computed for the
+/// detail view so the frontend can render a runtime card without a spawn.
 fn runtime_info(svc_cfg: &ServiceConfig) -> Option<ananke_api::services::detail::RuntimeInfo> {
     use ananke_api::services::detail::{IkParams, RuntimeInfo};
     let lc = svc_cfg.llama_cpp()?;

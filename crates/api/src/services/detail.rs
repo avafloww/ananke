@@ -97,6 +97,28 @@ pub struct ServiceDetail {
     /// command-template services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serving: Option<ServingConfig>,
+    /// Container identity for a containerized service. `None` for native
+    /// host processes. Kept beside the llama-cpp `runtime`/`serving` cards
+    /// so containerized llama.cpp retains its engine semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<ContainerDetail>,
+}
+
+/// Container identity for a service running under Docker/Podman.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ContainerDetail {
+    /// Container runtime (`docker` or `podman`).
+    pub runtime: String,
+    /// Container image reference.
+    pub image: String,
+    /// Network mode (`bridge` or `host`).
+    pub network: String,
+    /// Live container ID, present only while a container is running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_id: Option<String>,
+    /// Live container name, present only while a container is running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_name: Option<String>,
 }
 
 /// One persisted auto-restart watchdog firing.
