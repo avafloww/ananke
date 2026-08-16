@@ -179,7 +179,8 @@ enum Command {
         /// Cap on number of historical lines returned.
         #[arg(long, default_value_t = 200)]
         limit: u32,
-        /// Filter to stdout or stderr.
+        /// Filter to one stream: `stdout`, `stderr`, or `combined` (a
+        /// container's merged output).
         #[arg(long)]
         stream: Option<String>,
     },
@@ -374,6 +375,20 @@ fn parse_relative_age_ms(s: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--stream combined` must reach the query string; the daemon owns
+    /// the vocabulary, so the CLI passes the value through rather than
+    /// re-validating it.
+    #[test]
+    fn logs_accepts_combined_stream_flag() {
+        let cli = Cli::try_parse_from(["anankectl", "logs", "demo", "--stream", "combined"])
+            .expect("--stream combined must parse");
+        let Command::Logs { stream, name, .. } = cli.command else {
+            panic!("expected the logs subcommand");
+        };
+        assert_eq!(name, "demo");
+        assert_eq!(stream.as_deref(), Some("combined"));
+    }
 
     #[test]
     fn raw_ms_passes_through() {

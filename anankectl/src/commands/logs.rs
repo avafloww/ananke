@@ -105,5 +105,32 @@ pub async fn run(
 }
 
 fn print_line(line: &LogLine) {
-    println!("[{}] {}", line.stream, line.line);
+    println!("{}", format_line(line));
+}
+
+/// Render one captured line for the terminal. Split out from the `println!`
+/// so the stream label can be asserted without capturing stdout.
+fn format_line(line: &LogLine) -> String {
+    format!("[{}] {}", line.stream, line.line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anankectl_accepts_and_prints_combined_stream() {
+        // The label is printed verbatim, so a container's merged output is
+        // never displayed as though it came from the child's stdout.
+        let line = |stream: &str| LogLine {
+            timestamp_ms: 0,
+            stream: stream.to_string(),
+            line: "loading model".to_string(),
+            run_id: 1,
+            seq: 1,
+        };
+        assert_eq!(format_line(&line("combined")), "[combined] loading model");
+        assert_eq!(format_line(&line("stdout")), "[stdout] loading model");
+        assert_eq!(format_line(&line("stderr")), "[stderr] loading model");
+    }
 }
