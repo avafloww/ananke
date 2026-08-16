@@ -28,6 +28,11 @@ pub const LOG_BROADCAST_CAPACITY: usize = 256;
 pub enum Stream {
     Stdout,
     Stderr,
+    /// Merged stdout+stderr from a container log follower. The common
+    /// Docker/Podman CLI contract does not document lossless stdout/stderr
+    /// framing, so container output is tagged `combined` rather than
+    /// mislabeled as `stdout`.
+    Combined,
 }
 
 impl Stream {
@@ -35,6 +40,7 @@ impl Stream {
         match self {
             Stream::Stdout => "stdout",
             Stream::Stderr => "stderr",
+            Stream::Combined => "combined",
         }
     }
 }

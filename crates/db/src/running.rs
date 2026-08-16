@@ -3,7 +3,7 @@
 //! orphan cleanup, and replayed at startup for orphan recovery.
 
 use ananke_errors::ExpectedError;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::{Database, models::RunningService};
 
@@ -14,8 +14,9 @@ impl Database {
         let conn = self.conn.lock();
         conn.execute(
             "INSERT OR REPLACE INTO running_services
-                 (service_id, run_id, pid, spawned_at, command_line, allocation, state)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 (service_id, run_id, pid, spawned_at, command_line, allocation, state,
+                  workload_kind, runtime, container_name, container_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 row.service_id,
                 row.run_id,
@@ -23,7 +24,11 @@ impl Database {
                 row.spawned_at,
                 row.command_line,
                 row.allocation,
-                row.state
+                row.state,
+                row.workload_kind,
+                row.runtime,
+                row.container_name,
+                row.container_id
             ],
         )
         .map_err(|e| self.db_err(e))?;
@@ -50,6 +55,22 @@ impl Database {
             .query_map([], RunningService::from_row)
             .map_err(|e| self.db_err(e))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| self.db_err(e))
+    }
+
+    /// The most recently spawned running_services row for a service, if any.
+    pub async fn latest_running(
+        &self,
+        service_id: i64,
+    ) -> Result<Option<RunningService>, ExpectedError> {
+        let conn = self.conn.lock();
+        let sql = format!(
+            "SELECT {} FROM running_services WHERE service_id = ?1 \
+             ORDER BY spawned_at DESC LIMIT 1",
+            RunningService::COLUMNS
+        );
+        conn.query_row(&sql, params![service_id], RunningService::from_row)
+            .optional()
             .map_err(|e| self.db_err(e))
     }
 }

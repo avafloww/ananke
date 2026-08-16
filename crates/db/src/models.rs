@@ -32,11 +32,15 @@ impl Service {
 pub struct RunningService {
     pub service_id: i64,
     pub run_id: i64,
-    pub pid: i64,
+    pub pid: Option<i64>,
     pub spawned_at: i64,
     pub command_line: String,
     pub allocation: String,
     pub state: String,
+    pub workload_kind: Option<String>,
+    pub runtime: Option<String>,
+    pub container_name: Option<String>,
+    pub container_id: Option<String>,
 }
 
 impl RunningService {
@@ -44,16 +48,62 @@ impl RunningService {
         Ok(Self {
             service_id: row.get(0)?,
             run_id: row.get(1)?,
-            pid: row.get(2)?,
+            pid: row.get::<_, Option<i64>>(2)?,
             spawned_at: row.get(3)?,
             command_line: row.get(4)?,
             allocation: row.get(5)?,
             state: row.get(6)?,
+            workload_kind: row.get(7)?,
+            runtime: row.get(8)?,
+            container_name: row.get(9)?,
+            container_id: row.get(10)?,
         })
     }
 
-    pub const COLUMNS: &'static str =
-        "service_id, run_id, pid, spawned_at, command_line, allocation, state";
+    pub const COLUMNS: &'static str = "service_id, run_id, pid, spawned_at, command_line, \
+         allocation, state, workload_kind, runtime, container_name, container_id";
+}
+
+/// A durable container launch intent recorded before any runtime invocation.
+#[derive(Debug, Clone)]
+pub struct ContainerLaunchIntent {
+    pub intent_id: i64,
+    pub service_id: i64,
+    pub run_id: i64,
+    pub owner_uuid: String,
+    pub workload_kind: String,
+    pub runtime: String,
+    pub runtime_executable: String,
+    pub container_name: String,
+    pub labels_json: String,
+    pub spec_json: String,
+    pub container_id: Option<String>,
+    pub state: String,
+    pub created_at: i64,
+}
+
+impl ContainerLaunchIntent {
+    pub fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            intent_id: row.get(0)?,
+            service_id: row.get(1)?,
+            run_id: row.get(2)?,
+            owner_uuid: row.get(3)?,
+            workload_kind: row.get(4)?,
+            runtime: row.get(5)?,
+            runtime_executable: row.get(6)?,
+            container_name: row.get(7)?,
+            labels_json: row.get(8)?,
+            spec_json: row.get(9)?,
+            container_id: row.get(10)?,
+            state: row.get(11)?,
+            created_at: row.get(12)?,
+        })
+    }
+
+    pub const COLUMNS: &'static str = "intent_id, service_id, run_id, owner_uuid, \
+         workload_kind, runtime, runtime_executable, container_name, labels_json, spec_json, \
+         container_id, state, created_at";
 }
 
 #[derive(Debug, Clone)]
