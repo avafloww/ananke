@@ -64,6 +64,16 @@ pub trait PlaceholderChecker {
     /// Dry-run substitute `argv` for `field`, failing on unresolved or
     /// malformed placeholders.
     fn check(&self, name: &SmolStr, field: &str, argv: &[String]) -> Result<(), ExpectedError>;
+
+    /// Dry-run substitute every value in an environment map. Env values go
+    /// through the same substitution as argv at spawn time, so a typo in
+    /// one has to fail here rather than at the launch it breaks.
+    fn check_env(
+        &self,
+        name: &SmolStr,
+        field: &str,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), ExpectedError>;
 }
 
 /// Checker that skips the dry-run. Used by `validate` when the caller
@@ -73,6 +83,15 @@ pub struct NoopPlaceholderChecker;
 
 impl PlaceholderChecker for NoopPlaceholderChecker {
     fn check(&self, _name: &SmolStr, _field: &str, _argv: &[String]) -> Result<(), ExpectedError> {
+        Ok(())
+    }
+
+    fn check_env(
+        &self,
+        _name: &SmolStr,
+        _field: &str,
+        _env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), ExpectedError> {
         Ok(())
     }
 }

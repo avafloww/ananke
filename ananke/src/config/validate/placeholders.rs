@@ -1,6 +1,8 @@
 //! Dry-run every `{placeholder}` a service's argv can contain at validate
 //! time, so a typo fails `config validate` rather than a runtime spawn.
 
+use std::collections::BTreeMap;
+
 use ananke_errors::ExpectedError;
 use ananke_templates::stale_placeholder_names;
 use smol_str::SmolStr;
@@ -19,6 +21,18 @@ impl PlaceholderChecker for DaemonPlaceholderChecker {
             _ => check_placeholders(name, field, argv),
         }
     }
+
+    fn check_env(
+        &self,
+        name: &SmolStr,
+        field: &str,
+        env: &BTreeMap<String, String>,
+    ) -> Result<(), ExpectedError> {
+        for (key, value) in env {
+            check_one(name, &format!("{field}.{key}"), value)?;
+        }
+        Ok(())
+    }
 }
 
 /// Resolve every `{placeholder}` in `argv` against a synthetic context
@@ -31,9 +45,19 @@ pub(crate) fn check_placeholders(
     field: &str,
     argv: &[String],
 ) -> Result<(), ExpectedError> {
+    for (i, arg) in argv.iter().enumerate() {
+        check_one(name, &format!("{field}[{i}]"), arg)?;
+    }
+    Ok(())
+}
+
+/// Dry-run one value — an argv entry or an env value — against a synthetic
+/// context covering every substitution the supervisor can produce. `entry`
+/// names the value in full, so a failure says where it is.
+pub(crate) fn check_one(name: &SmolStr, entry: &str, value: &str) -> Result<(), ExpectedError> {
     use ananke_placement::devices::{Allocation, DeviceId};
     use ananke_templates::{PlaceholderContext, substitute};
-    let mut alloc_bytes = std::collections::BTreeMap::new();
+    let mut alloc_bytes = BTreeMap::new();
     alloc_bytes.insert(DeviceId::Gpu(0), 1);
     let alloc = Allocation { bytes: alloc_bytes };
     let ctx = PlaceholderContext {
@@ -49,11 +73,8 @@ pub(crate) fn check_placeholders(
         listen_host: None,
         host_port: 0,
     };
-    for (i, arg) in argv.iter().enumerate() {
-        warn_on_stale_form(name, field, i, arg);
-        substitute(arg, &ctx)
-            .map_err(|e| fail(format!("service {name}: {field}[{i}] {arg:?}: {e}")))?;
-    }
+    warn_on_stale_form(name, entry, value);
+    substitute(value, &ctx).map_err(|e| fail(format!("service {name}: {entry} {value:?}: {e}")))?;
     Ok(())
 }
 
@@ -65,11 +86,11 @@ pub(crate) fn check_placeholders(
 /// A warning rather than an error: a bare `{` is ordinary payload, and a
 /// JSON or format-string argument may hold `{model}` on purpose. Write
 /// `$${model}` to say that deliberately and silence this.
-fn warn_on_stale_form(name: &SmolStr, field: &str, index: usize, arg: &str) {
-    for stale in stale_placeholder_names(arg) {
+fn warn_on_stale_form(name: &SmolStr, entry: &str, value: &str) {
+    for stale in stale_placeholder_names(value) {
         warn!(
             service = %name,
-            entry = %format!("{field}[{index}]"),
+            entry = %entry,
             "`{{{stale}}}` is not a placeholder; write `${{{stale}}}`, or `$${{{stale}}}` for the literal text"
         );
     }
@@ -99,7 +120,7 @@ pub(crate) fn check_launcher_placeholders(
         host_port: 0,
     };
     for (i, arg) in argv.iter().enumerate() {
-        warn_on_stale_form(name, "launcher", i, arg);
+        warn_on_stale_form(name, &format!("launcher[{i}]"), arg);
     }
     substitute_launcher_argv(argv, &[], &ctx)
         .map_err(|e| fail(format!("service {name}: launcher: {e}")))?;
@@ -239,6 +260,56 @@ allocation.reserve_gb = 1
         let msg = format!("{err}");
         assert!(
             msg.contains("shutdown_command[1]") && msg.contains("${bogus}"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn a_typo_in_an_env_value_is_a_config_error() {
+        // Env values are substituted at spawn like any argv entry, so a
+        // typo in one has to fail here rather than at the launch it breaks.
+        let cfg = parse_and_merge(
+            r#"
+[[service]]
+name = "ext"
+template = "command"
+command = ["run", "--port=${port}"]
+env = { ENDPOINT = "http://localhost:${prot}" }
+port = 8500
+allocation.mode = "static"
+allocation.reserve_gb = 1
+"#,
+        );
+        let err = validate(&cfg).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("env.ENDPOINT") && msg.contains("${prot}"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn a_typo_in_a_container_env_value_is_a_config_error() {
+        let cfg = parse_and_merge(
+            r#"
+[[service]]
+name = "ext"
+template = "command"
+command = ["run", "--port=${listen_port}"]
+port = 8500
+allocation.mode = "static"
+allocation.reserve_gb = 1
+
+[service.container]
+image = "example:latest"
+network = "host"
+env = { BIND = "${lsiten_host}" }
+"#,
+        );
+        let err = validate(&cfg).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("container.env.BIND") && msg.contains("${lsiten_host}"),
             "unexpected error: {err}"
         );
     }

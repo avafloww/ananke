@@ -431,6 +431,7 @@ pub(crate) fn validate_service(
         all_extra.extend(append.iter().cloned());
     }
     let env = common.env.clone().unwrap_or_default();
+    daemon.placeholder_checker.check_env(&name, "env", &env)?;
     let env_inherit = common.env_inherit.unwrap_or(true);
 
     // Allocate a private loopback port. Default is auto-assignment from
@@ -492,6 +493,11 @@ pub(crate) fn validate_service(
         None => None,
         Some(raw_ct) => {
             let ct = validate_container(&name, &raw_ct)?;
+            // `container.env` is substituted at spawn like any argv entry,
+            // so a typo in one has to fail here rather than at launch.
+            daemon
+                .placeholder_checker
+                .check_env(&name, "container.env", &ct.env)?;
             // A bridge-networked command service publishes a loopback host
             // port onto a container port; ananke can only guarantee the
             // published endpoint is reachable if the command actually binds
