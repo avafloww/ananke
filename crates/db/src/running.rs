@@ -67,7 +67,7 @@ impl Database {
         let conn = self.conn.lock();
         let sql = format!(
             "SELECT {} FROM running_services WHERE service_id = ?1 \
-             ORDER BY spawned_at DESC LIMIT 1",
+             ORDER BY spawned_at DESC, run_id DESC LIMIT 1",
             RunningService::COLUMNS
         );
         conn.query_row(&sql, params![service_id], RunningService::from_row)

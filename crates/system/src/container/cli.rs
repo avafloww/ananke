@@ -251,6 +251,15 @@ impl CliRunningContainer {
     }
 
     fn spawn_logs(&self) -> Result<Vec<DynAsyncRead>, ExpectedError> {
+        // One follower per run. A second would overwrite the stored handle,
+        // and `kill_on_drop` would take the first one down with it — the
+        // caller holding those readers would see a silent EOF mid-run.
+        if self.follower.lock().is_some() {
+            return Err(cli_err(format!(
+                "{} logs {}: a follower is already attached to this run",
+                self.executable, self.id
+            )));
+        }
         let exe = &self.executable;
         let argv = crate::container::render::render_logs_argv(exe, &self.id);
         let mut cmd = Command::new(&argv[0]);
@@ -559,5 +568,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.trim(), "tail");
+    }
+
+    #[tokio::test]
+    async fn a_second_follower_is_refused() {
+        // `kill_on_drop` means the second follower's arrival would kill the
+        // first, and whoever held its readers would see EOF mid-run.
+        let c = CliRunningContainer {
+            id: "abc".into(),
+            name: "ananke-svc-1".into(),
+            executable: "echo".into(),
+            host_pid: None,
+            follower: parking_lot::Mutex::new(None),
+        };
+        assert!(!c.logs().is_empty());
+        assert!(
+            c.spawn_logs().is_err(),
+            "a run must not get a second follower"
+        );
+        assert!(c.follower.lock().is_some(), "the first must be untouched");
     }
 }
