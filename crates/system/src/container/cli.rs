@@ -219,6 +219,7 @@ impl ManagedContainer for CliRunningContainer {
     }
 
     async fn remove(&self) -> Result<(), ExpectedError> {
+        self.let_follower_finish().await;
         let exe = &self.executable;
         let argv = crate::container::render::render_remove_argv(exe, &self.id);
         run_idempotent(exe, &format!("rm {}", self.id), &argv).await
@@ -226,6 +227,29 @@ impl ManagedContainer for CliRunningContainer {
 }
 
 impl CliRunningContainer {
+    /// Wait, briefly, for the log follower to reach EOF and exit.
+    ///
+    /// Removal deletes the runtime's log store, so anything the follower
+    /// had not yet read is gone — which is the tail explaining why the
+    /// workload had to be stopped. By this point the container has already
+    /// exited, so the follower is about to end on its own. If it does not,
+    /// removal proceeds regardless: a wedged follower must not be able to
+    /// hold a container's reservation open.
+    async fn let_follower_finish(&self) {
+        let Some(mut child) = self.follower.lock().take() else {
+            return;
+        };
+        if tokio::time::timeout(FOLLOWER_FLUSH_GRACE, child.wait())
+            .await
+            .is_err()
+        {
+            warn!(
+                container = %self.id,
+                "log follower did not finish before removal; the tail of this run's output may be missing"
+            );
+        }
+    }
+
     fn spawn_logs(&self) -> Result<Vec<DynAsyncRead>, ExpectedError> {
         let exe = &self.executable;
         let argv = crate::container::render::render_logs_argv(exe, &self.id);
@@ -257,6 +281,10 @@ impl CliRunningContainer {
         Ok(readers)
     }
 }
+
+/// How long removal waits for the log follower to drain the tail of a
+/// stopped container's output.
+const FOLLOWER_FLUSH_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Build an error naming the operation and carrying the runtime's own words.
 fn cli_err(context: String) -> ExpectedError {
@@ -493,5 +521,43 @@ mod tests {
         let mut out = String::new();
         readers[0].read_to_string(&mut out).await.unwrap();
         assert!(out.contains("logs --follow abc"), "got {out:?}");
+    }
+
+    #[tokio::test]
+    async fn removal_waits_for_the_follower_to_finish() {
+        // Removal deletes the runtime's log store. A follower still reading
+        // the tail of a stopped container loses exactly the output that
+        // explains why it stopped, so removal waits for it to end. `sh`
+        // stands in for the runtime: the follower writes after a pause, and
+        // `rm` is a shell no-op.
+        let c = CliRunningContainer {
+            id: "abc".into(),
+            name: "ananke-svc-1".into(),
+            executable: "/bin/sh".into(),
+            host_pid: None,
+            follower: parking_lot::Mutex::new(None),
+        };
+        let mut child = tokio::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 0.2; echo tail"])
+            .stdout(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut reader = child.stdout.take().unwrap();
+        *c.follower.lock() = Some(child);
+
+        let _ = c.remove().await;
+        assert!(
+            c.follower.lock().is_none(),
+            "the follower must be taken, not left for the next removal"
+        );
+
+        // The follower has exited, so its whole output is already buffered:
+        // reading it back cannot block, and nothing was cut short.
+        let mut out = String::new();
+        tokio::io::AsyncReadExt::read_to_string(&mut reader, &mut out)
+            .await
+            .unwrap();
+        assert_eq!(out.trim(), "tail");
     }
 }
