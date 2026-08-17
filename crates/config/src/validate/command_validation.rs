@@ -65,7 +65,7 @@ pub(crate) fn validate_command(
 }
 
 /// Returns `true` when the command service's argv or any env value
-/// references `{port}`. Heuristic for warning about an auto-assigned
+/// references `${port}`. Heuristic for warning about an auto-assigned
 /// `private_port` that the child never receives.
 pub(crate) fn command_uses_port_placeholder(
     cmd: &CommandConfig,
@@ -301,7 +301,7 @@ allocation.reserve_gb = 1
 name = "ext"
 template = "command"
 command = ["run", "--port=${port}"]
-shutdown_command = ["stop", "{bogus}"]
+shutdown_command = ["stop", "${bogus}"]
 port = 8500
 allocation.mode = "static"
 allocation.reserve_gb = 1

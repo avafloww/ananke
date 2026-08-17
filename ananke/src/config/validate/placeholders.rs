@@ -2,7 +2,9 @@
 //! time, so a typo fails `config validate` rather than a runtime spawn.
 
 use ananke_errors::ExpectedError;
+use ananke_templates::stale_placeholder_names;
 use smol_str::SmolStr;
+use tracing::warn;
 
 use crate::config::validate::{PlaceholderChecker, fail};
 
@@ -39,7 +41,7 @@ pub(crate) fn check_placeholders(
         port: 0,
         model: Some("/m/x.gguf"),
         allocation: &alloc,
-        // `None` so a `{reserve_mb}` placeholder on a dynamic allocation
+        // `None` so a `${reserve_mb}` placeholder on a dynamic allocation
         // trips the `ReserveMbOnDynamic` branch at config time, not
         // later. Static allocations re-validate at spawn time against
         // the real static_reserve_mb.
@@ -48,14 +50,33 @@ pub(crate) fn check_placeholders(
         host_port: 0,
     };
     for (i, arg) in argv.iter().enumerate() {
+        warn_on_stale_form(name, field, i, arg);
         substitute(arg, &ctx)
             .map_err(|e| fail(format!("service {name}: {field}[{i}] {arg:?}: {e}")))?;
     }
     Ok(())
 }
 
+/// Say so when an entry contains a placeholder name written in the old
+/// `{name}` form. It resolves to nothing now, so a config carried over
+/// from before the grammar changed launches with the literal text in its
+/// argv and no error anywhere.
+///
+/// A warning rather than an error: a bare `{` is ordinary payload, and a
+/// JSON or format-string argument may hold `{model}` on purpose. Write
+/// `$${model}` to say that deliberately and silence this.
+fn warn_on_stale_form(name: &SmolStr, field: &str, index: usize, arg: &str) {
+    for stale in stale_placeholder_names(arg) {
+        warn!(
+            service = %name,
+            entry = %format!("{field}[{index}]"),
+            "`{{{stale}}}` is not a placeholder; write `${{{stale}}}`, or `$${{{stale}}}` for the literal text"
+        );
+    }
+}
+
 /// Dry-run a llama-cpp `launcher` argv at validate time. Identical
-/// purpose to [`check_placeholders`] but tolerates the `{args}` splat
+/// purpose to [`check_placeholders`] but tolerates the `${args}` splat
 /// (which would otherwise be rejected by [`substitute`]). Surfaces
 /// typos like `${prot}` and misuses like `--foo={args}` as config errors
 /// rather than runtime `StartFailure`s.
@@ -77,6 +98,9 @@ pub(crate) fn check_launcher_placeholders(
         listen_host: None,
         host_port: 0,
     };
+    for (i, arg) in argv.iter().enumerate() {
+        warn_on_stale_form(name, "launcher", i, arg);
+    }
     substitute_launcher_argv(argv, &[], &ctx)
         .map_err(|e| fail(format!("service {name}: launcher: {e}")))?;
     Ok(())

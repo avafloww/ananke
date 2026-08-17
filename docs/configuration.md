@@ -584,9 +584,9 @@ The following placeholders are substituted in `command` and `shutdown_command` a
 
 A placeholder is `${name}`, and only `${` and `$$` mean anything to the substituter. A bare `{` never does, so an argument carrying JSON, a Jinja template, or a Python format string passes through exactly as written — vLLM's `--diffusion-config '{"canvas_length": 256}'` needs no escaping at all. `$$` is a literal `$`, which is how a literal `${port}` is written (`$${port}`); a `$` before anything else is itself, since arguments carry bare dollars far more often than they carry `${`.
 
-An unknown name is an error, so a typo surfaces at config load rather than reaching the argv. So does `${` with no closing brace.
+An unknown name is an error, so a typo surfaces at config load rather than reaching the argv. So does `${` with no closing brace. A known name written bare — `{port}` — is a warning rather than an error: it cannot be one, since a JSON or format-string argument may hold `{model}` on purpose. Write `$${model}` to say that deliberately and silence it.
 
-> **Changed in 0.3.0.** Placeholders were previously written `{name}`. That form could not be told apart from an argument's own braces without guessing, which made JSON arguments fail and silently rewrote Jinja templates. Rename each placeholder to `${name}`; nothing else needs escaping. A config still using `{name}` will not error — the text is now literal — so check that a service's rendered command still contains the value you expect, via `GET /api/services/{name}/command` or the launch-command panel.
+> **Changed in 0.3.0.** Placeholders were previously written `{name}`. That form could not be told apart from an argument's own braces without guessing, which made JSON arguments fail and silently rewrote Jinja templates. Rename each placeholder to `${name}`; nothing else needs escaping. A config still using `{name}` will not error — the text is now literal — but it does warn at config load, naming the service and the entry. Check that a service's rendered command still contains the value you expect, via `GET /api/services/{name}/command` or the launch-command panel.
 
 The child also inherits `CUDA_VISIBLE_DEVICES` set to the picked GPU id(s). A containerized service does not need to forward it by hand: set `container.gpu_device` and ananke injects exactly the GPUs it picked.
 

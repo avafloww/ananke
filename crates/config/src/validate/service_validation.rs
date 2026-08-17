@@ -437,7 +437,7 @@ pub(crate) fn validate_service(
     // the daemon's pool; a command service may override with a fixed
     // port (used when the external service binds a predictable host
     // port, e.g. a docker container). If the operator didn't override,
-    // warn when their `command`/`env` never substitutes `{port}` — that
+    // warn when their `command`/`env` never substitutes `${port}` — that
     // suggests the child binds a fixed port ananke doesn't know about.
     let private_port_override = match &template_config {
         TemplateConfig::Command(cmd) => cmd.private_port_override,

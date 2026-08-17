@@ -279,7 +279,7 @@ pub struct LlamaCppConfig {
     /// Optional argv template that replaces the default
     /// `llama-server -m <model> …` invocation. `launcher[0]` becomes
     /// the executable; `launcher[1..]` is substituted with the standard
-    /// placeholders and the splat `{args}` (which expands to every
+    /// placeholders and the splat `${args}` (which expands to every
     /// other llama-server flag ananke would have emitted).
     pub launcher: Option<Vec<String>>,
 }

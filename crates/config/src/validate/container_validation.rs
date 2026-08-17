@@ -253,7 +253,7 @@ pub(crate) fn validate_container(
 ///
 /// In bridge mode ananke publishes `127.0.0.1:<private_port>` onto
 /// `<container_port>`, which only works if the command actually binds
-/// `{listen_host}` (`0.0.0.0`) on `{listen_port}` (the container port).
+/// `${listen_host}` (`0.0.0.0`) on `${listen_port}` (the container port).
 /// A command that hardcodes its own interface or port silently binds
 /// somewhere the publication does not reach, so the proxy would forward
 /// into a dead endpoint. Opaque bridge commands are out of scope: ananke
@@ -579,7 +579,7 @@ container_port = 8000
     #[test]
     fn bridge_command_listen_placeholders_in_env_are_accepted() {
         // The endpoint may reach the workload through the environment rather
-        // than argv; `{port}` remains a legal spelling of `{listen_port}`.
+        // than argv; `${port}` remains a legal spelling of `${listen_port}`.
         let cfg = parse_and_merge(
             r#"
 [[service]]

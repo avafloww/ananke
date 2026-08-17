@@ -21,11 +21,9 @@ pub struct RawContainerConfig {
     pub runtime_executable: Option<String>,
     /// Required container image reference (e.g., `vllm/vllm-openai:v0.26.0`).
     pub image: Option<String>,
-    /// Optional explicit entrypoint that replaces the image's ENTRYPOINT.
-    /// For llama-cpp services, ananke normally emits `--entrypoint` from
-    /// the resolved `llama_server`; set this to override that behaviour.
-    /// For command services, the configured `command` is passed after the
-    /// image exactly as written; an explicit entrypoint replaces the image's.
+    /// Replaces the image's ENTRYPOINT. ananke never derives one: without
+    /// this the image's own entrypoint runs, and the rendered argv is
+    /// passed after the image as its arguments.
     pub entrypoint: Option<String>,
     /// Working directory inside the container.
     pub workdir: Option<String>,

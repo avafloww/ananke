@@ -9,23 +9,23 @@ use ananke_devices::{Allocation, DeviceId};
 #[derive(Debug, Clone)]
 pub struct PlaceholderContext<'a> {
     pub name: &'a str,
-    /// The port the workload should bind, resolving `{listen_port}` and its
-    /// `{port}` alias. For a native process this is the ananke private
+    /// The port the workload should bind, resolving `${listen_port}` and its
+    /// `${port}` alias. For a native process this is the ananke private
     /// port; for a bridge container it is `container_port`, so the argv
     /// binds the in-container side of the publication.
     pub port: u16,
     pub model: Option<&'a str>,
     pub allocation: &'a Allocation,
     /// Only populated for single-device static allocations; `None` on
-    /// dynamic or multi-device, where `{reserve_mb}` is a config error.
+    /// dynamic or multi-device, where `${reserve_mb}` is a config error.
     pub static_reserve_mb: Option<u64>,
-    /// Container listening interface for `{listen_host}`. `None` renders
+    /// Container listening interface for `${listen_host}`. `None` renders
     /// the native-process default of `127.0.0.1`; a bridge-networked
     /// container supplies `0.0.0.0` so the published loopback host port
     /// maps onto the in-container all-interfaces listener. Host-networked
     /// containers keep `127.0.0.1`.
     pub listen_host: Option<&'a str>,
-    /// Host-side port for `{host_port}`. For a native process this equals
+    /// Host-side port for `${host_port}`. For a native process this equals
     /// [`Self::port`]; for a bridge container it is the ananke private
     /// port while [`Self::port`] is the container port.
     pub host_port: u16,
@@ -40,9 +40,9 @@ pub enum SubstituteError {
     /// reach the argv; a placeholder the author meant to write is more
     /// likely than a payload containing a bare `${`.
     UnterminatedPlaceholder(String),
-    /// The launcher splat `{args}` must occupy a launcher entry on its
-    /// own; it cannot be embedded inside a larger argv string because
-    /// the expansion produces multiple arguments, not a single one.
+    /// `${args}` expands to many arguments, so it can only be a launcher
+    /// entry of its own — never embedded in a larger string, and never in
+    /// a field that renders to a single argument.
     SplatInsideArg,
 }
 
@@ -71,8 +71,8 @@ impl std::fmt::Display for SubstituteError {
             SubstituteError::SplatInsideArg => {
                 write!(
                     f,
-                    "splat placeholder `${{args}}` must be the entire launcher entry, \
-                     not embedded inside a larger string"
+                    "`${{args}}` expands to several arguments, so it must be a \
+                     `launcher` entry on its own; write `$${{args}}` for the literal text"
                 )
             }
         }
@@ -164,6 +164,11 @@ pub fn resolve(key: &str, ctx: &PlaceholderContext<'_>) -> Result<String, Substi
             .static_reserve_mb
             .map(|mb| mb.to_string())
             .ok_or(SubstituteError::ReserveMbOnDynamic),
+        // Reached only when `${args}` is embedded in a larger entry or
+        // used outside `launcher`: the whole-entry splat is handled by
+        // `substitute_launcher_argv` before it gets here, and `$${args}`
+        // never reaches resolution at all.
+        "args" => Err(SubstituteError::SplatInsideArg),
         other => Err(SubstituteError::UnknownPlaceholder(other.to_string())),
     }
 }
@@ -188,12 +193,49 @@ pub fn substitute_launcher_argv(
             out.extend(llama_args.iter().cloned());
             continue;
         }
-        if entry.contains("${args}") {
-            return Err(SubstituteError::SplatInsideArg);
-        }
         out.push(substitute(entry, ctx)?);
     }
     Ok(out)
+}
+
+/// Every name the substituter resolves, plus the launcher splat. Used to
+/// spot text written in the pre-0.3.0 `{name}` form, which the current
+/// grammar passes through as a literal.
+pub const PLACEHOLDER_NAMES: [&str; 10] = [
+    "args",
+    "gpu_ids",
+    "host_port",
+    "listen_host",
+    "listen_port",
+    "model",
+    "name",
+    "port",
+    "reserve_mb",
+    "vram_mb",
+];
+
+/// Names written in the old `{name}` form, in order of appearance.
+///
+/// A bare `{` is ordinary payload under the current grammar, so this
+/// cannot be an error — a JSON or format-string argument may legitimately
+/// contain `{model}`. It is enough to recognise the shape and say so.
+pub fn stale_placeholder_names(input: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    let bytes = input.as_bytes();
+    for (at, _) in input.match_indices('{') {
+        // `$${name}` is a deliberate literal, and `${name}` is current.
+        if at > 0 && bytes[at - 1] == b'$' {
+            continue;
+        }
+        let rest = &input[at + 1..];
+        let Some(close) = rest.find('}') else {
+            continue;
+        };
+        if let Some(known) = PLACEHOLDER_NAMES.iter().find(|n| ***n == rest[..close]) {
+            out.push(*known);
+        }
+    }
+    out
 }
 
 /// Apply substitution across a whole argv vector and env map. Stops at
@@ -376,5 +418,52 @@ mod tests {
             let _ = substitute(input, &c);
         }
         assert_eq!(substitute("é$$é", &c).unwrap(), "é$é");
+    }
+
+    #[test]
+    fn an_escaped_splat_is_literal_text() {
+        // `$${args}` is the author saying they want the characters. The
+        // embedded-splat check used to run on the raw string, so it fired
+        // on the escape it was supposed to permit.
+        let a = alloc_gpu0_only();
+        let c = ctx(&a, None);
+        let out = substitute_launcher_argv(
+            &["wrap.sh".into(), "--label=$${args}".into()],
+            &["-ngl".into(), "99".into()],
+            &c,
+        )
+        .unwrap();
+        assert_eq!(out, ["wrap.sh", "--label=${args}"]);
+    }
+
+    #[test]
+    fn an_embedded_splat_is_still_rejected() {
+        let a = alloc_gpu0_only();
+        let c = ctx(&a, None);
+        let err = substitute_launcher_argv(&["wrap.sh".into(), "--foo=${args}".into()], &[], &c)
+            .unwrap_err();
+        assert!(matches!(err, SubstituteError::SplatInsideArg), "{err}");
+    }
+
+    #[test]
+    fn the_splat_is_rejected_outside_a_launcher() {
+        let a = alloc_gpu0_only();
+        let c = ctx(&a, None);
+        let err = substitute("${args}", &c).unwrap_err();
+        assert!(matches!(err, SubstituteError::SplatInsideArg), "{err}");
+    }
+
+    #[test]
+    fn the_old_placeholder_form_is_recognisable() {
+        assert_eq!(stale_placeholder_names("--port={port}"), ["port"]);
+        assert_eq!(
+            stale_placeholder_names("{model} then {gpu_ids}"),
+            ["model", "gpu_ids"]
+        );
+        // Current and deliberately-escaped forms are not stale.
+        assert!(stale_placeholder_names("--port=${port}").is_empty());
+        assert!(stale_placeholder_names("--port=$${port}").is_empty());
+        // A brace payload that happens to look like nothing we resolve.
+        assert!(stale_placeholder_names(r#"{"canvas_length": 256}"#).is_empty());
     }
 }

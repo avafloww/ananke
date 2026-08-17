@@ -204,7 +204,7 @@ fn translate_argv_paths(
 /// namespace would be unreachable from the host side of the publication.
 ///
 /// Both templates resolve their endpoint here: `command` feeds it to
-/// `{listen_host}`/`{listen_port}`, and `llama-cpp` emits it directly as
+/// `${listen_host}`/`${listen_port}`, and `llama-cpp` emits it directly as
 /// `--host`/`--port`.
 pub fn listen_endpoint(svc: &ServiceConfig) -> (&'static str, u16) {
     match svc
