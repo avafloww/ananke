@@ -25,7 +25,11 @@ config belong here; refactors and internal tidying do not.
   rendered command still contains the value you expect, through
   `GET /api/services/{name}/command` or the launch-command panel.
 
-  An unknown name, or a `${` with no closing brace, is a config error.
+  An unknown name, or a `${` with no closing brace, is a config error. A
+  known name written bare — `{port}` — is a warning naming the service and
+  the entry, since it cannot be an error: a JSON or format-string argument
+  may hold `{model}` on purpose. Write `$${model}` to say that and silence
+  it.
 
 ### Added
 
@@ -63,6 +67,17 @@ config belong here; refactors and internal tidying do not.
 
 - A `}` with nothing to close made the placeholder scanner loop forever,
   hanging config load.
+- A typo in an `env` or `container.env` value now fails at config load,
+  naming the variable, rather than at the launch it breaks.
+- Container removal waits for the log follower to finish, so the tail of a
+  stopped container's output — the part saying why it stopped — is no
+  longer lost to the removal that deletes the runtime's log store.
+- A runtime that cannot be reached is no longer read as a container that is
+  not there. Reconciliation kept deleting the record in that case, which
+  strands a running container with nothing pointing at it. The startup
+  leak sweep also asks every runtime the records name, rather than
+  whichever this process defaults to — on a Podman-only host it was
+  running `docker ps` and finding nothing.
 - The daemon removes every container it owns on shutdown when a drain
   overruns `shutdown_timeout`, rather than exiting and leaving the workload
   holding its reservation.
