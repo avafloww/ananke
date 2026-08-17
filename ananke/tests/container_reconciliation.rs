@@ -471,7 +471,7 @@ async fn sweep_skip_set_matches_listed_ids() {
         .create(&spec("ananke-ninfer-7", OWNER, "ninfer", 7))
         .await
         .unwrap();
-    let inspected = engine.inspect(&c.id).await.unwrap();
+    let inspected = engine.inspect(&c.id).await.unwrap().expect("just created");
     let listed = engine.list(&[]).await.unwrap();
 
     assert_eq!(listed.len(), 1);
@@ -774,5 +774,88 @@ async fn resolved_run_drops_its_stale_intent() {
             .count(),
         1,
         "the container is removed exactly once"
+    );
+}
+
+#[tokio::test]
+async fn unreachable_runtime_preserves_the_row() {
+    // A runtime that cannot be reached is not evidence that the container is
+    // gone. Cleaning the row here would strand a running container with no
+    // record of it anywhere, so it is kept for the next start to resolve.
+    let db = Database::open_in_memory().await.unwrap();
+    let svc = db.upsert_service("ninfer", 0).await.unwrap();
+    let engine = FakeContainerEngine::new();
+    let prepared = engine
+        .create(&spec("ananke-ninfer-7", OWNER, "ninfer", 7))
+        .await
+        .unwrap();
+    db.insert_running(&running_row(svc, 7, "ananke-ninfer-7", Some(&prepared.id)))
+        .await
+        .unwrap();
+
+    engine.set_unreachable(true);
+    let out = reconcile(&InMemoryProcFs::new(), &engine, Some(OWNER), &db).await;
+
+    assert_eq!(sole_container_action(&out), "blocked-runtime-unreachable");
+    assert_eq!(db.list_running().await.unwrap().len(), 1);
+    assert_eq!(
+        engine.find(&prepared.id).unwrap().state,
+        FakeContainerState::Created,
+        "an unreachable runtime must not be treated as a removal"
+    );
+}
+
+#[tokio::test]
+async fn unreachable_runtime_preserves_the_intent() {
+    let db = Database::open_in_memory().await.unwrap();
+    let svc = db.upsert_service("ninfer", 0).await.unwrap();
+    let engine = FakeContainerEngine::new();
+    let prepared = engine
+        .create(&spec("ananke-ninfer-7", OWNER, "ninfer", 7))
+        .await
+        .unwrap();
+    db.insert_launch_intent(&intent(
+        svc,
+        7,
+        OWNER,
+        "ananke-ninfer-7",
+        Some(&prepared.id),
+    ))
+    .await
+    .unwrap();
+
+    engine.set_unreachable(true);
+    reconcile(&InMemoryProcFs::new(), &engine, Some(OWNER), &db).await;
+
+    assert_eq!(db.list_launch_intents().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn the_sweep_asks_every_recorded_runtime() {
+    // The backstop runs `ps` per runtime the records name. Asking only the
+    // process default would mean a Podman-only host runs `docker ps`, which
+    // fails, so the sweep that exists to catch leaks silently finds none.
+    let db = Database::open_in_memory().await.unwrap();
+    let svc = db.upsert_service("ninfer", 0).await.unwrap();
+    let engine = FakeContainerEngine::new();
+    let prepared = engine
+        .create(&spec("ananke-ninfer-7", OWNER, "ninfer", 7))
+        .await
+        .unwrap();
+
+    // The row carries its ID, so it resolves through `inspect` alone. Any
+    // listing that happens is the sweep's own.
+    let mut row = running_row(svc, 7, "ananke-ninfer-7", Some(&prepared.id));
+    row.runtime_executable = Some("/nix/store/x/bin/podman".to_string());
+    db.insert_running(&row).await.unwrap();
+
+    reconcile(&InMemoryProcFs::new(), &engine, Some(OWNER), &db).await;
+
+    let scanned = engine.listed_under();
+    assert!(
+        scanned
+            .iter()
+            .any(|e| e.as_deref() == Some("/nix/store/x/bin/podman")),
+        "the sweep never scanned the recorded runtime: {scanned:?}"
     );
 }

@@ -316,12 +316,19 @@ async fn sweep_containers_on_shutdown(
     db: &Database,
     system: &ananke_system::SystemDeps,
 ) {
-    let mut runtimes: Vec<&'static str> = Vec::new();
+    // Keyed by the executable each service would actually run, not by the
+    // runtime's bare name: a service naming a store path or a wrapper is
+    // only reachable through that binary.
+    let mut runtimes: Vec<String> = Vec::new();
     for svc in &effective.services {
-        if let Some(container) = &svc.container
-            && !runtimes.contains(&container.runtime.as_str())
-        {
-            runtimes.push(container.runtime.as_str());
+        if let Some(container) = &svc.container {
+            let exe = container
+                .runtime_executable
+                .clone()
+                .unwrap_or_else(|| container.runtime.executable().to_string());
+            if !runtimes.contains(&exe) {
+                runtimes.push(exe);
+            }
         }
     }
     if runtimes.is_empty() {
@@ -333,14 +340,14 @@ async fn sweep_containers_on_shutdown(
 
     let swept = tokio::time::timeout(SHUTDOWN_SWEEP_BOUND, async {
         let skip = std::collections::BTreeSet::new();
-        for runtime in runtimes {
+        for runtime in &runtimes {
             let engine = system.container_engine.for_executable(runtime);
             for removal in
                 crate::supervise::orphans::remove_owned_containers(engine.as_ref(), &owner, &skip)
                     .await
             {
                 warn!(
-                    runtime,
+                    runtime = %runtime,
                     container = %removal.name,
                     removed = removal.removed,
                     "container outlived its drain; removed on shutdown"

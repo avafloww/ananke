@@ -105,6 +105,10 @@ pub async fn reconcile(
     // block is deliberately still there, not leaked.
     let mut resolved: BTreeSet<String> = BTreeSet::new();
     let ctx = Reconciler { engine, owner, db };
+    // Captured before the rows and intents are cleaned: they are the only
+    // record of which runtimes this installation has ever used, and the
+    // sweep below still has to ask each of them.
+    let runtimes = runtimes_seen(db).await;
     for (service_id, run_id, row) in container_rows {
         handled.insert((service_id, run_id));
         reconcile_container_row(&ctx, service_id, run_id, row, &mut resolved, &mut out).await;
@@ -119,7 +123,7 @@ pub async fn reconcile(
     // Backstop for containers this installation owns but has no record of
     // at all — a leak from a path that dropped its row and its intent.
     // Scoped to our own owner label, so it can only ever see our own.
-    sweep_owned_orphans(&ctx, &resolved, &mut out).await;
+    sweep_owned_orphans(&ctx, &runtimes, &resolved, &mut out).await;
 
     out
 }
@@ -133,10 +137,50 @@ pub async fn reconcile(
 /// a label alone is safe.
 async fn sweep_owned_orphans(
     ctx: &Reconciler<'_>,
+    executables: &BTreeSet<String>,
     resolved: &BTreeSet<String>,
     out: &mut Vec<OrphanDisposition>,
 ) {
-    for removal in remove_owned_containers(ctx.engine, ctx.owner, resolved).await {
+    // Ask every runtime the records name. Using the process default would
+    // mean a Podman-only host runs `docker ps`, which fails, so the backstop
+    // silently sweeps nothing on exactly the deployment that needs it.
+    for exe in executables {
+        let engine = ctx.engine.for_executable(exe);
+        sweep_with(engine.as_ref(), ctx.owner, resolved, out).await;
+    }
+}
+
+/// Every runtime binary the persisted records name. Docker's default is
+/// included so a deployment that has never recorded one is still swept.
+async fn runtimes_seen(db: &Database) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    out.insert(
+        ananke_spawn::ContainerRuntime::Docker
+            .executable()
+            .to_string(),
+    );
+    for row in db.list_running().await.unwrap_or_default() {
+        if let Some(exe) = row.runtime_executable.filter(|e| !e.trim().is_empty()) {
+            out.insert(exe);
+        } else if let Some(rt) = row.runtime {
+            out.insert(rt);
+        }
+    }
+    for intent in db.list_launch_intents().await.unwrap_or_default() {
+        if !intent.runtime_executable.trim().is_empty() {
+            out.insert(intent.runtime_executable);
+        }
+    }
+    out
+}
+
+async fn sweep_with(
+    engine: &dyn ananke_system::container::ContainerEngine,
+    owner: &str,
+    resolved: &BTreeSet<String>,
+    out: &mut Vec<OrphanDisposition>,
+) {
+    for removal in remove_owned_containers(engine, owner, resolved).await {
         warn!(
             container = %removal.name,
             removed = removal.removed,
@@ -262,8 +306,20 @@ async fn reconcile_intents(
         // containers. The name lookup is scoped by the owner label, so it
         // never becomes a global scan of everything on the host.
         let found = match &intent.container_id {
-            Some(id) => engine.inspect(id).await.ok().map(|i| (i.id, i.owner)),
-            None => find_owned_by_name(engine, owner, &intent.container_name).await,
+            Some(id) => match engine.inspect(id).await {
+                Ok(found) => found.map(|i| (i.id, i.owner)),
+                Err(e) => {
+                    warn!(error = %e, container = %intent.container_name, "cannot reach the runtime; keeping the intent");
+                    continue;
+                }
+            },
+            None => match find_owned_by_name(engine, owner, &intent.container_name).await {
+                Ok(found) => found,
+                Err(e) => {
+                    warn!(error = %e, container = %intent.container_name, "cannot reach the runtime; keeping the intent");
+                    continue;
+                }
+            },
         };
 
         let action = match found {
@@ -349,19 +405,13 @@ async fn find_owned_by_name(
     engine: &dyn ananke_system::container::ContainerEngine,
     owner: &str,
     name: &str,
-) -> Option<(String, Option<String>)> {
+) -> Result<Option<(String, Option<String>)>, ExpectedError> {
     let filters = [format!("label={OWNER_LABEL}={owner}")];
-    let summaries = match engine.list(&filters).await {
-        Ok(s) => s,
-        Err(e) => {
-            warn!(error = %e, "listing owned containers failed; leaving the intent in place");
-            return None;
-        }
-    };
-    summaries
+    let summaries = engine.list(&filters).await?;
+    Ok(summaries
         .into_iter()
         .find(|s| s.name == name)
-        .map(|s| (s.id, s.owner))
+        .map(|s| (s.id, s.owner)))
 }
 
 /// Reconcile one native-process row: adopt if the recorded cmdline matches
@@ -453,15 +503,48 @@ async fn reconcile_container_row(
     // the generated name among this owner's containers. The fallback covers
     // a row written before the ID was known.
     let inspected = match &id {
-        Some(id) => engine.inspect(id).await.ok().map(|i| (i.id, i.owner)),
+        Some(id) => match engine.inspect(id).await {
+            Ok(found) => found.map(|i| (i.id, i.owner)),
+            Err(e) => {
+                // The runtime could not be asked. Deleting the row here
+                // would strand a container that is very likely still
+                // running — this is the case that leaves no record at all.
+                warn!(
+                    service_id, run_id, error = %e,
+                    "cannot reach the runtime; keeping the row for the next start"
+                );
+                out.push(OrphanDisposition::Container {
+                    container_id: Some(id.clone()),
+                    container_name: name.clone(),
+                    service_id,
+                    run_id,
+                    action: "blocked-runtime-unreachable",
+                });
+                return;
+            }
+        },
         None => match &name {
-            Some(name) => find_owned_by_name(engine, owner, name).await,
+            Some(name) => match find_owned_by_name(engine, owner, name).await {
+                Ok(found) => found,
+                Err(e) => {
+                    warn!(
+                        service_id, run_id, error = %e,
+                        "cannot reach the runtime; keeping the row for the next start"
+                    );
+                    out.push(OrphanDisposition::Container {
+                        container_id: None,
+                        container_name: Some(name.clone()),
+                        service_id,
+                        run_id,
+                        action: "blocked-runtime-unreachable",
+                    });
+                    return;
+                }
+            },
             None => None,
         },
     };
 
-    // If ID inspect failed (or no ID), the list path is not reliably keyed
-    // without a full scan; emit a blocked disposition preserving evidence.
     match inspected {
         Some((container_id, owner_label)) => {
             resolved.insert(container_id.clone());

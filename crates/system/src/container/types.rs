@@ -35,8 +35,14 @@ pub trait ContainerEngine: Send + Sync {
     /// Remove a prepared container idempotently (without starting it).
     async fn remove_prepared(&self, prepared: &PreparedContainer) -> Result<(), ExpectedError>;
 
-    /// Inspect a container by ID and return its status.
-    async fn inspect(&self, id: &str) -> Result<ContainerInspect, ExpectedError>;
+    /// Inspect a container by ID.
+    ///
+    /// `Ok(None)` means the runtime answered and the container is not
+    /// there. `Err` means the runtime could not be asked. Callers act very
+    /// differently on those — one cleans a stale record, the other must
+    /// preserve it — so the distinction is in the type rather than in the
+    /// text of an error a caller would have to match on.
+    async fn inspect(&self, id: &str) -> Result<Option<ContainerInspect>, ExpectedError>;
 
     /// Remove a container by ID, idempotently. Already-absent is success.
     /// Used by startup reconciliation, which has no running/prepared handle.

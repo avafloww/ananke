@@ -65,6 +65,11 @@ struct Inner {
     kill_outcomes: Vec<bool>,
     /// Scripted outcomes for remove.
     remove_outcomes: Vec<bool>,
+    /// When set, every query fails as though the runtime were not running.
+    unreachable: bool,
+    /// Every executable an engine handle was requested for, in order.
+    requested_executables: Vec<String>,
+    listed_under: Vec<Option<String>>,
 }
 
 struct Slot {
@@ -97,6 +102,10 @@ impl Slot {
 /// inspect state via [`snapshot`].
 pub struct FakeContainerEngine {
     inner: Arc<Mutex<Inner>>,
+    /// The executable this handle was resolved for, if any. Handles share
+    /// one state — the fake models a single runtime — but each records the
+    /// binary its own queries would have run.
+    executable: Option<String>,
     /// Woken whenever a container's exit code is set. A blocked `wait` parks
     /// on this rather than polling: a spin loop keeps the runtime busy, which
     /// stops `start_paused` tests from ever advancing their timers.
@@ -107,6 +116,7 @@ impl FakeContainerEngine {
     pub fn new() -> Self {
         Self {
             exited: Arc::new(Notify::new()),
+            executable: None,
             inner: Arc::new(Mutex::new(Inner {
                 next_id: AtomicU32::new(1),
                 slots: Vec::new(),
@@ -116,6 +126,9 @@ impl FakeContainerEngine {
                 term_outcomes: Vec::new(),
                 kill_outcomes: Vec::new(),
                 remove_outcomes: Vec::new(),
+                unreachable: false,
+                requested_executables: Vec::new(),
+                listed_under: Vec::new(),
             })),
         }
     }
@@ -173,6 +186,26 @@ impl FakeContainerEngine {
         self.inner.lock().remove_outcomes.push(true);
     }
 
+    /// Make every query fail as though the runtime were unavailable. This
+    /// is the case a fake that only models success cannot express, and the
+    /// one where mistaking "cannot ask" for "not there" destroys records.
+    pub fn set_unreachable(&self, unreachable: bool) {
+        self.inner.lock().unreachable = unreachable;
+    }
+
+    /// Executables an engine handle was requested for, in order. Lets a
+    /// test assert that a container is driven by the binary its record
+    /// names rather than by whichever the process happens to default to.
+    pub fn requested_executables(&self) -> Vec<String> {
+        self.inner.lock().requested_executables.clone()
+    }
+
+    /// The executable each `list` ran under, in order. `None` is the
+    /// process default. Lets a test assert which runtimes a scan reached.
+    pub fn listed_under(&self) -> Vec<Option<String>> {
+        self.inner.lock().listed_under.clone()
+    }
+
     /// Force a container to exit with a code.
     pub fn exit(&self, id: &str, code: i32) -> bool {
         let mut inner = self.inner.lock();
@@ -201,8 +234,17 @@ impl Default for FakeContainerEngine {
 impl ContainerEngine for FakeContainerEngine {
     /// One fake engine backs every runtime: tests script outcomes on the
     /// shared state rather than per binary.
-    fn for_executable(&self, _executable: &str) -> Arc<dyn ContainerEngine> {
-        Arc::new(self.clone())
+    fn for_executable(&self, executable: &str) -> Arc<dyn ContainerEngine> {
+        // Recorded so a test can tell which binary a caller resolved. The
+        // handle still shares one state: the fake models a single runtime.
+        self.inner
+            .lock()
+            .requested_executables
+            .push(executable.to_string());
+        Arc::new(Self {
+            executable: Some(executable.to_string()),
+            ..self.clone()
+        })
     }
 
     async fn create(&self, spec: &ContainerSpec) -> Result<PreparedContainer, ExpectedError> {
@@ -313,7 +355,13 @@ impl ContainerEngine for FakeContainerEngine {
         Ok(())
     }
 
-    async fn inspect(&self, id: &str) -> Result<ContainerInspect, ExpectedError> {
+    async fn inspect(&self, id: &str) -> Result<Option<ContainerInspect>, ExpectedError> {
+        if self.inner.lock().unreachable {
+            return Err(ExpectedError::config_unparseable(
+                std::path::PathBuf::from("<fake>"),
+                "cannot connect to the container runtime".to_string(),
+            ));
+        }
         let inner = self.inner.lock();
         let slot = inner
             .slots
@@ -321,10 +369,7 @@ impl ContainerEngine for FakeContainerEngine {
             .find(|s| s.id == id)
             .filter(|s| s.state != FakeContainerState::Removed);
         let Some(slot) = slot else {
-            return Err(ExpectedError::config_unparseable(
-                std::path::PathBuf::from("<fake>"),
-                format!("inspect {id}: not found"),
-            ));
+            return Ok(None);
         };
         let (state_str, exit_code) = match &slot.state {
             FakeContainerState::Created => ("created".into(), None),
@@ -334,7 +379,7 @@ impl ContainerEngine for FakeContainerEngine {
             FakeContainerState::Removed => ("removed".into(), None),
             FakeContainerState::Exited { code } => ("exited".into(), Some(*code)),
         };
-        Ok(ContainerInspect {
+        Ok(Some(ContainerInspect {
             id: slot.id.clone(),
             name: slot.name.clone(),
             state: state_str,
@@ -344,7 +389,7 @@ impl ContainerEngine for FakeContainerEngine {
                 .labels
                 .get(crate::container::render::OWNER_LABEL)
                 .cloned(),
-        })
+        }))
     }
 
     async fn remove(&self, id: &str) -> Result<(), ExpectedError> {
@@ -367,6 +412,13 @@ impl ContainerEngine for FakeContainerEngine {
     }
 
     async fn list(&self, filters: &[String]) -> Result<Vec<ContainerSummary>, ExpectedError> {
+        self.inner.lock().listed_under.push(self.executable.clone());
+        if self.inner.lock().unreachable {
+            return Err(ExpectedError::config_unparseable(
+                std::path::PathBuf::from("<fake>"),
+                "cannot connect to the container runtime".to_string(),
+            ));
+        }
         let inner = self.inner.lock();
         let mut out = Vec::new();
         for slot in &inner.slots {
@@ -406,6 +458,7 @@ impl Clone for FakeContainerEngine {
         Self {
             inner: Arc::clone(&self.inner),
             exited: Arc::clone(&self.exited),
+            executable: self.executable.clone(),
         }
     }
 }

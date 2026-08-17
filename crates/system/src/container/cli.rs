@@ -73,11 +73,17 @@ impl ContainerEngine for CliContainerEngine {
         })
     }
 
-    async fn inspect(&self, id: &str) -> Result<ContainerInspect, ExpectedError> {
+    async fn inspect(&self, id: &str) -> Result<Option<ContainerInspect>, ExpectedError> {
         let exe = &self.executable;
         let argv = crate::container::render::render_inspect_argv(exe, id);
-        let raw = run_checked(exe, &format!("inspect {id}"), &argv).await?;
+        let raw = match run_checked(exe, &format!("inspect {id}"), &argv).await {
+            Ok(raw) => raw,
+            // The runtime answered, and the answer is that it is gone.
+            Err(e) if is_absent(&e.to_string()) => return Ok(None),
+            Err(e) => return Err(e),
+        };
         parse_inspect_output(&raw)
+            .map(Some)
             .ok_or_else(|| cli_err(format!("{exe} inspect {id}: unparseable output `{raw}`")))
     }
 
@@ -96,16 +102,15 @@ impl ContainerEngine for CliContainerEngine {
         // installation's own containers, so the extra calls are few.
         let mut out = Vec::new();
         for id in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            match self.inspect(id).await {
-                Ok(i) => out.push(ContainerSummary {
+            match self.inspect(id).await? {
+                Some(i) => out.push(ContainerSummary {
                     id: i.id,
                     name: i.name,
                     state: i.state,
                     owner: i.owner,
                 }),
                 // Raced with a removal between listing and inspecting.
-                Err(e) if is_absent(&e.to_string()) => continue,
-                Err(e) => return Err(e),
+                None => continue,
             }
         }
         Ok(out)
@@ -121,7 +126,7 @@ impl ContainerEngine for CliContainerEngine {
         // Inspect for the host PID. A failure here is not fatal — the
         // container is started — but it costs attribution, so it is logged.
         let host_pid = match self.inspect(&prepared.id).await {
-            Ok(i) => i.host_pid,
+            Ok(i) => i.and_then(|i| i.host_pid),
             Err(e) => {
                 warn!(error = %e, container = %prepared.id, "inspect after start failed; no host pid for attribution");
                 None
