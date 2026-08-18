@@ -101,7 +101,7 @@ reserved_gb = 8
 | `cpu.reserved_gb` | u64 | `0` | Host RAM (GiB) the daemon keeps free. Bounds how much expert weight a hybrid MoE service may offload to the CPU; a placement that would exceed it is rejected. |
 
 ## Service Configuration
-Services are defined as an array of `[[service]]` blocks. Each service uses one of two templates: `llama-cpp` (for GGUF models via llama.cpp) or `command` (for arbitrary binaries). Either template can run its workload in a container — see [Container Workloads](#container-workloads).
+Services are defined as an array of `[[service]]` blocks. Each service uses one of two templates: `llama-cpp` (for GGUF models via llama.cpp) or `command` (for arbitrary binaries). Either template can run its workload in a container; see [Container Workloads](#container-workloads).
 
 ### Common Fields
 
@@ -548,7 +548,7 @@ repeat_penalty = 1.1
 | `repeat_penalty` | f32 | none | Repeat penalty applied to generated tokens. |
 
 ### command
-Used for arbitrary binaries. Only `name`, `template`, `port`, and `command` are required. To run the command inside Docker or Podman, add a `[service.container]` block rather than wrapping it in a script — see [Container Workloads](#container-workloads).
+Used for arbitrary binaries. Only `name`, `template`, `port`, and `command` are required. To run the command inside Docker or Podman, add a `[service.container]` block rather than wrapping it in a script; see [Container Workloads](#container-workloads).
 
 ```toml
 [[service]]
@@ -582,15 +582,15 @@ The following placeholders are substituted in `command` and `shutdown_command` a
 - `${listen_host}` / `${listen_port}` - the interface and port the workload should bind. For a host process these are `127.0.0.1` and the private port, so `${listen_port}` and `${port}` agree; they differ only for a bridge-networked container (see [Container Workloads](#container-workloads)).
 - `${host_port}` - the host-side private port, for the rare command that needs both sides of a bridge publication.
 
-A placeholder is `${name}`, and only `${` and `$$` mean anything to the substituter. A bare `{` never does, so an argument carrying JSON, a Jinja template, or a Python format string passes through exactly as written — vLLM's `--diffusion-config '{"canvas_length": 256}'` needs no escaping at all. `$$` is a literal `$`, which is how a literal `${port}` is written (`$${port}`); a `$` before anything else is itself, since arguments carry bare dollars far more often than they carry `${`.
+A placeholder is `${name}`, and only `${` and `$$` mean anything to the substituter. A bare `{` never does, so an argument carrying JSON, a Jinja template, or a Python format string passes through exactly as written: vLLM's `--diffusion-config '{"canvas_length": 256}'` needs no escaping. `$$` is a literal `$`, which is how a literal `${port}` is written (`$${port}`); a `$` before anything else is itself, since arguments carry bare dollars far more often than they carry `${`.
 
-An unknown name is an error, so a typo surfaces at config load rather than reaching the argv. So does `${` with no closing brace. A known name written bare — `{port}` — is a warning rather than an error: it cannot be one, since a JSON or format-string argument may hold `{model}` on purpose. Write `$${model}` to say that deliberately and silence it.
+An unknown name is an error, so a typo surfaces at config load rather than reaching the argv. So does `${` with no closing brace. A known name written bare (`{port}`) is a warning rather than an error: it cannot be one, since a JSON or format-string argument may hold `{model}` on purpose. Write `$${model}` to say that deliberately and silence the warning.
 
-> **Changed in 0.3.0.** Placeholders were previously written `{name}`. That form could not be told apart from an argument's own braces without guessing, which made JSON arguments fail and silently rewrote Jinja templates. Rename each placeholder to `${name}`; nothing else needs escaping. A config still using `{name}` will not error — the text is now literal — but it does warn at config load, naming the service and the entry. Check that a service's rendered command still contains the value you expect, via `GET /api/services/{name}/command` or the launch-command panel.
+> Changed in 0.3.0. Placeholders were previously written `{name}`. That form could not be told apart from an argument's own braces without guessing, which made JSON arguments fail and silently rewrote Jinja templates. Rename each placeholder to `${name}`; nothing else needs escaping. A config still using `{name}` does not error, because the text is now literal, but it does warn at config load, naming the service and the entry. Confirm that a service's rendered command still contains the expected value, via `GET /api/services/{name}/command` or the launch-command panel.
 
 The child also inherits `CUDA_VISIBLE_DEVICES` set to the picked GPU id(s). A containerized service does not need to forward it by hand: set `container.gpu_device` and ananke injects exactly the GPUs it picked.
 
-The `shutdown_command` field is for external processes that cannot stop via signal alone. ananke runs it after the drain pipeline completes, ensuring a clean exit for a service that doesn't respond to SIGTERM. A container service has no use for it — native runtime cleanup replaces it, and the two are rejected together.
+The `shutdown_command` field is for external processes that cannot stop via signal alone. ananke runs it after the drain pipeline completes, ensuring a clean exit for a service that does not respond to SIGTERM. A container service has no use for it: native runtime cleanup replaces it, and the two are rejected together.
 
 #### OpenAI Proxy
 
@@ -697,7 +697,7 @@ A `command`-template service that already speaks the OpenAI API (vLLM, TGI, SGLa
 | `upstream_model` | string | none | Model name the upstream server was started with (e.g. via `--served-model-name`). ananke rewrites the JSON `model` field to this value before forwarding. |
 
 ## Container Workloads
-Any service — either template — can run inside a Docker or Podman container by adding a `[service.container]` block. Without the block the service is an ordinary host process and nothing about it changes.
+Either template can run inside a Docker or Podman container. Add a `[service.container]` block to the service. Without the block the service runs as an ordinary host process and nothing about it changes.
 
 The block does not replace the template; it relocates it. A `llama-cpp` service still gets its placement-derived llama-server argv, and a `command` service still supplies its own. What changes is where that argv runs: as the container's command rather than as a child of the daemon.
 
@@ -726,41 +726,41 @@ mounts = [
 
 #### Prerequisites
 
-ananke drives the runtime's CLI — it never talks to the Engine or Libpod socket, and it neither pulls nor builds images. Its business is starting and stopping what you point it at; where the image came from is yours. Have it in the local store before the service starts:
+ananke drives the runtime's CLI. It never talks to the Engine or Libpod socket, and it neither pulls nor builds images. It starts and stops the image named by the service; the image must already be in the local store before the service starts:
 
 ```sh
 docker pull vllm/vllm-openai:v0.26.0
 podman build -t ninfer:local ~/src/ninfer
 ```
 
-A missing image surfaces as a start failure carrying the runtime's own message, which distinguishes an unknown tag from a registry that needs credentials from an image that was never built.
+A missing image surfaces as a start failure carrying the runtime's own message, which distinguishes an unknown tag, a registry that needs credentials, and an image that was never built.
 
 The daemon needs the selected runtime binary on its `$PATH` (or an explicit `runtime_executable`) and permission to use it.
 
-Selecting Podman changes the `runtime` field and nothing else about the service. It does not make the two runtimes interchangeable in general: ananke owns the lifecycle-flag differences, but CDI support, rootless cgroup layouts, and SELinux relabelling all vary by runtime and version, and a capability the runtime lacks fails loudly rather than silently degrading.
+Selecting Podman changes the `runtime` field and nothing else about the service. It does not make the two runtimes interchangeable in general: ananke owns the lifecycle-flag differences, but CDI support, rootless cgroup layouts, and SELinux relabelling all vary by runtime and version, and a capability the runtime lacks fails with an error rather than silently degrading.
 
 #### Conflicting fields
 
-Two existing fields are rejected outright alongside `container`, because each replaces the same boundary the container does:
+Two existing fields are rejected alongside `container`, because each replaces the same boundary the container does:
 
 - `launcher` (llama-cpp) wraps the host execution boundary, which is what the container now is.
-- `shutdown_command` (command) exists so a wrapper script can stop something signals can't reach. Native runtime cleanup replaces it.
+- `shutdown_command` (command) exists so a wrapper script can stop something signals cannot reach. Native runtime cleanup replaces it.
 
 #### Networking
 
-The service endpoint has two sides, and the placeholders resolve to the side the workload should bind — never the side ananke connects to.
+The service endpoint has two sides. The placeholders resolve to the side the workload should bind, not the side ananke connects to.
 
-Under `network = "bridge"`, ananke publishes `127.0.0.1:<private_port>` onto `<container_port>` and nothing else. Inside the container, `${listen_host}` resolves to `0.0.0.0` and `${listen_port}` to `<container_port>`: a workload that bound loopback inside its own network namespace would be unreachable from the host side of the publication. Because ananke can only guarantee reachability it was told about, a bridge-networked `command` service **must** consume both `${listen_host}` and `${listen_port}` in its argv or environment; one that hardcodes its own address is rejected at config load. Use host networking for a command whose listener you can't parameterise.
+Under `network = "bridge"`, ananke publishes `127.0.0.1:<private_port>` onto `<container_port>` and nothing else. Inside the container, `${listen_host}` resolves to `0.0.0.0` and `${listen_port}` to `<container_port>`: a workload that bound loopback inside its own network namespace would be unreachable from the host side of the publication. Because ananke can only guarantee reachability it was told about, a bridge-networked `command` service must consume both `${listen_host}` and `${listen_port}` in its argv or environment; one that hardcodes its own address is rejected at config load. Use host networking for a command whose listener cannot be parameterised.
 
 Under `network = "host"`, there is no publication and no translation. `${listen_host}` resolves to `127.0.0.1` and `${listen_port}` to the private port, exactly as for a host process.
 
-`${port}` remains accepted everywhere as an alias for `${listen_port}`, so pre-container command templates keep working. `${host_port}` is always the host-side private port, for the rare command that genuinely needs both numbers.
+`${port}` remains accepted everywhere as an alias for `${listen_port}`, so pre-container command templates keep working. `${host_port}` is always the host-side private port, for the rare command that needs both numbers.
 
-llama.cpp takes the same resolved endpoint, but as a typed renderer input rather than a placeholder: ananke emits `--host`/`--port` itself, so a containerized llama.cpp service needs no configuration for this at all.
+llama.cpp takes the same resolved endpoint, but as a typed renderer input rather than a placeholder: ananke emits `--host`/`--port` itself, so a containerized llama.cpp service needs no configuration for this.
 
 #### Environment and secrets
 
-`env_inherit` copies the daemon's whole environment into a host process. That is reasonable for a child process and wrong for a container, so it governs host processes only. A container's environment is exactly what you declare:
+`env_inherit` copies the daemon's whole environment into a host process. That is reasonable for a child process and wrong for a container, so it governs host processes only. A container's environment is exactly what the service declares:
 
 - `env` on the service, and `container.env` layered over it, for explicit values.
 - `container.env_passthrough` for names forwarded from the daemon's own environment, e.g. `["HF_TOKEN"]`.
@@ -769,15 +769,15 @@ Passthrough values are read at launch and never leave the runtime invocation: th
 
 #### Mounts and path translation
 
-Nothing inside the container can see a host path that wasn't mounted. For `command` services this is entirely yours to arrange: write container paths in the argv, and mount whatever backs them. Paths are not guessed.
+Nothing inside the container can see a host path that was not mounted. For `command` services the service arranges this: write container paths in the argv, and mount whatever backs them. Paths are not guessed.
 
-For `llama-cpp`, ananke generates the argv, so it also translates the four path fields it owns — `model`, `mmproj`, `draft_model`, and `chat_template_file` — through the configured mounts. Matching is lexical and component-aware, longest source prefix wins, and there is no symlink resolution. A typed path no mount covers is a start failure naming the exact path and field, rather than a container that comes up and can't find its weights. Paths embedded in `extra_args` stay opaque and must already be container paths.
+For `llama-cpp`, ananke generates the argv, so it also translates the four path fields it owns (`model`, `mmproj`, `draft_model`, and `chat_template_file`) through the configured mounts. Matching is lexical and component-aware, longest source prefix wins, and there is no symlink resolution. A typed path no mount covers is a start failure naming the exact path and field, rather than a container that comes up and cannot find its weights. Paths embedded in `extra_args` stay opaque and must already be container paths.
 
 #### GPUs
 
-`gpu_device` is a CDI template expanded once per GPU that ananke's placement actually selected, so the container sees the same devices the allocator reserved for it. `nvidia.com/gpu=${id}` with GPUs 0 and 2 selected yields `--device nvidia.com/gpu=0 --device nvidia.com/gpu=2`.
+`gpu_device` is a CDI template expanded once per GPU that ananke's placement selected, so the container sees the same devices the allocator reserved for it. `nvidia.com/gpu=${id}` with GPUs 0 and 2 selected yields `--device nvidia.com/gpu=0 --device nvidia.com/gpu=2`.
 
-Leaving it unset injects nothing. If the runtime cannot satisfy the requested CDI device, the start fails with that error — ananke does not fall back to bind-mounting `/dev/nvidia*`, which would hand the container every GPU on the machine.
+Leaving it unset injects nothing. If the runtime cannot satisfy the requested CDI device, the start fails with that error. ananke does not fall back to bind-mounting `/dev/nvidia*`, which would expose every GPU on the machine to the container.
 
 #### Memory attribution
 
@@ -785,34 +785,34 @@ ananke reads the container's cgroup back from its host PID after start and attri
 
 #### Lifecycle and recovery
 
-Containers can outlive both ananke and the CLI process that started them, so the lifecycle is deliberately conservative and every step is recoverable:
+Containers can outlive both ananke and the CLI process that started them, so the lifecycle is conservative and every step is recoverable:
 
-1. A durable launch intent is written **before** anything is created, carrying the owner, the service and run identity, the exact runtime executable, and the generated name and labels.
-2. The container is created — never started — and its ID is attached to the intent.
+1. A durable launch intent is written before anything is created, carrying the owner, the service and run identity, the exact runtime executable, and the generated name and labels.
+2. The container is created, not started, and its ID is attached to the intent.
 3. The ownership row is committed. Only then is the container started: a container is never running without a persisted row that says so.
 4. Logs are followed by a separate `logs --follow` process, and the exit status comes from an independent `wait`.
 5. On drain, `kill --signal TERM`, escalating to `KILL` on the existing `drain_timeout`. Final logs are drained before the container is removed.
 
-Each run gets its own container named `ananke-<service>-<run-id>`, removed along with any anonymous volumes the runtime created for it. A stable per-service name would be friendlier to type, but a single failed cleanup would then wedge the service permanently — the next `create` would fail on the name already being in use. A per-run name makes a stray container inert rather than blocking, and the startup sweep bounds how long one can persist.
+Each run gets its own container named `ananke-<service>-<run-id>`, removed along with any anonymous volumes the runtime created for it. A stable per-service name would be easier to read, but a single failed cleanup would then block the service permanently: the next `create` would fail because the name is already in use. A per-run name makes a stray container inert rather than blocking, and the startup sweep bounds how long one can persist.
 
 `--rm` is deliberately not used. Auto-removal races the log follower and the exit-status read, and it destroys the evidence a crashed daemon needs, so removal is always an explicit final step and is idempotent.
 
-At startup ananke reconciles what it finds against those records. Every container it creates is labelled with a stable per-installation owner UUID as well as its service and run, and cleanup requires *both* a persisted identity and a matching owner label — never a name prefix alone. That is what keeps a second ananke, or an unrelated container that happens to share a name, safe. A container whose ownership can't be resolved blocks only its own service from reprovisioning, preserving the evidence, while every other service starts normally.
+At startup ananke reconciles what it finds against those records. Every container it creates is labelled with a stable per-installation owner UUID as well as its service and run, and cleanup requires both a persisted identity and a matching owner label, not a name prefix alone. This keeps a second ananke, or an unrelated container that shares a name, from being removed. A container whose ownership cannot be resolved blocks only its own service from reprovisioning, preserving the evidence, while every other service starts normally.
 
 #### What happens when ananke stops
 
-A native child dies with the daemon: the spawner sets `PR_SET_PDEATHSIG`, and the kernel honours it however the daemon died. A container has no equivalent — it belongs to the runtime, not to ananke's process tree — so its survival has to be handled rather than assumed.
+A native child dies with the daemon: the spawner sets `PR_SET_PDEATHSIG`, and the kernel honours it however the daemon died. A container has no equivalent: it belongs to the runtime, not to ananke's process tree. Its survival is therefore handled explicitly rather than assumed.
 
-**On a signal ananke can catch** (`SIGTERM`, `SIGINT`, `SIGQUIT` — `systemctl stop`, a restart, a reboot, Ctrl-C) every service drains: TERM, then KILL after `drain_timeout`, then removal. Containers do not outlive it.
+On a signal ananke can catch (`SIGTERM`, `SIGINT`, `SIGQUIT`, as sent by `systemctl stop`, a restart, a reboot, or Ctrl-C), every service drains: TERM, then KILL after `drain_timeout`, then removal. Containers do not outlive it.
 
-**If that drain overruns `shutdown_timeout`**, the daemon exits anyway rather than hanging. Before it does, it removes every container still carrying this installation's owner label. This is the case the sweep exists for; after a drain that finished, it finds nothing.
+If that drain overruns `shutdown_timeout`, the daemon exits rather than hanging. Before it exits, it removes every container still carrying this installation's owner label. The sweep exists for this case; after a drain that finished, it finds nothing.
 
-**On `SIGKILL`, the OOM killer, or a power loss**, nothing in a userspace process runs — that is what those mean. Containers keep running and keep the VRAM they reserved. Two things bound the damage:
+On `SIGKILL`, the OOM killer, or a power loss, no userspace code runs: that is what those events mean. Containers keep running and keep the VRAM they reserved. Two things bound the exposure:
 
 - Startup reconciliation removes them when ananke comes back, so the exposure lasts as long as the daemon is down. Running under a supervisor that restarts it keeps that to seconds.
-- The allocator reads *real* free VRAM from NVML, not just its own pledge book, so a surviving container makes ananke conservative rather than wrong: it declines to place, or evicts, instead of over-committing onto memory something else is holding.
+- The allocator reads real free VRAM from NVML, not just its own pledge book, so a surviving container makes ananke conservative rather than wrong: it declines to place, or evicts, instead of over-committing onto memory something else is holding.
 
-An orphan is therefore a capacity problem until reconciliation clears it, not a correctness one. If you need containers to die with the daemon under `SIGKILL` too, that guarantee has to come from outside ananke — a cgroup the supervisor tears down, for instance — because no process can clean up after a signal it cannot receive.
+An orphan is therefore a capacity problem until reconciliation clears it, not a correctness one. To make containers die with the daemon under `SIGKILL` as well, that guarantee has to come from outside ananke, for example a cgroup the supervisor tears down, because no process can clean up after a signal it cannot receive.
 
 #### Logs
 
@@ -842,7 +842,7 @@ mounts = [
 ]
 ```
 
-Only the generated flags follow the image; the image's own ENTRYPOINT runs them. `llama_server` is not consulted here — it answers where llama-server lives *on the host*, and its `llama-server` default is a `$PATH` lookup that means nothing inside an image. The official llama.cpp image, for instance, ships `/app/llama-server` with `/app` off `$PATH`, so an entrypoint derived from that default would fail to resolve. An image that needs something other than its declared ENTRYPOINT says so with `container.entrypoint`.
+Only the generated flags follow the image; the image's own ENTRYPOINT runs them. `llama_server` is not consulted here: it answers where llama-server lives on the host, and its `llama-server` default is a `$PATH` lookup that means nothing inside an image. The official llama.cpp image ships `/app/llama-server` with `/app` off `$PATH`, so an entrypoint derived from that default would fail to resolve. An image that needs something other than its declared ENTRYPOINT says so with `container.entrypoint`.
 
 The three model paths are translated through the mount before creation, becoming `-m /models/muse-glimmer-30B-kquant-dynamic.gguf` and so on.
 
@@ -880,7 +880,7 @@ mounts = [
 ]
 ```
 
-An image whose CMD you want to replace instead takes the executable as its first argument — `command = ["ninfer-serve", "/artifacts/model.ninfer", ...]` — and the same block otherwise. The only field that differs between the Docker and Podman versions of either example is `runtime`.
+An image whose CMD is to be replaced instead takes the executable as its first argument (`command = ["ninfer-serve", "/artifacts/model.ninfer", ...]`), with the same block otherwise. The only field that differs between the Docker and Podman versions of either example is `runtime`.
 
 #### Field Reference
 
@@ -889,12 +889,12 @@ An image whose CMD you want to replace instead takes the executable as its first
 | `runtime` | string | `docker` | Container runtime to drive. One of `"docker"`, `"podman"`. |
 | `runtime_executable` | path | the runtime name | Absolute path to the runtime binary. Set this when the binary isn't on the daemon's `$PATH` (e.g. a Nix store path). The value is recorded in the launch intent, so a container stays reconcilable across a runtime change. |
 | `image` | string | *required* | Image reference to run, e.g. `vllm/vllm-openai:v0.26.0`. Must already be in the runtime's local store: ananke neither pulls nor builds, and a missing image fails the start with the runtime's own error. |
-| `entrypoint` | string | the image's own | Replaces the image ENTRYPOINT. Unset, the image's own applies — including for `llama-cpp` services, whose `llama_server` is a host-side path and is not used inside the container. |
+| `entrypoint` | string | the image's own | Replaces the image ENTRYPOINT. Unset, the image's own applies, including for `llama-cpp` services, whose `llama_server` is a host-side path and is not used inside the container. |
 | `workdir` | path | the image's own | Working directory inside the container. |
 | `network` | string | `bridge` | Network mode, one of `"bridge"`, `"host"`. See [Networking](#networking) for what each resolves the service endpoint to. |
 | `container_port` | u16 | *required in bridge mode* | Port the workload binds inside the container. ananke publishes `127.0.0.1:<private_port>:<container_port>`. Rejected as meaningless under host networking. |
 | `ipc` | string | `private` | IPC namespace, one of `"private"`, `"host"`. `host` shares the host `/dev/shm`, which vLLM and other multi-worker runtimes need. |
-| `gpu_device` | string | none | CDI device template expanded once per GPU ananke's placement picked, e.g. `nvidia.com/gpu=${id}`. Must contain `${id}` exactly once. Unset means no GPU is injected — there is no `/dev/nvidia*` fallback. |
+| `gpu_device` | string | none | CDI device template expanded once per GPU ananke's placement picked, e.g. `nvidia.com/gpu=${id}`. Must contain `${id}` exactly once. Unset means no GPU is injected; there is no `/dev/nvidia*` fallback. |
 | `env` | table | none | Explicit environment for the container, merged over the service's own `env`. Container services never inherit the daemon's environment: `env_inherit` governs host processes only. |
 | `env_passthrough` | array of string | none | Names of host environment variables forwarded into the container by name, e.g. `["HF_TOKEN"]`. Values are read from the daemon's environment at launch and never rendered into the API, previews, or logs. |
 | `labels` | table | none | User labels applied to the container. The whole `io.ananke.*` namespace is reserved for ananke's ownership labels and rejected here. |

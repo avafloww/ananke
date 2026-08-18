@@ -39,7 +39,7 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "entrypoint",
                     "string",
                     "the image's own",
-                    "Replaces the image ENTRYPOINT. Unset, the image's own applies — including for `llama-cpp` services, whose `llama_server` is a host-side path and is not used inside the container.",
+                    "Replaces the image ENTRYPOINT. Unset, the image's own applies, including for `llama-cpp` services, whose `llama_server` is a host-side path and is not used inside the container.",
                 ),
                 field(
                     "workdir",
@@ -75,7 +75,7 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "gpu_device",
                     "string",
                     "none",
-                    "CDI device template expanded once per GPU ananke's placement picked, e.g. `nvidia.com/gpu=${id}`. Must contain `${id}` exactly once. Unset means no GPU is injected — there is no `/dev/nvidia*` fallback.",
+                    "CDI device template expanded once per GPU ananke's placement picked, e.g. `nvidia.com/gpu=${id}`. Must contain `${id}` exactly once. Unset means no GPU is injected; there is no `/dev/nvidia*` fallback.",
                 ),
                 field(
                     "env",
