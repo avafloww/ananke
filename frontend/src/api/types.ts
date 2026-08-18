@@ -500,6 +500,19 @@ export interface components {
       /** @description `true` iff no errors were found. */
       valid: boolean;
     };
+    /** @description Container identity for a service running under Docker/Podman. */
+    ContainerDetail: {
+      /** @description Live container ID, present only while a container is running. */
+      container_id?: string | null;
+      /** @description Live container name, present only while a container is running. */
+      container_name?: string | null;
+      /** @description Container image reference. */
+      image: string;
+      /** @description Network mode (`bridge` or `host`). */
+      network: string;
+      /** @description Container runtime (`docker` or `podman`). */
+      runtime: string;
+    };
     /** @description `GET /api/info` response body. */
     DaemonInfoResponse: {
       /** @description The management API listen address (e.g. `"0.0.0.0:7071"`). */
@@ -859,14 +872,24 @@ export interface components {
       /** @description `-rtr` runtime repacking. */
       runtime_repack: boolean;
     };
-    /** @description One launch command — argv and environment. */
+    /**
+     * @description One launch command — argv and environment. Discriminated by the
+     *     optional `container` block: when `None` this is a native process (the
+     *     existing shape, byte-identical for process consumers); when `Some` it is
+     *     a containerized workload carrying the runtime create command plus the
+     *     in-container argv.
+     */
     LaunchCommand: {
       /**
-       * @description The full argv. `argv[0]` is the binary; the rest are its arguments.
-       *     Already split into tokens — no shell quoting is applied, so a client
-       *     rendering a copy-pasteable line should quote as needed.
+       * @description The argv. For a native process `argv[0]` is the binary and the rest
+       *     are its arguments. For a container this is the *in-container* argv,
+       *     which for a `llama-cpp` service is flags only — the executable is
+       *     the image's own entrypoint and does not appear here. Already split
+       *     into tokens; no shell quoting is applied, so a client rendering a
+       *     copy-pasteable line should quote as needed.
        */
       argv: string[];
+      container?: null | components["schemas"]["LaunchContainer"];
       /**
        * @description Environment variables ananke sets or overrides for the child (notably
        *     `CUDA_VISIBLE_DEVICES`), sorted by key. Not the full inherited
@@ -903,7 +926,55 @@ export interface components {
      * @enum {string}
      */
     LaunchCommandSource: "running" | "preview";
-    /** @description One captured stdout/stderr line. */
+    /**
+     * @description Container-specific half of a launch preview. Present only when the
+     *     service carries a `[service.container]` block.
+     */
+    LaunchContainer: {
+      /** @description In-container argv (the command that runs inside the container). */
+      argv: string[];
+      /** @description The exact, shell-free `create` argv ananke will invoke. */
+      create_argv: string[];
+      /** @description Explicit environment keys and values set inside the container. */
+      env: components["schemas"]["EnvVar"][];
+      /**
+       * @description Environment variable names passed through from the host, without
+       *     resolving their (possibly secret) values.
+       */
+      env_passthrough: string[];
+      /** @description Expanded CDI GPU device entries (one per allocated GPU). */
+      gpu_devices: string[];
+      /** @description Container image reference. */
+      image: string;
+      /** @description IPC mode (`private` or `host`). */
+      ipc: string;
+      /** @description Bind mounts. */
+      mounts: components["schemas"]["LaunchMount"][];
+      /**
+       * @description Generated name pattern (`ananke-<service>-<run-id>`; the run id is a
+       *     runtime value and not expanded in a preview).
+       */
+      name_pattern: string;
+      /** @description Network mode (`bridge` or `host`). */
+      network: string;
+      /**
+       * @description Service port publication (`host_ip:host_port:container_port`) for
+       *     bridge networking, or `None` for host networking.
+       */
+      publication?: string | null;
+      /** @description Container runtime (`docker` or `podman`). */
+      runtime: string;
+    };
+    /** @description A bind mount in a container launch preview. */
+    LaunchMount: {
+      /** @description Whether the mount is read-only. */
+      read_only: boolean;
+      /** @description Absolute host path. */
+      source: string;
+      /** @description Absolute container path. */
+      target: string;
+    };
+    /** @description One captured stdout/stderr/combined line. */
     LogLine: {
       /** @description The line content (sans trailing newline). */
       line: string;
@@ -917,7 +988,7 @@ export interface components {
        * @description Sequence number within `(service_id, run_id)`, monotonic per run.
        */
       seq: number;
-      /** @description `"stdout"` or `"stderr"`. */
+      /** @description `"stdout"`, `"stderr"`, or `"combined"` (container merged output). */
       stream: string;
       /**
        * Format: int64
@@ -1318,6 +1389,7 @@ export interface components {
        *     [`crate::services::list::ServiceSummary::ananke_metadata`].
        */
       ananke_metadata?: Record<string, never>;
+      container?: null | components["schemas"]["ContainerDetail"];
       /**
        * @description What pledge the service is currently holding on each device.
        *     Empty when idle. Keys are slot strings (`"cpu"`, `"gpu:0"`, …),
@@ -2227,7 +2299,7 @@ export interface operations {
         until?: number;
         /** @description Restrict to one run_id */
         run?: number;
-        /** @description "stdout" or "stderr" */
+        /** @description "stdout", "stderr", or "combined" */
         stream?: string;
         /** @description Max rows to return (≤1000, default 200) */
         limit?: number;

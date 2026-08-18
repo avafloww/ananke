@@ -4,7 +4,7 @@
 //! Linux-coupled via `/proc` orphan reconciliation and the `signals` submodule.
 
 pub mod app_state;
-pub mod signals;
+mod signals;
 
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
@@ -62,7 +62,18 @@ pub async fn run() -> Result<(), ExpectedError> {
         );
     }
 
-    for disposition in reconcile(system.proc.as_ref(), &db).await {
+    // Resolve the stable owner UUID before any container reconciliation or
+    // launch. A missing row is created once; a corrupt row disables the
+    // container scan (owner is `None`) without blocking native provision.
+    let owner_uuid = db.ensure_owner_uuid().await.ok();
+    for disposition in reconcile(
+        system.proc.as_ref(),
+        system.container_engine.as_ref(),
+        owner_uuid.as_deref(),
+        &db,
+    )
+    .await
+    {
         info!(?disposition, "orphan reconcile");
     }
 
@@ -239,12 +250,20 @@ pub async fn run() -> Result<(), ExpectedError> {
         ShutdownKind::Graceful => Duration::from_millis(effective.daemon.shutdown_timeout_ms),
         ShutdownKind::Emergency => crate::daemon::signals::grace_for(shutdown_kind),
     };
-    let _ = tokio::time::timeout(drain_bound, async {
+    let drained = tokio::time::timeout(drain_bound, async {
         for sup in &supervisors {
             sup.shutdown().await;
         }
     })
-    .await;
+    .await
+    .is_ok();
+    if !drained {
+        warn!(
+            timeout_ms = drain_bound.as_millis(),
+            "drain did not finish within the shutdown timeout"
+        );
+    }
+    sweep_containers_on_shutdown(&effective, &db, &system).await;
 
     for t in proxy_tasks {
         t.abort();
@@ -280,6 +299,71 @@ async fn wait_shutdown(mut rx: watch::Receiver<bool>) {
         }
     }
 }
+
+/// Remove any container still carrying this installation's owner label.
+///
+/// A drain that finished has already removed its containers, so this is
+/// normally a no-op listing. It matters when the drain did not finish: the
+/// daemon exits at `shutdown_timeout`, and without this a slow-stopping
+/// workload would outlive it, holding the VRAM it reserved until the next
+/// start reconciled it away.
+///
+/// Bounded so a wedged runtime cannot hold shutdown open indefinitely, and
+/// scoped to the runtimes the config actually names so it never probes one
+/// the machine does not have.
+async fn sweep_containers_on_shutdown(
+    effective: &ananke_config::validate::EffectiveConfig,
+    db: &Database,
+    system: &ananke_system::SystemDeps,
+) {
+    // Keyed by the executable each service would actually run, not by the
+    // runtime's bare name: a service naming a store path or a wrapper is
+    // only reachable through that binary.
+    let mut runtimes: Vec<String> = Vec::new();
+    for svc in &effective.services {
+        if let Some(container) = &svc.container {
+            let exe = container
+                .runtime_executable
+                .clone()
+                .unwrap_or_else(|| container.runtime.executable().to_string());
+            if !runtimes.contains(&exe) {
+                runtimes.push(exe);
+            }
+        }
+    }
+    if runtimes.is_empty() {
+        return;
+    }
+    let Ok(Some(owner)) = db.owner_uuid().await else {
+        return;
+    };
+
+    let swept = tokio::time::timeout(SHUTDOWN_SWEEP_BOUND, async {
+        let skip = std::collections::BTreeSet::new();
+        for runtime in &runtimes {
+            let engine = system.container_engine.for_executable(runtime);
+            for removal in
+                crate::supervise::orphans::remove_owned_containers(engine.as_ref(), &owner, &skip)
+                    .await
+            {
+                warn!(
+                    runtime = %runtime,
+                    container = %removal.name,
+                    removed = removal.removed,
+                    "container outlived its drain; removed on shutdown"
+                );
+            }
+        }
+    })
+    .await;
+    if swept.is_err() {
+        warn!("container sweep did not finish before the shutdown bound");
+    }
+}
+
+/// Cap on the shutdown container sweep, so an unresponsive runtime CLI
+/// cannot stop the daemon from exiting.
+const SHUTDOWN_SWEEP_BOUND: Duration = Duration::from_secs(15);
 
 fn parse_cli_config_arg() -> Option<PathBuf> {
     let mut args = std::env::args().skip(1);

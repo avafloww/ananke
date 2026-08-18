@@ -28,7 +28,7 @@ use ananke_templates::SubstituteError;
 use ananke_tracking::rolling::Corrections;
 pub use verdict::{preview_command_placement, preview_override_placement, preview_placement};
 
-use crate::spawn::{SpawnConfig, render_argv};
+use crate::spawn::{SpawnConfig, container::render_container_spec, render_argv};
 
 /// Why a launch-command preview could not be produced.
 #[derive(Debug)]
@@ -42,6 +42,8 @@ pub enum PreviewError {
     Pack(PackError),
     /// Argv rendering failed (a `{placeholder}` could not be substituted).
     Render(SubstituteError),
+    /// Container-spec rendering failed (mount translation, CDI template, etc).
+    Container(String),
 }
 
 impl std::fmt::Display for PreviewError {
@@ -51,6 +53,7 @@ impl std::fmt::Display for PreviewError {
             PreviewError::Estimator(e) => write!(f, "estimate the model: {e}"),
             PreviewError::Pack(e) => write!(f, "plan placement: {e}"),
             PreviewError::Render(e) => write!(f, "render the command line: {e}"),
+            PreviewError::Container(e) => write!(f, "render the container spec: {e}"),
         }
     }
 }
@@ -61,6 +64,7 @@ impl std::error::Error for PreviewError {
             Self::Estimator(e) => Some(e),
             Self::Pack(e) => Some(e),
             Self::Render(e) => Some(e),
+            Self::Container(_) => None,
             Self::NoModelPath => None,
         }
     }
@@ -80,6 +84,29 @@ pub fn preview_command(
 ) -> Result<SpawnConfig, PreviewError> {
     let (alloc, cmd_args) = plan(svc, snapshot, table, fs, corrections)?;
     render_argv(svc, &alloc, cmd_args.as_ref()).map_err(PreviewError::Render)
+}
+
+/// Render the resolved container spec a service would launch with, for
+/// services carrying a `[service.container]` block. The owner UUID and
+/// run id are runtime values: `owner_uuid` must be the installation's stable
+/// owner, and `run_id` a preview run id (the generated name is a pattern, not
+/// a live name). For a non-container service this returns `None`.
+pub fn preview_container_command(
+    svc: &ServiceConfig,
+    snapshot: &DeviceSnapshot,
+    table: &AllocationTable,
+    fs: &dyn Fs,
+    corrections: Corrections,
+    owner_uuid: &str,
+    run_id: i64,
+) -> Result<Option<ananke_spawn::ContainerSpec>, PreviewError> {
+    if svc.container.is_none() {
+        return Ok(None);
+    }
+    let (alloc, cmd_args) = plan(svc, snapshot, table, fs, corrections)?;
+    render_container_spec(svc, &alloc, cmd_args.as_ref(), run_id, owner_uuid)
+        .map(Some)
+        .map_err(|e| PreviewError::Container(e.to_string()))
 }
 
 /// Resolve the allocation and (for the llama estimator path) the

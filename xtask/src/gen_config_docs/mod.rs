@@ -42,6 +42,7 @@ const PROSE_ESTIMATION: &str = include_str!("prose/estimation.md");
 const PROSE_SAMPLING: &str = include_str!("prose/sampling.md");
 const PROSE_COMMAND: &str = include_str!("prose/command.md");
 const PROSE_OPENAI_PROXY: &str = include_str!("prose/openai_proxy.md");
+const PROSE_CONTAINER: &str = include_str!("prose/container.md");
 const PROSE_INHERITANCE: &str = include_str!("prose/inheritance.md");
 
 #[derive(Args)]
@@ -83,6 +84,7 @@ pub fn run(args: GenConfigDocsArgs) -> Result<(), Error> {
         sampling: PROSE_SAMPLING,
         command: PROSE_COMMAND,
         openai_proxy: PROSE_OPENAI_PROXY,
+        container: PROSE_CONTAINER,
         inheritance: PROSE_INHERITANCE,
     };
     let markdown = render::render_markdown(&sections, &prose);
@@ -278,6 +280,7 @@ mod tests {
             sampling: PROSE_SAMPLING,
             command: PROSE_COMMAND,
             openai_proxy: PROSE_OPENAI_PROXY,
+            container: PROSE_CONTAINER,
             inheritance: PROSE_INHERITANCE,
         }
     }
@@ -309,6 +312,7 @@ mod tests {
             sampling: "",
             command: "",
             openai_proxy: "",
+            container: "",
             inheritance: "",
         }
     }

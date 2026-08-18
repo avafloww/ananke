@@ -17,6 +17,7 @@ use serde::Serialize;
 
 mod auto_restart;
 mod command;
+mod container;
 mod daemon;
 mod llama_cpp;
 mod service;
@@ -241,6 +242,7 @@ pub fn all_sections() -> Vec<SectionDoc> {
     sections.extend(auto_restart::sections());
     sections.extend(llama_cpp::sections());
     sections.extend(command::sections());
+    sections.extend(container::sections());
     sections
 }
 // ── tests ───────────────────────────────────────────────────────────────

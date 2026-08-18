@@ -148,6 +148,7 @@ pub async fn spawn_oneshot(
         tracking: crate::config::TrackingSettings::default(),
         metadata: ananke_api::shared::metadata::AnankeMetadata::new(),
         template_config,
+        container: None,
     };
 
     let now_ms = ananke_time::now_unix_ms();

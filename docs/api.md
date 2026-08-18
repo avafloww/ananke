@@ -593,6 +593,13 @@ Get service detail
 ```typescript
 {
   ananke_metadata?: Record<string, any>
+  container?: {
+    container_id?: string | null
+    container_name?: string | null
+    image: string
+    network: string
+    runtime: string
+  } | null
   current_allocation: Record<string, number>
   elastic_borrower?: string | null
   estimate?: {
@@ -725,6 +732,27 @@ Get launch command preview
 {
   active?: {
     argv: string[]
+    container?: {
+      argv: string[]
+      create_argv: string[]
+      env: {
+        key: string
+        value: string
+      }[]
+      env_passthrough: string[]
+      gpu_devices: string[]
+      image: string
+      ipc: string
+      mounts: {
+        read_only: boolean
+        source: string
+        target: string
+      }[]
+      name_pattern: string
+      network: string
+      publication?: string | null
+      runtime: string
+    } | null
     env: {
       key: string
       value: string
@@ -734,6 +762,27 @@ Get launch command preview
   } | null
   on_empty: {
     argv: string[]
+    container?: {
+      argv: string[]
+      create_argv: string[]
+      env: {
+        key: string
+        value: string
+      }[]
+      env_passthrough: string[]
+      gpu_devices: string[]
+      image: string
+      ipc: string
+      mounts: {
+        read_only: boolean
+        source: string
+        target: string
+      }[]
+      name_pattern: string
+      network: string
+      publication?: string | null
+      runtime: string
+    } | null
     env: {
       key: string
       value: string
@@ -810,7 +859,7 @@ Get service logs (paginated)
 | `since` | query | no | Earliest timestamp_ms, inclusive |
 | `until` | query | no | Latest timestamp_ms, inclusive |
 | `run` | query | no | Restrict to one run_id |
-| `stream` | query | no | "stdout" or "stderr" |
+| `stream` | query | no | "stdout", "stderr", or "combined" |
 | `limit` | query | no | Max rows to return (≤1000, default 200) |
 | `before` | query | no | Opaque cursor from a prior response |
 

@@ -320,6 +320,7 @@ pub fn minimal_llama_service(name: &str, port: u16) -> ServiceConfig {
             binary: PathBuf::from("llama-server"),
             launcher: None,
         })),
+        container: None,
     }
 }
 

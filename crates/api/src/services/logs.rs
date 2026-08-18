@@ -23,7 +23,7 @@ pub struct LogsQuery {
     pub until: Option<i64>,
     /// Restrict to one run_id.
     pub run: Option<i64>,
-    /// `"stdout"` or `"stderr"`.
+    /// `"stdout"`, `"stderr"`, or `"combined"` (container merged output).
     pub stream: Option<String>,
     /// Max rows to return (≤1000, default 200).
     pub limit: Option<u32>,

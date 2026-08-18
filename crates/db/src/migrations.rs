@@ -64,6 +64,26 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "service_restart_counts",
         sql: include_str!("migrations/0007_service_restart_counts.sql"),
     },
+    Migration {
+        version: 8,
+        name: "installation_metadata",
+        sql: include_str!("migrations/0008_installation_metadata.sql"),
+    },
+    Migration {
+        version: 9,
+        name: "container_launch_intents",
+        sql: include_str!("migrations/0009_container_launch_intents.sql"),
+    },
+    Migration {
+        version: 10,
+        name: "managed_workloads",
+        sql: include_str!("migrations/0010_managed_workloads.sql"),
+    },
+    Migration {
+        version: 11,
+        name: "running_runtime_executable",
+        sql: include_str!("migrations/0011_running_runtime_executable.sql"),
+    },
 ];
 
 /// SQL applied before the first migration ever runs. Creates the version

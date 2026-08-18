@@ -9,6 +9,7 @@ type Schemas = components["schemas"];
 export type ServiceSummary = Schemas["ServiceSummary"];
 export type ServicesResponse = Schemas["ServicesResponse"];
 export type ServiceDetail = Schemas["ServiceDetail"];
+export type ContainerDetail = Schemas["ContainerDetail"];
 export type RestartEvent = Schemas["RestartEvent"];
 export type RestartsResponse = Schemas["RestartsResponse"];
 export type ServiceRestartEntry = Schemas["ServiceRestartEntry"];
@@ -50,7 +51,7 @@ export type LogsQuery = {
   since?: number;
   until?: number;
   run?: number;
-  stream?: "stdout" | "stderr";
+  stream?: "stdout" | "stderr" | "combined";
   limit?: number;
   before?: string;
 };

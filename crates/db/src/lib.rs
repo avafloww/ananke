@@ -4,6 +4,7 @@
 //! in [`migrations`], so re-opening an already-provisioned file applies
 //! only pending migrations (empty set when up to date).
 
+mod container;
 mod devices;
 mod metrics;
 mod metrics_query;

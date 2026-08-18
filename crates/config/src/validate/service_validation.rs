@@ -23,8 +23,9 @@ use crate::{
         AllocationMode, DaemonValidationCtx, DeviceSlot, Filters, HealthSettings, Lifecycle,
         PlacementPolicy, ServiceConfig, ServiceValidationState, SplitMode, Template,
         TemplateConfig, build_ananke_metadata, command_uses_port_placeholder, fail,
-        parse_duration_ms, toml_value_to_json, validate_auto_restart, validate_command,
-        validate_llama_cpp, validate_tracking,
+        parse_duration_ms, toml_value_to_json, validate_auto_restart,
+        validate_bridge_command_endpoint, validate_command, validate_container, validate_llama_cpp,
+        validate_tracking,
     },
 };
 
@@ -55,8 +56,14 @@ pub(crate) fn validate_service(
         )));
     }
 
-    let (allocation_mode, template_config) = match raw {
+    let (allocation_mode, template_config, raw_container) = match raw {
         RawService::LlamaCpp(lc) => {
+            // Reject launcher + container: both replace the host execution boundary.
+            if lc.launcher.is_some() && lc.container.is_some() {
+                return Err(fail(format!(
+                    "service {name}: launcher and [service.container] are mutually exclusive (both replace the host execution boundary)"
+                )));
+            }
             let tc = validate_llama_cpp(
                 &name,
                 lc,
@@ -74,9 +81,19 @@ pub(crate) fn validate_service(
                 DEFAULT_MIN_BORROWER_RUNTIME_MS,
             )
             .map_err(|e| fail(format!("service {name}: {e}")))?;
-            (alloc, TemplateConfig::LlamaCpp(Box::new(tc)))
+            (
+                alloc,
+                TemplateConfig::LlamaCpp(Box::new(tc)),
+                lc.container.clone(),
+            )
         }
         RawService::Command(cmd) => {
+            // Reject shutdown_command + container: native runtime cleanup replaces it.
+            if cmd.shutdown_command.is_some() && cmd.container.is_some() {
+                return Err(fail(format!(
+                    "service {name}: shutdown_command is not allowed with [service.container] (native runtime cleanup replaces it)"
+                )));
+            }
             let raw_alloc = cmd.allocation.clone().unwrap_or_default();
             let runtime_ms = raw_alloc
                 .min_borrower_runtime
@@ -95,7 +112,7 @@ pub(crate) fn validate_service(
             )
             .map_err(|e| fail(format!("service {name}: {e}")))?;
             let tc = validate_command(&name, cmd, daemon.placeholder_checker)?;
-            (alloc, TemplateConfig::Command(tc))
+            (alloc, TemplateConfig::Command(tc), cmd.container.clone())
         }
     };
 
@@ -414,13 +431,14 @@ pub(crate) fn validate_service(
         all_extra.extend(append.iter().cloned());
     }
     let env = common.env.clone().unwrap_or_default();
+    daemon.placeholder_checker.check_env(&name, "env", &env)?;
     let env_inherit = common.env_inherit.unwrap_or(true);
 
     // Allocate a private loopback port. Default is auto-assignment from
     // the daemon's pool; a command service may override with a fixed
     // port (used when the external service binds a predictable host
     // port, e.g. a docker container). If the operator didn't override,
-    // warn when their `command`/`env` never substitutes `{port}` — that
+    // warn when their `command`/`env` never substitutes `${port}` — that
     // suggests the child binds a fixed port ananke doesn't know about.
     let private_port_override = match &template_config {
         TemplateConfig::Command(cmd) => cmd.private_port_override,
@@ -445,7 +463,7 @@ pub(crate) fn validate_service(
             warn!(
                 service = %name,
                 private_port = p,
-                "auto-assigned private_port is never referenced via {{port}} in the command or env — the child likely binds a different port and ananke's proxy will fail to forward. Either substitute {{port}} or set `private_port` to match the child's actual port"
+                "auto-assigned private_port is never referenced via `${{port}}` in the command or env — the child likely binds a different port and ananke's proxy will fail to forward. Either substitute `${{port}}` or set `private_port` to match the child's actual port"
             );
         }
         p
@@ -469,6 +487,27 @@ pub(crate) fn validate_service(
         has_spec_type,
         common.auto_restart.is_some(),
     )?;
+
+    // Validate container configuration (if present).
+    let container = match raw_container {
+        None => None,
+        Some(raw_ct) => {
+            let ct = validate_container(&name, &raw_ct)?;
+            // `container.env` is substituted at spawn like any argv entry,
+            // so a typo in one has to fail here rather than at launch.
+            daemon
+                .placeholder_checker
+                .check_env(&name, "container.env", &ct.env)?;
+            // A bridge-networked command service publishes a loopback host
+            // port onto a container port; ananke can only guarantee the
+            // published endpoint is reachable if the command actually binds
+            // the resolved interface and port it was given.
+            if let TemplateConfig::Command(cmd) = &template_config {
+                validate_bridge_command_endpoint(&name, &ct, &cmd.command, &env)?;
+            }
+            Some(ct)
+        }
+    };
 
     Ok(ServiceConfig {
         name,
@@ -501,5 +540,6 @@ pub(crate) fn validate_service(
         tracking,
         metadata,
         template_config,
+        container,
     })
 }

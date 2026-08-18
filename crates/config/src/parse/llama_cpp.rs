@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use smol_str::SmolStr;
 
-use crate::parse::RawServiceCommon;
+use crate::parse::{RawContainerConfig, RawServiceCommon};
 
 /// A raw `llama-cpp`-template service: model, runtime, and serving knobs.
 #[derive(Debug, Default, Deserialize, Clone)]
@@ -124,14 +124,18 @@ pub struct RawLlamaCppService {
     /// Full argv template that replaces the default
     /// `llama-server -m <model> …` invocation. When set, `launcher[0]`
     /// is the executable and `launcher[1..]` is its argv. Each entry is
-    /// substituted with the standard placeholders (`{model}`,
-    /// `{mmproj}`, `{port}`, `{name}`, `{gpu_ids}`) plus the splat
-    /// `{args}`, which expands to every llama-server flag ananke would
+    /// substituted with the standard placeholders (`${model}`,
+    /// `${mmproj}`, `${port}`, `${name}`, `${gpu_ids}`) plus the splat
+    /// `${args}`, which expands to every llama-server flag ananke would
     /// otherwise have emitted (excluding `-m <model>` — that lives in
-    /// `{model}` so wrappers can position it freely). Lets operators
+    /// `${model}` so wrappers can position it freely). Lets operators
     /// front llama-server with a docker/podman wrapper that has its own
-    /// argv shape.
+    /// argv shape. Rejected when `[service.container]` is present because
+    /// both replace the host execution boundary.
     pub launcher: Option<Vec<String>>,
+    /// Container configuration for Docker/Podman workloads. When present,
+    /// the service runs inside a container rather than as a native process.
+    pub container: Option<RawContainerConfig>,
 }
 
 /// The `runtime` table of a llama-cpp-template service, tagged by

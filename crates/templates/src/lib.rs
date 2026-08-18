@@ -7,5 +7,6 @@
 pub mod placeholders;
 
 pub use placeholders::{
-    PlaceholderContext, SubstituteError, substitute, substitute_argv, substitute_launcher_argv,
+    PlaceholderContext, SubstituteError, stale_placeholder_names, substitute, substitute_argv,
+    substitute_launcher_argv,
 };

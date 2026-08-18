@@ -5,7 +5,7 @@ mod common;
 
 use ananke::supervise::{OrphanDisposition, reconcile};
 use ananke_db::{Database, models::RunningService};
-use ananke_system::InMemoryProcFs;
+use ananke_system::{InMemoryProcFs, container::FakeContainerEngine};
 
 #[tokio::test]
 async fn cleans_row_for_dead_pid() {
@@ -23,17 +23,23 @@ async fn cleans_row_for_dead_pid() {
     db.insert_running(&RunningService {
         service_id,
         run_id: 1,
-        pid: 99999,
+        pid: Some(99999),
         spawned_at: 0,
         command_line: "fake-server".to_string(),
         allocation: "{}".to_string(),
         state: "running".to_string(),
+        workload_kind: Some("process".to_string()),
+        runtime: None,
+        container_name: None,
+        container_id: None,
+        runtime_executable: None,
     })
     .await
     .expect("insert row");
 
     let proc = InMemoryProcFs::new();
-    let dispositions = reconcile(&proc, &db).await;
+    let engine = FakeContainerEngine::new();
+    let dispositions = reconcile(&proc, &engine, None, &db).await;
 
     assert_eq!(dispositions.len(), 1);
     assert!(

@@ -18,7 +18,8 @@ use crate::{
     merge::resolve_inheritance,
     parse::{EstimationConfig, RawConfig, SamplingConfig, parse_toml},
     validate::{
-        AllocationMode, AutoRestartSettings, CommandConfig, DEFAULT_SERVICE_PRIORITY,
+        AllocationMode, AutoRestartSettings, CommandConfig, ContainerConfig, ContainerIpc,
+        ContainerMount, ContainerNetwork, ContainerRuntime, DEFAULT_SERVICE_PRIORITY,
         DeviceReserves, DeviceSlot, Filters, HealthSettings, Lifecycle, LlamaCppConfig,
         OffloadMode, PlacementPolicy, ServiceConfig, SplitMode, Template, TemplateConfig,
         TrackingSettings, validate,
@@ -100,6 +101,7 @@ pub fn minimal_llama_cpp_service(name: &str) -> ServiceConfig {
         tracking: TrackingSettings::default(),
         metadata: ananke_api::shared::metadata::AnankeMetadata::new(),
         template_config: TemplateConfig::LlamaCpp(Box::new(llama_cpp_fixture())),
+        container: None,
     }
 }
 
@@ -116,6 +118,38 @@ pub fn minimal_command_service(name: &str, argv: Vec<String>) -> ServiceConfig {
     });
     svc.openai_compat = false;
     svc
+}
+
+/// Minimal host-networked container config for tests: a Docker image and
+/// nothing else. Callers switch `network`, add mounts, or set `gpu_device`
+/// for the case they exercise.
+pub fn minimal_container_config(image: &str) -> ContainerConfig {
+    ContainerConfig {
+        runtime: ContainerRuntime::Docker,
+        runtime_executable: None,
+        image: image.to_string(),
+        entrypoint: None,
+        workdir: None,
+        network: ContainerNetwork::Host,
+        container_port: None,
+        ipc: ContainerIpc::Private,
+        gpu_device: None,
+        mounts: Vec::new(),
+        extra_publications: Vec::new(),
+        env: BTreeMap::new(),
+        env_passthrough: Vec::new(),
+        labels: BTreeMap::new(),
+    }
+}
+
+/// A read-only bind mount, the shape every container fixture wants.
+pub fn container_mount(source: &str, target: &str) -> ContainerMount {
+    ContainerMount {
+        source: source.to_string(),
+        target: target.to_string(),
+        read_only: true,
+        selinux: None,
+    }
 }
 
 /// Borrow the LlamaCpp variant or panic. Convenience for tests that set

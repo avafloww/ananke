@@ -44,7 +44,7 @@ struct Cursor {
         ("since" = Option<i64>, Query, description = "Earliest timestamp_ms, inclusive"),
         ("until" = Option<i64>, Query, description = "Latest timestamp_ms, inclusive"),
         ("run" = Option<i64>, Query, description = "Restrict to one run_id"),
-        ("stream" = Option<String>, Query, description = "\"stdout\" or \"stderr\""),
+        ("stream" = Option<String>, Query, description = "\"stdout\", \"stderr\", or \"combined\""),
         ("limit" = Option<u32>, Query, description = "Max rows to return (≤1000, default 200)"),
         ("before" = Option<String>, Query, description = "Opaque cursor from a prior response"),
     ),

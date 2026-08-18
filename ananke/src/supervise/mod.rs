@@ -8,7 +8,8 @@ pub use ananke_supervise::{
     KillHandle, OrphanDisposition, PersistentWatchDeps, PlacementOutcome, PreviewError,
     ServiceIdentity, SpawnConfig, StartFailure, StartFailureKind, StartOutcome, SupervisorCommand,
     SupervisorDeps, SupervisorHandle, SupervisorInit, SupervisorSnapshot, await_ensure, drain,
-    ensure, estimate_cache, genstall, handle, health, logs, orphans, persistent_watcher, preview,
-    preview_command, preview_command_placement, preview_override_placement, preview_placement,
-    provision, reconcile, reconciler, registry, render_argv, spawn, spawn_supervisor, state,
+    ensure, estimate_cache, genstall, handle, health, launch, logs, orphans, persistent_watcher,
+    preview, preview_command, preview_command_placement, preview_container_command,
+    preview_override_placement, preview_placement, provision, reconcile, reconciler, registry,
+    render_argv, spawn, spawn_supervisor, state, workload,
 };

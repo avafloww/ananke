@@ -149,6 +149,9 @@ pub struct ServiceConfig {
     pub metadata: AnankeMetadata,
     /// The template-specific half of the service config.
     pub template_config: TemplateConfig,
+    /// Container configuration for Docker/Podman workloads. `None` means
+    /// this is a native host process.
+    pub container: Option<ContainerConfig>,
 }
 
 impl ServiceConfig {
@@ -276,7 +279,7 @@ pub struct LlamaCppConfig {
     /// Optional argv template that replaces the default
     /// `llama-server -m <model> …` invocation. `launcher[0]` becomes
     /// the executable; `launcher[1..]` is substituted with the standard
-    /// placeholders and the splat `{args}` (which expands to every
+    /// placeholders and the splat `${args}` (which expands to every
     /// other llama-server flag ananke would have emitted).
     pub launcher: Option<Vec<String>>,
 }
@@ -315,4 +318,112 @@ pub struct OpenAiProxyConfig {
     /// service's `name` is what clients see in `/v1/models`; this is
     /// what the upstream (vLLM, TGI, …) is asked to serve.
     pub upstream_model: SmolStr,
+}
+
+// ── Container configuration ──────────────────────────────────────────────
+
+/// Container runtime selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerRuntime {
+    /// Docker container runtime.
+    Docker,
+    /// Podman container runtime.
+    Podman,
+}
+
+impl ContainerRuntime {
+    /// Canonical name: the `runtime` value in config, and the name of the
+    /// binary that drives it. An explicit `runtime_executable` overrides
+    /// the latter without changing the former.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContainerRuntime::Docker => "docker",
+            ContainerRuntime::Podman => "podman",
+        }
+    }
+
+    /// Default CLI executable for this runtime.
+    pub fn executable(&self) -> &'static str {
+        self.as_str()
+    }
+}
+
+/// Network mode for a containerized service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerNetwork {
+    /// Bridge networking with loopback-only port publication.
+    Bridge,
+    /// Host networking with no port translation.
+    Host,
+}
+
+/// IPC namespace policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerIpc {
+    /// Private IPC namespace (default).
+    Private,
+    /// Host IPC namespace (shares /dev/shm with the host).
+    Host,
+}
+
+/// A validated bind mount for a container.
+#[derive(Debug, Clone)]
+pub struct ContainerMount {
+    /// Absolute host path.
+    pub source: String,
+    /// Absolute container path.
+    pub target: String,
+    /// Whether the mount is read-only.
+    pub read_only: bool,
+    /// Optional SELinux relabel policy.
+    pub selinux: Option<SmolStr>,
+}
+
+/// An additional port publication beyond the service endpoint.
+#[derive(Debug, Clone)]
+pub struct ContainerPortPublication {
+    /// Host IP to bind.
+    pub host_ip: String,
+    /// Host port.
+    pub host_port: u16,
+    /// Container port.
+    pub container_port: u16,
+    /// Protocol (`"tcp"` or `"udp"`).
+    pub protocol: SmolStr,
+}
+
+/// Validated container configuration. Present on both llama-cpp and command
+/// services when `[service.container]` is configured.
+#[derive(Debug, Clone)]
+pub struct ContainerConfig {
+    /// Container runtime (Docker or Podman).
+    pub runtime: ContainerRuntime,
+    /// Runtime executable override (e.g., NixOS store path).
+    pub runtime_executable: Option<String>,
+    /// Container image reference.
+    pub image: String,
+    /// Explicit entrypoint override. For llama-cpp, ananke normally emits
+    /// `--entrypoint` from the resolved `llama_server`; this overrides it.
+    pub entrypoint: Option<String>,
+    /// Working directory inside the container.
+    pub workdir: Option<String>,
+    /// Network mode.
+    pub network: ContainerNetwork,
+    /// Container-side port for bridge networking.
+    pub container_port: Option<u16>,
+    /// IPC namespace.
+    pub ipc: ContainerIpc,
+    /// CDI GPU device template (e.g., `"nvidia.com/gpu=${id}"`). Expanded
+    /// once per allocated GPU at launch time.
+    pub gpu_device: Option<String>,
+    /// Bind mounts.
+    pub mounts: Vec<ContainerMount>,
+    /// Additional port publications beyond the service endpoint.
+    pub extra_publications: Vec<ContainerPortPublication>,
+    /// Explicit container environment variables.
+    pub env: BTreeMap<String, String>,
+    /// Environment variable names passed through from the host.
+    pub env_passthrough: Vec<String>,
+    /// User-defined labels (merged with reserved labels at launch time).
+    pub labels: BTreeMap<String, String>,
 }

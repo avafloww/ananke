@@ -25,12 +25,14 @@ pub mod reconciler;
 pub mod registry;
 pub mod spawn;
 pub mod state;
+pub mod workload;
 
 mod auto_restart;
 mod context;
 mod dispatch;
 mod eviction;
 mod idle;
+pub mod launch;
 mod reservation;
 mod rolling;
 mod running;
@@ -60,7 +62,7 @@ pub use crate::{
     },
     preview::{
         PlacementOutcome, PreviewError, preview_command, preview_command_placement,
-        preview_override_placement, preview_placement,
+        preview_container_command, preview_override_placement, preview_placement,
     },
     spawn::{SpawnConfig, render_argv},
 };

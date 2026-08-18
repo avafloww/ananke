@@ -4,7 +4,6 @@
 
 use std::time::Duration;
 
-use ananke_system::ManagedChild;
 use tracing::{info, warn};
 
 use crate::{
@@ -12,6 +11,7 @@ use crate::{
     StartingOutcome,
     drain::{DrainConfig, drain_pipeline},
     state::ServiceState,
+    workload::ManagedWorkload,
 };
 
 /// Clock-skew tolerance on the idle-timeout re-check. Lets a ping that raced
@@ -22,7 +22,7 @@ impl RunLoop {
     /// The Running inner loop: wait for child exit, idle timeout, or commands.
     pub(crate) async fn run_running_loop(
         &mut self,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
     ) -> StartingOutcome {
         // Timers are seeded once from the config at Running entry; threshold
@@ -81,8 +81,19 @@ impl RunLoop {
 
         loop {
             tokio::select! {
-                exit = child.wait() => {
+                exit = workload.wait() => {
                     warn!(?exit, "child exited from running");
+                    // Only remove on a confirmed exit. An `Err` here means
+                    // the runtime was unreachable, not that the workload
+                    // stopped, and force-removing on that would destroy a
+                    // healthy container over one failed query.
+                    if exit.is_ok() {
+                        if let Err(e) = workload.cleanup().await {
+                            warn!(service = %self.init.identity.name, error = %e, "cleanup after exit failed");
+                        }
+                    } else {
+                        warn!(service = %self.init.identity.name, "exit unconfirmed; leaving the workload for reconciliation");
+                    }
                     self.record_drain_complete();
                     self.set_state(ServiceState::Failed { retry_count: 0 });
                     return StartingOutcome::Break;
@@ -97,7 +108,7 @@ impl RunLoop {
                 } => {
                     if let Some(detail) = self.evaluate_error_rate(run_id, running_since).await
                         && matches!(
-                            self.perform_error_rate_restart(child, run_id, detail).await,
+                            self.perform_error_rate_restart(workload, run_id, detail).await,
                             AutoRestartOutcome::Restarted | AutoRestartOutcome::Disabled,
                         )
                     {
@@ -117,7 +128,7 @@ impl RunLoop {
                         && let Some(detail) =
                             self.evaluate_generation_stall(g, running_since).await
                         && matches!(
-                            self.perform_auto_restart(child, run_id, "generation_stall", detail)
+                            self.perform_auto_restart(workload, run_id, "generation_stall", detail)
                                 .await,
                             AutoRestartOutcome::Restarted | AutoRestartOutcome::Disabled,
                         )
@@ -138,7 +149,7 @@ impl RunLoop {
                         .evaluate_spec_collapse(run_id, running_since, &mut spec_ever_accepted)
                         .await
                         && matches!(
-                            self.perform_auto_restart(child, run_id, "spec_collapse", detail)
+                            self.perform_auto_restart(workload, run_id, "spec_collapse", detail)
                                 .await,
                             AutoRestartOutcome::Restarted | AutoRestartOutcome::Disabled,
                         )
@@ -156,7 +167,7 @@ impl RunLoop {
                     }
                 } => {
                     if matches!(
-                        self.on_periodic_tick(&mut periodic_deadline, child, run_id).await,
+                        self.on_periodic_tick(&mut periodic_deadline, workload, run_id).await,
                         PeriodicOutcome::Restarted,
                     ) {
                         return StartingOutcome::Break;
@@ -180,7 +191,7 @@ impl RunLoop {
                         continue;
                     }
                     info!(service = %self.init.identity.name, "idle timeout; draining to idle");
-                    crate::drain::sigterm_then_sigkill(child, RUNNING_SIGTERM_GRACE).await;
+                    crate::drain::sigterm_then_sigkill(workload, RUNNING_SIGTERM_GRACE).await;
                     self.run_shutdown_command().await;
                     self.end_run(run_id).await;
                     self.record_drain_complete();
@@ -188,7 +199,7 @@ impl RunLoop {
                     return StartingOutcome::Break;
                 }
                 cmd = self.rx.recv() => {
-                    match self.on_running_command(cmd, child, run_id).await {
+                    match self.on_running_command(cmd, workload, run_id).await {
                         RunningOutcome::Continue => {}
                         RunningOutcome::Break => return StartingOutcome::Break,
                         RunningOutcome::Exit => return StartingOutcome::Exit,
@@ -204,11 +215,11 @@ impl RunLoop {
     /// returns.
     pub(crate) async fn drain_now(
         &mut self,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
         reason: crate::drain::DrainReason,
     ) {
-        self.drain_now_bounded(child, run_id, reason, None).await;
+        self.drain_now_bounded(workload, run_id, reason, None).await;
     }
 
     /// As [`Self::drain_now`], but with an optional override for how long the
@@ -219,7 +230,7 @@ impl RunLoop {
     /// never complete.
     pub(crate) async fn drain_now_bounded(
         &mut self,
-        child: &mut dyn ManagedChild,
+        workload: &mut ManagedWorkload,
         run_id: i64,
         reason: crate::drain::DrainReason,
         inflight_wait: Option<Duration>,
@@ -233,7 +244,7 @@ impl RunLoop {
             extended_stream_drain: Duration::from_millis(current.extended_stream_drain_ms),
             sigterm_grace: RUNNING_SIGTERM_GRACE,
         };
-        drain_pipeline(child, &cfg, self.init.inflight.clone(), reason).await;
+        drain_pipeline(workload, &cfg, self.init.inflight.clone(), reason).await;
         self.run_shutdown_command().await;
         self.end_run(run_id).await;
         self.record_drain_complete();

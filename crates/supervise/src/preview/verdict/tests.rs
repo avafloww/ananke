@@ -75,7 +75,7 @@ fn estimate_gib(n_layers: u32, per_gib: u64) -> Estimate {
 fn command_preview_picks_free_gpu_and_renders_env() {
     let mut svc = minimal_command_service(
         "comfy",
-        vec!["comfyui-start".into(), "--port".into(), "{port}".into()],
+        vec!["comfyui-start".into(), "--port".into(), "${port}".into()],
     );
     svc.placement_override.clear();
     svc.placement_policy = PlacementPolicy::GpuOnly;

@@ -124,6 +124,7 @@ arc-swap = "1"
 sha2 = "0.10"
 base64 = "0.22"
 ulid = "1"
+uuid = { version = "1", features = ["v4"] }
 clap = { version = "4", features = ["derive", "env"] }
 async-trait = "0.1"
 pin-project-lite = "0.2"

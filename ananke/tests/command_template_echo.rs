@@ -24,7 +24,7 @@ fn command_argv_substitutes_port() {
         "python".into(),
         "main.py".into(),
         "--port".into(),
-        "{port}".into(),
+        "${port}".into(),
     ];
 
     let svc = ServiceConfig {
@@ -68,6 +68,7 @@ fn command_argv_substitutes_port() {
             private_port_override: None,
             openai_proxy: None,
         }),
+        container: None,
     };
 
     let alloc = Allocation::from_override(&placement);

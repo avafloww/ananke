@@ -75,6 +75,7 @@ fn env_test_service(name: &str, port: u16, env_inherit: bool) -> ServiceConfig {
             private_port_override: None,
             openai_proxy: None,
         }),
+        container: None,
     }
 }
 

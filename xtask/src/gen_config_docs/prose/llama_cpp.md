@@ -73,11 +73,11 @@ By default, ananke spawns `llama-server` from `PATH`. Two knobs change that:
 
 Placeholders in `launcher` entries:
 
-- `{model}` - the model path. Held back from `{args}` so the wrapper can position it freely.
-- `{name}` - service name.
-- `{port}` - the private loopback port ananke assigned.
-- `{gpu_ids}` - comma-separated NVML index list ananke picked for this service.
-- `{args}` - splat: expands to every llama-server flag ananke would otherwise have emitted (everything except `-m <model>` - `--mmproj`, `-c`, placement-derived `-ngl`/`--tensor-split`/`-ot`, sampling, `--host`, `--port`, `extra_args`, …). Must occupy a launcher entry on its own; `"--foo={args}"` is rejected at config validation.
+- `${model}` - the model path. Held back from `${args}` so the wrapper can position it freely.
+- `${name}` - service name.
+- `${port}` - the private loopback port ananke assigned.
+- `${gpu_ids}` - comma-separated NVML index list ananke picked for this service.
+- `${args}` - splat: expands to every llama-server flag ananke would otherwise have emitted (everything except `-m <model>` - `--mmproj`, `-c`, placement-derived `-ngl`/`--tensor-split`/`-ot`, sampling, `--host`, `--port`, `extra_args`, …). Must occupy a launcher entry on its own; `"--foo=${args}"` is rejected at config validation.
 
 Example: wrap llama-server in a podman container that needs a volume mount for the model.
 
@@ -89,7 +89,7 @@ port = 11436
 model = "/srv/models/qwen3-30b.gguf"
 context = 32768
 flash_attn = true
-launcher = ["/opt/podman-llama.sh", "{model}", "{args}"]
+launcher = ["/opt/podman-llama.sh", "${model}", "${args}"]
 ```
 
 The wrapper script receives `/srv/models/qwen3-30b.gguf` as `$1` (for the volume mount) and `$@` after `shift` contains the rest of the llama-server argv - `-c 32768 -fa on -ngl 999 ... --host 127.0.0.1 --port 41000`. With `--network host` the container's llama-server is reachable on that port without further plumbing.

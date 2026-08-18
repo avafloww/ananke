@@ -318,6 +318,69 @@ mod tests {
         assert_eq!(pids, vec![10, 50, 700]);
     }
 
+    /// A container's workers are not descendants of the daemon at all — the
+    /// runtime reparents them — so the cgroup is the only thing that reaches
+    /// them. The inspected host PID must not be needed for attribution.
+    #[test]
+    fn container_cgroup_worker_is_attributed() {
+        let proc = InMemoryProcFs::new();
+        // Nothing is registered: a container launch records no usable host
+        // pid of its own, only the cgroup its workers live in.
+        proc.set_parent(900, 1);
+        proc.set_cgroup(
+            900,
+            "/ananke.slice/ananke-muse-glimmer.slice/docker-deadbeef.scope",
+        );
+        // A second worker in the same container.
+        proc.set_parent(901, 900);
+        proc.set_cgroup(
+            901,
+            "/ananke.slice/ananke-muse-glimmer.slice/docker-deadbeef.scope",
+        );
+        // Another service's container under a sibling slice.
+        proc.set_parent(950, 1);
+        proc.set_cgroup(950, "/ananke.slice/ananke-ninfer.slice/docker-cafe.scope");
+
+        let parents = parent_map(&proc);
+        let set = attributed_pid_set(
+            &[],
+            Some("/ananke.slice/ananke-muse-glimmer.slice"),
+            &parents,
+            &proc,
+        );
+        let mut pids: Vec<u32> = set.into_iter().collect();
+        pids.sort();
+        assert_eq!(pids, vec![900, 901]);
+    }
+
+    /// pid 0 parents init, so walking its descendants reaches the entire
+    /// process table. Nothing may register it — but if something does, the
+    /// walk itself is what turns a missing host pid into "this service is
+    /// using all the memory on the machine", so the shape is worth pinning.
+    #[test]
+    fn descendants_of_pid_zero_reach_everything() {
+        let proc = InMemoryProcFs::new();
+        // The real /proc shape: init and kthreadd both report ppid 0.
+        proc.set_parent(1, 0);
+        proc.set_parent(2, 0);
+        proc.set_parent(500, 1);
+        proc.set_parent(501, 500);
+        let parents = parent_map(&proc);
+
+        let everything = attributed_pid_set(&[0], None, &parents, &proc);
+        assert!(
+            everything.len() > 4,
+            "registering pid 0 sweeps up unrelated processes: {everything:?}"
+        );
+        // A real pid stays confined to its own subtree.
+        let confined = attributed_pid_set(&[500], None, &parents, &proc);
+        assert_eq!(
+            confined.into_iter().collect::<Vec<_>>(),
+            vec![500, 501],
+            "a real root attributes only its own descendants"
+        );
+    }
+
     /// VRAM and RSS sums correctly across the union and stay separated
     /// in the return value — combining them in the snapshotter would
     /// inflate the dynamic pledge by python's interpreter RSS.

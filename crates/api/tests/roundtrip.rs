@@ -4,6 +4,7 @@ use ananke_api::{
     internal::{event::Event, log_line::LogLine},
     oneshot::create::{OneshotAllocation, OneshotDevices, OneshotRequest, OneshotResponse},
     services::{
+        command::{EnvVar, LaunchCommand, LaunchCommandSource},
         detail::ServiceDetail,
         disable::DisableResponse,
         enable::EnableResponse,
@@ -228,6 +229,13 @@ fn service_detail_roundtrips() {
             mmap: false,
             mlock: false,
         }),
+        container: Some(ananke_api::services::detail::ContainerDetail {
+            runtime: "docker".into(),
+            image: "ghcr.io/ggml-org/llama.cpp:server-cuda".into(),
+            network: "host".into(),
+            container_id: Some("abc123".into()),
+            container_name: Some("ananke-demo-1".into()),
+        }),
     };
     assert_eq!(v.clone(), roundtrip(v));
 }
@@ -266,6 +274,7 @@ fn service_detail_roundtrips_mainline() {
             ik: None,
         }),
         serving: None,
+        container: None,
     };
     assert_eq!(v.clone(), roundtrip(v));
 }
@@ -301,6 +310,13 @@ fn service_detail_roundtrips_no_runtime() {
         last_used_ms: None,
         runtime: None,
         serving: None,
+        container: Some(ananke_api::services::detail::ContainerDetail {
+            runtime: "podman".into(),
+            image: "ninfer:local".into(),
+            network: "host".into(),
+            container_id: None,
+            container_name: None,
+        }),
     };
     assert_eq!(v.clone(), roundtrip(v));
 }
@@ -390,11 +406,166 @@ fn error_slug_other_fallback() {
 }
 
 #[test]
-fn error_kind_serde() {
+fn process_launch_command_json_is_byte_identical() {
+    // The process variant of `LaunchCommand` must keep producing exactly
+    // the four pre-container fields so existing consumers see no change.
+    let v = LaunchCommand {
+        source: LaunchCommandSource::Preview,
+        argv: vec!["llama-server".into(), "-m".into(), "/models/x.gguf".into()],
+        env: vec![EnvVar {
+            key: "CUDA_VISIBLE_DEVICES".into(),
+            value: "0".into(),
+        }],
+        env_inherit: true,
+        container: None,
+    };
+    let json = serde_json::to_value(&v).unwrap();
     assert_eq!(
-        serde_json::to_string(&ApiErrorKind::InvalidRequestError).unwrap(),
-        "\"invalid_request_error\""
+        json,
+        serde_json::json!({
+            "source": "preview",
+            "argv": ["llama-server", "-m", "/models/x.gguf"],
+            "env": [{"key": "CUDA_VISIBLE_DEVICES", "value": "0"}],
+            "env_inherit": true
+        })
     );
+    assert_eq!(v.clone(), roundtrip(v));
+}
+
+#[test]
+fn launch_preview_wire_union_roundtrips() {
+    let v = LaunchCommand {
+        source: LaunchCommandSource::Running,
+        argv: vec!["--model".into(), "nvidia/diffusiongemma".into()],
+        env: vec![],
+        env_inherit: false,
+        container: Some(ananke_api::services::command::LaunchContainer {
+            runtime: "docker".into(),
+            image: "vllm/vllm-openai:v0.26.0".into(),
+            name_pattern: "ananke-diffusiongemma-<run-id>".into(),
+            argv: vec!["--model".into(), "nvidia/diffusiongemma".into()],
+            env: vec![],
+            env_passthrough: vec!["HF_TOKEN".into()],
+            mounts: vec![ananke_api::services::command::LaunchMount {
+                source: "/cache".into(),
+                target: "/root/.cache".into(),
+                read_only: false,
+            }],
+            network: "bridge".into(),
+            publication: Some("127.0.0.1:40000:8000".into()),
+            ipc: "host".into(),
+            gpu_devices: vec!["nvidia.com/gpu=0".into()],
+            create_argv: vec![
+                "docker".into(),
+                "create".into(),
+                "--name".into(),
+                "ananke-diffusiongemma-0".into(),
+                "vllm/vllm-openai:v0.26.0".into(),
+                "--model".into(),
+                "nvidia/diffusiongemma".into(),
+            ],
+        }),
+    };
+    assert_eq!(v.clone(), roundtrip(v));
+
+    // The union is discriminated by the presence of `container`, so the
+    // process variant must not gain the key even after a container variant
+    // has been serialised in the same process.
+    let process = LaunchCommand {
+        source: LaunchCommandSource::Preview,
+        argv: vec!["llama-server".into()],
+        env: vec![],
+        env_inherit: true,
+        container: None,
+    };
+    let json = serde_json::to_value(&process).unwrap();
+    assert!(
+        json.get("container").is_none(),
+        "the process variant must stay byte-identical: {json}"
+    );
+    assert_eq!(process.clone(), roundtrip(process));
+}
+
+#[test]
+fn container_preview_redacts_passthrough_secrets() {
+    // `env_passthrough` carries variable names only. A resolved value here
+    // would leak a token into the management API and into any UI that
+    // renders a copy-pasteable command.
+    let secret = "hf_thisisnotarealtokenbutlooksenough";
+    // SAFETY: single-threaded test setup; the variable is read only through
+    // the assertion below.
+    unsafe { std::env::set_var("HF_TOKEN", secret) };
+
+    let v = LaunchCommand {
+        source: LaunchCommandSource::Preview,
+        argv: vec!["--model".into(), "x".into()],
+        env: vec![],
+        env_inherit: false,
+        container: Some(ananke_api::services::command::LaunchContainer {
+            runtime: "docker".into(),
+            image: "vllm/vllm-openai:v0.26.0".into(),
+            name_pattern: "ananke-vllm-<run-id>".into(),
+            argv: vec!["--model".into(), "x".into()],
+            env: vec![],
+            env_passthrough: vec!["HF_TOKEN".into()],
+            mounts: vec![],
+            network: "host".into(),
+            publication: None,
+            ipc: "private".into(),
+            gpu_devices: vec![],
+            create_argv: vec![
+                "docker".into(),
+                "create".into(),
+                "-e".into(),
+                // The create argv passes the name alone; the runtime reads
+                // the value from the daemon's own environment.
+                "HF_TOKEN".into(),
+                "vllm/vllm-openai:v0.26.0".into(),
+            ],
+        }),
+    };
+
+    let json = serde_json::to_string(&v).unwrap();
+    assert!(json.contains("HF_TOKEN"), "the name is shown");
+    assert!(
+        !json.contains(secret),
+        "a passthrough value must never reach the wire: {json}"
+    );
+    assert_eq!(v.clone(), roundtrip(v));
+}
+
+#[test]
+fn service_detail_container_wire_roundtrips() {
+    use ananke_api::services::detail::ContainerDetail;
+
+    // Running: the live identity is present.
+    let running = ContainerDetail {
+        runtime: "podman".into(),
+        image: "ghcr.io/ggml-org/llama.cpp:server-cuda".into(),
+        network: "host".into(),
+        container_id: Some("abc123".into()),
+        container_name: Some("ananke-muse-glimmer-42".into()),
+    };
+    assert_eq!(running.clone(), roundtrip(running.clone()));
+    let json = serde_json::to_value(&running).unwrap();
+    assert_eq!(json["runtime"], "podman");
+    assert_eq!(json["container_id"], "abc123");
+
+    // Idle: the identity fields are absent rather than null, so a client
+    // can tell "not running" from "running with no id".
+    let idle = ContainerDetail {
+        container_id: None,
+        container_name: None,
+        ..running
+    };
+    let json = serde_json::to_value(&idle).unwrap();
+    assert!(json.get("container_id").is_none());
+    assert!(json.get("container_name").is_none());
+    assert_eq!(idle.clone(), roundtrip(idle));
+}
+
+#[test]
+fn error_kind_serde() {
     assert_eq!(
         serde_json::to_string(&ApiErrorKind::ServerError).unwrap(),
         "\"server_error\""

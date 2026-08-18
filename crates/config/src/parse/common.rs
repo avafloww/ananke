@@ -1,6 +1,6 @@
 //! Fields and sub-tables shared across every template variant: the
 //! `RawServiceCommon` block flattened into each service, plus its nested
-//! tracking, filters, device-placement, and health tables.
+//! tracking, filters, device-placement, health, and container tables.
 
 use std::collections::BTreeMap;
 

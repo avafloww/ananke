@@ -79,7 +79,7 @@ pub(crate) fn sections() -> Vec<SectionDoc> {
                     "env",
                     "map string → string",
                     "none",
-                    "Environment variables set on the spawned process. Accepts `{port}`, `{gpu_ids}`, `{reserve_mb}`, `{model}`, `{name}` placeholders.",
+                    "Environment variables set on the spawned process. Accepts `${port}`, `${gpu_ids}`, `${reserve_mb}`, `${model}`, `${name}` placeholders.",
                 ),
                 field(
                     "env_inherit",

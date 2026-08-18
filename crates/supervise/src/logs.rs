@@ -36,6 +36,23 @@ pub fn spawn_pump_stderr(
     ));
 }
 
+/// Spawn a task that reads merged container output (from a `docker/podman
+/// logs --follow` follower) and tags every line as [`Stream::Combined`].
+pub fn spawn_pump_combined(
+    reader: DynAsyncRead,
+    service_id: i64,
+    run_id: i64,
+    batcher: BatcherHandle,
+) {
+    tokio::spawn(pump(
+        BufReader::new(reader),
+        service_id,
+        run_id,
+        Stream::Combined,
+        batcher,
+    ));
+}
+
 /// Read lines from `reader` until EOF, pushing each into the batcher.
 async fn pump<R: AsyncBufReadExt + Unpin>(
     mut reader: R,

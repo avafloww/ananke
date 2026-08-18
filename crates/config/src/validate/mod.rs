@@ -8,6 +8,7 @@ mod auto_restart_types;
 mod auto_restart_validation;
 mod command_validation;
 mod common;
+mod container_validation;
 mod llama_cpp_validation;
 mod metadata;
 mod orchestrate;
@@ -34,6 +35,7 @@ pub use auto_restart_types::{
 pub(crate) use auto_restart_validation::validate_auto_restart;
 pub(crate) use command_validation::{command_uses_port_placeholder, validate_command};
 pub use common::{fail, flag_variant, gib_to_mib, parse_duration_ms, variant_flag};
+pub(crate) use container_validation::{validate_bridge_command_endpoint, validate_container};
 pub(crate) use llama_cpp_validation::validate_llama_cpp;
 pub(crate) use metadata::{build_ananke_metadata, toml_value_to_json};
 pub(crate) use orchestrate::{DaemonValidationCtx, ServiceValidationState};
@@ -62,6 +64,16 @@ pub trait PlaceholderChecker {
     /// Dry-run substitute `argv` for `field`, failing on unresolved or
     /// malformed placeholders.
     fn check(&self, name: &SmolStr, field: &str, argv: &[String]) -> Result<(), ExpectedError>;
+
+    /// Dry-run substitute every value in an environment map. Env values go
+    /// through the same substitution as argv at spawn time, so a typo in
+    /// one has to fail here rather than at the launch it breaks.
+    fn check_env(
+        &self,
+        name: &SmolStr,
+        field: &str,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), ExpectedError>;
 }
 
 /// Checker that skips the dry-run. Used by `validate` when the caller
@@ -71,6 +83,15 @@ pub struct NoopPlaceholderChecker;
 
 impl PlaceholderChecker for NoopPlaceholderChecker {
     fn check(&self, _name: &SmolStr, _field: &str, _argv: &[String]) -> Result<(), ExpectedError> {
+        Ok(())
+    }
+
+    fn check_env(
+        &self,
+        _name: &SmolStr,
+        _field: &str,
+        _env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(), ExpectedError> {
         Ok(())
     }
 }
@@ -88,6 +109,7 @@ pub use split_mode::SplitMode;
 pub use tracking::TrackingSettings;
 pub(crate) use tracking::validate_tracking;
 pub use types::{
-    CommandConfig, DaemonSettings, EffectiveConfig, LlamaCppConfig, OpenAiProxyConfig,
-    ServiceConfig, TemplateConfig,
+    CommandConfig, ContainerConfig, ContainerIpc, ContainerMount, ContainerNetwork,
+    ContainerPortPublication, ContainerRuntime, DaemonSettings, EffectiveConfig, LlamaCppConfig,
+    OpenAiProxyConfig, ServiceConfig, TemplateConfig,
 };

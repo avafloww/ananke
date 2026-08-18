@@ -15,6 +15,7 @@ import { SegmentedToggle } from "../ui/SegmentedToggle.tsx";
 import { TimeWindowSelect } from "../ui/TimeWindowSelect.tsx";
 import { Spinner } from "../ui/Spinner.tsx";
 import { EmptyState } from "../ui/EmptyState.tsx";
+import { filterLines, type StreamFilter } from "./logFilter.ts";
 
 type LogsViewerProps = {
   name: string;
@@ -28,9 +29,7 @@ export function LogsViewer({ name }: LogsViewerProps) {
   });
 
   const win = useLogWindow(name, window);
-  const [streamFilter, setStreamFilter] = useState<
-    "both" | "stdout" | "stderr"
-  >("both");
+  const [streamFilter, setStreamFilter] = useState<StreamFilter>("both");
   const [search, setSearch] = useState("");
   const [runFilter, setRunFilter] = useState<number | null>(null);
 
@@ -41,18 +40,10 @@ export function LogsViewer({ name }: LogsViewerProps) {
     return [...set].sort((a, b) => b - a);
   }, [win.lines]);
 
-  const lines = useMemo(() => {
-    let result = win.lines;
-    if (streamFilter !== "both")
-      result = result.filter((l) => l.stream === streamFilter);
-    if (runFilter !== null)
-      result = result.filter((l) => l.run_id === runFilter);
-    if (search) {
-      const lower = search.toLowerCase();
-      result = result.filter((l) => l.line.toLowerCase().includes(lower));
-    }
-    return result;
-  }, [win.lines, streamFilter, runFilter, search]);
+  const lines = useMemo(
+    () => filterLines(win.lines, streamFilter, runFilter, search),
+    [win.lines, streamFilter, runFilter, search],
+  );
 
   // Auto-follow: stick to the bottom as new lines arrive while pinned there.
   // Scrolling up detaches (the follow button dims); scrolling back to the
@@ -66,11 +57,13 @@ export function LogsViewer({ name }: LogsViewerProps) {
       <div className="flex flex-wrap items-center gap-2 border-b border-border-default px-4 py-2">
         <TimeWindowSelect onChange={setWindow} />
         <div className="mx-1 h-3 w-px bg-border-default" />
-        <SegmentedToggle<"both" | "stdout" | "stderr">
-          options={(["both", "stdout", "stderr"] as const).map((s) => ({
-            label: t(`logs.${s}`),
-            value: s,
-          }))}
+        <SegmentedToggle<StreamFilter>
+          options={(["both", "stdout", "stderr", "combined"] as const).map(
+            (s) => ({
+              label: t(`logs.${s}`),
+              value: s,
+            }),
+          )}
           selected={streamFilter}
           onChange={setStreamFilter}
         />
@@ -151,7 +144,7 @@ export function LogsViewer({ name }: LogsViewerProps) {
   );
 }
 
-function LogRow({ line, search }: { line: LogLine; search: string }) {
+export function LogRow({ line, search }: { line: LogLine; search: string }) {
   const { t } = useTranslation();
   return (
     <div className="flex gap-2 py-0.5 hover:bg-elevated">
@@ -164,7 +157,11 @@ function LogRow({ line, search }: { line: LogLine; search: string }) {
           line.stream === "stderr" ? "text-danger" : "text-tertiary"
         }`}
       >
-        {line.stream === "stderr" ? t("logs.err") : t("logs.out")}
+        {line.stream === "stderr"
+          ? t("logs.err")
+          : line.stream === "combined"
+            ? t("logs.combined")
+            : t("logs.out")}
       </span>
       <span className="whitespace-pre-wrap break-all text-primary">
         {search ? highlightSearch(line.line, search) : line.line}
