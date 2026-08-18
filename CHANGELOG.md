@@ -26,6 +26,48 @@ The audience is an operator deciding whether to upgrade and what they will have 
 
 - An offline config validator: `cargo run -p ananke-supervise --example validate-config -- <file>` parses, validates, and renders the create argv each containerized service would launch with. `anankectl server-config validate` needs a running daemon; this does not.
 
+- Self-healing auto-restart. Watchdogs detect and restart a degraded running service without operator action. Five triggers cover distinct failure modes: error rate (on by default), time-to-first-token stall, generation stall, speculative-decoding collapse, and periodic time-based restart. Each is configured under `[service.auto_restart]`, with fleet-wide defaults under `[defaults.auto_restart]`. Anti-flap guards cap restarts within a sliding window and require a minimum uptime before a fresh run can trigger; a service past its restart budget is disabled with reason `auto_restart_loop` until re-enabled.
+
+- Restart history is persisted and exposed: `GET /api/restarts` (paginated by service and time range), the `ananke_auto_restarts_total` counter (labelled by service and trigger), and `auto_restarted` events carrying the trigger and the observed detail. The web UI renders it as a chart.
+
+- ik_llama.cpp runtime selection. A `llama-cpp` service selects between mainline llama.cpp (default) and the ik_llama.cpp fork through the `runtime` field, a tagged table (`{ kind = "ik-llama", mla = 1, dsa = true, attn_max_batch = 512, runtime_repack = false }`). ananke emits the matching `-mla`, `-dsa -fidx`, `-amb`, and `-rtr` flags and the ik `--spec-type` dialect, reserves whole GPUs for an ik service under `placement = "fit"`, and reads ik_llama.cpp's quantised tensor dtypes.
+
+- Heterogeneous GPU tensor-split. `devices.tensor_split_weights` balances layer-parallel work across unequal GPUs by weight, scaling each GPU's share and the emitted `--tensor-split` ratio.
+
+- Automatic expert offload for MoE models. `expert_offload = "auto"` offloads whole expert layers to host RAM through llama-server's `--n-cpu-moe`, keeping attention and the KV cache on the GPU, and balances the offload across GPUs with a room-based tensor split.
+
+- NUMA placement. The `numa` field (`distribute`, `interleave`, or `local`) passes `--numa` to llama-server for explicit thread and memory placement.
+
+- `env_inherit` (default on) copies the daemon's environment into a spawned host child; set it off to pass only the service's explicit `env` plus `CUDA_VISIBLE_DEVICES`. A container's environment is always explicit, regardless of this flag.
+
+- `cache_ram_mb` caps the host RAM llama-server may use for its prompt cache. The value is passed through explicitly so the packer's host reservation matches the runtime's cap; `0` disables the cache.
+
+- The VRAM estimator adds support for the laguna, glm-dsa, deepseek4, lfm2, and gemma4 architectures, and now models host RAM, quantised KV cache, sliding-window and recurrent (hybrid) KV, tensor-split compute buffers, and speculative-decoding overhead.
+
+- Token throughput is split into input (prompt processing) and output (decode) tokens per second, with an effective-generation figure (completion tokens over wall-clock) as the end-to-end fallback. The per-service reverse proxy records per-request token counts at the HTTP layer, and the web UI shows the split alongside the effective rate.
+
+- A `llama-cpp` service with `modality = "embedding"` now passes `--embeddings` to llama-server, enabling its embeddings endpoint.
+
+- A responsive web UI for small screens, with bottom-tab navigation and layouts adapted for touch and narrow viewports.
+
+- The service memory footprint is broken out per device in both the API and the UI, showing where a service's allocation lands.
+
+- The service detail view surfaces runtime and serving configuration (binary path, KV cache types, batch, context, and thread settings, speculative decoding, and expert-offload mode) in the API and the UI.
+
+- A shared time-window selector across logs, per-service stats, global metrics, and the dashboard, adding a 5-minute preset and a custom absolute range.
+
+- Chat renders LaTeX math, markdown in reasoning traces, and correctly escaped code blocks.
+
+- `anankectl logs` accepts human-friendly `--since` and `--until` values: RFC 3339 timestamps, local datetimes and dates, or relative ages like `2h` and `30m`, in addition to epoch milliseconds.
+
+### Changed
+
+- The reservation field `vram_gb` is renamed `reserve_gb` (with `min_reserve_gb` and `max_reserve_gb` for dynamic mode), a device-neutral name since it holds host RAM for a cpu-only service and VRAM otherwise. The old spellings are still accepted.
+
+- The VRAM estimator's tuned constants are now derived from a measurement dataset and checked in CI, so a constant cannot drift from its evidence. An architecture the estimator is not calibrated for is refused rather than under-reserved: such a service must declare an explicit reservation (`mode` plus `reserve_gb`).
+
+- The management API returns the documented error envelope (`{"error": {"code", "message", "type"}}`) rather than a bare string, so a client can dispatch on `error.code`.
+
 ### Fixed
 
 - A `}` with nothing to close made the placeholder scanner loop forever, hanging config load.
