@@ -22,7 +22,6 @@ import { Card } from "../ui/Card.tsx";
 import { ViewHeader } from "../ui/ViewHeader.tsx";
 import { Stat } from "../ui/Stat.tsx";
 import { Spinner } from "../ui/Spinner.tsx";
-import { CopyButton } from "../ui/CopyButton.tsx";
 import { SegmentedToggle } from "../ui/SegmentedToggle.tsx";
 import { DeviceCard } from "./DeviceCard.tsx";
 import { ServiceRow } from "./ServiceRow.tsx";
@@ -116,13 +115,7 @@ export function DashboardView() {
   return (
     <div className="flex h-full flex-col">
       <ViewHeader className="gap-3 sm:gap-5">
-        <div className="flex flex-col gap-0.5">
-          <h1 className="eyebrow !text-primary">{t("dashboard.title")}</h1>
-          <div className="flex items-center gap-1 text-xs text-tertiary">
-            <span className="font-mono">{window.location.host}</span>
-            <CopyButton value={window.location.host} />
-          </div>
-        </div>
+        <h1 className="eyebrow !text-primary">{t("dashboard.title")}</h1>
         <TimeWindowSelect onChange={setTimeWindow} />
         <div className="flex w-full flex-wrap items-center gap-x-5 gap-y-3 sm:w-auto sm:ml-auto">
           <Stat label={t("dashboard.totalServices")} value={totalCount} />

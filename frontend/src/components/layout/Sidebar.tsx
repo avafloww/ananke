@@ -6,6 +6,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { useServices } from "../../api/hooks.ts";
+import { CopyButton } from "../ui/CopyButton.tsx";
 import {
   ChatIcon,
   ConfigIcon,
@@ -83,9 +84,15 @@ export function Sidebar() {
     <aside className="hidden md:flex w-14 lg:w-52 flex-col border-r border-border-default bg-surface">
       <div className="flex h-[var(--header-height)] items-center gap-2.5 border-b border-border-default px-3 lg:px-4">
         <SpindleMark />
-        <span className="hidden font-mono text-sm font-semibold tracking-[0.04em] text-primary lg:block">
-          ananke
-        </span>
+        <div className="hidden min-w-0 flex-col gap-0.5 lg:flex">
+          <span className="font-mono text-sm font-semibold tracking-[0.04em] text-primary">
+            ananke
+          </span>
+          <div className="flex min-w-0 items-center gap-1 text-xs text-tertiary">
+            <span className="truncate font-mono">{window.location.host}</span>
+            <CopyButton value={window.location.host} className="shrink-0" />
+          </div>
+        </div>
       </div>
 
       <nav className="flex-1 py-3">
