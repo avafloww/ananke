@@ -47,6 +47,7 @@ The audience is an operator deciding whether to upgrade and what they will have 
 - A shared time-window selector across logs, per-service stats, global metrics, and the dashboard, adding a 5-minute preset and a custom absolute range.
 - Chat renders LaTeX math, markdown in reasoning traces, and correctly escaped code blocks.
 - `anankectl logs` accepts human-friendly `--since` and `--until` values: RFC 3339 timestamps, local datetimes and dates, or relative ages like `2h` and `30m`, in addition to epoch milliseconds.
+- Llama.cpp-native endpoints on the OpenAI listener. `/tokenize`, `/detokenize`, `/apply-template`, `/completion`, `/infill`, `/embedding`, `/embeddings`, `/rerank`, `/reranking`, `/props`, `/slots`, `/slots/{id}`, `/lora-adapters`, `/health`, `/v1/health`, and `/metrics` are now served on the main inference URL and forwarded verbatim to the upstream of a `llama-cpp` template service (started on demand). A `model` field in the body selects the service; without one, the sole llama-cpp service is the target. The OpenAI-shape aliases (`/v1/*`, `/models`, `/completions`, `/chat/completions`, …) are not proxied.
 
 ### Changed
 
