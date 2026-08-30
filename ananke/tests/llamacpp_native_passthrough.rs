@@ -13,7 +13,7 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::atomic::Ordering};
 
 use ananke::{
     api::openai,
@@ -28,7 +28,8 @@ use ananke::{
 };
 use axum::{
     body::Body,
-    http::{Request, StatusCode},
+    extract::DefaultBodyLimit,
+    http::{Request, StatusCode, header},
 };
 use common::{build_harness, minimal_llama_service};
 use smol_str::SmolStr;
@@ -222,4 +223,119 @@ async fn no_llama_cpp_service_is_a_structured_error() {
 
     let (st, _) = raw(app, "GET", "/props", "").await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn streaming_response_holds_inflight_guard_until_body_is_dropped() {
+    let h = build_harness(vec![minimal_llama_service("alpha", 0)]).await;
+    h.echo_state.hang.store(true, Ordering::Relaxed);
+    let app = openai::router(h.state.clone());
+    let service = SmolStr::new("alpha");
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/completion")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"prompt":"hello","stream":true}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(h.state.inflight.current(&service), 1);
+    drop(resp);
+    assert_eq!(h.state.inflight.current(&service), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_request_honours_configured_body_limit() {
+    let h = build_harness(vec![minimal_llama_service("alpha", 0)]).await;
+    let app = openai::router(h.state.clone()).layer(DefaultBodyLimit::max(16));
+
+    let (st, body) = raw(
+        app,
+        "POST",
+        "/tokenize",
+        r#"{"content":"this exceeds sixteen bytes"}"#,
+    )
+    .await;
+
+    assert_eq!(st, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert!(
+        !h.echo_state
+            .requests
+            .lock()
+            .iter()
+            .any(|request| request.path == "/tokenize")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn passthrough_strips_hop_by_hop_headers_in_both_directions() {
+    let h = build_harness(vec![minimal_llama_service("alpha", 0)]).await;
+    h.echo_state.hop_headers.store(true, Ordering::Relaxed);
+    let app = openai::router(h.state.clone());
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/tokenize")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONNECTION, "x-remove, keep-alive")
+        .header("keep-alive", "timeout=5")
+        .header("proxy-authorization", "Basic secret")
+        .header("proxy-connection", "keep-alive")
+        .header(header::TE, "trailers")
+        .header(header::TRAILER, "x-trailer")
+        .header(header::UPGRADE, "websocket")
+        .header("x-remove", "secret")
+        .header("x-end-to-end", "preserved")
+        .body(Body::from(r#"{"content":"hi"}"#))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    for name in [
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "x-upstream-remove",
+    ] {
+        assert!(
+            resp.headers().get(name).is_none(),
+            "response retained {name}"
+        );
+    }
+    assert_eq!(resp.headers()["x-end-to-end"], "preserved");
+
+    let requests = h.echo_state.requests.lock();
+    let seen = requests
+        .iter()
+        .find(|request| request.path == "/tokenize")
+        .expect("echo must receive the request");
+    for name in [
+        "connection",
+        "keep-alive",
+        "proxy-authorization",
+        "proxy-connection",
+        "te",
+        "trailer",
+        "upgrade",
+        "x-remove",
+    ] {
+        assert!(seen.headers.get(name).is_none(), "upstream retained {name}");
+    }
+    assert_eq!(seen.headers["x-end-to-end"], "preserved");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ready_service_connection_failure_is_upstream_unavailable() {
+    let h = build_harness(vec![minimal_llama_service("alpha", 0)]).await;
+    let app = openai::router(h.state.clone());
+
+    let (st, _) = raw(app.clone(), "POST", "/tokenize", r#"{"content":"warm"}"#).await;
+    assert_eq!(st, StatusCode::OK);
+    h.echo_state.drop_connections.store(true, Ordering::Relaxed);
+
+    let (st, body) = raw(app, "POST", "/tokenize", r#"{"content":"fail"}"#).await;
+    assert_eq!(st, StatusCode::BAD_GATEWAY, "{body}");
+    assert!(body.contains("upstream_unavailable"), "{body}");
 }

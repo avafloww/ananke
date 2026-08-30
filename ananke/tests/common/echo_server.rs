@@ -14,7 +14,7 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, StreamBody, combinators::BoxBody};
-use hyper::{Request, Response, StatusCode, body::Frame, service::service_fn};
+use hyper::{Request, Response, StatusCode, body::Frame, http::HeaderMap, service::service_fn};
 use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto,
@@ -47,6 +47,10 @@ pub struct EchoState {
     pub metrics_enabled: Arc<AtomicBool>,
     /// Value reported by both `/metrics` progress counters.
     pub metrics_counter: Arc<AtomicU64>,
+    /// Drop newly accepted sockets before HTTP negotiation.
+    pub drop_connections: Arc<AtomicBool>,
+    /// Add hop-by-hop and end-to-end headers to generic responses.
+    pub hop_headers: Arc<AtomicBool>,
 }
 
 /// One request the echo server received, recorded for proxy assertions.
@@ -55,6 +59,7 @@ pub struct EchoedRequest {
     pub method: String,
     pub path: String,
     pub query: Option<String>,
+    pub headers: HeaderMap,
     pub body: String,
 }
 
@@ -80,6 +85,9 @@ pub async fn serve(listener: TcpListener, state: EchoState, mut shutdown: watch:
             }
             accept = listener.accept() => {
                 let Ok((stream, _)) = accept else { continue; };
+                if state.drop_connections.load(Ordering::Relaxed) {
+                    continue;
+                }
                 let io = TokioIo::new(stream);
                 let state = state.clone();
                 tokio::spawn(async move {
@@ -110,6 +118,7 @@ async fn handle(
         method: parts.method.to_string(),
         path: parts.uri.path().to_string(),
         query: parts.uri.query().map(str::to_string),
+        headers: parts.headers.clone(),
         body: String::from_utf8_lossy(&body_bytes).into_owned(),
     });
     let path = parts.uri.path();
@@ -195,14 +204,32 @@ async fn handle(
                 .unwrap())
         }
 
+        _ if state.hang.load(Ordering::Relaxed) && path == "/completion" => {
+            let body = StreamBody::new(futures::stream::pending::<
+                Result<Frame<Bytes>, Box<dyn std::error::Error + Send + Sync>>,
+            >())
+            .boxed();
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "text/event-stream")
+                .body(body)
+                .unwrap())
+        }
+
         _ => {
             let body = Full::new(Bytes::from("hello"))
                 .map_err(|n| match n {})
                 .boxed();
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .body(body)
-                .unwrap())
+            let mut response = Response::builder().status(StatusCode::OK);
+            if state.hop_headers.load(Ordering::Relaxed) {
+                response = response
+                    .header("connection", "x-upstream-remove")
+                    .header("keep-alive", "timeout=5")
+                    .header("proxy-authenticate", "Basic realm=echo")
+                    .header("x-upstream-remove", "secret")
+                    .header("x-end-to-end", "preserved");
+            }
+            Ok(response.body(body).unwrap())
         }
     }
 }

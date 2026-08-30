@@ -24,21 +24,24 @@
 //! without a `model` field, gets a structured error naming the fix.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use std::{sync::Arc, time::Duration};
+use std::{error::Error, sync::Arc, task::Poll, time::Duration};
 
 use ananke_proxy::ProxyBody;
 use ananke_tracking::inflight::InflightGuard;
 use axum::{
-    Router,
+    RequestExt, Router,
     body::Body,
     extract::{Request, State},
-    http::{HeaderMap, Method},
+    http::{HeaderMap, HeaderName, StatusCode},
     response::{IntoResponse, Response},
     routing::any,
 };
 use futures::TryStreamExt;
-use http_body_util::{BodyExt, Full, StreamBody};
-use hyper::{body::Frame, header};
+use http_body_util::{BodyExt, Full, LengthLimitError, StreamBody};
+use hyper::{
+    body::{Frame, SizeHint},
+    header,
+};
 use smol_str::SmolStr;
 use tracing::{info, warn};
 
@@ -81,6 +84,35 @@ struct Target {
     max_request_duration_ms: u64,
 }
 
+pin_project_lite::pin_project! {
+    /// Keeps the service pinned until the downstream finishes or drops the body.
+    struct InflightBody<B> {
+        #[pin]
+        body: B,
+        _guard: InflightGuard,
+    }
+}
+
+impl<B: hyper::body::Body> hyper::body::Body for InflightBody<B> {
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        self.project().body.poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.body.size_hint()
+    }
+}
+
 pub fn register(router: Router, state: AppState) -> Router {
     let native: Router = NATIVE_PATHS
         .iter()
@@ -95,20 +127,21 @@ pub fn register(router: Router, state: AppState) -> Router {
 /// not apply (they expect OpenAI-shaped bodies), and no request is
 /// recorded for metrics — matching the per-service proxy, which only
 /// records the token-generating `/v1/*` endpoints.
-async fn passthrough(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    req: Request<Body>,
-) -> Response {
-    let (parts, body) = req.into_parts();
-    let method = parts.method.clone();
+async fn passthrough(State(state): State<AppState>, req: Request<Body>) -> Response {
+    let (parts, body) = req.with_limited_body().into_parts();
+    let method = parts.method;
     let path_and_query = parts
         .uri
         .path_and_query()
         .map(|p| p.as_str())
-        .unwrap_or("/");
+        .unwrap_or("/")
+        .to_string();
+    let mut headers = parts.headers;
     let body_bytes = match body.collect().await {
         Ok(c) => c.to_bytes(),
+        Err(e) if error_chain_contains::<LengthLimitError>(&e) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response();
+        }
         Err(e) => return errors::bad_request(format!("read request body: {e}")),
     };
 
@@ -129,7 +162,7 @@ async fn passthrough(
     // Bump activity and acquire an in-flight guard so the service stays
     // pinned against drain/eviction for the full response (including SSE).
     state.activity.ping(&target.name);
-    let _guard = InflightGuard::new(state.inflight.counter(&target.name));
+    let guard = InflightGuard::new(state.inflight.counter(&target.name));
 
     let client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
         .build_http::<ProxyBody>();
@@ -141,16 +174,14 @@ async fn passthrough(
         .unwrap_or_else(|_| {
             unreachable!("uri from a validated port and a client-supplied path parses")
         });
-    let mut upstream_req = Request::builder().method(method.clone()).uri(uri);
-    for (k, v) in headers.iter() {
-        if k == header::HOST || k == header::CONTENT_LENGTH {
-            continue;
-        }
+    remove_hop_by_hop_headers(&mut headers);
+    headers.remove(header::HOST);
+    headers.remove(header::CONTENT_LENGTH);
+    let mut upstream_req = Request::builder().method(method).uri(uri);
+    for (k, v) in &headers {
         upstream_req = upstream_req.header(k, v);
     }
-    // GET/HEAD carry no body; for everything else the length is known
-    // exactly because the body was buffered above.
-    if !matches!(method, Method::GET | Method::HEAD) && !body_bytes.is_empty() {
+    if !body_bytes.is_empty() {
         upstream_req = upstream_req.header(header::CONTENT_LENGTH, body_bytes.len());
     }
     let upstream_body: ProxyBody = Full::new(body_bytes)
@@ -165,11 +196,11 @@ async fn passthrough(
         Ok(r) => r,
         Err(e) => {
             warn!(service = %target.name, error = %e, "llama.cpp-native passthrough: upstream request failed");
-            return errors::start_failed(&target.name, "upstream unavailable");
+            return errors::upstream_unavailable(format!("upstream unavailable: {e}"));
         }
     };
 
-    let (parts, body) = resp.into_parts();
+    let (mut parts, body) = resp.into_parts();
     // Stream the body back without buffering — critical for SSE from
     // `/completion` with `"stream": true`.
     let stream = body.into_data_stream().map_ok(Frame::data);
@@ -179,11 +210,49 @@ async fn passthrough(
     )
     .boxed();
 
-    let mut out = Response::from_parts(parts, Body::new(boxed));
-    out.headers_mut().remove(header::CONNECTION);
-    out.headers_mut().remove("transfer-encoding");
-    out.headers_mut().remove("keep-alive");
-    out
+    let guarded = InflightBody {
+        body: boxed,
+        _guard: guard,
+    };
+    remove_hop_by_hop_headers(&mut parts.headers);
+    Response::from_parts(parts, Body::new(guarded))
+}
+
+fn error_chain_contains<T: Error + 'static>(error: &(dyn Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error.is::<T>() {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+fn remove_hop_by_hop_headers(headers: &mut HeaderMap) {
+    let nominated = headers
+        .get_all(header::CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|name| HeaderName::from_bytes(name.trim().as_bytes()).ok())
+        .collect::<Vec<_>>();
+    for name in nominated {
+        headers.remove(name);
+    }
+    for name in [
+        header::CONNECTION,
+        header::TE,
+        header::TRAILER,
+        header::TRANSFER_ENCODING,
+        header::UPGRADE,
+        header::PROXY_AUTHENTICATE,
+        header::PROXY_AUTHORIZATION,
+        HeaderName::from_static("keep-alive"),
+        HeaderName::from_static("proxy-connection"),
+    ] {
+        headers.remove(name);
+    }
 }
 
 /// Resolve which llama-cpp service a native request reaches: a `model`
