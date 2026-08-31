@@ -43,6 +43,13 @@ pub fn start_failed(name: &str, reason: &str) -> Response {
     .into_response()
 }
 
+pub fn upstream_unavailable(reason: impl Into<String>) -> Response {
+    ApiErrorCode::UpstreamUnavailable {
+        reason: reason.into(),
+    }
+    .into_response()
+}
+
 pub fn insufficient_capacity(name: &str, reason: &str) -> Response {
     ApiErrorCode::InsufficientCapacity {
         name: SmolStr::new(name),

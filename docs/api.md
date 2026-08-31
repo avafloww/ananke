@@ -80,6 +80,21 @@ The OpenAI-compatible API (`/v1/*`) is the primary inference surface. Ananke act
 
 Streaming responses (SSE) are supported on all three POST endpoints. Set `"stream": true` in the request body. The upstream's SSE chunks are proxied to the client as they arrive — there is no buffering.
 
+### Llama.cpp-native endpoints
+
+llama-server exposes its own native surface alongside the OpenAI ones, and those paths are served on the same listener: `/tokenize`, `/detokenize`, `/apply-template`, `/completion`, `/infill`, `/embedding`, `/embeddings`, `/rerank`, `/reranking`, `/props`, `/slots`, `/slots/{id}`, `/lora-adapters`, `/health`, `/v1/health`, and `/metrics`. A request to any of them is forwarded **verbatim** — original method, path, query, headers, and body — to the upstream of a `llama-cpp` template service, as long as the service is running (it is started on demand if not).
+
+These routes exist only for `llama-cpp` template services; a request that names a `command`-template service is rejected. Service selection mirrors the rest of the surface:
+
+- A `model` field in the JSON body selects the service, if present.
+- Without one, a single configured llama-cpp service is the target — the
+  reference single-model setup needs no extra configuration.
+- Multiple llama-cpp services without a `model` field is an error naming
+  the candidates and the fix.
+- With no llama-cpp service at all, the request gets a structured error.
+
+Filters do not apply to these requests (they expect OpenAI-shaped bodies), and they are not recorded for request metrics, matching the per-service proxy. In a multi-llama-cpp daemon, hit the native endpoints that take no model (the GETs, `/slots/{id}`, and model-less POSTs) on the service's own port instead — the per-service proxy forwards everything on `port` directly to that service's upstream.
+
 ### 501 stubs
 
 The following OpenAI endpoints return `501 Not Implemented`:
